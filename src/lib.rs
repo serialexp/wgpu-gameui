@@ -25,6 +25,24 @@
 //! // result.get(2) = floor label rect
 //! // result.get(3) = down button rect
 //! ```
+//!
+//! # Debugging a layout
+//!
+//! Positioning bugs produce no error, just a wrong picture. The [`debug`]
+//! module describes a *finished* frame — a named tree of world-space boxes
+//! plus what looks wrong with them (off-screen, overflowing its container,
+//! clipped away by a boundary, misaligned) — as text or JSON, with
+//! [`DebugReport::assert_clean`](debug::DebugReport::assert_clean) to guard a
+//! layout in a test:
+//!
+//! ```ignore
+//! let report = wgpu_gameui::debug::DebugReport::measured_layers(&mut layers, screen);
+//! println!("{}", report.to_text());
+//! report.assert_clean();
+//! ```
+//!
+//! For pixels rather than boxes, [`HeadlessGpu`] renders a frame offscreen and
+//! [`write_png`] saves it.
 
 // Public API is the contract for integrating apps; every exported type, field,
 // and method must carry rustdoc. `warn` (not `deny`) so a work-in-progress
@@ -51,6 +69,7 @@ mod animation;
 pub mod affine;
 mod click_tracker;
 pub mod color;
+pub mod debug;
 mod cursor;
 mod drag_tracker;
 mod frame;
@@ -76,7 +95,14 @@ pub use nav::{GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad,
 pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "phosphor-icons")]
 pub use render::PhosphorIcon;
-pub use render::{Backdrop, BlurParams, NineSliceMeta, SpriteAtlas, SpriteId, UiRenderer};
+#[cfg(feature = "headless")]
+pub use render::HeadlessGpu;
+pub use render::{
+    Backdrop, BlurParams, CAPTURE_FORMAT, NineSliceMeta, SpriteAtlas, SpriteId, UiRenderer,
+    capture_draw_list, capture_layers, write_png,
+};
+/// The entry point to layout inspection — see [`mod@debug`] for the full API.
+pub use debug::DebugReport;
 pub use style::{StyleKey, StyleOverlay, StyleResolver, StyleValue};
 pub use theme::Theme;
 pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};

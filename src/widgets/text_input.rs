@@ -998,7 +998,7 @@ impl TextInput {
         // Multiline content is clipped to the inner box (so wrapped + scrolled
         // lines, the selection, and the caret never spill past the field).
         if multiline {
-            list.push_clip(inner_rect);
+            list.push_clip_viewport(inner_rect);
         }
 
         // The vertical shift applied to text/selection/caret in multiline mode.

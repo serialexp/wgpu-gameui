@@ -13,6 +13,7 @@
 
 mod atlas;
 mod blur;
+mod capture;
 mod glyph_msdf;
 mod image_cache;
 mod msdf_atlas;
@@ -29,6 +30,9 @@ pub use phosphor::PhosphorIcon;
 pub(crate) use phosphor::{PHOSPHOR_FONT_ID, phosphor_font_data, phosphor_glyph_id};
 
 pub use atlas::{AtlasRegion, SpriteAtlas, SpriteId};
+#[cfg(feature = "headless")]
+pub use capture::HeadlessGpu;
+pub use capture::{CAPTURE_FORMAT, capture_draw_list, capture_layers, write_png};
 pub use blur::{Backdrop, BlurParams};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub(crate) use ui_renderer::ortho_matrix;

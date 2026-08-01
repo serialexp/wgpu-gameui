@@ -313,6 +313,10 @@ pub struct UiContext<'a> {
     /// `window_stack` length recorded at each `push`, restored at the matching
     /// `pop`.
     window_depth_stack: Vec<usize>,
+    /// Open debug-scope depth recorded at each `push`, restored at the matching
+    /// `pop`, so a scope opened inside a `push`/`pop` frame (notably by
+    /// [`window_begin`](UiContext::window_begin)) closes with it.
+    debug_scope_depth_stack: Vec<usize>,
     /// Stack of layer kinds still open — used by Drop debug_assert, by
     /// modal_end / popup_end to verify the caller closed the right kind, and
     /// to detect unbalanced begin/end pairs. Length == number of open layers.
@@ -356,9 +360,20 @@ pub struct UiContext<'a> {
     /// and saved/restored across nesting. `false` by default.
     input_disabled: bool,
     /// Saved viewport rect for a [`scroll_begin`](Self::scroll_begin) /
-    /// [`scroll_end`](Self::scroll_end) pair. `None` when no scroll is in
-    /// progress.
+    /// [`scroll_end`](Self::scroll_end) pair, in **local** space (what the
+    /// widget draws against). `None` when no scroll is in progress.
     pending_scroll_viewport: Option<Rect>,
+    /// Viewport height of the pending scroll region, used by
+    /// [`scroll_end`](Self::scroll_end) to advance the layout cursor once the
+    /// scroll transform has been popped.
+    pending_scroll_height: Option<f32>,
+    /// Inverse of the transform in force at the matching `scroll_begin`.
+    /// `scroll_end` draws the scrollbars *after* `ScrollView::end` pops the
+    /// clip/transform that `begin` pushed, so it must map the pointer with the
+    /// begin-time inverse rather than whatever is on the stack when it is
+    /// called. Without this the scrollbar hover/drag test reads world-space
+    /// coordinates against a local-space rect.
+    pending_scroll_inv: Option<Affine2>,
     /// Saved [`ScrollBegin`] from the most recent
     /// [`scroll_begin`](Self::scroll_begin), handed back to
     /// [`scroll_end`](Self::scroll_end).
@@ -376,6 +391,7 @@ impl<'a> UiContext<'a> {
             clip_depth_stack: Vec::new(),
             window_stack: Vec::new(),
             window_depth_stack: Vec::new(),
+            debug_scope_depth_stack: Vec::new(),
             open_layer_kinds: Vec::new(),
             warned_align_tokens: std::collections::HashSet::new(),
             font_stack: vec![FontSpec::default()],
@@ -387,6 +403,8 @@ impl<'a> UiContext<'a> {
             auto_advance: true,
             input_disabled: false,
             pending_scroll_viewport: None,
+            pending_scroll_height: None,
+            pending_scroll_inv: None,
             pending_scroll_begin: None,
         }
     }
@@ -399,6 +417,7 @@ impl<'a> UiContext<'a> {
             clip_depth_stack: Vec::new(),
             window_stack: Vec::new(),
             window_depth_stack: Vec::new(),
+            debug_scope_depth_stack: Vec::new(),
             open_layer_kinds: Vec::new(),
             warned_align_tokens: std::collections::HashSet::new(),
             font_stack: vec![FontSpec::default()],
@@ -410,6 +429,8 @@ impl<'a> UiContext<'a> {
             auto_advance: true,
             input_disabled: false,
             pending_scroll_viewport: None,
+            pending_scroll_height: None,
+            pending_scroll_inv: None,
             pending_scroll_begin: None,
         }
     }
@@ -463,6 +484,8 @@ impl<'a> UiContext<'a> {
         self.style_stack.push(style_top);
         self.clip_depth_stack.push(clip_depth);
         self.window_depth_stack.push(window_depth);
+        let scope_depth = self.backend.list_mut().debug_scope_depth();
+        self.debug_scope_depth_stack.push(scope_depth);
     }
 
     /// Pop transform + tint + align + clip/window scope (Teardown's `UiPop`).
@@ -487,6 +510,9 @@ impl<'a> UiContext<'a> {
         }
         if let Some(depth) = self.window_depth_stack.pop() {
             self.window_stack.truncate(depth);
+        }
+        if let Some(depth) = self.debug_scope_depth_stack.pop() {
+            self.backend.list_mut().truncate_debug_scopes(depth);
         }
     }
 
@@ -708,13 +734,27 @@ impl<'a> UiContext<'a> {
     /// the current origin under the active alignment, then transform through
     /// the active affine.
     pub fn place_rect(&mut self, width: f32, height: f32) -> Rect {
-        let align = *self.align_stack.last().unwrap_or(&AlignSpec::DEFAULT);
-        let [ox, oy] = align.offset(width, height);
-        let local = Rect::new(ox, oy, width, height);
+        let local = self.place_local(width, height);
         self.backend
             .list_mut()
             .current_transform()
             .transform_rect_aabb(local)
+    }
+
+    /// The **local**-space rect for a widget of the given size at the current
+    /// origin under the active alignment — i.e. [`place_rect`](Self::place_rect)
+    /// without the transform applied.
+    ///
+    /// This is what a widget that draws through `DrawList` must be handed.
+    /// `DrawList` applies the active transform itself at push time, so passing
+    /// it an already-transformed rect applies the transform twice. Interactive
+    /// verbs go the other way round — they need world space for hit-testing and
+    /// then undo it via `localize` — but a purely visual widget only ever wants
+    /// the local rect.
+    fn place_local(&mut self, width: f32, height: f32) -> Rect {
+        let align = *self.align_stack.last().unwrap_or(&AlignSpec::DEFAULT);
+        let [ox, oy] = align.offset(width, height);
+        Rect::new(ox, oy, width, height)
     }
 
     /// Clip subsequent drawing to a `w`×`h` rect at the current origin
@@ -737,15 +777,79 @@ impl<'a> UiContext<'a> {
     /// [`clip_rect`](Self::clip_rect) for the `inherit` semantics). Scoped to the
     /// enclosing `push`/`pop`.
     pub fn window_begin(&mut self, w: f32, h: f32, clip: bool, inherit: bool) {
+        let depth = self.window_stack.len();
+        self.window_begin_named(&format!("window#{depth}"), w, h, clip, inherit);
+    }
+
+    /// [`window_begin`](Self::window_begin) with a name for layout inspection.
+    ///
+    /// Identical in every rendering respect, but the window also opens a debug
+    /// scope declaring its rect, so [`DebugReport`](crate::debug::DebugReport)
+    /// can name this region and check that its contents actually stayed inside
+    /// it. Prefer this over `window_begin` — the name costs nothing at runtime
+    /// and is the difference between a report that reads `window#0` and one that
+    /// reads `inventory_panel`.
+    ///
+    /// The scope closes at the matching [`pop`](Self::pop), like the window
+    /// itself.
+    pub fn window_begin_named(
+        &mut self,
+        name: &str,
+        w: f32,
+        h: f32,
+        clip: bool,
+        inherit: bool,
+    ) {
+        let local = Rect::new(0.0, 0.0, w, h);
         let rect = self
             .backend
             .list_mut()
             .current_transform()
-            .transform_rect_aabb(Rect::new(0.0, 0.0, w, h));
+            .transform_rect_aabb(local);
         self.window_stack.push(WindowFrame { rect });
+        self.backend.list_mut().push_debug_scope_rect(name, local);
         if clip {
             self.clip_rect(w, h, inherit);
         }
+    }
+
+    /// Open a named debug scope (see [`DrawList::push_debug_scope`]). Pure
+    /// instrumentation: nothing is drawn and rendering is unaffected.
+    ///
+    /// Must be balanced with [`pop_debug_scope`](Self::pop_debug_scope), or
+    /// closed implicitly by a [`pop`](Self::pop) of the enclosing frame.
+    pub fn push_debug_scope(&mut self, name: impl Into<String>) {
+        self.backend.list_mut().push_debug_scope(name);
+    }
+
+    /// Open a named debug scope that declares the local-space box it means to
+    /// paint into (see [`DrawList::push_debug_scope_rect`]).
+    ///
+    /// Preferred over [`push_debug_scope`](Self::push_debug_scope): the declared
+    /// rect is what lets the report report an overflow, or notice that the
+    /// region drew nothing at all.
+    pub fn push_debug_scope_rect(&mut self, name: impl Into<String>, rect: Rect) {
+        self.backend.list_mut().push_debug_scope_rect(name, rect);
+    }
+
+    /// Close the innermost debug scope.
+    pub fn pop_debug_scope(&mut self) {
+        self.backend.list_mut().pop_debug_scope();
+    }
+
+    /// Run `body` inside a named debug scope declaring `rect`, closing the scope
+    /// afterwards even if `body` returns early. The convenient form when you
+    /// have the rect to hand.
+    pub fn debug_scope<R>(
+        &mut self,
+        name: impl Into<String>,
+        rect: Rect,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.push_debug_scope_rect(name, rect);
+        let out = body(self);
+        self.pop_debug_scope();
+        out
     }
 
     /// The current `UiWindow` rect in world space, or `None` when no window is
@@ -909,7 +1013,7 @@ impl<'a> UiContext<'a> {
         let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
         let width = self.default_field_width();
         let thickness = style.scalar(StyleKey::BorderWidth).max(1.0);
-        let rect = self.place_rect(width, thickness);
+        let rect = self.place_local(width, thickness);
         Separator::horizontal().draw(rect, self.backend.list_mut(), &style);
         self.advance(thickness);
     }
@@ -926,7 +1030,7 @@ impl<'a> UiContext<'a> {
         let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
         let width = w.unwrap_or_else(|| self.default_field_width());
         let height = style.scalar(StyleKey::InputHeight);
-        let rect = self.place_rect(width, height);
+        let rect = self.place_local(width, height);
         ProgressBar::new(value).draw(rect, self.backend.list_mut(), &style);
         self.advance(height);
     }
@@ -948,7 +1052,7 @@ impl<'a> UiContext<'a> {
             let list = self.backend.list_mut();
             b.measure_height(list, &style, width)
         };
-        let rect = self.place_rect(width, h);
+        let rect = self.place_local(width, h);
         b.draw(rect, self.backend.list_mut(), &style);
         self.advance(h);
     }
@@ -968,7 +1072,7 @@ impl<'a> UiContext<'a> {
         };
         let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
         let width = w.unwrap_or_else(|| self.default_field_width());
-        let rect = self.place_rect(width, h);
+        let rect = self.place_local(width, h);
         let content = Group::new(title).draw(rect, self.backend.list_mut(), &style);
         self.advance(h);
         content
@@ -985,7 +1089,7 @@ impl<'a> UiContext<'a> {
         };
         let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
         let width = w.unwrap_or_else(|| self.default_field_width());
-        let rect = self.place_rect(width, h);
+        let rect = self.place_local(width, h);
         Panel::draw_at(rect, self.backend.list_mut(), &style);
         self.advance(h);
     }
@@ -1843,14 +1947,19 @@ impl<'a> UiContext<'a> {
             }
         };
         let width = w.unwrap_or_else(|| self.default_field_width());
-        let viewport = self.place_rect(width, h);
+        // Hit-testing needs world space, drawing needs local space (the
+        // `DrawList` re-applies the active transform at push time). Localize, as
+        // every other interactive verb does — passing the world rect through to
+        // the widget would double-apply the translation and put the scrollbars
+        // at twice their intended offset.
+        let world = self.place_rect(width, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (viewport, mut local_input) = self.localize(inv, world, input);
         let sv = ScrollView::new(viewport);
         let style = StyleResolver::with_overlay_opt(
             theme,
             self.style_stack.last(),
         );
-        // Need a mutable InputState clone since ScrollView::begin takes &mut.
-        let mut local_input = self.effective_input(input);
         let begun = {
             let list = self.backend.list_mut();
             let state = match self.state.as_mut() {
@@ -1863,8 +1972,15 @@ impl<'a> UiContext<'a> {
             sv.begin(&mut state.scroll, list, &style, &mut local_input)
         };
         self.pending_scroll_viewport = Some(viewport);
+        self.pending_scroll_inv = Some(inv);
         self.pending_scroll_begin = Some(begun);
-        self.advance(h);
+        self.pending_scroll_height = Some(h);
+        // NB: the layout cursor is advanced by `scroll_end`, not here.
+        // `ScrollView::begin` has just pushed a transform for the scroll offset;
+        // advancing now would shift the caller's *content* down by the height of
+        // the viewport it is supposed to sit inside — and `ScrollView::end` pops
+        // that transform, so the advance would be discarded before it could move
+        // anything that follows.
         begun.inner
     }
 
@@ -1895,13 +2011,22 @@ impl<'a> UiContext<'a> {
             theme,
             self.style_stack.last(),
         );
+        let inv = self.pending_scroll_inv.take().unwrap_or(Affine2::IDENTITY);
         let mut local_input = self.effective_input(input);
+        let [mx, my] = inv.transform_point([local_input.mouse_x, local_input.mouse_y]);
+        local_input.mouse_x = mx;
+        local_input.mouse_y = my;
         let list = self.backend.list_mut();
         let state = match self.state.as_mut() {
             Some(s) => s,
             None => return,
         };
         sv.end(&mut state.scroll, list, &style, &mut local_input, begun);
+        // Now that `end` has popped the scroll transform, move the layout cursor
+        // past the whole viewport so the next verb does not draw over it.
+        if let Some(h) = self.pending_scroll_height.take() {
+            self.advance(h);
+        }
     }
 
     /// Draw a dropdown button showing `options[selected]`. Clicking the button
@@ -2046,6 +2171,14 @@ impl<'a> Drop for UiContext<'a> {
             0,
             "UiContext dropped with {} unbalanced modal_begin/end or popup_begin/end pair(s)",
             self.open_layer_kinds.len()
+        );
+        // An unbalanced debug scope does not corrupt rendering, but it silently
+        // swallows every later draw into the leaked scope and makes the layout
+        // report wrong — which is exactly when someone is relying on it.
+        let open_scopes = self.backend.list_mut().debug_scope_depth();
+        debug_assert_eq!(
+            open_scopes, 0,
+            "UiContext dropped with {open_scopes} unbalanced push_debug_scope/pop_debug_scope pair(s)"
         );
     }
 }
@@ -2698,6 +2831,201 @@ mod tests {
         // Re-balance the align stack so only the font-stack assert can fire.
         // (push() also grows align_stack; here we touched font_stack directly,
         // so align_stack is still balanced.)
+        drop(ui);
+    }
+
+    // ---- Non-interactive verbs must not double-apply the transform ----
+
+    /// `place_rect` returns world space, but `DrawList` applies the active
+    /// transform itself at push time. A verb that hands the world rect straight
+    /// to a widget therefore applies the translation twice — the widget lands at
+    /// `2 * offset` and, for a large enough offset, entirely off screen. These
+    /// pin each affected verb to the correct position.
+    fn drawn_bounds(list: &DrawList) -> Rect {
+        let mut acc = Rect::zero();
+        for c in &list.chrome_instances {
+            acc = acc.union(Rect::new(c.rect[0], c.rect[1], c.rect[2], c.rect[3]));
+        }
+        for v in &list.vertices {
+            let p = Rect::new(v.position[0], v.position[1], 0.0, 0.0);
+            acc = if acc.is_empty() {
+                Rect::new(p.x, p.y, 0.0, 0.0)
+            } else {
+                Rect::new(
+                    acc.x.min(p.x),
+                    acc.y.min(p.y),
+                    acc.right().max(p.x) - acc.x.min(p.x),
+                    acc.bottom().max(p.y) - acc.y.min(p.y),
+                )
+            };
+        }
+        acc
+    }
+
+    #[test]
+    fn panel_verb_lands_at_the_translated_origin_not_twice_it() {
+        let mut list = DrawList::new();
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = UiState::new();
+        {
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.push();
+            ui.translate(300.0, 200.0);
+            ui.panel(Some(100.0), 40.0);
+            ui.pop();
+        }
+        let b = drawn_bounds(&list);
+        assert!(
+            (b.x - 300.0).abs() < 0.5 && (b.y - 200.0).abs() < 0.5,
+            "panel should land at the translated origin (300, 200), got {b:?}"
+        );
+    }
+
+    #[test]
+    fn group_begin_lands_at_the_translated_origin_and_returns_a_local_rect() {
+        let mut list = DrawList::new();
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let content;
+        {
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.push();
+            ui.translate(400.0, 100.0);
+            content = ui.group_begin("Title", Some(200.0), 80.0);
+            ui.pop();
+        }
+        let b = drawn_bounds(&list);
+        assert!(
+            (b.x - 400.0).abs() < 0.5 && (b.y - 100.0).abs() < 0.5,
+            "group should land at (400, 100), got {b:?}"
+        );
+        // The content rect is in the caller's local space, so drawing into it
+        // through the same context needs no compensation for the translate.
+        assert!(
+            content.x >= 0.0 && content.x < 40.0,
+            "content rect should be local, got {content:?}"
+        );
+    }
+
+    #[test]
+    fn separator_progress_and_banner_land_at_the_translated_origin() {
+        for which in 0..3 {
+            let mut list = DrawList::new();
+            let theme = Theme::default();
+            let input = InputState::default();
+            let mut state = UiState::new();
+            {
+                let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+                ui.push();
+                ui.translate(250.0, 150.0);
+                match which {
+                    0 => ui.separator(),
+                    1 => ui.progress_bar(0.5, Some(120.0)),
+                    _ => ui.banner(Severity::Info, "hello", Some(160.0)),
+                }
+                ui.pop();
+            }
+            let b = drawn_bounds(&list);
+            assert!(
+                (b.x - 250.0).abs() < 1.0 && (b.y - 150.0).abs() < 1.0,
+                "verb {which} should land at (250, 150), got {b:?}"
+            );
+        }
+    }
+
+    // ---- Debug scopes ----
+
+    #[test]
+    fn window_begin_named_declares_its_rect_as_a_scope() {
+        let mut list = DrawList::new();
+        {
+            let mut ui = UiContext::new(&mut list);
+            ui.push();
+            ui.translate(40.0, 20.0);
+            ui.window_begin_named("inventory", 200.0, 120.0, false, true);
+            ui.pop();
+        }
+        let scopes = list.debug_scopes();
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].name, "inventory");
+        assert!(scopes[0].closed, "pop() must close the window's scope");
+        assert_eq!(
+            scopes[0].declared,
+            Some(Rect::new(40.0, 20.0, 200.0, 120.0)),
+            "the declared rect is the window rect in world space"
+        );
+    }
+
+    #[test]
+    fn plain_window_begin_still_gets_an_auto_named_scope() {
+        let mut list = DrawList::new();
+        {
+            let mut ui = UiContext::new(&mut list);
+            ui.push();
+            ui.window_begin(100.0, 50.0, false, true);
+            ui.pop();
+        }
+        assert_eq!(list.debug_scopes()[0].name, "window#0");
+    }
+
+    #[test]
+    fn pop_closes_scopes_opened_inside_the_frame() {
+        let mut list = DrawList::new();
+        {
+            let mut ui = UiContext::new(&mut list);
+            ui.push();
+            ui.push_debug_scope("leaked_by_caller");
+            ui.pop();
+            // The scope must not leak past the frame that opened it, or every
+            // later draw would be attributed to it.
+            assert_eq!(ui.backend.list_mut().debug_scope_depth(), 0);
+        }
+        assert!(list.debug_scopes()[0].closed);
+    }
+
+    #[test]
+    fn debug_scope_closure_balances_itself() {
+        let mut list = DrawList::new();
+        {
+            let mut ui = UiContext::new(&mut list);
+            let out = ui.debug_scope("card", Rect::new(0.0, 0.0, 50.0, 50.0), |ui| {
+                ui.quad(10.0, 10.0, [1.0; 4]);
+                7
+            });
+            assert_eq!(out, 7);
+        }
+        let s = list.debug_scopes();
+        assert_eq!(s.len(), 1);
+        assert!(s[0].closed);
+        assert_eq!(s[0].declared, Some(Rect::new(0.0, 0.0, 50.0, 50.0)));
+    }
+
+    #[test]
+    fn nested_windows_nest_their_scopes() {
+        let mut list = DrawList::new();
+        {
+            let mut ui = UiContext::new(&mut list);
+            ui.push();
+            ui.window_begin_named("outer", 300.0, 200.0, false, true);
+            ui.push();
+            ui.window_begin_named("inner", 100.0, 40.0, false, true);
+            ui.pop();
+            ui.pop();
+        }
+        let s = list.debug_scopes();
+        assert_eq!(s[0].name, "outer");
+        assert_eq!(s[1].name, "inner");
+        assert_eq!(s[1].parent, Some(0), "the inner window nests in the outer");
+    }
+
+    #[test]
+    #[should_panic(expected = "unbalanced push_debug_scope/pop_debug_scope")]
+    fn unbalanced_debug_scope_drop_panics_in_debug() {
+        let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        ui.push_debug_scope("never_popped");
         drop(ui);
     }
 

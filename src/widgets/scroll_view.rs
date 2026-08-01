@@ -264,7 +264,9 @@ impl ScrollView {
         }
 
         // Set up clip + transform for the content the caller is about to draw.
-        list.push_clip(inner);
+        // A viewport, not a boundary: rows either side of `inner` are supposed
+        // to be clipped away, so the debug report must not call that a defect.
+        list.push_clip_viewport(inner);
         list.push_transform();
         list.translate(-state.offset[0], -state.offset[1]);
 

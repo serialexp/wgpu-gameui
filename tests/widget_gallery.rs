@@ -25,6 +25,7 @@ use wgpu_gameui::{
     TooltipLayer,
     TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState, ease, lerp_color,
 };
+use wgpu_gameui::debug::DebugReport;
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
 
@@ -878,10 +879,15 @@ fn render_widget_gallery() {
                 let mut vstate = UiState::new();
                 let mut ui = UiContext::interactive(list, &input, &mut vstate, &theme);
                 ui.translate(r.x, r.y);
-                let inner = ui.group_begin("Group Title", Some(200.0), 80.0);
-                // Place a small text label inside the group
+                // `group_begin` auto-advances the layout cursor past the group,
+                // so wrap it in push/pop to discard that advance — `inner` is
+                // local to the *pre*-group transform, and the label belongs
+                // inside the group, not after it.
                 ui.push();
-                ui.translate(inner.x - r.x, inner.y - r.y);
+                let inner = ui.group_begin("Group Title", Some(200.0), 80.0);
+                ui.pop();
+                ui.push();
+                ui.translate(inner.x, inner.y);
                 ui.text("Content");
                 ui.pop();
             }
@@ -895,8 +901,13 @@ fn render_widget_gallery() {
                 let mut vstate = UiState::new();
                 let mut ui = UiContext::interactive(list, &input, &mut vstate, &theme);
                 ui.translate(r.x, r.y);
-                ui.panel(Some(200.0), 50.0);
+                // Same as the group above: discard `panel`'s auto-advance so the
+                // label lands inside the panel rather than below it.
                 ui.push();
+                ui.panel(Some(200.0), 50.0);
+                ui.pop();
+                ui.push();
+                ui.translate(12.0, 14.0);
                 ui.text("Inside panel");
                 ui.pop();
             }
@@ -978,8 +989,10 @@ fn render_widget_gallery() {
                     let mut ui = UiContext::interactive(list, &input, &mut vstate, &theme);
                     ui.translate(r.x, r.y);
                     let inner = ui.scroll_begin(Some(200.0), 100.0);
+                    // `inner` is local to the caller's transform, so no
+                    // compensation for the translate above is needed.
                     ui.push();
-                    ui.translate(inner.x - r.x, inner.y - r.y);
+                    ui.translate(inner.x, inner.y);
                     ui.text("Row 1");
                     ui.text("Row 2");
                     ui.text("Row 3");
@@ -1966,6 +1979,33 @@ fn render_widget_gallery() {
         tip_input.mouse_y = tooltip_rect.y + tooltip_rect.height / 2.0;
         tooltip.tick(999.0, &tip_input);
         tooltip.draw_into_layers(&mut layers, &tip_input, &StyleResolver::new(&theme), W as f32, h as f32);
+    }
+
+    // Dump the layout report alongside the PNG. The gallery is the largest real
+    // corpus of this crate's own widgets, so it is also the best check on
+    // whether the debug lints are useful or merely noisy — read the .txt when
+    // you change them.
+    {
+        let screen = Rect::new(0.0, 0.0, W as f32, h as f32);
+        let report = DebugReport::measured_layers(&mut layers, screen);
+        std::fs::create_dir_all("test_output").unwrap();
+        std::fs::write("test_output/widget_gallery.debug.txt", report.to_text())
+            .expect("write debug report");
+        std::fs::write("test_output/widget_gallery.debug.json", report.to_json())
+            .expect("write debug json");
+        eprintln!(
+            "wrote test_output/widget_gallery.debug.txt — {} nodes, {} problems ({} inferred names)",
+            report.nodes.len(),
+            report.problems.len(),
+            report.inferred_count()
+        );
+        let mut by_code: std::collections::BTreeMap<&str, usize> = Default::default();
+        for p in report.problems() {
+            *by_code.entry(p.code()).or_default() += 1;
+        }
+        for (code, n) in by_code {
+            eprintln!("  {code}: {n}");
+        }
     }
 
     let target = device.create_texture(&wgpu::TextureDescriptor {

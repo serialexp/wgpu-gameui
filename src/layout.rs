@@ -76,6 +76,67 @@ impl Rect {
             Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
         }
     }
+
+    /// Right edge (`x + width`).
+    pub fn right(&self) -> f32 {
+        self.x + self.width
+    }
+
+    /// Bottom edge (`y + height`).
+    pub fn bottom(&self) -> f32 {
+        self.y + self.height
+    }
+
+    /// True when this rect encloses no area (either dimension is zero or
+    /// negative). Note that primitives with an empty rect draw nothing — see
+    /// [`DrawList::quad`](crate::DrawList::quad), which returns early.
+    pub fn is_empty(&self) -> bool {
+        self.width <= 0.0 || self.height <= 0.0
+    }
+
+    /// The smallest rect containing both `self` and `other`.
+    ///
+    /// An empty rect is treated as "no contribution", so unioning onto
+    /// [`Rect::zero`] does not drag the result to the origin — that makes this
+    /// usable as a fold over a set of bounds.
+    pub fn union(&self, other: Rect) -> Rect {
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return *self;
+        }
+        let x0 = self.x.min(other.x);
+        let y0 = self.y.min(other.y);
+        let x1 = self.right().max(other.right());
+        let y1 = self.bottom().max(other.bottom());
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+
+    /// True when `other` lies entirely within `self`, within `tolerance` pixels
+    /// of slack on every side.
+    ///
+    /// Unlike [`contains`](Self::contains) this is edge-*inclusive*: a child
+    /// exactly filling its parent is contained. An empty `other` is trivially
+    /// contained (it covers nothing to spill out).
+    pub fn contains_rect(&self, other: Rect, tolerance: f32) -> bool {
+        if other.is_empty() {
+            return true;
+        }
+        other.x >= self.x - tolerance
+            && other.y >= self.y - tolerance
+            && other.right() <= self.right() + tolerance
+            && other.bottom() <= self.bottom() + tolerance
+    }
+
+    /// Shrink by `amount` on every side (negative `amount` grows). The result is
+    /// clamped to zero size rather than inverting when the inset exceeds half
+    /// the extent.
+    pub fn inset(&self, amount: f32) -> Rect {
+        let width = (self.width - amount * 2.0).max(0.0);
+        let height = (self.height - amount * 2.0).max(0.0);
+        Rect::new(self.x + amount, self.y + amount, width, height)
+    }
 }
 
 /// Anchor point for positioning relative to parent/screen.
@@ -1313,6 +1374,81 @@ pub fn vstack_fit(width: f32, spacing: f32, padding: f32, child_heights: &[f32])
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Rect helpers ----
+
+    #[test]
+    fn rect_edges_and_is_empty() {
+        let r = Rect::new(10.0, 20.0, 30.0, 40.0);
+        assert_eq!(r.right(), 40.0);
+        assert_eq!(r.bottom(), 60.0);
+        assert!(!r.is_empty());
+        assert!(Rect::new(5.0, 5.0, 0.0, 10.0).is_empty());
+        assert!(Rect::new(5.0, 5.0, 10.0, 0.0).is_empty());
+        assert!(Rect::new(5.0, 5.0, -1.0, 10.0).is_empty());
+        assert!(Rect::zero().is_empty());
+    }
+
+    #[test]
+    fn rect_union_covers_both() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 5.0, 10.0, 30.0);
+        let u = a.union(b);
+        assert_eq!((u.x, u.y, u.width, u.height), (0.0, 0.0, 30.0, 35.0));
+        // union is commutative
+        assert_eq!(b.union(a), u);
+    }
+
+    #[test]
+    fn rect_union_ignores_empty_operands() {
+        // This is what makes union usable as a fold seed: an empty accumulator
+        // must not drag the result back to the origin.
+        let a = Rect::new(50.0, 60.0, 10.0, 10.0);
+        assert_eq!(Rect::zero().union(a), a);
+        assert_eq!(a.union(Rect::zero()), a);
+        assert_eq!(Rect::zero().union(Rect::zero()), Rect::zero());
+    }
+
+    #[test]
+    fn rect_contains_rect_is_edge_inclusive() {
+        let parent = Rect::new(0.0, 0.0, 100.0, 100.0);
+        // exactly filling the parent counts as contained (unlike `contains`)
+        assert!(parent.contains_rect(parent, 0.0));
+        assert!(parent.contains_rect(Rect::new(10.0, 10.0, 20.0, 20.0), 0.0));
+        assert!(!parent.contains_rect(Rect::new(90.0, 10.0, 20.0, 20.0), 0.0));
+        assert!(!parent.contains_rect(Rect::new(-1.0, 10.0, 20.0, 20.0), 0.0));
+    }
+
+    #[test]
+    fn rect_contains_rect_honours_tolerance() {
+        let parent = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let spills = Rect::new(0.0, 0.0, 100.5, 100.0);
+        assert!(!parent.contains_rect(spills, 0.0));
+        assert!(parent.contains_rect(spills, 1.0), "0.5px spill within 1px tolerance");
+    }
+
+    #[test]
+    fn rect_contains_rect_empty_is_trivially_contained() {
+        let parent = Rect::new(0.0, 0.0, 10.0, 10.0);
+        // An empty rect covers nothing, so it cannot spill out — even when its
+        // origin sits outside the parent.
+        assert!(parent.contains_rect(Rect::new(500.0, 500.0, 0.0, 0.0), 0.0));
+    }
+
+    #[test]
+    fn rect_inset_shrinks_and_clamps() {
+        let r = Rect::new(10.0, 10.0, 100.0, 50.0);
+        let i = r.inset(5.0);
+        assert_eq!((i.x, i.y, i.width, i.height), (15.0, 15.0, 90.0, 40.0));
+        // negative amount grows
+        let g = r.inset(-5.0);
+        assert_eq!((g.x, g.y, g.width, g.height), (5.0, 5.0, 110.0, 60.0));
+        // over-inset clamps to zero rather than inverting
+        let c = r.inset(40.0);
+        assert_eq!(c.width, 20.0);
+        assert_eq!(c.height, 0.0);
+        assert!(c.is_empty());
+    }
 
     #[test]
     fn vstack_fit_sizes_container_and_places_rows() {

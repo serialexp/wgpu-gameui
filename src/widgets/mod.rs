@@ -40,7 +40,8 @@ pub(crate) use draw_list::ColorCmd;
 #[cfg(feature = "phosphor-icons")]
 pub use draw_list::IconMsdf;
 pub use draw_list::{
-    ChromeInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, NineSliceId, Vertex,
+    ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw, NineSliceDraw, NineSliceId,
+    PrimCounts, Vertex,
 };
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use focus::{FocusId, FocusState};

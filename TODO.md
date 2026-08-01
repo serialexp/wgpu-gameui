@@ -816,3 +816,96 @@ the daemon would otherwise work around:
   closure-based scope verb in the file, chosen for RAII balance; nesting is
   absolute (an inner `enabled_scope(true)` re-enables, restored on exit).
 
+
+---
+
+## 2026-08-02 — Layout inspection ("debug mode" for agents)
+
+Motivation: positioning bugs — a widget off-screen, overflowing its container,
+clipped away, or misaligned by a fraction — were invisible. There was no way to
+ask the library *what it actually drew*, and the only way to look at a frame was
+the headless-PNG recipe copy-pasted across ten test files. Agents in particular
+had no way to check their own work.
+
+- [x] **Debug scopes on `DrawList`.** `push_debug_scope(name)` /
+  `push_debug_scope_rect(name, rect)` / `pop_debug_scope()` /
+  `debug_scopes()` / `debug_scope_depth()` / `truncate_debug_scopes(depth)`,
+  plus `DebugScope` and `PrimCounts`. A scope records the *buffer lengths* at
+  push and pop; because every geometry buffer is append-only, that delimits a
+  contiguous span in each one. **No primitive method or widget changed**, and
+  the cost is zero unless a scope is pushed. `color_cmds` is deliberately not
+  spanned — `push_chrome_instance` merges runs by mutating its last element, so
+  it is the one buffer that is not append-only.
+- [x] **`DrawList::dropped_degenerate()`.** Counts primitives rejected by a
+  non-positive size/radius/thickness guard (11 call sites). This is the only
+  evidence that an element *collapsed*: `quad` and friends return early on a
+  degenerate rect, so a width computed as `available - padding * 2` that went
+  negative leaves nothing at all in any buffer. Spanned by scopes.
+- [x] **`src/debug.rs` — `DebugReport`.** `from_draw_list` / `measured` /
+  `from_layers` / `measured_layers` build a named, nested tree of world-space
+  bounding boxes ordered by `RenderPass` (buffer order is *not* Z order — the
+  renderer draws nine-slices → colour → icons → MSDF icons → text). Renders as
+  an indented tree via `to_text()` or as JSON via `to_json()` (hand-rolled; no
+  serde dependency), or straight to disk with `write_to_dir()`. Un-scoped draws
+  still appear, named on a best-effort basis (a text block by its own content,
+  an icon by its atlas key) and nested by geometric containment, with the report
+  stating how many names were inferred.
+- [x] **Lints + `assert_clean()`.** `Problem` / `Severity` / `LintConfig`, each
+  finding carrying its coordinates and a `hint()` explaining the likely cause.
+  Defaults are tuned to be silent on correct UIs: `partially_clipped` and
+  `sibling_overlap` are off (a scroll view and a panel background respectively
+  do those by design), `partially_off_screen` is off (toasts animate in from
+  off-screen), and `near_miss_alignment` only compares *named* siblings — a
+  panel's own border quads sit a pixel apart by construction. `assert_clean()`
+  guards on `Error` only; warnings cover the merely suspicious.
+- [x] **`DrawList::push_clip_viewport(rect)` / `viewport_clips()`.** A clip that
+  erases an element is a layout bug when the clip is a hard boundary (a window,
+  a panel) and *the entire point* when it is a viewport — a scroll view hides
+  the rows either side of its window on every frame it works correctly. Only the
+  pusher knows which it meant, so `ScrollView::begin`, `Dropdown`'s option list
+  and multiline `TextInput` now say so. The report tags nodes a viewport removed
+  with an `off-viewport` effect (so they are still visible in the tree, with the
+  reason) and skips them in the `fully_clipped` lint; what is left is content
+  that missed its container, which is now an `Error`. Sticky through nesting:
+  a node's clip is the whole stack intersected, so anything inside a viewport
+  carries a clip contained by it however deep. Took the widget gallery from 33
+  `fully_clipped` warnings to **zero problems across 863 nodes**.
+- [x] **`TextMeasurer::measure_block` / `DrawList::measure_block`.** Measures a
+  `TextBlock` as it will actually be laid out — font, weight, style, wrap, and
+  `vertical` included. The existing `measure*` methods hard-code most of those,
+  so they report the wrong size for any bold, italic, custom-font, or stacked
+  block.
+- [x] **`Rect` helpers.** `right`, `bottom`, `is_empty`, `union` (empty operands
+  contribute nothing, so it folds), `contains_rect(other, tolerance)`
+  (edge-inclusive), `inset`.
+- [x] **`UiContext` integration.** `push_debug_scope` / `push_debug_scope_rect` /
+  `pop_debug_scope` / `debug_scope(name, rect, |ui| …)`, scopes closed by the
+  enclosing `pop()`, and a `Drop` balance assert alongside the existing ones.
+  `window_begin` now opens a scope declaring its rect; `window_begin_named` gives
+  it a real name.
+- [x] **`src/render/capture.rs`.** `capture_draw_list` / `capture_layers` /
+  `write_png` need no async runtime (`Device::poll(Maintain::Wait)` is
+  synchronous) and are always available; `HeadlessGpu` sits behind the
+  **default-on** `headless` feature. Both non-obvious steps are handled: the
+  `LoadOp::Clear` pass `UiRenderer::render` does not do, and the 256-byte
+  row-alignment de-pad that otherwise shears the image.
+
+### Bugs this immediately found and fixed
+
+Running the report over the widget gallery reported 11 elements drawn entirely
+off-screen. All were one root cause: **`place_rect` returns *world* space, but
+`DrawList` re-applies the active transform at push time.**
+
+- [x] `panel`, `separator`, `progress_bar`, `banner`, `group_begin` passed the
+  world rect straight to a widget, double-applying the translation and placing
+  the widget at twice its intended offset. Fixed with a new private
+  `place_local`; the interactive verbs already localized correctly.
+- [x] `scroll_begin` had the same bug, plus its scrollbar hit-test compared a
+  world-space pointer against a local-space rect. It now localizes, storing the
+  begin-time inverse for `scroll_end` (which draws *after* `ScrollView::end`
+  pops the transform).
+- [x] `scroll_begin` advanced the layout cursor *before* the caller's content was
+  drawn, pushing that content out of the viewport it was supposed to sit inside —
+  and `ScrollView::end` then popped the transform, discarding the advance so
+  nothing after the scroll region moved either. The advance is now in
+  `scroll_end`. The gallery's scroll cell rendered completely empty before this.

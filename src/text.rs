@@ -1896,6 +1896,37 @@ impl TextMeasurer {
         )
     }
 
+    /// Measure a [`TextBlock`] **exactly as it will be laid out**, honouring its
+    /// font, weight, style, wrap policy, `max_width`, and `vertical` flag.
+    ///
+    /// The narrower `measure*` methods above each hard-code some of those
+    /// (`measure_styled` cannot do vertical text; everything below it assumes
+    /// the default font at `Weight::NORMAL`/`Style::Normal`), so measuring a
+    /// bold, italic, custom-font, or stacked block through them reports the
+    /// wrong size. Prefer this when you have the block itself — as debug
+    /// tooling and layout inspection do.
+    ///
+    /// An [`ellipsize`](TextBlock::ellipsize) block is measured **unwrapped on
+    /// one line**: the width the content *wants* before truncation. Compare it
+    /// against `max_width` to tell whether the ellipsis actually engaged.
+    pub fn measure_block(&mut self, block: &TextBlock) -> (f32, f32) {
+        let max_width = if block.ellipsize || block.vertical {
+            None
+        } else {
+            Some(block.max_width)
+        };
+        self.measure_keyed(
+            &block.content,
+            block.font_size,
+            max_width,
+            block.font.as_ref(),
+            block.weight,
+            block.style,
+            block.wrap,
+            block.vertical,
+        )
+    }
+
     /// Shared cache-keyed measurement backing [`measure_styled`] (horizontal) and
     /// [`measure_vertical`]. `vertical` is part of the cache key so the two
     /// orientations of the same string never collide.

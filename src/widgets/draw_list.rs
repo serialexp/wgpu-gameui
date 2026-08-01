@@ -192,6 +192,135 @@ pub struct IconMsdf {
     pub clip: Option<Rect>,
 }
 
+/// Per-buffer element counts — a snapshot of how much geometry a [`DrawList`]
+/// held at one instant, or (as a difference of two snapshots) how much a
+/// [`DebugScope`] emitted.
+///
+/// Every geometry buffer on `DrawList` is append-only between [`DrawList::clear`]
+/// calls, so a pair of these snapshots delimits a contiguous, stable range in
+/// each buffer. That is what lets debug scopes be recorded without touching a
+/// single primitive method.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrimCounts {
+    /// Soup vertices ([`DrawList::vertices`]).
+    pub vertices: usize,
+    /// Soup indices ([`DrawList::indices`]).
+    pub indices: usize,
+    /// Text blocks ([`DrawList::texts`]).
+    pub texts: usize,
+    /// Atlas icon draws ([`DrawList::icons`]).
+    pub icons: usize,
+    /// Nine-slice draws ([`DrawList::nine_slices`]).
+    pub nine_slices: usize,
+    /// MSDF vector icon draws ([`DrawList::icons_msdf`]).
+    #[cfg(feature = "phosphor-icons")]
+    pub icons_msdf: usize,
+    /// Instanced chrome rects ([`DrawList::chrome_instances`]).
+    pub chrome_instances: usize,
+    /// Instanced circles ([`DrawList::circle_instances`]).
+    pub circle_instances: usize,
+    /// Primitives silently dropped by a non-positive size/radius/thickness
+    /// guard. These leave **no trace in any buffer**, so this counter is the
+    /// only evidence that an element collapsed — see
+    /// [`DrawList::dropped_degenerate`].
+    pub dropped_degenerate: usize,
+}
+
+impl PrimCounts {
+    /// Total number of drawn primitives, counting each soup *triangle* once
+    /// (soup vertices are shared, so raw vertex count overstates the work).
+    pub fn total(&self) -> usize {
+        let soup_tris = self.indices / 3;
+        #[cfg(feature = "phosphor-icons")]
+        let msdf = self.icons_msdf;
+        #[cfg(not(feature = "phosphor-icons"))]
+        let msdf = 0;
+        soup_tris
+            + self.texts
+            + self.icons
+            + self.nine_slices
+            + msdf
+            + self.chrome_instances
+            + self.circle_instances
+    }
+
+    /// Element-wise `self - earlier`, saturating at zero. Use this to turn a
+    /// scope's `(start, end)` snapshot pair into "what this scope emitted".
+    pub fn since(&self, earlier: PrimCounts) -> PrimCounts {
+        PrimCounts {
+            vertices: self.vertices.saturating_sub(earlier.vertices),
+            indices: self.indices.saturating_sub(earlier.indices),
+            texts: self.texts.saturating_sub(earlier.texts),
+            icons: self.icons.saturating_sub(earlier.icons),
+            nine_slices: self.nine_slices.saturating_sub(earlier.nine_slices),
+            #[cfg(feature = "phosphor-icons")]
+            icons_msdf: self.icons_msdf.saturating_sub(earlier.icons_msdf),
+            chrome_instances: self
+                .chrome_instances
+                .saturating_sub(earlier.chrome_instances),
+            circle_instances: self
+                .circle_instances
+                .saturating_sub(earlier.circle_instances),
+            dropped_degenerate: self
+                .dropped_degenerate
+                .saturating_sub(earlier.dropped_degenerate),
+        }
+    }
+
+    /// True when no primitives at all fall in this span.
+    pub fn is_empty(&self) -> bool {
+        self.total() == 0
+    }
+}
+
+/// A named region of a [`DrawList`], recorded by
+/// [`push_debug_scope`](DrawList::push_debug_scope) /
+/// [`pop_debug_scope`](DrawList::pop_debug_scope).
+///
+/// Scopes are pure instrumentation — they emit no geometry and cost nothing
+/// unless pushed. Each one owns the contiguous span of primitives emitted
+/// between its push and its pop, which is what
+/// [`DebugReport`](crate::debug::DebugReport) turns into a named, nested tree
+/// of bounding boxes.
+///
+/// Prefer [`push_debug_scope_rect`](DrawList::push_debug_scope_rect) where the
+/// caller knows the box it *intends* to fill: without a declared rect a scope's
+/// bounds are derived from what it painted, so it can never be found to have
+/// overflowed, and a widget that collapsed to nothing is indistinguishable from
+/// one that was never drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugScope {
+    /// Caller-supplied label, e.g. `"settings_window/ok_button"`.
+    pub name: String,
+    /// Index of the enclosing scope in [`DrawList::debug_scopes`], if nested.
+    pub parent: Option<usize>,
+    /// Nesting depth (0 for a top-level scope).
+    pub depth: usize,
+    /// The box this scope said it would paint into, in **world space** (the
+    /// active transform is applied at push time, as [`DrawList::push_clip`]
+    /// does). `None` when opened via [`DrawList::push_debug_scope`].
+    pub declared: Option<Rect>,
+    /// The clip rect in force when the scope was pushed, in world space.
+    /// Recorded directly rather than reconstructed from per-primitive clip
+    /// data, so it stays correct for primitives that carry no clip of their own.
+    pub clip: Option<Rect>,
+    /// Buffer lengths when the scope was pushed.
+    pub start: PrimCounts,
+    /// Buffer lengths when the scope was popped. Equal to `start` until then;
+    /// a scope left unpopped at report time is treated as closing at the end of
+    /// the list.
+    pub end: PrimCounts,
+    /// False until [`pop_debug_scope`](DrawList::pop_debug_scope) closes it.
+    pub closed: bool,
+}
+
+impl DebugScope {
+    /// Primitives emitted inside this scope (including nested child scopes).
+    pub fn counts(&self) -> PrimCounts {
+        self.end.since(self.start)
+    }
+}
+
 /// Draw list for collecting render commands.
 ///
 /// Owns a transform stack and a tint stack: every primitive method consults
@@ -227,8 +356,21 @@ pub struct DrawList {
     pub(crate) soup_committed_indices: u32,
     pub(crate) text_measurer: TextMeasurer,
     clip_stack: Vec<Rect>,
+    /// World-space rects of clips pushed via
+    /// [`push_clip_viewport`](DrawList::push_clip_viewport). See
+    /// [`viewport_clips`](DrawList::viewport_clips).
+    viewport_clips: Vec<Rect>,
     transform_stack: Vec<Affine2>,
     tint_stack: Vec<[f32; 4]>,
+    /// Recorded debug scopes, in push order. Empty (and never allocated) unless
+    /// [`push_debug_scope`](Self::push_debug_scope) is used, so instrumentation
+    /// costs nothing when it is off.
+    debug_scopes: Vec<DebugScope>,
+    /// Indices into `debug_scopes` for the currently-open scopes.
+    debug_scope_stack: Vec<usize>,
+    /// Running count of primitives rejected by a non-positive size/radius/
+    /// thickness guard. See [`DrawList::dropped_degenerate`].
+    dropped_degenerate: u32,
     /// Logged-once flag for "tried to draw rotated text" — glyphon does not
     /// support rotation, so we silently render axis-aligned.
     text_rotation_warned: bool,
@@ -254,8 +396,12 @@ impl Default for DrawList {
             soup_committed_indices: 0,
             text_measurer: TextMeasurer::default(),
             clip_stack: Vec::new(),
+            viewport_clips: Vec::new(),
             transform_stack: vec![Affine2::IDENTITY],
             tint_stack: vec![[1.0, 1.0, 1.0, 1.0]],
+            debug_scopes: Vec::new(),
+            debug_scope_stack: Vec::new(),
+            dropped_degenerate: 0,
             text_rotation_warned: false,
             id: next_draw_list_id(),
         }
@@ -298,8 +444,12 @@ impl DrawList {
             soup_committed_indices: 0,
             text_measurer: TextMeasurer::with_font_system(font_system),
             clip_stack: Vec::new(),
+            viewport_clips: Vec::new(),
             transform_stack: vec![Affine2::IDENTITY],
             tint_stack: vec![[1.0, 1.0, 1.0, 1.0]],
+            debug_scopes: Vec::new(),
+            debug_scope_stack: Vec::new(),
+            dropped_degenerate: 0,
             text_rotation_warned: false,
             id: next_draw_list_id(),
         }
@@ -314,10 +464,13 @@ impl DrawList {
         self.id
     }
 
-    /// Clear all queued geometry/commands and reset the clip, transform, and
-    /// tint stacks to their identity base, ready to reuse for the next frame.
-    /// The shared font system / measurer is retained.
+    /// Clear all queued geometry/commands and reset the clip, transform, tint,
+    /// and debug-scope stacks to their base state, ready to reuse for the next
+    /// frame. The shared font system / measurer is retained.
     pub fn clear(&mut self) {
+        self.debug_scopes.clear();
+        self.debug_scope_stack.clear();
+        self.dropped_degenerate = 0;
         self.vertices.clear();
         self.indices.clear();
         self.texts.clear();
@@ -330,6 +483,7 @@ impl DrawList {
         self.color_cmds.clear();
         self.soup_committed_indices = 0;
         self.clip_stack.clear();
+        self.viewport_clips.clear();
         self.transform_stack.clear();
         self.transform_stack.push(Affine2::IDENTITY);
         self.tint_stack.clear();
@@ -347,6 +501,15 @@ impl DrawList {
         max_width: Option<f32>,
     ) -> (f32, f32) {
         self.text_measurer.measure(text, font_size, max_width)
+    }
+
+    /// Measure a queued [`TextBlock`] exactly as it will be laid out — font,
+    /// weight, style, wrap, and vertical stacking included. See
+    /// [`TextMeasurer::measure_block`]; prefer this over
+    /// [`measure_text`](Self::measure_text), which assumes the default font at
+    /// normal weight and style.
+    pub fn measure_block(&mut self, block: &TextBlock) -> (f32, f32) {
+        self.text_measurer.measure_block(block)
     }
 
     /// Per-font vertical metrics for optical (cap-height) centring, for the given
@@ -447,6 +610,117 @@ impl DrawList {
         crate::text::text_visual_layout(&mut fs, text, font_size, lh, mw, wrap, None, direction)
     }
 
+    // ---- Debug scopes ----
+
+    /// Current buffer lengths, as a [`PrimCounts`] snapshot.
+    fn prim_counts(&self) -> PrimCounts {
+        PrimCounts {
+            vertices: self.vertices.len(),
+            indices: self.indices.len(),
+            texts: self.texts.len(),
+            icons: self.icons.len(),
+            nine_slices: self.nine_slices.len(),
+            #[cfg(feature = "phosphor-icons")]
+            icons_msdf: self.icons_msdf.len(),
+            chrome_instances: self.chrome_instances.len(),
+            circle_instances: self.circle_instances.len(),
+            dropped_degenerate: self.dropped_degenerate as usize,
+        }
+    }
+
+    /// Open a named debug scope. Everything drawn until the matching
+    /// [`pop_debug_scope`](Self::pop_debug_scope) is attributed to `name` in the
+    /// [`DebugReport`](crate::debug::DebugReport).
+    ///
+    /// Emits no geometry and does not affect rendering in any way. Scopes nest.
+    ///
+    /// Prefer [`push_debug_scope_rect`](Self::push_debug_scope_rect) when you
+    /// know the box you mean to fill — it unlocks the overflow and
+    /// "drew nothing" checks, which cannot be inferred from geometry alone.
+    pub fn push_debug_scope(&mut self, name: impl Into<String>) {
+        self.open_debug_scope(name.into(), None);
+    }
+
+    /// Open a named debug scope that declares the box it intends to paint into.
+    ///
+    /// `rect` is in local space and transformed to its world-space AABB by the
+    /// active transform, matching [`push_clip`](Self::push_clip). Declaring the
+    /// rect is what lets the report tell "painted outside its box" and "drew
+    /// nothing at all" apart from a scope that simply had little to draw.
+    pub fn push_debug_scope_rect(&mut self, name: impl Into<String>, rect: Rect) {
+        let world = self.current_transform().transform_rect_aabb(rect);
+        self.open_debug_scope(name.into(), Some(world));
+    }
+
+    fn open_debug_scope(&mut self, name: String, declared: Option<Rect>) {
+        let start = self.prim_counts();
+        let parent = self.debug_scope_stack.last().copied();
+        let depth = self.debug_scope_stack.len();
+        let index = self.debug_scopes.len();
+        self.debug_scopes.push(DebugScope {
+            name,
+            parent,
+            depth,
+            declared,
+            clip: self.current_clip(),
+            start,
+            end: start,
+            closed: false,
+        });
+        self.debug_scope_stack.push(index);
+    }
+
+    /// Close the innermost open debug scope. No-op when none is open, so an
+    /// unbalanced pop cannot corrupt the record (it just loses attribution).
+    pub fn pop_debug_scope(&mut self) {
+        let Some(index) = self.debug_scope_stack.pop() else {
+            return;
+        };
+        let end = self.prim_counts();
+        let scope = &mut self.debug_scopes[index];
+        scope.end = end;
+        scope.closed = true;
+    }
+
+    /// All debug scopes recorded on this list, in push order. Parent indices in
+    /// [`DebugScope::parent`] refer into this slice.
+    pub fn debug_scopes(&self) -> &[DebugScope] {
+        &self.debug_scopes
+    }
+
+    /// How many primitives were rejected by a non-positive size, radius, or
+    /// thickness guard since the last [`clear`](Self::clear).
+    ///
+    /// This is the crate's only signal for a whole class of layout bug. Every
+    /// primitive returns early on a degenerate rect — `quad` bails on
+    /// `width <= 0.0`, and so on — which means an element whose size was
+    /// computed as, say, `rect.width - padding * 2.0` and came out negative
+    /// **vanishes leaving nothing at all in any buffer**. No amount of
+    /// inspecting the geometry can distinguish that from an element that was
+    /// never meant to be drawn; a non-zero count here can.
+    ///
+    /// Note that a legitimately hidden element (an `if` that chose not to draw)
+    /// does *not* increment this — only one that asked to draw something
+    /// impossible.
+    pub fn dropped_degenerate(&self) -> u32 {
+        self.dropped_degenerate
+    }
+
+    /// Number of debug scopes currently open. Callers that scope by depth (as
+    /// [`UiContext`](crate::UiContext) does) snapshot this and
+    /// [`truncate_debug_scopes`](Self::truncate_debug_scopes) back to it.
+    pub fn debug_scope_depth(&self) -> usize {
+        self.debug_scope_stack.len()
+    }
+
+    /// Close open debug scopes until only `depth` remain (no-op if already at
+    /// or below `depth`).
+    pub fn truncate_debug_scopes(&mut self, depth: usize) {
+        while self.debug_scope_stack.len() > depth {
+            self.pop_debug_scope();
+        }
+    }
+
     // ---- Clip stack ----
 
     /// Push a clipping rectangle. Nested clips are intersected with the current clip.
@@ -474,6 +748,36 @@ impl DrawList {
     pub fn push_clip_exact(&mut self, rect: Rect) {
         let world_rect = self.current_transform().transform_rect_aabb(rect);
         self.clip_stack.push(world_rect);
+    }
+
+    /// Push a clip that is a **viewport**: a deliberately small window onto
+    /// content that is expected to be larger than it — a scroll view, a
+    /// dropdown's option list, a horizontally-scrolled text field.
+    ///
+    /// Geometrically identical to [`push_clip`](Self::push_clip). The only
+    /// difference is intent, and intent is exactly what the debug report cannot
+    /// infer: a clip that removes an element entirely is a layout bug when the
+    /// clip is a hard boundary (a window, a panel) and *the whole point* when it
+    /// is a viewport. Recording which is which is what lets
+    /// [`DebugReport`](crate::debug::DebugReport) flag the first and stay quiet
+    /// about the second.
+    ///
+    /// The recorded rect is the effective (already intersected, world-space)
+    /// clip, and the marking is sticky for the subtree: anything drawn while
+    /// this clip is active — including under further nested clips — counts as
+    /// living inside a viewport.
+    pub fn push_clip_viewport(&mut self, rect: Rect) {
+        self.push_clip(rect);
+        if let Some(clip) = self.current_clip() {
+            self.viewport_clips.push(clip);
+        }
+    }
+
+    /// Effective world-space rects of every viewport clip pushed this frame, in
+    /// push order. Read by the debug report; see
+    /// [`push_clip_viewport`](Self::push_clip_viewport).
+    pub fn viewport_clips(&self) -> &[Rect] {
+        &self.viewport_clips
     }
 
     /// Pop the current clipping rectangle.
@@ -617,6 +921,7 @@ impl DrawList {
     /// still transforms correctly.
     pub fn quad(&mut self, x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) {
         if width <= 0.0 || height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         if self.current_transform().is_translate_only() {
@@ -654,6 +959,7 @@ impl DrawList {
     /// transform + tint via `vertex`. No-op on non-positive size.
     pub fn quad_gradient(&mut self, rect: Rect, colors: [[f32; 4]; 4]) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         let x0 = rect.x;
@@ -684,6 +990,7 @@ impl DrawList {
     /// [`vertical_gradient`](Self::vertical_gradient).
     pub fn linear_gradient(&mut self, rect: Rect, start: [f32; 4], end: [f32; 4], angle: f32) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         let (s, c) = angle.sin_cos();
@@ -727,6 +1034,7 @@ impl DrawList {
     /// iso-color rings are circles centered in the rect, not ellipses.
     pub fn radial_gradient(&mut self, rect: Rect, inner: [f32; 4], outer: [f32; 4], segments: u32) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         let segments = segments.max(3);
@@ -760,6 +1068,7 @@ impl DrawList {
         let dy = p1[1] - p0[1];
         let len = (dx * dx + dy * dy).sqrt();
         if len <= f32::EPSILON || thickness <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
 
@@ -922,6 +1231,7 @@ impl DrawList {
     /// exactly like [`DrawList::quad`].
     pub fn rect_outline(&mut self, rect: Rect, thickness: f32, color: [f32; 4]) {
         if thickness <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         // Fast path: one outline-only SDF instance (radius 0, transparent fill)
@@ -962,6 +1272,7 @@ impl DrawList {
         color: [f32; 4],
     ) {
         if thickness <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         if radius <= 0.0 {
@@ -1068,6 +1379,7 @@ impl DrawList {
         border: [f32; 4],
     ) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
 
@@ -1236,6 +1548,7 @@ impl DrawList {
     /// other primitives.
     pub fn circle(&mut self, center: (f32, f32), radius: f32, color: [f32; 4]) {
         if radius <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         // Fast path: one SDF disc instance (smooth at any radius) instead of a
@@ -1265,6 +1578,7 @@ impl DrawList {
         color: [f32; 4],
     ) {
         if radius <= 0.0 || thickness <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         // Fast path: one SDF ring instance instead of a stroked-arc band.
@@ -1443,6 +1757,7 @@ impl DrawList {
     #[cfg(feature = "phosphor-icons")]
     pub fn icon_msdf(&mut self, rect: Rect, icon: PhosphorIcon, tint: [f32; 4]) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
             return;
         }
         let Some(glyph_id) = phosphor_glyph_id(icon) else {
@@ -1589,7 +1904,7 @@ mod tests {
     use crate::affine::Affine2;
     use crate::layout::Rect;
 
-    use super::DrawList;
+    use super::{DrawList, PrimCounts};
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -2358,6 +2673,264 @@ mod tests {
         assert!(list.chrome_instances.is_empty());
         assert!(list.color_cmds.is_empty());
         assert_eq!(list.soup_committed_indices, 0);
+    }
+
+    // ---- Debug scopes ----
+
+    #[test]
+    fn debug_scope_records_span_of_emitted_primitives() {
+        let mut list = DrawList::new();
+        list.chrome_rect(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.push_debug_scope("inner");
+        list.chrome_rect(Rect::new(0.0, 0.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(Rect::new(5.0, 0.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.pop_debug_scope();
+        list.chrome_rect(Rect::new(0.0, 0.0, 3.0, 3.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+
+        let scopes = list.debug_scopes();
+        assert_eq!(scopes.len(), 1);
+        let s = &scopes[0];
+        assert_eq!(s.name, "inner");
+        assert!(s.closed);
+        // The scope owns exactly the two chrome rects drawn between push and pop.
+        assert_eq!(s.start.chrome_instances, 1);
+        assert_eq!(s.end.chrome_instances, 3);
+        assert_eq!(s.counts().chrome_instances, 2);
+        assert_eq!(s.counts().total(), 2);
+    }
+
+    #[test]
+    fn debug_scopes_nest_with_parent_and_depth() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("window");
+        list.push_debug_scope("row");
+        list.push_debug_scope("button");
+        list.pop_debug_scope();
+        list.pop_debug_scope();
+        list.pop_debug_scope();
+
+        let s = list.debug_scopes();
+        assert_eq!(s.len(), 3);
+        assert_eq!((s[0].parent, s[0].depth), (None, 0));
+        assert_eq!((s[1].parent, s[1].depth), (Some(0), 1));
+        assert_eq!((s[2].parent, s[2].depth), (Some(1), 2));
+        assert!(s.iter().all(|sc| sc.closed));
+        assert_eq!(list.debug_scope_depth(), 0);
+    }
+
+    #[test]
+    fn sibling_scopes_get_the_same_parent() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("panel");
+        list.push_debug_scope("a");
+        list.pop_debug_scope();
+        list.push_debug_scope("b");
+        list.pop_debug_scope();
+        list.pop_debug_scope();
+
+        let s = list.debug_scopes();
+        assert_eq!(s[1].parent, Some(0));
+        assert_eq!(s[2].parent, Some(0));
+        assert_eq!(s[1].depth, 1);
+        assert_eq!(s[2].depth, 1);
+    }
+
+    #[test]
+    fn declared_rect_is_transformed_to_world_space() {
+        let mut list = DrawList::new();
+        list.push_transform();
+        list.translate(100.0, 50.0);
+        list.push_debug_scope_rect("moved", Rect::new(10.0, 10.0, 20.0, 20.0));
+        list.pop_debug_scope();
+        list.pop_transform();
+
+        let declared = list.debug_scopes()[0].declared.expect("declared rect");
+        assert_eq!(
+            (declared.x, declared.y, declared.width, declared.height),
+            (110.0, 60.0, 20.0, 20.0)
+        );
+    }
+
+    #[test]
+    fn scope_records_active_clip() {
+        let mut list = DrawList::new();
+        list.push_clip(Rect::new(5.0, 6.0, 30.0, 40.0));
+        list.push_debug_scope("clipped");
+        list.pop_debug_scope();
+        list.pop_clip();
+        list.push_debug_scope("unclipped");
+        list.pop_debug_scope();
+
+        let s = list.debug_scopes();
+        assert_eq!(s[0].clip, Some(Rect::new(5.0, 6.0, 30.0, 40.0)));
+        assert_eq!(s[1].clip, None);
+    }
+
+    #[test]
+    fn unpopped_scope_stays_open() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("leaked");
+        list.chrome_rect(Rect::new(0.0, 0.0, 4.0, 4.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+
+        let s = &list.debug_scopes()[0];
+        assert!(!s.closed, "an unpopped scope must be flagged, not silently closed");
+        assert_eq!(s.end, s.start, "end is only stamped on pop");
+        assert_eq!(list.debug_scope_depth(), 1);
+    }
+
+    #[test]
+    fn pop_without_push_is_a_noop() {
+        let mut list = DrawList::new();
+        list.pop_debug_scope();
+        list.pop_debug_scope();
+        assert!(list.debug_scopes().is_empty());
+        assert_eq!(list.debug_scope_depth(), 0);
+    }
+
+    #[test]
+    fn truncate_debug_scopes_closes_back_to_depth() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("a");
+        list.push_debug_scope("b");
+        list.push_debug_scope("c");
+        list.truncate_debug_scopes(1);
+
+        assert_eq!(list.debug_scope_depth(), 1);
+        let s = list.debug_scopes();
+        assert!(!s[0].closed, "the scope at the retained depth stays open");
+        assert!(s[1].closed);
+        assert!(s[2].closed);
+    }
+
+    #[test]
+    fn clear_resets_debug_scopes() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("stale");
+        list.chrome_rect(Rect::new(0.0, 0.0, 4.0, 4.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.pop_debug_scope();
+        assert_eq!(list.debug_scopes().len(), 1);
+
+        list.clear();
+        assert!(list.debug_scopes().is_empty());
+        assert_eq!(list.debug_scope_depth(), 0);
+    }
+
+    #[test]
+    fn scopes_cost_nothing_when_unused() {
+        let mut list = DrawList::new();
+        list.quad(0.0, 0.0, 10.0, 10.0, [1.0; 4]);
+        assert!(list.debug_scopes().is_empty());
+        assert_eq!(list.debug_scope_depth(), 0);
+    }
+
+    #[test]
+    fn adjacent_scopes_own_disjoint_ranges_despite_command_run_merging() {
+        // `push_chrome_instance` MERGES consecutive chrome draws into one
+        // `ColorCmd::Chrome` run by mutating the last command in place, so
+        // `color_cmds` is NOT append-only and must never be spanned. The
+        // instance buffers themselves are, which is what scopes rely on.
+        let mut list = DrawList::new();
+        list.push_debug_scope("a");
+        list.chrome_rect(Rect::new(0.0, 0.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.pop_debug_scope();
+        list.push_debug_scope("b");
+        list.chrome_rect(Rect::new(5.0, 0.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.pop_debug_scope();
+
+        // One merged draw command spanning both scopes...
+        assert_eq!(list.color_cmds.len(), 1, "runs merge across the scope boundary");
+        // ...but the scopes still own disjoint, correct instance ranges.
+        let s = list.debug_scopes();
+        assert_eq!((s[0].start.chrome_instances, s[0].end.chrome_instances), (0, 1));
+        assert_eq!((s[1].start.chrome_instances, s[1].end.chrome_instances), (1, 2));
+    }
+
+    // ---- Degenerate-drop counter ----
+
+    #[test]
+    fn degenerate_quad_is_counted_not_silently_lost() {
+        let mut list = DrawList::new();
+        // The classic bug: padding ate the whole width.
+        list.quad(10.0, 10.0, -4.0, 20.0, [1.0; 4]);
+        assert!(list.vertices.is_empty(), "nothing is drawn");
+        assert!(list.chrome_instances.is_empty());
+        assert_eq!(list.dropped_degenerate(), 1, "but the drop is recorded");
+    }
+
+    #[test]
+    fn degenerate_drops_counted_across_primitive_kinds() {
+        let mut list = DrawList::new();
+        list.quad(0.0, 0.0, 0.0, 10.0, [1.0; 4]);
+        list.chrome_rect(Rect::new(0.0, 0.0, 10.0, 0.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.rect_outline(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0, [1.0; 4]);
+        list.circle((5.0, 5.0), 0.0, [1.0; 4]);
+        list.line([0.0, 0.0], [10.0, 0.0], -1.0, [1.0; 4]);
+        assert_eq!(list.dropped_degenerate(), 5);
+    }
+
+    #[test]
+    fn rounded_rect_fallback_counts_the_drop_only_once() {
+        // `rounded_rect` delegates a degenerate rect to `quad`; only the
+        // delegate may count it, or one mistake reads as two.
+        let mut list = DrawList::new();
+        list.rounded_rect(Rect::new(0.0, 0.0, -5.0, 10.0), 4.0, [1.0; 4]);
+        assert_eq!(list.dropped_degenerate(), 1);
+    }
+
+    #[test]
+    fn healthy_primitives_do_not_count_as_drops() {
+        let mut list = DrawList::new();
+        list.quad(0.0, 0.0, 10.0, 10.0, [1.0; 4]);
+        list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
+        list.circle((5.0, 5.0), 3.0, [1.0; 4]);
+        assert_eq!(list.dropped_degenerate(), 0);
+    }
+
+    #[test]
+    fn scope_spans_the_drop_counter() {
+        let mut list = DrawList::new();
+        list.quad(0.0, 0.0, -1.0, 5.0, [1.0; 4]); // outside any scope
+        list.push_debug_scope("toolbar");
+        list.quad(0.0, 0.0, -1.0, 5.0, [1.0; 4]);
+        list.quad(0.0, 0.0, 5.0, -1.0, [1.0; 4]);
+        list.pop_debug_scope();
+
+        let s = &list.debug_scopes()[0];
+        assert_eq!(s.counts().dropped_degenerate, 2, "attributed to the scope");
+        assert!(s.counts().is_empty(), "a scope that only dropped draws nothing");
+        assert_eq!(list.dropped_degenerate(), 3, "list-wide total includes the loose one");
+    }
+
+    #[test]
+    fn clear_resets_the_drop_counter() {
+        let mut list = DrawList::new();
+        list.quad(0.0, 0.0, -1.0, 5.0, [1.0; 4]);
+        assert_eq!(list.dropped_degenerate(), 1);
+        list.clear();
+        assert_eq!(list.dropped_degenerate(), 0);
+    }
+
+    #[test]
+    fn prim_counts_since_saturates_and_totals_triangles() {
+        let a = PrimCounts {
+            indices: 6,
+            texts: 1,
+            ..PrimCounts::default()
+        };
+        let b = PrimCounts {
+            indices: 12,
+            texts: 3,
+            chrome_instances: 2,
+            ..PrimCounts::default()
+        };
+        let d = b.since(a);
+        assert_eq!(d.indices, 6);
+        assert_eq!(d.texts, 2);
+        assert_eq!(d.chrome_instances, 2);
+        // 6 indices = 2 triangles, + 2 texts + 2 chrome
+        assert_eq!(d.total(), 6);
+        // reversed subtraction saturates rather than underflowing
+        assert!(a.since(b).is_empty());
     }
 
     #[test]

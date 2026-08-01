@@ -17,6 +17,11 @@ framing, per-subtree styling, and a Teardown-style immediate-mode verb API.
 - **Dual API.** Draw raw widgets against a `DrawContext` for full control, or
   use the `UiContext` / `Frame` façade for auto-advancing, stateful verbs
   (`text_button`, `slider`, `text_input`, …) — the Teardown port target.
+- **Inspectable.** Ask a finished frame what it actually drew: `DebugReport`
+  dumps a named tree of world-space boxes plus the things that look wrong with
+  them (off-screen, overflowing its container, clipped away, misaligned), as
+  text or JSON, with `assert_clean()` to guard a layout in a test. See
+  [Debugging & layout inspection](#debugging--layout-inspection).
 
 Dual-licensed MIT OR Apache-2.0.
 
@@ -127,8 +132,9 @@ cargo run --example hello_ui
 A headless render of the full widget set is checked into the test suite:
 
 ```
-cargo test --test widget_gallery -- --ignored --nocapture
+DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
 # writes test_output/widget_gallery.png
+#      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 ```
 
 ---
@@ -150,7 +156,8 @@ cargo test --test widget_gallery -- --ignored --nocapture
 
 - **`DrawList`** is the pure data layer: a CPU-side command list of quads,
   rounded rects, lines, circles, icons, nine-slices, and text blocks. It owns
-  the transform stack, tint stack, and clip stack. No GPU state.
+  the transform stack, tint stack, clip stack, and (when used) debug scopes.
+  No GPU state.
 - **`DrawContext`** bundles a `&mut DrawList` with `&mut FocusState`,
   `&Theme`, `&InputState`, and screen dimensions, plus optional seams for
   animation (`with_animations`) and cursor requests (`with_cursor`). Raw
@@ -243,12 +250,117 @@ cycles through registered `FocusId`s, scoped to the active layer.
 
 ---
 
+## Debugging & layout inspection
+
+Positioning bugs are invisible in an immediate-mode library: a widget drawn
+off-screen, overflowing its container, clipped away, or misaligned by a fraction
+of a pixel produces no error — just a wrong picture. `DebugReport` closes that
+gap by describing a *finished* frame.
+
+```rust
+use wgpu_gameui::debug::DebugReport;
+
+let report = DebugReport::measured_layers(&mut layers, screen);
+println!("{}", report.to_text());
+report.assert_clean();                       // panics with the full dump
+report.write_to_dir("target/ui-debug")?;     // frame.txt + frame.json
+```
+
+`to_text()` renders an indented tree of world-space boxes followed by a
+`PROBLEMS` section; `to_json()` gives the same thing machine-readably (hand
+written — the crate has no serde dependency).
+
+```
+screen 0.0,0.0 800.0x600.0   nodes=41  problems=1  text=measured
+────────────────────────────────────────────────────────────────
+Sidebar [scope] 0.0,0.0 240.0x600.0  declared=0.0,0.0 200.0x600.0
+  chrome#3 [chrome] 8.0,8.0 224.0x32.0
+  "Settings" [text] 16.0,14.0 52.1x20.0
+────────────────────────────────────────────────────────────────
+PROBLEMS (1):
+!! WARN  overflows_declared      Sidebar
+   painted 0.0,0.0 240.0x600.0 but declared 0.0,0.0 200.0x600.0 — overshoots by 40.0px
+   painted outside the rect this scope declared — content is larger than the
+   box reserved for it, so it will collide with whatever sits next to it
+```
+
+Every finding carries its coordinates and a `hint()` explaining the likely
+cause, so the dump is actionable without reading this crate's source.
+
+### Naming what you drew
+
+The report works with no instrumentation at all: unscoped draws are named on a
+best-effort basis (a text block by its own content, an icon by its atlas key,
+otherwise `chrome#12`) and nested by geometric containment. Naming a region
+gives better output *and* enables two checks that pure geometry cannot express:
+
+```rust
+ui.debug_scope("Sidebar", sidebar_rect, |ui| {
+    ui.text("Settings");
+    // …
+});
+```
+
+A scope that declares a rect can be caught **overflowing** it — the only
+authoritative overflow check, since a region's painted bounds are derived from
+its children and so can never overflow themselves — and caught **painting
+nothing** into a box it reserved. Scopes cost nothing when unused: a scope
+records the *buffer lengths* at push and pop, and because every geometry buffer
+is append-only that already delimits its span, so no primitive method or widget
+has to know scopes exist.
+
+### Clips: boundary vs viewport
+
+A clip that erases an element is a layout bug when the clip is a hard boundary
+(a window, a panel) and the entire point when it's a viewport — a scroll view
+hides the rows either side of its window on every frame it works correctly.
+Only the pusher knows which it meant, so say so:
+
+```rust
+list.push_clip_viewport(inner);   // scroll view, dropdown list, scrolled field
+list.push_clip(bounds);           // hard boundary — losing content here is a bug
+```
+
+Content a viewport removed is tagged `off-viewport` in the tree (so you can see
+*why* it didn't render) and skipped by the lint. `ScrollView`, `Dropdown` and
+multiline `TextInput` already do this.
+
+### Lints
+
+`LintConfig` tunes the checks; the defaults are chosen to be **silent on a
+correct UI**, so anything reported is worth reading. `assert_clean()` guards on
+`Error` only — unambiguous defects like off-screen, clipped away by a boundary,
+reserved-a-box-and-drew-nothing, or a size that collapsed to zero. Warnings
+cover the merely suspicious (crossing a screen edge, overlapping a sibling, an
+edge half a pixel off its neighbours); `assert_clean_at(Severity::Warning)`
+tightens the floor.
+
+One check has no geometric evidence at all: `quad` and friends return early on
+a non-positive size, so a width computed as `available - padding * 2` that went
+negative leaves *nothing* in any buffer. `DrawList::dropped_degenerate()` counts
+those rejections, which is the only way a collapsed element can be seen.
+
+### Screenshots
+
+For pixels rather than boxes, the headless capture path is exported — no async,
+no boilerplate, and it handles the two steps hand-rolled copies get wrong (a
+clear-only pass first, and the 256-byte row-alignment de-pad on readback):
+
+```rust
+let Some(mut gpu) = HeadlessGpu::new() else { return };   // no adapter: skip
+let rgba = gpu.capture_layers(&layers, (800, 600), wgpu::Color::BLACK);
+write_png("frame.png", &rgba, (800, 600))?;
+```
+
+---
+
 ## Features
 
 | Feature | Default | Description |
 |---|---|---|
 | `bundled-font` | ✅ | Embed Noto Sans (regular/bold/italic) as the default sans-serif. Drop ~1.5 MB if you supply your own fonts. |
 | `phosphor-icons` | ✅ | Embed the Phosphor (MIT) icon font and expose the `PhosphorIcon` enum + `Icon` widget. Drop ~0.5 MB if unused. |
+| `headless` | ✅ | `HeadlessGpu` — offscreen device + renderer for screenshot capture in tests. Pulls in `pollster`. The dependency-free half (`capture_draw_list`, `write_png`) is always available. |
 | `tracy` | ❌ | Emit `tracing` spans around the render path for Tracy profiling. |
 
 ---
@@ -256,11 +368,12 @@ cycles through registered `FocusId`s, scoped to the active layer.
 ## Testing & benchmarks
 
 ```bash
-# Unit tests (696 tests, headless, no GPU)
+# Unit tests (791 tests, headless, no GPU)
 cargo test --lib
 
-# Widget gallery (headless GPU render → PNG)
-cargo test --test widget_gallery -- --ignored --nocapture
+# Widget gallery (headless GPU render → PNG + layout dump)
+DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
+# writes test_output/widget_gallery.png, .debug.txt, .debug.json
 
 # Benchmarks (CPU-only groups need no GPU; render groups do)
 DISPLAY=:0 cargo bench --bench ui_stress

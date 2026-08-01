@@ -277,7 +277,8 @@ impl DropdownState {
                 style.color(StyleKey::Panel),
                 style.color(StyleKey::PanelBorder),
             );
-            l.push_clip(list_rect);
+            // Scrollable option list — content outside it is expected.
+            l.push_clip_viewport(list_rect);
             for (i, item) in geom.items.iter().enumerate() {
                 let iy = list_rect.y + i as f32 * geom.item_h - scroll;
                 // Cull rows fully outside the viewport.

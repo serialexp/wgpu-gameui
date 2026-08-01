@@ -29,14 +29,22 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # enabled by the default `bundled-font` feature so the UI renders identically on
 # every machine without depending on installed system fonts.
 notosans = { version = "0.1.0", optional = true }
+# Blocking executor used only to create a headless wgpu adapter/device in
+# `render::capture::HeadlessGpu`. Zero transitive dependencies.
+pollster = { version = "0.3", optional = true }
 
 [features]
-default = ["bundled-font", "phosphor-icons"]
+default = ["bundled-font", "phosphor-icons", "headless"]
 # Emit tracing spans around the render path for Tracy profiling.
 tracy = ["dep:tracing"]
 # Embed Noto Sans and register it as the default sans-serif family. Disable
 # (`--no-default-features`) to drop ~1.5 MB and fall back to system fonts only.
 bundled-font = ["dep:notosans"]
+# Offscreen rendering without a window (`HeadlessGpu`). The lower-level
+# `capture_draw_list`/`capture_layers`/`write_png` helpers need no async runtime
+# and are always available; only device creation needs `pollster`. Default-on so
+# tests and tooling work without discovering a feature flag.
+headless = ["dep:pollster"]
 # Embed the Phosphor (regular weight, MIT) icon font and expose the
 # `PhosphorIcon` enum + `Icon` widget, rendered through a dedicated MSDF icon
 # atlas. Disable (`--no-default-features`) to drop the ~0.5 MB font; widgets
