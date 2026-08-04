@@ -298,24 +298,37 @@ dropped. A button that landed 400px below its window is reported just as loudly
 whether it is called `SaveButton` or `chrome#12`. The name only decides how
 legible the resulting line is.
 
-What instrumentation adds is **intent**, which no amount of geometry can
+What a *declared rect* adds is **intent**, which no amount of geometry can
 recover. A draw list records what was painted, never what layout assigned — so
 "this is at x=100 and should have been at x=140" is unanswerable, because the
-second number existed only in the layout code that already ran. Declaring the
-rect supplies it:
+second number existed only in the layout code that already ran.
+
+Supplying it is not your job. **Every widget declares the rect it was handed**,
+so the moment you draw a `Button` the report already knows the box that button
+was supposed to fill and checks the paint against it. Application code never
+types a coordinate for the benefit of the debugger — that would be absolute
+positioning wearing a disguise, an assertion duplicating a number the layout
+engine owns and free to go stale the moment layout changes.
+
+Two checks fall out of that. A widget is caught **overflowing** its allocation —
+the only authoritative overflow check, since a region's painted bounds are
+derived from its children and so can never overflow themselves — and caught
+**painting nothing** into a box it reserved, which is otherwise indistinguishable
+from never having been drawn.
+
+App-level scopes are therefore a pure **label**, useful for making a dump of a
+busy frame readable:
 
 ```rust
-ui.debug_scope("Sidebar", sidebar_rect, |ui| {
-    ui.text("Settings");
+ui.debug_scope("Sidebar", |ui| {
+    ui.button("Save");
     // …
 });
 ```
 
-Two checks then become possible. A scope can be caught **overflowing** its
-declared rect — the only authoritative overflow check, since a region's painted
-bounds are derived from its children and so can never overflow themselves — and
-caught **painting nothing** into a box it reserved, which is otherwise
-indistinguishable from never having been drawn.
+If you implement a widget of your own, declare its allocation the way this
+crate's widgets do — `list.push_debug_scope_rect("MyWidget", rect)` — because at
+that point you *are* the layout engine and the rect is genuinely yours to state.
 
 (One asymmetry worth knowing: near-miss alignment analysis considers *named*
 siblings only, because a widget's own sub-primitives — a panel's four border

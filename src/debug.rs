@@ -41,6 +41,14 @@
 //! never be found to have overflowed itself, and a widget that collapsed to
 //! nothing looks identical to one that was never drawn.
 //!
+//! Declaring is the **widget implementor's** job, not the application's — every
+//! widget in this crate declares the `Rect` it was handed, so its allocation is
+//! checked without anyone opting in. Application code has no rect to offer that
+//! layout does not already own, which is why [`UiContext::debug_scope`] takes a
+//! name and nothing else.
+//!
+//! [`UiContext::debug_scope`]: crate::UiContext::debug_scope
+//!
 //! The single exception where a name does affect detection: near-miss alignment
 //! considers **named siblings only**. A widget's own sub-primitives (a panel's
 //! four border quads) sit a pixel apart by construction and would otherwise
@@ -1810,11 +1818,13 @@ impl DebugReport {
         if inferred > 0 {
             s.push_str(&format!(
                 "\nnote: {inferred} of {} nodes were named by inference, and so declared \
-                 no rect. Every geometric check — off-screen, clipped, text overflow — \
-                 still ran on them; what is missing is the box they were *supposed* to \
-                 fill, which is what the overflow and \"drew nothing\" checks compare \
-                 against. Wrap a suspect region in \
-                 `ui.push_debug_scope_rect(\"name\", rect)` to supply it.\n",
+                 no rect — typically the individual primitives a widget paints inside \
+                 its own scope. Every geometric check — off-screen, clipped, text \
+                 overflow — still ran on them; what is missing is the box they were \
+                 *supposed* to fill, which is what the overflow and \"drew nothing\" \
+                 checks compare against. Widgets in this crate declare that box \
+                 themselves; if you have written your own, call \
+                 `DrawList::push_debug_scope_rect(\"name\", rect)` in it.\n",
                 self.nodes.len()
             ));
         }

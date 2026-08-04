@@ -878,11 +878,18 @@ had no way to check their own work.
 - [x] **`Rect` helpers.** `right`, `bottom`, `is_empty`, `union` (empty operands
   contribute nothing, so it folds), `contains_rect(other, tolerance)`
   (edge-inclusive), `inset`.
-- [x] **`UiContext` integration.** `push_debug_scope` / `push_debug_scope_rect` /
-  `pop_debug_scope` / `debug_scope(name, rect, |ui| …)`, scopes closed by the
-  enclosing `pop()`, and a `Drop` balance assert alongside the existing ones.
-  `window_begin` now opens a scope declaring its rect; `window_begin_named` gives
-  it a real name.
+- [x] **`UiContext` integration.** `push_debug_scope(name)` / `pop_debug_scope()`
+  / `debug_scope(name, |ui| …)`, scopes closed by the enclosing `pop()`, and a
+  `Drop` balance assert alongside the existing ones. `window_begin` opens a scope
+  declaring its rect; `window_begin_named` gives it a real name. The app-facing
+  verbs take a **name only** — see the widget-declaration item below for why.
+- [x] **Widgets declare their own allocation.** Every widget entry point opens
+  `push_debug_scope_rect(Type("label"), rect)` around its body, so the box layout
+  handed it is checked without anyone opting in. Rect declaration is a
+  widget-implementor concern: an application passing coordinates to a debug verb
+  is absolute positioning in disguise, duplicating a number layout owns and free
+  to go stale. Took the gallery from 861-of-863 inferred names to 143 real widget
+  scopes.
 - [x] **`src/render/capture.rs`.** `capture_draw_list` / `capture_layers` /
   `write_png` need no async runtime (`Device::poll(Maintain::Wait)` is
   synchronous) and are always available; `HeadlessGpu` sits behind the
