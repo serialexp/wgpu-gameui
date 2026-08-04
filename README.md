@@ -287,12 +287,22 @@ PROBLEMS (1):
 Every finding carries its coordinates and a `hint()` explaining the likely
 cause, so the dump is actionable without reading this crate's source.
 
-### Naming what you drew
+### Declaring what a region was *supposed* to fill
 
-The report works with no instrumentation at all: unscoped draws are named on a
-best-effort basis (a text block by its own content, an icon by its atlas key,
-otherwise `chrome#12`) and nested by geometric containment. Naming a region
-gives better output *and* enables two checks that pure geometry cannot express:
+The report works with no instrumentation at all, and an un-instrumented node is
+**not** a less-checked node. Unscoped draws are named on a best-effort basis (a
+text block by its own content, an icon by its atlas key, otherwise `chrome#12`)
+and nested by geometric containment, and every geometric check still runs on
+them: off-screen, clipped away, text overflowing its box, degenerate primitives
+dropped. A button that landed 400px below its window is reported just as loudly
+whether it is called `SaveButton` or `chrome#12`. The name only decides how
+legible the resulting line is.
+
+What instrumentation adds is **intent**, which no amount of geometry can
+recover. A draw list records what was painted, never what layout assigned — so
+"this is at x=100 and should have been at x=140" is unanswerable, because the
+second number existed only in the layout code that already ran. Declaring the
+rect supplies it:
 
 ```rust
 ui.debug_scope("Sidebar", sidebar_rect, |ui| {
@@ -301,13 +311,20 @@ ui.debug_scope("Sidebar", sidebar_rect, |ui| {
 });
 ```
 
-A scope that declares a rect can be caught **overflowing** it — the only
-authoritative overflow check, since a region's painted bounds are derived from
-its children and so can never overflow themselves — and caught **painting
-nothing** into a box it reserved. Scopes cost nothing when unused: a scope
-records the *buffer lengths* at push and pop, and because every geometry buffer
-is append-only that already delimits its span, so no primitive method or widget
-has to know scopes exist.
+Two checks then become possible. A scope can be caught **overflowing** its
+declared rect — the only authoritative overflow check, since a region's painted
+bounds are derived from its children and so can never overflow themselves — and
+caught **painting nothing** into a box it reserved, which is otherwise
+indistinguishable from never having been drawn.
+
+(One asymmetry worth knowing: near-miss alignment analysis considers *named*
+siblings only, because a widget's own sub-primitives — a panel's four border
+quads — sit a pixel apart by construction and would otherwise flag every panel
+in the frame.)
+
+Scopes cost nothing when unused: a scope records the *buffer lengths* at push
+and pop, and because every geometry buffer is append-only that already delimits
+its span, so no primitive method or widget has to know scopes exist.
 
 ### Clips: boundary vs viewport
 

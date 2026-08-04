@@ -16,20 +16,35 @@
 //! report.assert_clean();   // fails the test if the layout regressed
 //! ```
 //!
-//! # Naming
+//! # Names are labels; declared rects are what unlock checks
 //!
-//! Names come from [`DrawList::push_debug_scope`] /
-//! [`push_debug_scope_rect`](DrawList::push_debug_scope_rect). Anything drawn
-//! outside a scope still appears, named on a best-effort basis — a text block
-//! by its own content, an icon by its atlas key, otherwise by primitive kind and
-//! index. Those nodes are marked [`DebugNode::named`]` == false`, are nested by
-//! geometric containment rather than by declared structure, and the report tells
-//! you how many there are so you know how much of the picture is guesswork.
+//! These are two separate things, and it is worth not conflating them — they
+//! merely happen to arrive together via
+//! [`push_debug_scope_rect`](DrawList::push_debug_scope_rect).
 //!
-//! Scopes that **declare a rect** are worth the extra argument: without one, a
-//! scope's bounds are derived from what it painted, so it can never be found to
-//! have overflowed, and a widget that collapsed to nothing looks identical to
-//! one that was never drawn.
+//! A **name** is presentation. Anything drawn outside a scope still appears,
+//! named on a best-effort basis — a text block by its own content, an icon by
+//! its atlas key, otherwise by primitive kind and index — and is marked
+//! [`DebugNode::named`]` == false`. Such a node is *not* a less-checked node:
+//! every geometric lint (off-screen, fully/partially clipped, text overflowing
+//! its box, dropped degenerate primitives) runs on it identically, falling back
+//! to the bounds it actually painted. A misplaced widget is reported whether or
+//! not anyone named it; the name only decides how legible the resulting line is.
+//!
+//! A **declared rect** is intent, and intent cannot be inferred from geometry at
+//! all. A draw list records what was painted, never what layout assigned, so
+//! "this is at x=100 and should have been at x=140" is unanswerable here — the
+//! second number only ever existed in the layout code that already ran.
+//! Declaring a rect supplies it, which is what
+//! [`Problem::OverflowsDeclared`] and [`Problem::MissingPaint`] compare against;
+//! without one a region's bounds are derived from what it painted, so it can
+//! never be found to have overflowed itself, and a widget that collapsed to
+//! nothing looks identical to one that was never drawn.
+//!
+//! The single exception where a name does affect detection: near-miss alignment
+//! considers **named siblings only**. A widget's own sub-primitives (a panel's
+//! four border quads) sit a pixel apart by construction and would otherwise
+//! flag every panel in the frame.
 //!
 //! # Z order is not buffer order
 //!
@@ -1762,9 +1777,12 @@ impl DebugReport {
         let inferred = self.inferred_count();
         if inferred > 0 {
             s.push_str(&format!(
-                "\nnote: {inferred} of {} nodes were named by inference. Wrap draws in \
-                 `ui.push_debug_scope_rect(\"name\", rect)` for real names, and to enable \
-                 the overflow and \"drew nothing\" checks.\n",
+                "\nnote: {inferred} of {} nodes were named by inference, and so declared \
+                 no rect. Every geometric check — off-screen, clipped, text overflow — \
+                 still ran on them; what is missing is the box they were *supposed* to \
+                 fill, which is what the overflow and \"drew nothing\" checks compare \
+                 against. Wrap a suspect region in \
+                 `ui.push_debug_scope_rect(\"name\", rect)` to supply it.\n",
                 self.nodes.len()
             ));
         }
