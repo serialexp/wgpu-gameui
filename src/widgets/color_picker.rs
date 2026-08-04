@@ -110,10 +110,16 @@ impl ColorPicker {
     }
 
     /// Sub-region rects within `rect`: `(sv_square, hue_bar, alpha_bar?)`.
+    ///
+    /// The rightmost bar stops [`CURSOR_OVERHANG`] short of `rect.right()` so the
+    /// cursor tick — which deliberately overhangs its bar on both sides — still
+    /// lands inside the allocation. Without that reserve the picker paints 2px
+    /// wider than the box it was given.
     fn regions(&self, rect: Rect) -> (Rect, Rect, Option<Rect>) {
         let bars = if self.alpha { 2.0 } else { 1.0 };
         let reserved = bars * (self.bar_w + self.gap);
-        let sv_w = (rect.width - reserved).max(1.0);
+        let usable_w = (rect.width - CURSOR_OVERHANG).max(1.0);
+        let sv_w = (usable_w - reserved).max(1.0);
 
         let sv = Rect::new(rect.x, rect.y, sv_w, rect.height);
         let hue_x = rect.x + sv_w + self.gap;
@@ -254,12 +260,17 @@ impl ColorPicker {
     }
 }
 
+/// How far [`draw_bar_cursor`]'s tick sticks out past each edge of its bar.
+/// `regions` reserves this on the right so the overhang stays inside the
+/// widget's allocation.
+const CURSOR_OVERHANG: f32 = 2.0;
+
 /// A horizontal cursor tick across a vertical bar at fractional position `t`
 /// (0 = top, 1 = bottom): a white bar overhanging both edges with a dark outline.
 fn draw_bar_cursor(list: &mut super::DrawList, bar: Rect, t: f32) {
     let y = bar.y + t.clamp(0.0, 1.0) * bar.height;
     let h = 3.0;
-    let over = 2.0;
+    let over = CURSOR_OVERHANG;
     let tick = Rect::new(bar.x - over, y - h * 0.5, bar.width + 2.0 * over, h);
     list.quad(tick.x, tick.y, tick.width, tick.height, [1.0, 1.0, 1.0, 1.0]);
     list.rect_outline(tick, 1.0, [0.0, 0.0, 0.0, 1.0]);

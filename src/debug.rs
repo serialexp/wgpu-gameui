@@ -888,7 +888,7 @@ impl DebugReport {
             node.layer = Some(i);
             raw.push(node);
             collect_nodes(&layer.list, None, Some(root), Some(i), &mut raw);
-            let bounds = child_union(&raw, root);
+            let bounds = child_union(&raw, root, layer.list.viewport_clips());
             raw[root].bounds = bounds;
         }
         let mut nodes = finalize(raw);
@@ -925,7 +925,7 @@ impl DebugReport {
             node.layer = Some(i);
             raw.push(node);
             collect_nodes(&layer.list, Some(&layer_ink[i]), Some(root), Some(i), &mut raw);
-            let bounds = child_union(&raw, root);
+            let bounds = child_union(&raw, root, layer.list.viewport_clips());
             raw[root].bounds = bounds;
         }
         let mut nodes = finalize(raw);
@@ -991,15 +991,47 @@ fn mark_off_viewport(nodes: &mut [DebugNode], viewports: &[Rect]) {
 /// Marker pushed onto [`DebugNode::effects`] by [`mark_off_viewport`].
 pub(crate) const OFF_VIEWPORT: &str = "off-viewport";
 
-/// Union of every descendant's bounds.
-fn child_union(raw: &[RawNode], root: usize) -> Rect {
+/// Union of every descendant's bounds, with anything hidden by a **viewport**
+/// contributing only its visible part.
+///
+/// A scroll view's content is taller than its viewport by design, and a scope's
+/// bounds are derived from its children — so unioning raw bounds would make
+/// every scrolling container appear to overflow the rect it declared, which is
+/// exactly what [`DrawList::push_clip_viewport`](crate::DrawList::push_clip_viewport)
+/// exists to say is fine. Content under a *hard* clip still contributes in full:
+/// a widget that missed its container is a bug we want reported, and the clip
+/// erasing it must not hide that.
+fn child_union(raw: &[RawNode], root: usize, viewports: &[Rect]) -> Rect {
     let mut acc = Rect::zero();
     for (i, n) in raw.iter().enumerate() {
-        if i != root && descends_from(raw, i, root) {
-            acc = acc.union(n.bounds);
+        if i == root || !descends_from(raw, i, root) {
+            continue;
         }
+        acc = acc.union(visible_within_viewport(n.bounds, n.clip, viewports));
     }
     acc
+}
+
+/// `bounds` reduced to what a viewport clip leaves visible, or `bounds`
+/// unchanged when the clip is a hard boundary (or there is none).
+fn visible_within_viewport(bounds: Rect, clip: Option<Rect>, viewports: &[Rect]) -> Rect {
+    let Some(clip) = clip else { return bounds };
+    if viewports.is_empty() {
+        return bounds;
+    }
+    // Same containment test as `mark_off_viewport`, and for the same reason:
+    // nesting only shrinks a clip, so anything drawn inside a viewport carries a
+    // clip contained by it however deeply nested.
+    let within = |outer: &Rect| {
+        clip.x >= outer.x
+            && clip.y >= outer.y
+            && clip.right() <= outer.right()
+            && clip.bottom() <= outer.bottom()
+    };
+    if !viewports.iter().any(within) {
+        return bounds;
+    }
+    bounds.intersection(clip).unwrap_or(Rect::zero())
 }
 
 fn descends_from(raw: &[RawNode], mut node: usize, ancestor: usize) -> bool {
@@ -1239,7 +1271,7 @@ fn collect_nodes(
     // ---- 3. Scope bounds = union of everything inside them. ----
     for si in 0..scopes.len() {
         let node = scope_base + si;
-        let bounds = child_union(out, node);
+        let bounds = child_union(out, node, list.viewport_clips());
         out[node].bounds = bounds;
     }
 
@@ -2173,6 +2205,50 @@ mod tests {
             .expect("hidden row is still a node");
         assert!(hidden.effects.contains(&"off-viewport"));
         assert_eq!(report.viewports, vec![Rect::new(0.0, 0.0, 100.0, 100.0)]);
+    }
+
+    #[test]
+    fn a_scope_is_not_overflowing_just_because_its_content_scrolls() {
+        // The scroll-view shape: a scope declaring the viewport, whose content is
+        // deliberately taller than it. A scope's bounds are the union of its
+        // children, so unioning *unclipped* bounds would make every scrolling
+        // container in the crate report as overflowing the box it declared.
+        let mut list = DrawList::new();
+        list.push_debug_scope_rect("ScrollView", Rect::new(0.0, 0.0, 100.0, 100.0));
+        list.push_clip_viewport(Rect::new(0.0, 0.0, 100.0, 100.0));
+        list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 40.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(Rect::new(0.0, 40.0, 100.0, 260.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.pop_clip();
+        list.pop_debug_scope();
+
+        let report = DebugReport::from_draw_list(&list, SCREEN);
+        assert!(
+            !codes(&report).contains(&"overflows_declared"),
+            "{}",
+            report.to_text()
+        );
+        let sv = find(&report, "ScrollView");
+        assert_eq!(sv.bounds.height, 100.0, "bounds clipped to the viewport");
+    }
+
+    #[test]
+    fn a_hard_clip_does_not_hide_content_that_missed_its_container() {
+        // The mirror image: same geometry, but a *boundary* clip. Here the
+        // overflow is a real bug and the clip erasing it must not conceal that.
+        let mut list = DrawList::new();
+        list.push_debug_scope_rect("Panel", Rect::new(0.0, 0.0, 100.0, 100.0));
+        list.push_clip(Rect::new(0.0, 0.0, 100.0, 100.0));
+        list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 40.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(Rect::new(0.0, 40.0, 100.0, 260.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.pop_clip();
+        list.pop_debug_scope();
+
+        let report = DebugReport::from_draw_list(&list, SCREEN);
+        assert!(
+            codes(&report).contains(&"overflows_declared"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]
