@@ -1,0 +1,49 @@
+name: Publish
+
+# Runs only when a release PR from release.yml lands on main. just-release then
+# runs `cargo publish` and cuts the matching GitHub release + vX.Y.Z tag.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The mirror image of release.yml's guard: run *only* for the release commit.
+    if: >-
+      startsWith(github.event.head_commit.message, 'release:') ||
+      (startsWith(github.event.head_commit.message, 'Merge') && contains(github.event.head_commit.message, 'release/'))
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # A crates.io version can be yanked but never replaced, so gate the
+      # publish on the suite. The lib tests are CPU-only (GPU-dependent ones are
+      # #[ignore]d and no-op without an adapter), so no runner GPU is needed.
+      - name: Build
+        run: cargo build --all-targets
+
+      - name: Test
+        run: cargo test --lib
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+
+      - name: Publish to crates.io and create the GitHub release
+        run: npx just-release
+        env:
+          CI: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Org-level secret, inherited by this repo. cargo reads the token from
+          # CARGO_REGISTRY_TOKEN, hence the rename.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}

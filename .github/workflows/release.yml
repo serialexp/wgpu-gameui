@@ -1,0 +1,52 @@
+name: Release
+
+# Opens (and keeps updating) a release PR whenever conventional commits land on
+# main. just-release reads the history since the last release, computes the bump
+# — feat: minor, fix:/perf: patch, `!`/BREAKING CHANGE: major, chore:/docs:/test:
+# nothing — writes the changelog, rewrites the version in Cargo.toml, and pushes
+# a `release/YYYY-MM-DD` branch with a `release: X.Y.Z` commit.
+#
+# Merging that PR is what triggers publish.yml.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Start a prerelease cycle with this tag (alpha, beta, rc). Blank for a normal release.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Skip the release commit itself, otherwise merging the release PR would
+    # immediately open another one. Covers both squash merges (`release: X.Y.Z`)
+    # and regular merges (`Merge ... release/...`).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!startsWith(github.event.head_commit.message, 'release:') &&
+       !(startsWith(github.event.head_commit.message, 'Merge') && contains(github.event.head_commit.message, 'release/')))
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history — just-release resolves the current version from the
+          # last `release:` commit or the newest vX.Y.Z tag.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+
+      - name: Create or update the release PR
+        run: npx just-release
+        env:
+          CI: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JUST_RELEASE_PRERELEASE: ${{ github.event.inputs.prerelease }}
