@@ -489,6 +489,7 @@ impl<'a> TreeNode<'a> {
         state: &mut TreeState,
         ctx: &mut DrawContext,
     ) -> TreeNodeOutput {
+        ctx.push_debug_scope_rect(crate::widgets::scope_name("TreeNode", self.label), rect);
         let s = ctx.styles();
         let theme = ctx.theme;
         let input = ctx.input;
@@ -632,6 +633,7 @@ impl<'a> TreeNode<'a> {
             }
         }
 
+        ctx.pop_debug_scope();
         let expanded = !self.leaf && state.is_expanded(id);
         TreeNodeOutput {
             expanded,

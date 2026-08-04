@@ -50,7 +50,9 @@ impl Icon {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
+        list.push_debug_scope_rect("Icon", rect);
         list.icon_msdf(rect, self.icon, self.tint);
+        list.pop_debug_scope();
     }
 }
 

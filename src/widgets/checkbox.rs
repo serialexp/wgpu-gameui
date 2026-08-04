@@ -119,6 +119,7 @@ impl Checkbox {
     /// The box is drawn at the left of the rect (square, fitted to rect height),
     /// with the label to its right.
     pub fn draw(&self, checked: bool, label: &str, rect: Rect, ctx: &mut DrawContext) -> bool {
+        ctx.push_debug_scope_rect(crate::widgets::scope_name("Checkbox", label), rect);
         let input = ctx.input;
         let s = ctx.styles();
         // Honor layer capture (`mouse_consumed`) so a checkbox under a
@@ -223,6 +224,7 @@ impl Checkbox {
             }
         }
 
+        ctx.pop_debug_scope();
         toggled
     }
 }

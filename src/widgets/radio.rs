@@ -127,6 +127,7 @@ impl<'a> RadioGroup<'a> {
     /// selection changed to option `i` this frame (click or keyboard), else
     /// `None`.
     pub fn draw(&self, selected: usize, rect: Rect, ctx: &mut DrawContext) -> Option<usize> {
+        ctx.push_debug_scope_rect("RadioGroup", rect);
         let input = ctx.input;
         let s = ctx.styles();
         let diameter = Self::diameter(&s);
@@ -227,6 +228,7 @@ impl<'a> RadioGroup<'a> {
             }
         }
 
+        ctx.pop_debug_scope();
         result
     }
 }

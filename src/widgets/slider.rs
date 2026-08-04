@@ -95,6 +95,7 @@ impl Slider {
         rect: Rect,
         ctx: &mut DrawContext,
     ) -> SliderOutput {
+        ctx.push_debug_scope_rect("Slider", rect);
         // Snapshot the input fields up front so we can mutate `ctx` (focus
         // registration) later without holding a borrow on `ctx.input`.
         let input = ctx.input;
@@ -266,6 +267,7 @@ impl Slider {
             ctx.draw_focus_ring(rect);
         }
 
+        ctx.pop_debug_scope();
         SliderOutput {
             value: new_value,
             dragging,

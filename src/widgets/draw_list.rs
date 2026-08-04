@@ -283,11 +283,14 @@ impl PrimCounts {
 /// [`DebugReport`](crate::debug::DebugReport) turns into a named, nested tree
 /// of bounding boxes.
 ///
-/// Prefer [`push_debug_scope_rect`](DrawList::push_debug_scope_rect) where the
-/// caller knows the box it *intends* to fill: without a declared rect a scope's
-/// bounds are derived from what it painted, so it can never be found to have
-/// overflowed, and a widget that collapsed to nothing is indistinguishable from
-/// one that was never drawn.
+/// **Widget implementors** should use
+/// [`push_debug_scope_rect`](DrawList::push_debug_scope_rect) and declare the
+/// `Rect` the widget was handed: without a declared rect a scope's bounds are
+/// derived from what it painted, so it can never be found to have overflowed,
+/// and a widget that collapsed to nothing is indistinguishable from one that was
+/// never drawn. This crate's own widgets all do it, so applications get those
+/// checks for free and never supply geometry themselves — for an application, a
+/// scope is only ever a label ([`UiContext::debug_scope`](crate::UiContext::debug_scope)).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DebugScope {
     /// Caller-supplied label, e.g. `"settings_window/ok_button"`.
@@ -634,19 +637,30 @@ impl DrawList {
     ///
     /// Emits no geometry and does not affect rendering in any way. Scopes nest.
     ///
-    /// Prefer [`push_debug_scope_rect`](Self::push_debug_scope_rect) when you
-    /// know the box you mean to fill — it unlocks the overflow and
-    /// "drew nothing" checks, which cannot be inferred from geometry alone.
+    /// This is the labelling form. If you are **implementing a widget**, use
+    /// [`push_debug_scope_rect`](Self::push_debug_scope_rect) instead and declare
+    /// the `Rect` you were handed.
     pub fn push_debug_scope(&mut self, name: impl Into<String>) {
         self.open_debug_scope(name.into(), None);
     }
 
-    /// Open a named debug scope that declares the box it intends to paint into.
+    /// Open a named debug scope declaring the box it was allocated — **the entry
+    /// point for widget implementors**.
+    ///
+    /// Pass the `Rect` the widget received from layout (or, for a widget that
+    /// stores its own geometry, the rect it derives from its fields). That is the
+    /// one fact the draw list cannot recover on its own: it records what was
+    /// painted, never what was assigned. Declaring it is what lets the report
+    /// tell "painted outside its box" and "drew nothing at all" apart from a
+    /// region that simply had little to draw.
+    ///
+    /// Applications never need this — every widget in this crate declares its
+    /// own allocation, so a caller only ever supplies a *label* via
+    /// [`push_debug_scope`](Self::push_debug_scope). Downstream custom widgets
+    /// should call this for the same reason the built-ins do.
     ///
     /// `rect` is in local space and transformed to its world-space AABB by the
-    /// active transform, matching [`push_clip`](Self::push_clip). Declaring the
-    /// rect is what lets the report tell "painted outside its box" and "drew
-    /// nothing at all" apart from a scope that simply had little to draw.
+    /// active transform, matching [`push_clip`](Self::push_clip).
     pub fn push_debug_scope_rect(&mut self, name: impl Into<String>, rect: Rect) {
         let world = self.current_transform().transform_rect_aabb(rect);
         self.open_debug_scope(name.into(), Some(world));

@@ -247,10 +247,15 @@ impl ToastStack {
             };
 
             let alpha = fade_alpha(a.elapsed, a.toast.ttl, self.fade);
+            let toast_rect = Rect::new(x, y, self.width, h);
+            // Scoped per toast rather than per stack: the stack has no
+            // allocation of its own, each toast does.
+            list.push_debug_scope_rect("Toast", toast_rect);
             list.push_tint();
             list.multiply_tint([1.0, 1.0, 1.0, alpha]);
-            banner.draw(Rect::new(x, y, self.width, h), list, style);
+            banner.draw(toast_rect, list, style);
             list.pop_tint();
+            list.pop_debug_scope();
         }
     }
 

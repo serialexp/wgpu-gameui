@@ -153,6 +153,12 @@ impl<'a> Banner<'a> {
 
     /// Draw the banner filling `rect`.
     pub fn draw(&self, rect: Rect, list: &mut DrawList, style: &StyleResolver) {
+        // Named by `title` (author-written) and never by `message`, which can be
+        // arbitrarily long — scope names are not truncated.
+        list.push_debug_scope_rect(
+            crate::widgets::scope_name("Banner", self.title.unwrap_or_default()),
+            rect,
+        );
         let pad = style.scalar(StyleKey::Padding);
         let font_size = style.scalar(StyleKey::FontSize);
         let accent = self.severity.resolved_accent(style);
@@ -189,6 +195,7 @@ impl<'a> Banner<'a> {
             )
             .with_max_width(inner_w);
         list.text(block);
+        list.pop_debug_scope();
     }
 }
 

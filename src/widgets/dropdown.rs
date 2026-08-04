@@ -269,6 +269,9 @@ impl DropdownState {
 
         {
             let l = &mut layers.layers_mut()[idx].list;
+            // Scoped inside this block so the pop precedes every `return` path
+            // in the click resolution below.
+            l.push_debug_scope_rect("Dropdown popup", list_rect);
             // List background + border.
             l.chrome_rect(
                 list_rect,
@@ -320,6 +323,7 @@ impl DropdownState {
                 );
             }
             l.pop_clip();
+            l.pop_debug_scope();
         }
 
         // Resolve a click on the list.
@@ -454,6 +458,7 @@ impl<'a> Dropdown<'a> {
             ctx.request_cursor(crate::CursorIcon::Pointer);
         }
 
+        ctx.push_debug_scope_rect("Dropdown", rect);
         let s = ctx.styles();
         let list = &mut *ctx.draw_list;
         let input = ctx.input;
@@ -558,6 +563,7 @@ impl<'a> Dropdown<'a> {
             });
         }
 
+        ctx.pop_debug_scope();
         DropdownOutput { clicked, open }
     }
 }

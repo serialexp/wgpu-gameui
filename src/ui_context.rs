@@ -822,31 +822,33 @@ impl<'a> UiContext<'a> {
         self.backend.list_mut().push_debug_scope(name);
     }
 
-    /// Open a named debug scope that declares the local-space box it means to
-    /// paint into (see [`DrawList::push_debug_scope_rect`]).
-    ///
-    /// Preferred over [`push_debug_scope`](Self::push_debug_scope): the declared
-    /// rect is what lets the report report an overflow, or notice that the
-    /// region drew nothing at all.
-    pub fn push_debug_scope_rect(&mut self, name: impl Into<String>, rect: Rect) {
-        self.backend.list_mut().push_debug_scope_rect(name, rect);
-    }
-
     /// Close the innermost debug scope.
     pub fn pop_debug_scope(&mut self) {
         self.backend.list_mut().pop_debug_scope();
     }
 
-    /// Run `body` inside a named debug scope declaring `rect`, closing the scope
-    /// afterwards even if `body` returns early. The convenient form when you
-    /// have the rect to hand.
+    /// Run `body` inside a named debug scope, closing it afterwards.
+    ///
+    /// Purely a **label** for a region of your UI, to give the
+    /// [`DebugReport`](crate::debug::DebugReport) tree a heading you recognise:
+    ///
+    /// ```ignore
+    /// ui.debug_scope("Sidebar", |ui| {
+    ///     ui.text("Settings");
+    /// });
+    /// ```
+    ///
+    /// You do not pass the rect the region occupies, and should not need to:
+    /// every widget in this crate declares its own allocation (via
+    /// [`DrawList::push_debug_scope_rect`]), so the overflow and "drew nothing"
+    /// checks already apply to what you drew. Supplying coordinates here would
+    /// only duplicate a number the layout engine owns.
     pub fn debug_scope<R>(
         &mut self,
         name: impl Into<String>,
-        rect: Rect,
         body: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        self.push_debug_scope_rect(name, rect);
+        self.push_debug_scope(name);
         let out = body(self);
         self.pop_debug_scope();
         out
@@ -2990,7 +2992,7 @@ mod tests {
         let mut list = DrawList::new();
         {
             let mut ui = UiContext::new(&mut list);
-            let out = ui.debug_scope("card", Rect::new(0.0, 0.0, 50.0, 50.0), |ui| {
+            let out = ui.debug_scope("card", |ui| {
                 ui.quad(10.0, 10.0, [1.0; 4]);
                 7
             });
@@ -2999,7 +3001,9 @@ mod tests {
         let s = list.debug_scopes();
         assert_eq!(s.len(), 1);
         assert!(s[0].closed);
-        assert_eq!(s[0].declared, Some(Rect::new(0.0, 0.0, 50.0, 50.0)));
+        // The application-facing form is a label and nothing more: declaring a
+        // rect is the widget's job, not the caller's.
+        assert_eq!(s[0].declared, None);
     }
 
     #[test]

@@ -118,19 +118,23 @@ fn a_widget_collapsed_to_nothing_is_caught() {
 #[test]
 fn a_column_misaligned_by_a_fraction_is_caught() {
     let mut list = DrawList::new();
-    let mut ui = UiContext::new(&mut list);
+    let mut focus = FocusState::new();
+    let theme = Theme::default();
+    let input = InputState::default();
 
-    // Four fields that should share a left edge; the third has a stray offset.
+    // Four buttons that should share a left edge; the third has a stray offset.
+    // Nothing here declares a rect: the buttons declare their own allocations,
+    // which is the whole point — an application supplies only the label.
     let lefts = [40.0f32, 40.0, 40.75, 40.0];
-    ui.push_debug_scope("form");
-    for (i, left) in lefts.into_iter().enumerate() {
-        let rect = Rect::new(left, 40.0 + i as f32 * 36.0, 220.0, 28.0);
-        ui.debug_scope(format!("field{i}"), rect, |ui| {
-            ui.list().chrome_rect(rect, 3.0, 1.0, [0.2, 0.2, 0.25, 1.0], [0.4, 0.4, 0.5, 1.0]);
-        });
+    {
+        let mut c = ctx(&mut list, &mut focus, &theme, &input);
+        c.draw_list.push_debug_scope("form");
+        for (i, left) in lefts.into_iter().enumerate() {
+            let rect = Rect::new(left, 40.0 + i as f32 * 36.0, 220.0, 28.0);
+            Button::new(&format!("field{i}")).draw(rect, &mut c);
+        }
+        c.draw_list.pop_debug_scope();
     }
-    ui.pop_debug_scope();
-    drop(ui);
 
     let report = DebugReport::measured(&mut list, screen());
     let misalignment = report
@@ -143,7 +147,7 @@ fn a_column_misaligned_by_a_fraction_is_caught() {
         Problem::NearMissAlignment {
             node, edge, delta, ..
         } => {
-            assert_eq!(report.nodes[*node].name, "field2");
+            assert_eq!(report.nodes[*node].name, "Button \"field2\"");
             assert_eq!(*edge, "left");
             assert!((delta - 0.75).abs() < 0.01, "delta {delta}");
         }

@@ -81,6 +81,11 @@ impl<'a> Tabs<'a> {
 
         let tab_width = rect.width / tab_count as f32;
         let bar_rect = Rect::new(rect.x, rect.y, rect.width, self.tab_height);
+        // Declares `bar_rect`, not `rect`: callers hand Tabs the whole content
+        // area but it only ever paints the strip, and `declared` feeds the
+        // alignment check — declaring a box we never own would invent consensus
+        // edges against every neighbour.
+        list.push_debug_scope_rect("Tabs", bar_rect);
         let mut clicked = None;
 
         // Draw background for entire tab bar
@@ -195,6 +200,7 @@ impl<'a> Tabs<'a> {
             style.color(StyleKey::TabBorder),
         );
 
+        list.pop_debug_scope();
         TabsOutput {
             clicked,
             rect: bar_rect,

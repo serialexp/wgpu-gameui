@@ -114,6 +114,9 @@ pub struct ScrollBegin {
     h_visible: bool,
     inner_w: f32,
     inner_h: f32,
+    /// Debug-scope depth before `begin` opened the `ScrollView` scope, so `end`
+    /// can close back to it even if the caller's content closure leaked a scope.
+    scope_depth: usize,
 }
 
 impl ScrollView {
@@ -263,6 +266,14 @@ impl ScrollView {
             }
         }
 
+        // Opened *before* the clip and transform below, deliberately: the scope
+        // records the clip in force at push time and applies the active
+        // transform to its declared rect, so pushing it after would declare the
+        // viewport shifted by -offset and record the inner clip as its own —
+        // which would then wrongly excuse a genuinely mislaid scrollbar.
+        let scope_depth = list.debug_scope_depth();
+        list.push_debug_scope_rect("ScrollView", self.viewport);
+
         // Set up clip + transform for the content the caller is about to draw.
         // A viewport, not a boundary: rows either side of `inner` are supposed
         // to be clipped away, so the debug report must not call that a defect.
@@ -276,6 +287,7 @@ impl ScrollView {
             h_visible,
             inner_w,
             inner_h,
+            scope_depth,
         }
     }
 
@@ -317,6 +329,11 @@ impl ScrollView {
                 style.color(StyleKey::InputBackground),
             );
         }
+
+        // `truncate_debug_scopes` rather than a bare pop: arbitrary caller code
+        // ran between `begin` and here, and a closure that leaked a scope would
+        // otherwise make this pop close the wrong one.
+        list.truncate_debug_scopes(begun.scope_depth);
     }
 
     fn draw_v_bar(

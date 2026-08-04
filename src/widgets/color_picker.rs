@@ -140,6 +140,7 @@ impl ColorPicker {
         rect: Rect,
         ctx: &mut DrawContext,
     ) -> ColorPickerOutput {
+        ctx.push_debug_scope_rect("ColorPicker", rect);
         // Snapshot input up front so we can borrow the draw list mutably later.
         let input = ctx.input;
         let mx = input.mouse_x;
@@ -243,6 +244,7 @@ impl ColorPicker {
             draw_bar_cursor(list, ar, 1.0 - new.a);
         }
 
+        ctx.pop_debug_scope();
         ColorPickerOutput {
             hsva: new,
             rgba: new.to_rgba(),

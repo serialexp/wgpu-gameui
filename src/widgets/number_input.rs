@@ -241,6 +241,7 @@ impl NumberInput {
         rect: Rect,
         ctx: &mut DrawContext,
     ) -> NumberOutput {
+        ctx.push_debug_scope_rect("NumberInput", rect);
         let original = value;
         let mut value = self.clamp(value);
         let allow_decimal = self.decimals > 0;
@@ -390,6 +391,7 @@ impl NumberInput {
             }
         }
 
+        ctx.pop_debug_scope();
         NumberOutput {
             value,
             changed: value != original,

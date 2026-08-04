@@ -329,6 +329,7 @@ impl List {
     where
         F: FnMut(&mut DrawList, Rect, ListItem),
     {
+        list.push_debug_scope_rect("List", rect);
         let item_h = self
             .item_height
             .unwrap_or(style.scalar(StyleKey::FontSize) + 10.0)
@@ -540,6 +541,7 @@ impl List {
                 }
             });
 
+        list.pop_debug_scope();
         ListOutput {
             clicked,
             activated,

@@ -217,6 +217,9 @@ impl Button {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return false;
         }
+        // Pushed before `ctx.styles()` / the `&mut *ctx.draw_list` reborrow
+        // below, which hold `ctx` for the rest of the body.
+        ctx.push_debug_scope_rect(crate::widgets::scope_name("Button", &self.label), rect);
         let input = ctx.input;
 
         // Honor layer capture so a button under a modal/popup doesn't react to
@@ -281,6 +284,7 @@ impl Button {
             }
         }
 
+        ctx.pop_debug_scope();
         activated
     }
 
@@ -300,6 +304,7 @@ impl Button {
         ctx: &mut DrawContext,
         texture_key: &str,
     ) -> bool {
+        ctx.push_debug_scope_rect(crate::widgets::scope_name("Button", label), rect);
         let s = ctx.styles();
         let input = ctx.input;
         let list = &mut *ctx.draw_list;
@@ -320,6 +325,7 @@ impl Button {
         );
         draw_label(list, &s, rect, label, enabled);
 
+        list.pop_debug_scope();
         clicked
     }
 }

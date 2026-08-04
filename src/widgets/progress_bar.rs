@@ -106,6 +106,7 @@ impl ProgressBar {
 
     /// Draw the progress bar at the given rect.
     pub fn draw(&self, rect: Rect, list: &mut DrawList, style: &StyleResolver) {
+        list.push_debug_scope_rect("ProgressBar", rect);
         let border_radius = style.scalar(StyleKey::BorderRadius);
         let progress_background = style.color(StyleKey::ProgressBackground);
         // Background
@@ -169,6 +170,7 @@ impl ProgressBar {
                 .with_font_opt(style.theme().font.clone());
             list.text(block);
         }
+        list.pop_debug_scope();
     }
 
     /// Draw with a label to the left.
@@ -180,6 +182,12 @@ impl ProgressBar {
         list: &mut DrawList,
         style: &StyleResolver,
     ) {
+        // Unlike the other thin wrappers this one is scoped, because it passes a
+        // *derived* rect inward: `ProgressBar (labeled)` declaring `rect` with a
+        // child `ProgressBar` declaring `bar_rect` is the layout fact worth
+        // recording, and the only thing that catches label_width >= rect.width.
+        list.push_debug_scope_rect(crate::widgets::scope_name("ProgressBar", label), rect);
+
         // Label on the left
         let font_size = style.scalar(StyleKey::FontSize) * 0.75;
         let label_y = list.vcentered_text_y(
@@ -208,6 +216,7 @@ impl ProgressBar {
             rect.height,
         );
         self.draw(bar_rect, list, style);
+        list.pop_debug_scope();
     }
 }
 

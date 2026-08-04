@@ -253,4 +253,35 @@ impl<'a> DrawContext<'a> {
         let color = self.color(StyleKey::FocusRing);
         self.draw_list.rounded_rect_outline(rect, radius, 2.0, color);
     }
+
+    /// Open a debug scope declaring the box this widget was allocated — see
+    /// [`DrawList::push_debug_scope_rect`].
+    ///
+    /// Widgets call this with the `Rect` they were handed so the report can tell
+    /// whether they stayed inside it. Applications never need to.
+    pub fn push_debug_scope_rect(&mut self, name: impl Into<String>, rect: crate::layout::Rect) {
+        self.draw_list.push_debug_scope_rect(name, rect);
+    }
+
+    /// Close the innermost debug scope.
+    pub fn pop_debug_scope(&mut self) {
+        self.draw_list.pop_debug_scope();
+    }
+}
+
+/// Build a widget scope name: the type name, plus the author-written label in
+/// quotes when the widget has one (`Button "Save"`).
+///
+/// The type leads so names stay greppable and machine-splittable; the label is
+/// what makes [`DebugReport::node`](crate::debug::DebugReport::node) — which is
+/// first-match-wins — actually able to address one button out of thirty.
+///
+/// Only ever pass an author-written label (a title, a caption), never
+/// content the user typed or a long message: scope names are not truncated.
+pub(crate) fn scope_name(kind: &str, label: &str) -> String {
+    if label.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind} {label:?}")
+    }
 }

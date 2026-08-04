@@ -755,6 +755,13 @@ impl TextInput {
         if ctx.input.is_hovered(self.x, self.y, self.width, self.height) {
             ctx.request_cursor(crate::CursorIcon::Text);
         }
+        // The field owns its own geometry, so it declares the box it was
+        // configured with. Pushed before the reborrows below, which hold `ctx`
+        // for the rest of the body.
+        ctx.push_debug_scope_rect(
+            "TextInput",
+            Rect::new(self.x, self.y, self.width, self.height),
+        );
         let s = ctx.styles();
         let list = &mut *ctx.draw_list;
         let focus = &mut *ctx.focus;
@@ -1188,6 +1195,7 @@ impl TextInput {
             list.pop_clip();
         }
 
+        list.pop_debug_scope();
         clicked
     }
 }

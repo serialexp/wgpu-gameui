@@ -134,6 +134,10 @@ impl DragHandle {
         rect: Rect,
         ctx: &mut DrawContext,
     ) -> DragHandleOutput {
+        ctx.push_debug_scope_rect(
+            crate::widgets::scope_name("DragHandle", self.label.as_deref().unwrap_or_default()),
+            rect,
+        );
         let input = ctx.input;
         let s = ctx.styles();
 
@@ -217,6 +221,7 @@ impl DragHandle {
             list.text(block);
         }
 
+        ctx.pop_debug_scope();
         DragHandleOutput {
             dragging,
             started,

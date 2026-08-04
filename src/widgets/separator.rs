@@ -98,6 +98,7 @@ impl Separator {
 
     /// Draw the rule centered within `rect`.
     pub fn draw(&self, rect: Rect, list: &mut DrawList, style: &StyleResolver) {
+        list.push_debug_scope_rect("Separator", rect);
         let thickness = self
             .thickness
             .unwrap_or_else(|| style.scalar(StyleKey::BorderWidth).max(1.0));
@@ -125,6 +126,7 @@ impl Separator {
                 }
             }
         }
+        list.pop_debug_scope();
     }
 }
 

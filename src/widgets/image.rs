@@ -188,6 +188,9 @@ impl Image {
         if dest.width <= 0.0 || dest.height <= 0.0 {
             return;
         }
+        // Declares `dest`, not the fitted sub-rect `resolve` returns: `dest` is
+        // the allocation, and letterboxing inside it is the widget working.
+        list.push_debug_scope_rect("Image", dest);
         match &self.source {
             Source::Sprite(id) => {
                 let (r, uv) = self.resolve(dest, true);
@@ -202,6 +205,7 @@ impl Image {
                 list.icon(key, r.x, r.y, r.width, r.height);
             }
         }
+        list.pop_debug_scope();
     }
 }
 

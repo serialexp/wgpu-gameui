@@ -117,6 +117,7 @@ impl ImageButton {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return false;
         }
+        list.push_debug_scope_rect("ImageButton", rect);
 
         let hovered =
             self.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
@@ -180,6 +181,7 @@ impl ImageButton {
             }
         }
 
+        list.pop_debug_scope();
         clicked
     }
 }

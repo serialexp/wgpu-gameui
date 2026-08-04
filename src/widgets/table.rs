@@ -182,6 +182,7 @@ impl<'a> Table<'a> {
         style: &StyleResolver,
         input: &mut InputState,
     ) -> TableOutput {
+        list.push_debug_scope_rect("Table", rect);
         let header_h = if self.show_header {
             self.header_height
         } else {
@@ -301,6 +302,7 @@ impl<'a> Table<'a> {
             },
         );
 
+        list.pop_debug_scope();
         TableOutput {
             rect,
             clicked_row,
