@@ -861,6 +861,22 @@ had no way to check their own work.
   off-screen), and `near_miss_alignment` only compares *named* siblings — a
   panel's own border quads sit a pixel apart by construction. `assert_clean()`
   guards on `Error` only; warnings cover the merely suspicious.
+- [x] **`near_miss_alignment` tightened to what it can actually claim.** It is
+  the one lint asserting *intent* — that one piece of layout code placed these
+  and meant their edges to match — so it now requires (a) the parent to be a
+  **scope**, since an inferred parent can be a bounding box around unrelated
+  shapes, (b) the elements to be **stacked along the other axis** from the edge
+  compared, since the `left` edges of a row are deliberately different numbers,
+  and (c) at most **one finding per element per axis**, preferring the origin
+  edge, since a dropped element has a wrong top, bottom *and* centre for one
+  reason. Loose soup geometry is also barred from adopting children in
+  `nest_by_containment`: it is aggregated per scope, so its rect is a box drawn
+  around disjoint triangles, and in the gallery that one node spanned the whole
+  4482px page and adopted 309 others. Took the gallery from 15 alignment
+  findings — all false — to zero, without loosening `align_max`, which would
+  have blinded the lint to exactly the 1–2px errors it exists to catch.
+  `tests/alignment_gallery.rs` is the tuning fixture: six labelled cases, two
+  meant to fire and four meant to stay quiet, rendered to a readable PNG.
 - [x] **`DrawList::push_clip_viewport(rect)` / `viewport_clips()`.** A clip that
   erases an element is a layout bug when the clip is a hard boundary (a window,
   a panel) and *the entire point* when it is a viewport — a scroll view hides

@@ -49,10 +49,15 @@
 //!
 //! [`UiContext::debug_scope`]: crate::UiContext::debug_scope
 //!
-//! The single exception where a name does affect detection: near-miss alignment
-//! considers **named siblings only**. A widget's own sub-primitives (a panel's
-//! four border quads) sit a pixel apart by construction and would otherwise
-//! flag every panel in the frame.
+//! The single exception where naming affects detection is **near-miss
+//! alignment**, which is a claim about intent rather than geometry: that one
+//! piece of layout code placed these elements together and meant their edges to
+//! match. It therefore runs only between **named siblings inside a scope** —
+//! anywhere else the parent was inferred from geometry, and an inferred parent
+//! can be a bounding box drawn around unrelated shapes. (Named siblings only for
+//! a second reason: a widget's own sub-primitives — a panel's four border quads —
+//! sit a pixel apart by construction.) To get alignment analysis over a region,
+//! name it: `ui.debug_scope("Toolbar", |ui| …)`.
 //!
 //! # Z order is not buffer order
 //!
@@ -513,11 +518,15 @@ pub struct LintConfig {
     pub text_overflows_box: bool,
     /// Report ellipsized labels as info. Default on.
     pub text_ellipsized: bool,
-    /// Report near-miss edge alignment. Default on, but **only ever evaluated
-    /// between named sibling scopes**: the sub-rects a single widget draws (a
-    /// panel's four border quads, an outline's four edges) sit a pixel or two
-    /// apart by construction and would otherwise produce a false positive on
-    /// every panel in the frame.
+    /// Report near-miss edge alignment. Default on, but hedged about with
+    /// preconditions, because alignment is a claim about *intent* and the frame
+    /// only records geometry. It is evaluated only between **named siblings
+    /// inside a scope**, only for elements **stacked along the other axis** from
+    /// the edge being compared, and at most **once per element per axis**. Each
+    /// of those rules out a class of false positive the widget gallery produced:
+    /// consensus manufactured between widgets 4000px apart under an inferred
+    /// parent, the `left` edges of a row compared against each other, and one
+    /// dropped element reported three times over.
     pub near_miss_alignment: bool,
     /// Report fully transparent chrome rects. Default on.
     pub invisible_alpha: bool,
@@ -1376,6 +1385,13 @@ fn list_counts(list: &DrawList) -> PrimCounts {
 /// This is the "best effort" structure for draws made outside any debug scope —
 /// a panel background ends up as the parent of the label sitting on it, which is
 /// usually what the author meant even though they never said so.
+///
+/// Two node kinds are barred from adopting. **Text** because a label is a leaf.
+/// **Geometry** because it is the one node whose bounds do not describe a shape:
+/// loose triangles are aggregated per scope, so its rect is a bounding box drawn
+/// around unrelated pieces and covers mostly empty space. In the widget gallery
+/// that single aggregate spanned the whole 4482px page and adopted 309 nodes,
+/// burying the real structure and making every widget a sibling of every other.
 fn nest_by_containment(out: &mut [RawNode], base: usize, root: Option<usize>) {
     let candidates: Vec<(usize, Rect, f32)> = (base..out.len())
         .filter(|&i| !out[i].bounds.is_empty())
@@ -1393,7 +1409,10 @@ fn nest_by_containment(out: &mut [RawNode], base: usize, root: Option<usize>) {
         let my_area = me.width * me.height;
         let mut best: Option<(usize, f32)> = None;
         for &(j, rect, area) in &candidates {
-            if j == i || out[j].kind == NodeKind::Text {
+            if j == i
+                || out[j].kind == NodeKind::Text
+                || out[j].kind == NodeKind::Geometry
+            {
                 continue;
             }
             // Strictly larger, and containing — ties would make a cycle.
@@ -1641,39 +1660,108 @@ fn overshoot_of(inner: Rect, outer: Rect) -> f32 {
     left.max(top).max(right).max(bottom).max(0.0)
 }
 
+/// The axis an edge measures along. An edge only expresses *alignment* between
+/// elements laid out along the **other** axis: things side by side in a row line
+/// up on their tops, things stacked in a column line up on their lefts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+}
+
+/// The six edges alignment is checked on, with the axis each measures along.
+const ALIGN_EDGES: [(&str, Axis, fn(&Rect) -> f32); 6] = [
+    ("left", Axis::X, |r| r.x),
+    ("right", Axis::X, |r| r.right()),
+    ("center_x", Axis::X, |r| r.x + r.width * 0.5),
+    ("top", Axis::Y, |r| r.y),
+    ("bottom", Axis::Y, |r| r.bottom()),
+    ("center_y", Axis::Y, |r| r.y + r.height * 0.5),
+];
+
+/// Whether two rects occupy separate bands of `axis` — i.e. are stacked along
+/// it rather than sitting beside each other.
+fn separated_along(axis: Axis, a: Rect, b: Rect) -> bool {
+    match axis {
+        Axis::X => a.right() <= b.x || b.right() <= a.x,
+        Axis::Y => a.bottom() <= b.y || b.bottom() <= a.y,
+    }
+}
+
+/// Whether `rect` already agrees *exactly* with a quorum of `siblings` on some
+/// edge of `axis`.
+///
+/// Differently sized elements can only line up on one edge per axis. A 16px icon
+/// top-aligned beside a 32px one necessarily disagrees on `bottom` and
+/// `center_y` — by exactly half the size difference, which lands squarely in
+/// near-miss range. Having found the edge they *do* share, the other two are
+/// explained, and reporting them is reporting the size difference twice.
+fn aligned_exactly_on(rect: Rect, siblings: &[&DebugNode], axis: Axis, quorum: usize) -> bool {
+    ALIGN_EDGES
+        .iter()
+        .filter(|(_, a, _)| *a == axis)
+        .any(|(_, _, get)| {
+            let v = get(&rect);
+            siblings
+                .iter()
+                .filter(|s| (get(&s.lint_rect()) - v).abs() <= f32::EPSILON * 8.0)
+                .count()
+                >= quorum
+        })
+}
+
 /// Flag edges that sit *almost* where their siblings agree they should be.
 ///
-/// Only **named** siblings take part. The sub-rects a single widget emits — a
-/// panel's four border quads, an outline's four edges — sit a pixel or two apart
-/// by construction, so including inferred nodes would flag every panel in the
-/// frame.
+/// Three things must hold before a near miss is worth saying out loud, and each
+/// exists because dropping it produced a frame's worth of false positives:
+///
+/// 1. **The parent is a scope.** Alignment is a claim about intent — that one
+///    piece of layout code placed these together — and a scope is the only node
+///    that exists because someone said "this is a region". Nesting elsewhere is
+///    inferred from geometry, and an inferred parent can be a bounding box over
+///    unrelated shapes: the widget gallery's loose primitives aggregate into one
+///    4482px-tall node that "contains" the entire page, which made every widget
+///    on it a sibling of every other and manufactured consensus between elements
+///    4000px apart. To get alignment analysis over a region, name it with
+///    `ui.debug_scope("name", …)`.
+/// 2. **Only named siblings.** The sub-rects a single widget emits — a panel's
+///    four border quads, an outline's four edges — sit a pixel or two apart by
+///    construction, so including inferred nodes would flag every panel.
+/// 3. **The elements are stacked along the other axis.** `left` edges are a
+///    claim about a column, so they are only compared between elements in
+///    different rows. Comparing the `left` edges of five icons *in* a row is
+///    comparing five deliberately different numbers.
+///
+/// One element can only be misplaced *once* per axis, so at most one finding is
+/// reported per node per axis — a button dropped 4px has a wrong top, bottom and
+/// centre, but that is one bug and one line. The origin edges (`left`, `top`)
+/// are preferred, being the ones layout code actually computes.
 fn check_alignment(nodes: &[DebugNode], cfg: &LintConfig, out: &mut Vec<Problem>) {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
 
-    let mut by_parent: BTreeMap<Option<usize>, Vec<&DebugNode>> = BTreeMap::new();
+    let mut by_parent: BTreeMap<usize, Vec<&DebugNode>> = BTreeMap::new();
     for node in nodes {
+        let Some(parent) = node.parent else { continue };
+        if nodes.get(parent).is_none_or(|p| p.kind != NodeKind::Scope) {
+            continue;
+        }
         if node.named && node.axis_aligned && !node.bounds.is_empty() {
-            by_parent.entry(node.parent).or_default().push(node);
+            by_parent.entry(parent).or_default().push(node);
         }
     }
-
-    const EDGES: [(&str, fn(&Rect) -> f32); 6] = [
-        ("left", |r| r.x),
-        ("right", |r| r.right()),
-        ("top", |r| r.y),
-        ("bottom", |r| r.bottom()),
-        ("center_x", |r| r.x + r.width * 0.5),
-        ("center_y", |r| r.y + r.height * 0.5),
-    ];
 
     for siblings in by_parent.values() {
         if siblings.len() <= cfg.align_quorum {
             continue;
         }
-        for (edge_name, get) in EDGES {
-            let mut values: Vec<(usize, f32)> = siblings
+        // (node id, axis) pairs already spoken for, so a displaced element is
+        // reported on its origin edge and not again on the two that follow from
+        // it. `ALIGN_EDGES` is ordered to put those origin edges first.
+        let mut reported: HashSet<(usize, usize)> = HashSet::new();
+        for (edge_name, axis, get) in ALIGN_EDGES {
+            let mut values: Vec<(&DebugNode, f32)> = siblings
                 .iter()
-                .map(|n| (n.id, get(&n.lint_rect())))
+                .map(|n| (*n, get(&n.lint_rect())))
                 .collect();
             values.sort_by(|a, b| a.1.total_cmp(&b.1));
 
@@ -1701,23 +1789,55 @@ fn check_alignment(nodes: &[DebugNode], cfg: &LintConfig, out: &mut Vec<Problem>
                         }
                     }
                     if best_n >= cfg.align_quorum {
-                        for &(id, v) in cluster {
+                        let consensus: Vec<Rect> = cluster
+                            .iter()
+                            .filter(|(_, v)| (v - best_val).abs() <= f32::EPSILON * 8.0)
+                            .map(|(n, _)| n.lint_rect())
+                            .collect();
+                        for &(node, v) in cluster {
                             let delta = v - best_val;
-                            if delta.abs() > cfg.align_min && delta.abs() <= cfg.align_max {
-                                out.push(Problem::NearMissAlignment {
-                                    node: id,
-                                    edge: edge_name,
-                                    actual: v,
-                                    expected: best_val,
-                                    delta,
-                                });
+                            if delta.abs() <= cfg.align_min || delta.abs() > cfg.align_max {
+                                continue;
                             }
+                            let me = node.lint_rect();
+                            // Sharing this edge only means anything if the
+                            // elements are stacked along the other axis.
+                            let stacked = consensus
+                                .iter()
+                                .all(|c| separated_along(other_axis(axis), me, *c));
+                            if !stacked {
+                                continue;
+                            }
+                            // Already lined up on a different edge of the same
+                            // axis: this delta is a size difference, not a
+                            // placement error.
+                            if aligned_exactly_on(me, siblings, axis, cfg.align_quorum) {
+                                continue;
+                            }
+                            if !reported.insert((node.id, axis as usize)) {
+                                continue;
+                            }
+                            out.push(Problem::NearMissAlignment {
+                                node: node.id,
+                                edge: edge_name,
+                                actual: v,
+                                expected: best_val,
+                                delta,
+                            });
                         }
                     }
                 }
                 i = j;
             }
         }
+    }
+}
+
+/// The axis perpendicular to `axis`.
+fn other_axis(axis: Axis) -> Axis {
+    match axis {
+        Axis::X => Axis::Y,
+        Axis::Y => Axis::X,
     }
 }
 
@@ -2595,6 +2715,143 @@ mod tests {
         }
         let report = DebugReport::from_draw_list(&list, SCREEN);
         assert!(!codes(&report).contains(&"near_miss_alignment"), "{}", report.to_text());
+    }
+
+    /// Lay out `rects` as named scopes inside a `form` scope and report.
+    fn scoped_layout(rects: &[Rect]) -> DebugReport {
+        let mut list = DrawList::new();
+        list.push_debug_scope("form");
+        for (i, r) in rects.iter().enumerate() {
+            list.push_debug_scope_rect(format!("field{i}"), *r);
+            list.chrome_rect(*r, 0.0, 0.0, [1.0; 4], [0.0; 4]);
+            list.pop_debug_scope();
+        }
+        list.pop_debug_scope();
+        DebugReport::from_draw_list(&list, SCREEN)
+    }
+
+    #[test]
+    fn a_row_is_not_compared_on_the_edges_it_varies_along() {
+        // Five boxes side by side. Their lefts differ by a few px because their
+        // widths do — that is what a row *is*, not a near miss.
+        let report = scoped_layout(&[
+            Rect::new(0.0, 0.0, 40.0, 20.0),
+            Rect::new(44.0, 0.0, 36.0, 20.0),
+            Rect::new(84.0, 0.0, 42.0, 20.0),
+            Rect::new(130.0, 0.0, 38.0, 20.0),
+        ]);
+        assert!(
+            !codes(&report).contains(&"near_miss_alignment"),
+            "{}",
+            report.to_text()
+        );
+    }
+
+    #[test]
+    fn a_row_of_mixed_heights_aligned_on_top_is_clean() {
+        // Tops match exactly, so bottoms and centres cannot. Reporting those is
+        // reporting the height difference, which was deliberate.
+        let report = scoped_layout(&[
+            Rect::new(0.0, 0.0, 40.0, 20.0),
+            Rect::new(50.0, 0.0, 40.0, 26.0),
+            Rect::new(100.0, 0.0, 40.0, 22.0),
+            Rect::new(150.0, 0.0, 40.0, 28.0),
+        ]);
+        assert!(
+            !codes(&report).contains(&"near_miss_alignment"),
+            "{}",
+            report.to_text()
+        );
+    }
+
+    #[test]
+    fn one_displaced_element_is_one_finding() {
+        // A dropped row member has a wrong top, bottom *and* centre. One bug.
+        let report = scoped_layout(&[
+            Rect::new(0.0, 0.0, 40.0, 20.0),
+            Rect::new(50.0, 0.0, 40.0, 20.0),
+            Rect::new(100.0, 3.0, 40.0, 20.0),
+            Rect::new(150.0, 0.0, 40.0, 20.0),
+        ]);
+        let hits: Vec<_> = report
+            .problems
+            .iter()
+            .filter(|p| p.code() == "near_miss_alignment")
+            .collect();
+        assert_eq!(hits.len(), 1, "{}", report.to_text());
+        match hits[0] {
+            Problem::NearMissAlignment {
+                node, edge, delta, ..
+            } => {
+                assert_eq!(report.nodes[*node].name, "field2");
+                assert_eq!(*edge, "top", "the origin edge, not bottom or centre");
+                assert!((delta - 3.0).abs() < 0.01, "delta {delta}");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn alignment_needs_a_declared_region() {
+        // The same stray column with no enclosing scope. Whatever parent the
+        // tree infers is a geometric accident, not a statement that these were
+        // laid out together — in the widget gallery it was a single aggregate
+        // spanning the whole page.
+        let mut list = DrawList::new();
+        for (i, x) in [20.0f32, 20.0, 21.5, 20.0].into_iter().enumerate() {
+            list.push_debug_scope_rect(
+                format!("field{i}"),
+                Rect::new(x, 10.0 + i as f32 * 30.0, 100.0, 20.0),
+            );
+            list.chrome_rect(
+                Rect::new(x, 10.0 + i as f32 * 30.0, 100.0, 20.0),
+                0.0,
+                0.0,
+                [1.0; 4],
+                [0.0; 4],
+            );
+            list.pop_debug_scope();
+        }
+        let report = DebugReport::from_draw_list(&list, SCREEN);
+        assert!(
+            !codes(&report).contains(&"near_miss_alignment"),
+            "{}",
+            report.to_text()
+        );
+    }
+
+    #[test]
+    fn an_aggregate_of_loose_geometry_never_adopts_anything() {
+        // Two quads at opposite corners aggregate into one node whose bounds
+        // span the gap between them — a rect that covers mostly nothing. Left
+        // eligible as a parent it swallows everything in between.
+        let mut list = DrawList::new();
+        list.triangle((0.0, 0.0), (10.0, 0.0), (0.0, 10.0), [1.0; 4]);
+        list.triangle((700.0, 500.0), (710.0, 500.0), (700.0, 510.0), [1.0; 4]);
+        list.push_debug_scope_rect("widget", Rect::new(300.0, 200.0, 40.0, 20.0));
+        list.chrome_rect(
+            Rect::new(300.0, 200.0, 40.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.pop_debug_scope();
+
+        let report = DebugReport::measured(&mut list, SCREEN);
+        let soup = find(&report, "geometry#0");
+        assert!(
+            soup.bounds.width > 700.0,
+            "precondition: the aggregate spans both quads ({:?})",
+            soup.bounds
+        );
+        let widget = find(&report, "widget");
+        assert_ne!(
+            widget.parent,
+            Some(soup.id),
+            "loose geometry must not adopt a real region\n\n{}",
+            report.to_text()
+        );
     }
 
     // ---- Assertions & rendering ----

@@ -330,10 +330,14 @@ If you implement a widget of your own, declare its allocation the way this
 crate's widgets do — `list.push_debug_scope_rect("MyWidget", rect)` — because at
 that point you *are* the layout engine and the rect is genuinely yours to state.
 
-(One asymmetry worth knowing: near-miss alignment analysis considers *named*
-siblings only, because a widget's own sub-primitives — a panel's four border
-quads — sit a pixel apart by construction and would otherwise flag every panel
-in the frame.)
+One asymmetry worth knowing: **near-miss alignment** is the one check a name
+does unlock. Unlike everything else here it is a claim about intent — that one
+piece of layout code placed these elements and meant their edges to match — so
+it runs only between named siblings *inside a scope*. Elsewhere the parent was
+inferred from geometry, and an inferred parent can be a bounding box around
+unrelated shapes; in this crate's own gallery that was a single node spanning the
+whole page, which made every widget on it a sibling of every other. Naming a
+region is what turns that analysis on for it.
 
 Scopes cost nothing when unused: a scope records the *buffer lengths* at push
 and pop, and because every geometry buffer is append-only that already delimits
