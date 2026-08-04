@@ -1748,6 +1748,10 @@ pub struct TextMeasurer {
     /// weights/styles have different advances so all must be part of the key.
     cache: HashMap<MeasureKey, HashMap<String, (f32, f32)>>,
     cache_entries: usize,
+    /// Ink bands ([`TextMeasurer::measure_block_ink`]), keyed identically to
+    /// `cache`. Separate because it is populated only by layout inspection, so
+    /// the common path never pays for it.
+    ink_cache: HashMap<MeasureKey, HashMap<String, Option<(f32, f32)>>>,
     /// Per-font vertical metrics for optical centring, keyed by
     /// `(family_hash, weight, style_disc)`. Sampled once per font (a one-glyph
     /// shaping pass + a ttf-parser metric read), then reused every frame.
@@ -1764,6 +1768,7 @@ impl TextMeasurer {
             font_system: shared_font_system(),
             cache: HashMap::new(),
             cache_entries: 0,
+            ink_cache: HashMap::new(),
             vmetrics: HashMap::new(),
         }
     }
@@ -1775,6 +1780,7 @@ impl TextMeasurer {
             font_system,
             cache: HashMap::new(),
             cache_entries: 0,
+            ink_cache: HashMap::new(),
             vmetrics: HashMap::new(),
         }
     }
@@ -1791,6 +1797,7 @@ impl TextMeasurer {
     pub fn clear_cache(&mut self) {
         self.cache.clear();
         self.cache_entries = 0;
+        self.ink_cache.clear();
         self.vmetrics.clear();
     }
 
@@ -1927,6 +1934,70 @@ impl TextMeasurer {
         )
     }
 
+    /// The band of real glyph **ink** a block paints, as `(top, bottom)` offsets
+    /// below the block's top edge ([`TextBlock::y`]). `None` when the block inks
+    /// nothing — empty or whitespace-only content.
+    ///
+    /// [`measure_block`](Self::measure_block) reports the *slot*: advance width
+    /// by line-box height, which is what layout reserves. This reports what
+    /// actually lands on screen, and the two differ by design. A line box always
+    /// carries leading above the ascent and below the descent, and
+    /// `DrawList::vcentered_text_y` slides that whole slot upward so the glyphs'
+    /// optical centre — not the slot's — sits on the row centre. Comparing the
+    /// slot against the row therefore reports a correctly centred label as
+    /// overflowing by a pixel or two; comparing the ink does not.
+    ///
+    /// Intended for layout inspection (see [`crate::debug`]), which is why the
+    /// result is cached separately and never computed on the drawing path.
+    pub fn measure_block_ink(&mut self, block: &TextBlock) -> Option<(f32, f32)> {
+        let max_width = if block.ellipsize || block.vertical {
+            None
+        } else {
+            Some(block.max_width)
+        };
+        let key = (
+            block.font_size.to_bits(),
+            max_width.map(f32::to_bits),
+            family_hash(block.font.as_ref()),
+            block.weight.0,
+            style_disc(block.style),
+            block.wrap,
+            block.vertical,
+        );
+
+        if let Some(inner) = self.ink_cache.get(&key)
+            && let Some(&band) = inner.get(block.content.as_str())
+        {
+            return band;
+        }
+
+        let band = {
+            let mut fs = self.font_system.lock().expect("FontSystem poisoned");
+            ink_band_with_font_system(
+                &mut fs,
+                &block.content,
+                block.font_size,
+                max_width,
+                block.font.as_ref().map(|h| h.family()),
+                block.weight,
+                block.style,
+                block.wrap,
+                block.vertical,
+            )
+        };
+
+        if self.cache_entries >= MEASURE_CACHE_CAP {
+            self.clear_cache();
+        }
+        self.ink_cache
+            .entry(key)
+            .or_default()
+            .insert(block.content.clone(), band);
+        self.cache_entries += 1;
+
+        band
+    }
+
     /// Shared cache-keyed measurement backing [`measure_styled`] (horizontal) and
     /// [`measure_vertical`]. `vertical` is part of the cache key so the two
     /// orientations of the same string never collide.
@@ -2025,8 +2096,11 @@ fn cosmic_align(align: TextAlign) -> Option<CosmicAlign> {
     }
 }
 
+/// Shape a string into a `Buffer` under the same policy the measurement path
+/// uses, so everything derived from it (advance box, ink band) describes one
+/// identical layout rather than two that merely resemble each other.
 #[allow(clippy::too_many_arguments)]
-fn measure_with_font_system(
+fn shape_for_measure(
     font_system: &mut FontSystem,
     text: &str,
     font_size: f32,
@@ -2036,14 +2110,13 @@ fn measure_with_font_system(
     style: Style,
     wrap: WrapMode,
     vertical: bool,
-) -> (f32, f32) {
+) -> Buffer {
     let line_height = font_size * LINE_HEIGHT_RATIO;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     let family = family_name.map(Family::Name).unwrap_or(Family::SansSerif);
 
     // Vertical (stacked) mode: lay out one grapheme cluster per line with no
-    // wrapping, mirroring `build_vertices`. The same `max(line_w)` / sum-of-
-    // `line_height` loop below then yields the column width × stacked height.
+    // wrapping, mirroring `build_vertices`.
     let stacked;
     let shaped_text: &str = if vertical {
         stacked = vertical_stack_string(text);
@@ -2063,6 +2136,112 @@ fn measure_with_font_system(
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
+    buffer
+}
+
+/// The vertical band of real glyph **ink**, as offsets below the block's top
+/// edge, or `None` when the string inks nothing (empty or whitespace-only).
+///
+/// This is deliberately *not* the line box. A line box is a typographic slot
+/// that always has leading above the ascent and below the descent, and
+/// `DrawList::vcentered_text_y` shifts that whole slot upward on purpose so the
+/// glyphs' optical centre — not the slot's centre — lands on the row's centre.
+/// A correctly centred label therefore has a line box poking out of its row by
+/// a pixel or two, which is exactly the false alarm layout inspection must not
+/// raise. Measuring the ink itself is what makes "did this text paint outside
+/// its box?" answerable.
+///
+/// Per glyph the band is `baseline − y_max` … `baseline − y_min` of the glyph's
+/// outline bounding box, scaled from font units. Whitespace and other
+/// outline-less glyphs have no bounding box and contribute nothing, matching the
+/// renderer, which skips exactly those.
+#[allow(clippy::too_many_arguments)]
+fn ink_band_with_font_system(
+    font_system: &mut FontSystem,
+    text: &str,
+    font_size: f32,
+    max_width: Option<f32>,
+    family_name: Option<&str>,
+    weight: Weight,
+    style: Style,
+    wrap: WrapMode,
+    vertical: bool,
+) -> Option<(f32, f32)> {
+    let buffer = shape_for_measure(
+        font_system,
+        text,
+        font_size,
+        max_width,
+        family_name,
+        weight,
+        style,
+        wrap,
+        vertical,
+    );
+
+    // Group by face first: parsing a face is far more expensive than reading a
+    // glyph box out of one, and a label is almost always a single face.
+    let mut by_font: HashMap<fontdb::ID, Vec<(u16, f32, f32)>> = HashMap::new();
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            // Same baseline expression `build_vertices` uses to place the quad.
+            let baseline = run.line_y + glyph.y - glyph.font_size * glyph.y_offset;
+            by_font
+                .entry(glyph.font_id)
+                .or_default()
+                .push((glyph.glyph_id, baseline, glyph.font_size));
+        }
+    }
+
+    let mut top = f32::INFINITY;
+    let mut bottom = f32::NEG_INFINITY;
+    for (font_id, glyphs) in by_font {
+        let Some(font) = font_system.get_font(font_id) else {
+            continue;
+        };
+        let Ok(face) = ttf_parser::Face::parse(font.data(), 0) else {
+            continue;
+        };
+        let upem = face.units_per_em() as f32;
+        if upem <= 0.0 {
+            continue;
+        }
+        for (gid, baseline, size) in glyphs {
+            let Some(bb) = face.glyph_bounding_box(ttf_parser::GlyphId(gid)) else {
+                continue; // whitespace / outline-less
+            };
+            top = top.min(baseline - bb.y_max as f32 / upem * size);
+            bottom = bottom.max(baseline - bb.y_min as f32 / upem * size);
+        }
+    }
+
+    (top <= bottom).then_some((top, bottom))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure_with_font_system(
+    font_system: &mut FontSystem,
+    text: &str,
+    font_size: f32,
+    max_width: Option<f32>,
+    family_name: Option<&str>,
+    weight: Weight,
+    style: Style,
+    wrap: WrapMode,
+    vertical: bool,
+) -> (f32, f32) {
+    let line_height = font_size * LINE_HEIGHT_RATIO;
+    let buffer = shape_for_measure(
+        font_system,
+        text,
+        font_size,
+        max_width,
+        family_name,
+        weight,
+        style,
+        wrap,
+        vertical,
+    );
 
     let mut width = 0.0f32;
     let mut height = 0.0f32;
@@ -4793,6 +4972,111 @@ mod tests {
         assert_eq!(v.band_ratio(false), v.cap_ratio);
         assert_eq!(v.band_ratio(has_lowercase("Apply")), v.x_ratio);
         assert_eq!(v.band_ratio(has_lowercase("OK")), v.cap_ratio);
+    }
+
+    // ---- Ink band ----
+
+    #[test]
+    fn ink_band_sits_inside_the_line_box() {
+        let mut m = TextMeasurer::new();
+        let block = TextBlock::new("Medium", 0.0, 0.0).with_size(16.0);
+        let (_, line_h) = m.measure_block(&block);
+        let (top, bottom) = m.measure_block_ink(&block).expect("glyphs ink");
+        assert!(
+            top > 0.0 && bottom < line_h,
+            "ink {top}..{bottom} should sit strictly inside the {line_h}px line box"
+        );
+        // Leading above the ascent is what makes the line box taller than the
+        // ink, and it is exactly what `vcentered_text_y` compensates for.
+        assert!(
+            bottom - top < line_h,
+            "ink height {} should be under the line box {line_h}",
+            bottom - top
+        );
+    }
+
+    #[test]
+    fn a_descender_reaches_below_a_baseline_only_glyph() {
+        let mut m = TextMeasurer::new();
+        let no_desc = TextBlock::new("mow", 0.0, 0.0).with_size(16.0);
+        let desc = TextBlock::new("mop", 0.0, 0.0).with_size(16.0);
+        let (_, b_no) = m.measure_block_ink(&no_desc).expect("inks");
+        let (_, b_yes) = m.measure_block_ink(&desc).expect("inks");
+        assert!(
+            b_yes > b_no,
+            "the 'p' descender should extend the band: {b_no} vs {b_yes}"
+        );
+    }
+
+    #[test]
+    fn an_ascender_reaches_above_an_x_height_glyph() {
+        let mut m = TextMeasurer::new();
+        let low = TextBlock::new("nom", 0.0, 0.0).with_size(16.0);
+        let tall = TextBlock::new("nomd", 0.0, 0.0).with_size(16.0);
+        let (t_low, _) = m.measure_block_ink(&low).expect("inks");
+        let (t_tall, _) = m.measure_block_ink(&tall).expect("inks");
+        assert!(
+            t_tall < t_low,
+            "the 'd' ascender should raise the band top: {t_low} vs {t_tall}"
+        );
+    }
+
+    #[test]
+    fn text_without_outlines_inks_nothing() {
+        let mut m = TextMeasurer::new();
+        assert_eq!(
+            m.measure_block_ink(&TextBlock::new("", 0.0, 0.0).with_size(16.0)),
+            None
+        );
+        assert_eq!(
+            m.measure_block_ink(&TextBlock::new("   ", 0.0, 0.0).with_size(16.0)),
+            None,
+            "spaces have no outline, so there is no ink band to report"
+        );
+    }
+
+    #[test]
+    fn ink_band_scales_with_font_size() {
+        let mut m = TextMeasurer::new();
+        let small = m
+            .measure_block_ink(&TextBlock::new("Medium", 0.0, 0.0).with_size(10.0))
+            .expect("inks");
+        let large = m
+            .measure_block_ink(&TextBlock::new("Medium", 0.0, 0.0).with_size(20.0))
+            .expect("inks");
+        let ratio = (large.1 - large.0) / (small.1 - small.0);
+        assert!(
+            (ratio - 2.0).abs() < 0.05,
+            "doubling the font size should double the ink height (got {ratio}x)"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_block_inks_across_every_line() {
+        let mut m = TextMeasurer::new();
+        let one = TextBlock::new("Medium", 0.0, 0.0).with_size(16.0);
+        let mut two = TextBlock::new("Medium medium", 0.0, 0.0).with_size(16.0);
+        two.max_width = 50.0; // forces a wrap
+        let (_, h_two) = m.measure_block(&two);
+        assert!(h_two > m.measure_block(&one).1, "precondition: it wrapped");
+        let single = m.measure_block_ink(&one).expect("inks");
+        let wrapped = m.measure_block_ink(&two).expect("inks");
+        assert!(
+            wrapped.1 - wrapped.0 > single.1 - single.0,
+            "a wrapped block's ink must span its lines: {single:?} vs {wrapped:?}"
+        );
+    }
+
+    #[test]
+    fn ink_band_is_cached_per_key() {
+        let mut m = TextMeasurer::new();
+        let block = TextBlock::new("Medium", 0.0, 0.0).with_size(16.0);
+        let a = m.measure_block_ink(&block);
+        let b = m.measure_block_ink(&block); // cache hit
+        assert_eq!(a, b);
+        // A different size is a different key, so it must re-measure, not reuse.
+        let bigger = TextBlock::new("Medium", 0.0, 0.0).with_size(32.0);
+        assert_ne!(a, m.measure_block_ink(&bigger));
     }
 
     #[test]

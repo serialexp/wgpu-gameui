@@ -515,6 +515,16 @@ impl DrawList {
         self.text_measurer.measure_block(block)
     }
 
+    /// The band of real glyph ink a queued [`TextBlock`] paints, as `(top,
+    /// bottom)` offsets below its top edge. `None` when it inks nothing.
+    ///
+    /// See [`TextMeasurer::measure_block_ink`] — this is the *painted* extent,
+    /// where [`measure_block`](Self::measure_block) is the *reserved* one, and a
+    /// vertically centred label deliberately makes those two disagree.
+    pub fn measure_block_ink(&mut self, block: &TextBlock) -> Option<(f32, f32)> {
+        self.text_measurer.measure_block_ink(block)
+    }
+
     /// Per-font vertical metrics for optical (cap-height) centring, for the given
     /// font at Normal weight/style (the only combination widget labels centre).
     /// Cached per font. Exposed mainly so debug tooling can draw the band; most

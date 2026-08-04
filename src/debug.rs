@@ -724,15 +724,49 @@ impl DebugReport {
     }
 }
 
-/// Measured ink size per text block index.
-fn measure_texts(list: &mut DrawList) -> Vec<(f32, f32)> {
-    let blocks: Vec<TextBlock> = list.texts.clone();
-    blocks.iter().map(|b| list.measure_block(b)).collect()
+/// What a shaping pass tells us about one text block.
+///
+/// The two halves answer different questions and are not interchangeable:
+/// `advance` is the slot the text *reserves* (advance width by line-box height),
+/// which is what neighbouring layout must not tread on; `ink_band` is what it
+/// *paints*, which is what may be found outside a box.
+#[derive(Clone, Copy)]
+struct TextExtent {
+    /// `(advance width, line-box height)` — [`DrawList::measure_block`].
+    advance: (f32, f32),
+    /// `(top, bottom)` glyph-ink offsets below the block's top edge, or `None`
+    /// when nothing inked (empty or whitespace-only).
+    ink_band: Option<(f32, f32)>,
 }
 
-/// Resolve a text block's ink rect from its measured size and alignment.
-fn text_ink_rect(block: &TextBlock, measured: (f32, f32)) -> Rect {
-    let (w, h) = measured;
+/// Measure every queued text block: reserved slot and painted ink both.
+fn measure_texts(list: &mut DrawList) -> Vec<TextExtent> {
+    let blocks: Vec<TextBlock> = list.texts.clone();
+    blocks
+        .iter()
+        .map(|b| TextExtent {
+            advance: list.measure_block(b),
+            ink_band: list.measure_block_ink(b),
+        })
+        .collect()
+}
+
+/// Resolve the rect a text block actually paints into, from its measurement and
+/// alignment.
+///
+/// Vertically this is the **ink band**, not the line box. A line box carries
+/// leading above the ascent and below the descent, and `vcentered_text_y`
+/// deliberately slides the whole box upward so the glyphs' optical centre lands
+/// on the row centre — so a correctly centred label's line box always pokes out
+/// of its row. Reporting that as painted area turns every centred label in the
+/// frame into an overflow. When nothing inked there is no band to use and the
+/// line box is the only answer available.
+///
+/// Horizontally this stays the advance box. Advance is what the next glyph (or
+/// the next widget) has to clear, and for upright text it contains the ink, so
+/// it is the conservative choice for "how much room did this take".
+fn text_ink_rect(block: &TextBlock, measured: TextExtent) -> Rect {
+    let (w, h) = measured.advance;
     // `Start`/`End` are direction-relative; for the overwhelmingly common LTR
     // case they coincide with Left/Right. RTL blocks mirror, which we do not try
     // to model — the width is right either way, only the x may be off.
@@ -741,7 +775,10 @@ fn text_ink_rect(block: &TextBlock, measured: (f32, f32)) -> Rect {
         TextAlign::End | TextAlign::Right => block.x + (block.max_width - w),
         TextAlign::Start | TextAlign::Left => block.x,
     };
-    Rect::new(x, block.y, w, h)
+    match measured.ink_band {
+        Some((top, bottom)) => Rect::new(x, block.y + top, w, bottom - top),
+        None => Rect::new(x, block.y, w, h),
+    }
 }
 
 /// Effects that paint outside the measured ink box.
@@ -856,7 +893,7 @@ impl DebugReport {
     fn build(
         list: &DrawList,
         screen: Rect,
-        ink: Option<&[(f32, f32)]>,
+        ink: Option<&[TextExtent]>,
         cfg: &LintConfig,
         text_measured: bool,
     ) -> Self {
@@ -914,7 +951,7 @@ impl DebugReport {
 
     fn build_layers_measured(layers: &mut LayerStack, screen: Rect, cfg: &LintConfig) -> Self {
         let base_ink = measure_texts(layers.base_mut());
-        let layer_ink: Vec<Vec<(f32, f32)>> = (0..layers.layers().len())
+        let layer_ink: Vec<Vec<TextExtent>> = (0..layers.layers().len())
             .map(|i| measure_texts(&mut layers.layers_mut()[i].list))
             .collect();
 
@@ -1060,7 +1097,7 @@ fn descends_from(raw: &[RawNode], mut node: usize, ancestor: usize) -> bool {
 /// Turn one `DrawList` into raw nodes, appended to `out`.
 fn collect_nodes(
     list: &DrawList,
-    ink: Option<&[(f32, f32)]>,
+    ink: Option<&[TextExtent]>,
     root: Option<usize>,
     layer: Option<usize>,
     out: &mut Vec<RawNode>,
@@ -1252,7 +1289,7 @@ fn collect_nodes(
             block.x,
             block.y,
             block.max_width,
-            measured.map_or(block.line_height, |(_, h)| h),
+            measured.map_or(block.line_height, |m| m.advance.1),
         );
         let bounds = match measured {
             Some(m) => text_ink_rect(block, m),
@@ -2373,6 +2410,64 @@ mod tests {
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
         assert!(codes(&report).contains(&"degenerate_declared_rect"), "{}", report.to_text());
+    }
+
+    /// A label centred by `vcentered_text_y` sits with its *line box* poking out
+    /// of the row on purpose — the box is slid up so the glyph ink, not the box,
+    /// lands on the row's centre. Measuring the box instead of the ink turned
+    /// every centred label in the widget gallery into an overflow warning.
+    #[test]
+    fn an_optically_centred_label_does_not_overflow_its_row() {
+        let row = Rect::new(0.0, 100.0, 120.0, 20.0);
+        let mut list = DrawList::new();
+        list.push_debug_scope_rect("row", row);
+        let y = list.vcentered_text_y(row.y, row.height, 14.0, None, "Medium");
+        assert!(
+            y < row.y,
+            "precondition: optical centring lifts the line box above the row \
+             (line box at {y}, row top {})",
+            row.y
+        );
+        list.text(TextBlock::new("Medium", row.x + 4.0, y).with_size(14.0));
+        list.pop_debug_scope();
+
+        let report = DebugReport::measured(&mut list, SCREEN);
+        assert!(
+            !codes(&report).contains(&"overflows_declared"),
+            "{}",
+            report.to_text()
+        );
+
+        // And the recorded bounds really are the ink, sitting inside the row.
+        let text = report
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Text)
+            .expect("the label is in the report");
+        assert!(
+            text.bounds.y >= row.y && text.bounds.bottom() <= row.bottom(),
+            "ink {:?} should sit inside row {row:?}",
+            text.bounds
+        );
+    }
+
+    /// The counterpart: ink that genuinely leaves the box must still be caught,
+    /// or the fix above would have bought silence rather than accuracy.
+    #[test]
+    fn text_that_really_escapes_its_row_is_still_reported() {
+        let row = Rect::new(0.0, 100.0, 120.0, 20.0);
+        let mut list = DrawList::new();
+        list.push_debug_scope_rect("row", row);
+        // Font far too large for the row: the ink overshoots on its own merits.
+        list.text(TextBlock::new("Medium", row.x, row.y).with_size(40.0));
+        list.pop_debug_scope();
+
+        let report = DebugReport::measured(&mut list, SCREEN);
+        assert!(
+            codes(&report).contains(&"overflows_declared"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]

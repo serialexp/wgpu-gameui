@@ -113,6 +113,39 @@ impl<'a> RadioGroup<'a> {
         }
     }
 
+    /// The size this group needs to lay its options out without spilling, as
+    /// `(width, height)`. Pass the result straight to [`draw`](Self::draw), or
+    /// use it as the minimum when the surrounding layout has room to spare.
+    ///
+    /// A group's extent is not something a caller can derive: it depends on the
+    /// dot diameter (fitted to the theme font size), the inter-option gap, and —
+    /// horizontally — the *shaped* width of every label. Guessing it is how a
+    /// group ends up 8px short of its last option.
+    ///
+    /// - **Vertical** (the default): `n` rows of one dot each, so the height is
+    ///   `n·diameter + (n−1)·gap` and the width is the widest dot+label row.
+    /// - **Horizontal**: one row, so the width is the sum of the option cells
+    ///   plus the gaps between them, and the height is one dot.
+    pub fn measure(&self, list: &mut DrawList, s: &StyleResolver) -> (f32, f32) {
+        let diameter = Self::diameter(s);
+        let gap = self.spacing.unwrap_or_else(|| s.scalar(StyleKey::Spacing));
+        let n = self.options.len();
+        if n == 0 {
+            return (0.0, 0.0);
+        }
+        let cells = self
+            .options
+            .iter()
+            .map(|o| self.h_cell_width(o, diameter, s, list));
+        if self.horizontal {
+            let total: f32 = cells.sum::<f32>() + gap * (n - 1) as f32;
+            (total, diameter)
+        } else {
+            let widest = cells.fold(0.0_f32, f32::max);
+            (widest, n as f32 * diameter + gap * (n - 1) as f32)
+        }
+    }
+
     /// Width of a horizontal option cell: dot + gap + measured label width.
     fn h_cell_width(&self, label: &str, diameter: f32, s: &StyleResolver, list: &mut DrawList) -> f32 {
         let label_w = if label.is_empty() {
@@ -302,6 +335,58 @@ mod tests {
         let gap = th.spacing;
         let y = i as f32 * (diameter + gap) + diameter / 2.0;
         (5.0, y)
+    }
+
+    /// The measured size must actually contain every option — this is the whole
+    /// point of the method, and the gallery shipped a hand-guessed height that
+    /// cut the third row off until layout inspection caught it.
+    #[test]
+    fn measured_size_contains_every_option() {
+        for horizontal in [false, true] {
+            let mut g = RadioGroup::new(&OPTS);
+            if horizontal {
+                g = g.horizontal();
+            }
+            let th = theme();
+            let s = StyleResolver::new(&th);
+            let mut list = DrawList::new();
+            let (w, h) = g.measure(&mut list, &s);
+            let rect = Rect::new(10.0, 10.0, w, h);
+
+            let last = g
+                .cell_rect(OPTS.len() - 1, rect, &s, &mut list)
+                .expect("last option has a cell");
+            assert!(
+                last.right() <= rect.right() + 0.01 && last.bottom() <= rect.bottom() + 0.01,
+                "horizontal={horizontal}: last cell {last:?} escapes measured {rect:?}"
+            );
+        }
+    }
+
+    /// Growing the gap has to grow the measured extent, or the measurement is
+    /// just the default theme's answer wearing a method signature.
+    #[test]
+    fn measured_size_tracks_the_configured_gap() {
+        let th = theme();
+        let s = StyleResolver::new(&th);
+        let mut list = DrawList::new();
+        let tight = RadioGroup::new(&OPTS).spacing(0.0).measure(&mut list, &s);
+        let loose = RadioGroup::new(&OPTS).spacing(20.0).measure(&mut list, &s);
+        // Two gaps between three options.
+        assert!(
+            (loose.1 - tight.1 - 40.0).abs() < 0.01,
+            "vertical height should grow by 2 x 20px: {tight:?} -> {loose:?}"
+        );
+        assert_eq!(tight.0, loose.0, "vertical width is gap-independent");
+    }
+
+    #[test]
+    fn empty_group_measures_to_nothing() {
+        let th = theme();
+        let s = StyleResolver::new(&th);
+        let mut list = DrawList::new();
+        let empty: [&str; 0] = [];
+        assert_eq!(RadioGroup::new(&empty).measure(&mut list, &s), (0.0, 0.0));
     }
 
     #[test]

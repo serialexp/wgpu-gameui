@@ -1071,14 +1071,18 @@ fn render_widget_gallery() {
         let r = flow.cell(list, "Checkbox (checked)", 120.0, 20.0);
         cb.draw(true, "On", r, &mut ctx(list, &mut focus, &theme, &input));
 
+        // Ask the group how big it needs to be rather than guessing: a
+        // hand-written 76.0 here used to clip the third option's row.
         let radio_opts = ["Low", "Medium", "High"];
-        let r = flow.cell(list, "Radio group", 120.0, 76.0);
-        RadioGroup::new(&radio_opts).draw(1, r, &mut ctx(list, &mut focus, &theme, &input));
+        let vertical = RadioGroup::new(&radio_opts);
+        let (rw, rh) = vertical.measure(list, &StyleResolver::new(&theme));
+        let r = flow.cell(list, "Radio group", rw, rh);
+        vertical.draw(1, r, &mut ctx(list, &mut focus, &theme, &input));
 
-        let r = flow.cell(list, "Radio (horizontal)", 260.0, 24.0);
-        RadioGroup::new(&radio_opts)
-            .horizontal()
-            .draw(0, r, &mut ctx(list, &mut focus, &theme, &input));
+        let horizontal = RadioGroup::new(&radio_opts).horizontal();
+        let (rw, rh) = horizontal.measure(list, &StyleResolver::new(&theme));
+        let r = flow.cell(list, "Radio (horizontal)", rw, rh);
+        horizontal.draw(0, r, &mut ctx(list, &mut focus, &theme, &input));
 
         let r = flow.cell(list, "Progress bar", 150.0, 20.0);
         ProgressBar::new(0.65).draw(r, list, &StyleResolver::new(&theme));

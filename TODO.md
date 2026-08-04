@@ -152,7 +152,10 @@ Use this as the working backlog for the package. Cross items off as PRs land.
       arrow nav: Up/Down vertical, Left/Right horizontal, clamped no-wrap),
       `.horizontal()` (cells sized to measured label width), `.spacing(px)`.
       Façade verb `UiContext::radio_group(options, selected) -> usize`
-      auto-places/advances like `checkbox`.
+      auto-places/advances like `checkbox`. `measure(list, style) -> (w, h)`
+      reports the extent the options need (dot diameter × gap × shaped label
+      widths, per orientation) — a caller cannot derive it, and layout
+      inspection caught the gallery's hand-guessed height cutting off a row.
 - [x] **P1 — Tree view / collapsing header.** `TreeNode`
       (`src/widgets/tree.rs`) draws one row — a disclosure triangle + indented
       label for *branches*, a terminal *leaf* otherwise — against a `Rect`/
@@ -875,6 +878,17 @@ had no way to check their own work.
   `vertical` included. The existing `measure*` methods hard-code most of those,
   so they report the wrong size for any bold, italic, custom-font, or stacked
   block.
+- [x] **`TextMeasurer::measure_block_ink` / `DrawList::measure_block_ink`.**
+  `(top, bottom)` offsets of the real glyph **ink** below a block's top edge, or
+  `None` when nothing inked. `measure_block` reports the *slot* a block reserves
+  (advance × line box); this reports what lands on screen, and the two differ by
+  design — `vcentered_text_y` slides the whole line box up so the glyphs' optical
+  centre hits the row centre, so a correctly centred label's line box always
+  pokes out of its row. The report measured the box and called it ink, which
+  turned every centred label in the gallery into a 1.92px overflow. Per glyph the
+  band is `baseline − y_max` … `baseline − y_min` of its outline box, faces
+  parsed once per run rather than once per glyph, cached separately so the
+  drawing path never pays for it.
 - [x] **`Rect` helpers.** `right`, `bottom`, `is_empty`, `union` (empty operands
   contribute nothing, so it folds), `contains_rect(other, tolerance)`
   (edge-inclusive), `inset`.
