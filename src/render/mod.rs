@@ -15,6 +15,8 @@ mod atlas;
 mod blur;
 mod capture;
 mod glyph_msdf;
+#[cfg(feature = "phosphor-icons")]
+mod icon_font;
 mod image_cache;
 mod msdf_atlas;
 #[cfg(feature = "phosphor-icons")]
@@ -25,9 +27,13 @@ pub use glyph_msdf::{GlyphMetrics, GlyphMsdf, generate_glyph_msdf};
 pub use msdf_atlas::{DEFAULT_PX_RANGE, DEFAULT_REF_PX, GlyphTile, MsdfGlyphAtlas};
 
 #[cfg(feature = "phosphor-icons")]
-pub use phosphor::PhosphorIcon;
+pub use icon_font::{
+    IconFontId, IconGlyph, icon_font_data, icon_font_id, icon_glyph, register_icon_font,
+};
 #[cfg(feature = "phosphor-icons")]
-pub(crate) use phosphor::{PHOSPHOR_FONT_ID, phosphor_font_data, phosphor_glyph_id};
+pub(crate) use icon_font::icon_font_snapshot;
+#[cfg(feature = "phosphor-icons")]
+pub use phosphor::PhosphorIcon;
 
 pub use atlas::{AtlasRegion, SpriteAtlas, SpriteId};
 #[cfg(feature = "headless")]

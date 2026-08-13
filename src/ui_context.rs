@@ -980,6 +980,32 @@ impl<'a> UiContext<'a> {
         self.backend.list_mut().icon(key, ox, oy, w, h);
     }
 
+    /// Draw a vector [`PhosphorIcon`] fit-centered into a `w`×`h` box at the
+    /// aligned origin, crisp at any size through the MSDF icon atlas.
+    ///
+    /// The vector sibling of [`icon`](Self::icon): no atlas key, no sprite to
+    /// register, and the current tint colorizes it. Like `icon`, it does **not**
+    /// advance the cursor — wrap it in `push`/`pop` and position it yourself.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn phosphor_icon(&mut self, icon: crate::render::PhosphorIcon, w: f32, h: f32) {
+        if let Some(glyph) = icon.glyph() {
+            self.vector_icon(glyph, w, h);
+        }
+    }
+
+    /// [`phosphor_icon`](Self::phosphor_icon) for a glyph from an
+    /// application-registered icon font (see
+    /// [`register_icon_font`](crate::render::register_icon_font)). Resolve the
+    /// [`IconGlyph`](crate::render::IconGlyph) once at startup and keep it.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn vector_icon(&mut self, glyph: crate::render::IconGlyph, w: f32, h: f32) {
+        let align = *self.align_stack.last().unwrap_or(&AlignSpec::DEFAULT);
+        let [ox, oy] = align.offset(w, h);
+        self.backend
+            .list_mut()
+            .icon_msdf(Rect::new(ox, oy, w, h), glyph, [1.0, 1.0, 1.0, 1.0]);
+    }
+
     /// Draw a pre-built [`TextBlock`] whose origin honours align/transform.
     /// (The auto-advancing string verb is [`text`](Self::text).)
     pub fn text_block(&mut self, mut block: TextBlock) {

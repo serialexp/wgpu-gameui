@@ -4,7 +4,7 @@ use crate::affine::Affine2;
 use crate::layout::Rect;
 use crate::render::SpriteId;
 #[cfg(feature = "phosphor-icons")]
-use crate::render::{PhosphorIcon, phosphor_glyph_id};
+use crate::render::{IconGlyph, PhosphorIcon};
 use crate::text::{FontHandle, FontSystemHandle, FontVMetrics, TextBlock, TextMeasurer, Underline};
 
 pub(crate) const ROUNDED_RECT_CORNER_SEGMENTS: usize = 8;
@@ -184,8 +184,10 @@ pub struct IconMsdf {
     pub local: Rect,
     /// Affine applied to each fitted quad corner during tessellation.
     pub transform: Affine2,
-    /// Resolved Phosphor glyph index (from [`PhosphorIcon`] at push time).
-    pub glyph_id: u16,
+    /// Glyph resolved at push time — which icon font, and which glyph in it.
+    /// Resolving here (rather than at render time) keeps the render pass free of
+    /// registry lookups and lets a command outlive the enum it came from.
+    pub glyph: IconGlyph,
     /// Multiplied with the sampled field's fill color. Default white.
     pub tint: [f32; 4],
     /// Optional clip rect; `None` draws unclipped.
@@ -1774,26 +1776,36 @@ impl DrawList {
         self.texts.push(block);
     }
 
-    /// Add a vector [`PhosphorIcon`], fit-centered into `rect` and rendered crisp
-    /// at any size through the MSDF icon atlas. `tint` multiplies the fill (use
-    /// `[1.0; 4]` for the icon's natural color). Honors the current transform,
-    /// tint stack, and clip. No-op for a zero-area rect or an unresolvable glyph.
+    /// Add a vector icon from any registered icon font, fit-centered into `rect`
+    /// and rendered crisp at any size through the MSDF icon atlas. `tint`
+    /// multiplies the fill (use `[1.0; 4]` for the icon's natural color). Honors
+    /// the current transform, tint stack, and clip. No-op for a zero-area rect.
+    ///
+    /// Resolve the [`IconGlyph`] once at startup (see
+    /// [`icon_glyph`](crate::render::icon_glyph)) and keep it — it is `Copy`.
     #[cfg(feature = "phosphor-icons")]
-    pub fn icon_msdf(&mut self, rect: Rect, icon: PhosphorIcon, tint: [f32; 4]) {
+    pub fn icon_msdf(&mut self, rect: Rect, glyph: IconGlyph, tint: [f32; 4]) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             self.dropped_degenerate += 1;
             return;
         }
-        let Some(glyph_id) = phosphor_glyph_id(icon) else {
-            return;
-        };
         self.icons_msdf.push(IconMsdf {
             local: rect,
             transform: self.current_transform(),
-            glyph_id,
+            glyph,
             tint: self.apply_tint(tint),
             clip: self.current_clip(),
         });
+    }
+
+    /// [`icon_msdf`](Self::icon_msdf) for the built-in Phosphor set — resolves
+    /// the enum to its glyph at push time. No-op if the glyph is unresolvable
+    /// (which the library's tests rule out for the curated set).
+    #[cfg(feature = "phosphor-icons")]
+    pub fn phosphor_icon(&mut self, rect: Rect, icon: PhosphorIcon, tint: [f32; 4]) {
+        if let Some(glyph) = icon.glyph() {
+            self.icon_msdf(rect, glyph, tint);
+        }
     }
 
     /// Add a textured icon by name. The renderer will resolve `icon_key` against
@@ -2117,15 +2129,16 @@ mod tests {
         list.push_transform();
         list.translate(40.0, 60.0);
         list.set_tint([1.0, 1.0, 1.0, 0.5]);
-        list.icon_msdf(
+        list.phosphor_icon(
             Rect::new(0.0, 0.0, 20.0, 20.0),
             PhosphorIcon::Plus,
             [1.0, 0.0, 0.0, 1.0],
         );
         assert_eq!(list.icons_msdf.len(), 1);
         let rec = list.icons_msdf[0];
-        // Glyph resolved to a real (non-notdef) id.
-        assert_ne!(rec.glyph_id, 0);
+        // Glyph resolved to a real (non-notdef) id in the Phosphor font.
+        assert_eq!(rec.glyph.font, crate::render::IconFontId::PHOSPHOR);
+        assert_ne!(rec.glyph.glyph_id, 0);
         // Tint is multiplied by the active tint stack (alpha 1.0 * 0.5).
         assert_eq!(rec.tint, [1.0, 0.0, 0.0, 0.5]);
         // The translate transform is carried (origin maps to (40, 60)).
@@ -2138,8 +2151,24 @@ mod tests {
     fn icon_msdf_skips_zero_rect() {
         use crate::render::PhosphorIcon;
         let mut list = DrawList::new();
-        list.icon_msdf(Rect::new(0.0, 0.0, 0.0, 20.0), PhosphorIcon::X, [1.0; 4]);
+        list.phosphor_icon(Rect::new(0.0, 0.0, 0.0, 20.0), PhosphorIcon::X, [1.0; 4]);
         assert!(list.icons_msdf.is_empty());
+    }
+
+    /// The generic verb and the Phosphor convenience wrapper must produce the
+    /// same record — the wrapper is a resolution shortcut, not a second path.
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn phosphor_icon_matches_the_generic_verb() {
+        use crate::render::PhosphorIcon;
+        let glyph = PhosphorIcon::Gear.glyph().expect("gear resolves");
+        let rect = Rect::new(3.0, 4.0, 18.0, 18.0);
+
+        let mut a = DrawList::new();
+        a.phosphor_icon(rect, PhosphorIcon::Gear, [1.0; 4]);
+        let mut b = DrawList::new();
+        b.icon_msdf(rect, glyph, [1.0; 4]);
+        assert_eq!(a.icons_msdf, b.icons_msdf);
     }
 
     #[test]

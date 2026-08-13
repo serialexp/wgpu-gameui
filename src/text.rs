@@ -24,9 +24,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
-use crate::render::{
-    DEFAULT_PX_RANGE, PHOSPHOR_FONT_ID, PhosphorIcon, phosphor_font_data, phosphor_glyph_id,
-};
+use crate::render::{DEFAULT_PX_RANGE, IconGlyph, PhosphorIcon, icon_font_snapshot};
 use crate::render::{GlyphTile, MsdfGlyphAtlas, ortho_matrix};
 #[cfg(feature = "phosphor-icons")]
 use crate::widgets::IconMsdf;
@@ -550,11 +548,30 @@ impl TextRenderer {
     /// (the renderer does this in `UiRenderer::new`).
     #[cfg(feature = "phosphor-icons")]
     pub fn prewarm_icons(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let data = phosphor_font_data();
-        for &icon in PhosphorIcon::ALL {
-            if let Some(gid) = phosphor_glyph_id(icon) {
-                self.icon_atlas.glyph(PHOSPHOR_FONT_ID, gid, data);
-            }
+        let glyphs: Vec<IconGlyph> = PhosphorIcon::ALL.iter().filter_map(|i| i.glyph()).collect();
+        self.prewarm_icon_glyphs(device, queue, &glyphs);
+    }
+
+    /// Pre-generate an explicit set of icon glyphs — the route for an
+    /// application font registered with
+    /// [`register_icon_font`](crate::render::register_icon_font), whose glyph set
+    /// the library can't enumerate for itself.
+    ///
+    /// Unresolvable glyphs (unregistered font, or a font id past the end of the
+    /// registry) are skipped rather than panicking.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn prewarm_icon_glyphs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        glyphs: &[IconGlyph],
+    ) {
+        let fonts = icon_font_snapshot();
+        for g in glyphs {
+            let Some(data) = fonts.get(g.font.index() as usize) else {
+                continue;
+            };
+            self.icon_atlas.glyph(g.font.index() as u64, g.glyph_id, data);
         }
         self.icon_gpu
             .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
@@ -589,11 +606,20 @@ impl TextRenderer {
             bytemuck::cast_slice(&[ortho_matrix(self.width as f32, self.height as f32)]),
         );
 
-        let data = phosphor_font_data();
+        // One lock acquisition for the whole batch; the bytes are `'static`, so
+        // MSDF generation below runs with the registry unlocked.
+        let fonts = icon_font_snapshot();
         let px_range = self.icon_atlas.px_range();
         let mut verts: Vec<MsdfVertex> = Vec::with_capacity(icons.len() * 6);
         for icon in icons {
-            let Some(tile) = self.icon_atlas.glyph(PHOSPHOR_FONT_ID, icon.glyph_id, data) else {
+            // An icon from an unregistered font simply doesn't draw.
+            let Some(data) = fonts.get(icon.glyph.font.index() as usize) else {
+                continue;
+            };
+            let Some(tile) =
+                self.icon_atlas
+                    .glyph(icon.glyph.font.index() as u64, icon.glyph.glyph_id, data)
+            else {
                 continue;
             };
             push_icon_quad(
@@ -5339,11 +5365,12 @@ mod icon_tests {
     #[test]
     fn icon_atlas_generates_and_caches_a_tile() {
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
-        let data = phosphor_font_data();
-        let gid = phosphor_glyph_id(PhosphorIcon::Plus).expect("Plus resolves");
+        let g = PhosphorIcon::Plus.glyph().expect("Plus resolves");
+        let data = icon_font_snapshot()[g.font.index() as usize];
+        let key = g.font.index() as u64;
 
         let t1 = atlas
-            .glyph(PHOSPHOR_FONT_ID, gid, data)
+            .glyph(key, g.glyph_id, data)
             .expect("Plus generates a tile");
         assert!(t1.region.w > 0 && t1.region.h > 0);
         // A real icon has horizontal and vertical extent.
@@ -5351,22 +5378,63 @@ mod icon_tests {
         assert!(t1.metrics.top_em > t1.metrics.bottom_em);
 
         // Cached: same tile, no new packing.
-        let t2 = atlas.glyph(PHOSPHOR_FONT_ID, gid, data).expect("cached");
+        let t2 = atlas.glyph(key, g.glyph_id, data).expect("cached");
         assert_eq!(t1, t2);
+    }
+
+    /// Two icon fonts share one atlas, so the resolution `render_icons` performs
+    /// — index the font snapshot by `IconGlyph::font`, key the atlas by the same
+    /// id — must give the *same glyph index* in different fonts different tiles.
+    /// Getting this wrong would silently draw font A's art for font B's icon.
+    #[cfg(all(feature = "phosphor-icons", feature = "bundled-font"))]
+    #[test]
+    fn two_icon_fonts_resolve_to_distinct_tiles_for_the_same_glyph_index() {
+        use crate::render::register_icon_font;
+
+        let other = register_icon_font("text-icons-under-test", notosans::REGULAR_TTF)
+            .expect("noto parses as a face");
+        let phosphor = PhosphorIcon::Gear.glyph().expect("gear resolves");
+        // Deliberately the *same* glyph index in the other font — the font id is
+        // the only thing that may distinguish these two.
+        let twin = IconGlyph {
+            font: other,
+            glyph_id: phosphor.glyph_id,
+        };
+
+        let fonts = icon_font_snapshot();
+        let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
+        let a = atlas
+            .glyph(
+                phosphor.font.index() as u64,
+                phosphor.glyph_id,
+                fonts[phosphor.font.index() as usize],
+            )
+            .expect("phosphor tile");
+        let b = atlas
+            .glyph(
+                twin.font.index() as u64,
+                twin.glyph_id,
+                fonts[twin.font.index() as usize],
+            )
+            .expect("other-font tile");
+        assert_ne!(
+            a.region, b.region,
+            "same glyph index in two fonts must pack to two tiles"
+        );
     }
 
     #[test]
     fn push_icon_quad_emits_six_verts_with_tint_and_clip() {
         use crate::affine::Affine2;
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
-        let data = phosphor_font_data();
-        let gid = phosphor_glyph_id(PhosphorIcon::Check).unwrap();
-        let tile = atlas.glyph(PHOSPHOR_FONT_ID, gid, data).unwrap();
+        let g = PhosphorIcon::Check.glyph().unwrap();
+        let data = icon_font_snapshot()[g.font.index() as usize];
+        let tile = atlas.glyph(g.font.index() as u64, g.glyph_id, data).unwrap();
 
         let icon = IconMsdf {
             local: Rect::new(0.0, 0.0, 32.0, 32.0),
             transform: Affine2::translation(100.0, 50.0),
-            glyph_id: gid,
+            glyph: g,
             tint: [0.2, 0.4, 0.6, 1.0],
             clip: Some(Rect::new(0.0, 0.0, 200.0, 200.0)),
         };

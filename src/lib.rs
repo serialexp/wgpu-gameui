@@ -94,7 +94,9 @@ pub use layer::{Layer, LayerKind, LayerStack};
 pub use nav::{GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard};
 pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "phosphor-icons")]
-pub use render::PhosphorIcon;
+pub use render::{
+    IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
+};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{

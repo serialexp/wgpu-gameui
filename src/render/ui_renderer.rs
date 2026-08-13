@@ -703,6 +703,24 @@ impl UiRenderer {
         self.atlas.id_for(name)
     }
 
+    /// Pre-generate MSDF tiles for icon glyphs from an application-registered
+    /// icon font, so the first frame that shows them doesn't hitch on generation.
+    ///
+    /// The built-in Phosphor set is already warmed by [`UiRenderer::new`]; this is
+    /// the route for a font added via
+    /// [`register_icon_font`](crate::render::register_icon_font), whose glyph set
+    /// the library cannot enumerate for itself. Call once after registering.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn prewarm_icons(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        glyphs: &[crate::render::IconGlyph],
+    ) {
+        self.text_renderer
+            .prewarm_icon_glyphs(device, queue, glyphs);
+    }
+
     /// True if `key` resolves to a sprite already present in the atlas — a
     /// loaded image (`load_image_*`), an out-of-band sprite
     /// (`load_sprite_rgba8`), or any registered name. Broader than
