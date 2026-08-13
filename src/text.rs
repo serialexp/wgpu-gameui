@@ -465,11 +465,18 @@ impl TextRenderer {
         Arc::clone(&self.font_system)
     }
 
-    /// Update the viewport size used to build the ortho projection. Both
-    /// dimensions are clamped to a minimum of 1.
-    pub fn resize(&mut self, width: u32, height: u32) {
-        self.width = width.max(1);
-        self.height = height.max(1);
+    /// Update the viewport size used to build the ortho projection.
+    ///
+    /// `width`/`height` are the **physical** render-target pixels; `scale_factor`
+    /// is the logical → physical ratio (e.g. 2.0 on Retina). The ortho matrix is
+    /// built from the *logical* dimensions (`physical / scale`) so text lands at
+    /// the same coordinates as the geometry pipeline, which also projects in
+    /// logical space.
+    pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
+        let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+        // Store the logical dimensions — ortho_matrix needs these, not physical.
+        self.width = ((width as f32 / scale) as u32).max(1);
+        self.height = ((height as f32 / scale) as u32).max(1);
     }
 
     /// Reset the per-frame vertex-buffer cursor. Call once at the start of each

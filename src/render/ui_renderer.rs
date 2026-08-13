@@ -858,9 +858,10 @@ impl UiRenderer {
         self.nine_slice_names.get(name).copied()
     }
 
-    /// Notify the text sub-renderer of viewport changes.
-    pub fn resize(&mut self, _queue: &wgpu::Queue, width: u32, height: u32) {
-        self.text_renderer.resize(width, height);
+    /// Notify the text sub-renderer of viewport changes. `scale_factor` is the
+    /// logical → physical ratio (pass `1.0` when unknown).
+    pub fn resize(&mut self, _queue: &wgpu::Queue, width: u32, height: u32, scale_factor: f32) {
+        self.text_renderer.resize(width, height, scale_factor);
     }
 
     /// Force-upload pending atlas changes to the GPU. Called automatically by
@@ -1088,7 +1089,7 @@ impl UiRenderer {
             view_proj: ortho_matrix(logical_w, logical_h),
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-        self.text_renderer.resize(viewport.0, viewport.1);
+        self.text_renderer.resize(viewport.0, viewport.1, scale);
         // Reset the per-frame bump cursors so this frame's draws start at 0.
         self.color_vbo_offset = 0;
         self.color_ibo_offset = 0;
