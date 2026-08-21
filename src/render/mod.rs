@@ -27,19 +27,19 @@ pub use glyph_msdf::{GlyphMetrics, GlyphMsdf, generate_glyph_msdf};
 pub use msdf_atlas::{DEFAULT_PX_RANGE, DEFAULT_REF_PX, GlyphTile, MsdfGlyphAtlas};
 
 #[cfg(feature = "phosphor-icons")]
+pub(crate) use icon_font::icon_font_snapshot;
+#[cfg(feature = "phosphor-icons")]
 pub use icon_font::{
     IconFontId, IconGlyph, icon_font_data, icon_font_id, icon_glyph, register_icon_font,
 };
 #[cfg(feature = "phosphor-icons")]
-pub(crate) use icon_font::icon_font_snapshot;
-#[cfg(feature = "phosphor-icons")]
 pub use phosphor::PhosphorIcon;
 
 pub use atlas::{AtlasRegion, SpriteAtlas, SpriteId};
+pub use blur::{Backdrop, BlurParams};
 #[cfg(feature = "headless")]
 pub use capture::HeadlessGpu;
 pub use capture::{CAPTURE_FORMAT, capture_draw_list, capture_layers, write_png};
-pub use blur::{Backdrop, BlurParams};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub(crate) use ui_renderer::ortho_matrix;
 pub use ui_renderer::{NineSliceMeta, UiRenderer};

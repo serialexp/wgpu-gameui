@@ -731,7 +731,7 @@ pub struct StackChild {
     /// Natural size along the stack (main) axis.
     pub content_size: f32, // Size along stack axis
     /// Natural size perpendicular to the stack (cross) axis.
-    pub cross_size: f32,   // Size perpendicular to stack axis
+    pub cross_size: f32, // Size perpendicular to stack axis
     /// Clamp applied to the resolved main-axis size of this child.
     pub constraint: Constraint,
     /// Alignment on the cross axis (defaults to [`CrossAlign::Stretch`]).
@@ -1424,7 +1424,10 @@ mod tests {
         let parent = Rect::new(0.0, 0.0, 100.0, 100.0);
         let spills = Rect::new(0.0, 0.0, 100.5, 100.0);
         assert!(!parent.contains_rect(spills, 0.0));
-        assert!(parent.contains_rect(spills, 1.0), "0.5px spill within 1px tolerance");
+        assert!(
+            parent.contains_rect(spills, 1.0),
+            "0.5px spill within 1px tolerance"
+        );
     }
 
     #[test]
@@ -1457,15 +1460,26 @@ mod tests {
         let c = r.container();
         assert_eq!(c.x, 0.0);
         assert_eq!(c.y, 0.0);
-        assert_eq!(c.width, 100.0 + 8.0 * 2.0, "container width = width + 2·padding");
-        assert_eq!(c.height, 8.0 * 2.0 + 20.0 + 4.0 + 30.0, "fit height = pad + rows + spacing");
+        assert_eq!(
+            c.width,
+            100.0 + 8.0 * 2.0,
+            "container width = width + 2·padding"
+        );
+        assert_eq!(
+            c.height,
+            8.0 * 2.0 + 20.0 + 4.0 + 30.0,
+            "fit height = pad + rows + spacing"
+        );
         assert_eq!(r.child_count(), 2);
 
         let r0 = r.get(1);
         assert_eq!((r0.x, r0.y, r0.width, r0.height), (8.0, 8.0, 100.0, 20.0));
         let r1 = r.get(2);
         // second row sits below the first plus the spacing.
-        assert_eq!((r1.x, r1.y, r1.width, r1.height), (8.0, 8.0 + 20.0 + 4.0, 100.0, 30.0));
+        assert_eq!(
+            (r1.x, r1.y, r1.width, r1.height),
+            (8.0, 8.0 + 20.0 + 4.0, 100.0, 30.0)
+        );
     }
 
     #[test]
@@ -1728,7 +1742,8 @@ mod tests {
         let result = stack.layout(Rect::new(10.0, 10.0, 100.0, 100.0));
         assert_eq!(result.get(1).x, 10.0, "start aligns to left edge");
         assert_eq!(
-            result.get(1).width, 40.0,
+            result.get(1).width,
+            40.0,
             "start uses cross_size, not inner_width"
         );
     }
@@ -1777,7 +1792,8 @@ mod tests {
         let result = stack.layout(Rect::new(10.0, 10.0, 100.0, 100.0));
         assert_eq!(result.get(1).y, 10.0, "start aligns to top edge");
         assert_eq!(
-            result.get(1).height, 20.0,
+            result.get(1).height,
+            20.0,
             "start uses cross_size, not inner_height"
         );
     }
@@ -1815,7 +1831,8 @@ mod tests {
         assert_eq!(result.get(1).y, 5.0, "start child at top edge");
         assert_eq!(result.get(2).height, 30.0, "end child uses cross_size");
         assert_eq!(
-            result.get(2).y, 65.0,
+            result.get(2).y,
+            65.0,
             "end child at bottom edge (5 + 90 - 30)"
         );
     }
@@ -1839,7 +1856,8 @@ mod tests {
             "center child x"
         );
         assert_eq!(
-            result.get(2).width, 112.0,
+            result.get(2).width,
+            112.0,
             "fill child stretches full width"
         );
         assert_eq!(result.get(3).width, 40.0, "end child uses cross_size");
@@ -1895,7 +1913,10 @@ mod tests {
     #[test]
     fn zero_weight_fill_gets_nothing() {
         // A lone fill at weight 0 → fill_weight is 0 → 0px (no div-by-zero).
-        let stack = HStack::new(0.0).child(100.0, 20.0).child_fill(20.0).weight(0.0);
+        let stack = HStack::new(0.0)
+            .child(100.0, 20.0)
+            .child_fill(20.0)
+            .weight(0.0);
         let result = stack.layout(Rect::new(0.0, 0.0, 300.0, 20.0));
         assert_eq!(result.get(1).width, 100.0, "fixed child unaffected");
         assert_eq!(result.get(2).width, 0.0, "zero-weight fill gets no space");
@@ -2069,7 +2090,10 @@ mod tests {
         // Three 100px items, 10px spacing, in a 250px-wide bound: items 0 and 1
         // fit on row 0 (100 + 10 + 100 = 210 <= 250); item 2 (would reach 320)
         // wraps to row 1.
-        let flow = Flow::new(10.0).item(100.0, 40.0).item(100.0, 40.0).item(100.0, 40.0);
+        let flow = Flow::new(10.0)
+            .item(100.0, 40.0)
+            .item(100.0, 40.0)
+            .item(100.0, 40.0);
         let r = flow.layout(Rect::new(0.0, 0.0, 250.0, 200.0));
         assert_eq!(r.len(), 4, "container + 3 items");
         // Row 0.
@@ -2094,10 +2118,15 @@ mod tests {
         let r = flow.layout(Rect::new(0.0, 0.0, 100.0, 200.0));
         // inner_w = 100 - 16 = 84; item 0 at (8,8); item 1 (would reach 62+50=112
         // > 8+84=92) wraps.
-        assert_eq!((r.get(1).x, r.get(1).y), (8.0, 8.0), "first item at padding");
+        assert_eq!(
+            (r.get(1).x, r.get(1).y),
+            (8.0, 8.0),
+            "first item at padding"
+        );
         assert_eq!(r.get(2).x, 8.0, "second wraps to left padding");
         assert_eq!(
-            r.get(2).y, 8.0 + 30.0 + 20.0,
+            r.get(2).y,
+            8.0 + 30.0 + 20.0,
             "second on row 1 (padding + row_h + run_spacing)"
         );
     }
@@ -2127,7 +2156,11 @@ mod tests {
         let r = flow.layout(bounds);
         assert_eq!(r.len(), 1);
         assert_eq!(r.get(0), bounds);
-        assert_eq!(flow.measure_height(100.0), 0.0, "empty flow has no content height");
+        assert_eq!(
+            flow.measure_height(100.0),
+            0.0,
+            "empty flow has no content height"
+        );
     }
 
     #[test]
@@ -2137,7 +2170,11 @@ mod tests {
         let flow = Flow::new(4.0).item(500.0, 30.0).item(20.0, 30.0);
         let r = flow.layout(Rect::new(0.0, 0.0, 100.0, 200.0));
         assert_eq!(r.len(), 3, "both items placed");
-        assert_eq!((r.get(1).x, r.get(1).y), (0.0, 0.0), "oversized item on row 0");
+        assert_eq!(
+            (r.get(1).x, r.get(1).y),
+            (0.0, 0.0),
+            "oversized item on row 0"
+        );
         // The small item can't share row 0 (cur_x already past inner_w) -> row 1.
         assert_eq!(r.get(2).x, 0.0);
         assert_eq!(r.get(2).y, 34.0, "small item wraps below oversized one");
@@ -2163,8 +2200,16 @@ mod tests {
     fn get_by_id_is_order_independent() {
         // The core regression `NodeId` prevents: reordering children shifts every
         // positional index, but id lookup still resolves to the same logical node.
-        let a = HStack::new(0.0).child(40.0, 20.0).id(1).child(60.0, 20.0).id(2);
-        let b = HStack::new(0.0).child(60.0, 20.0).id(2).child(40.0, 20.0).id(1);
+        let a = HStack::new(0.0)
+            .child(40.0, 20.0)
+            .id(1)
+            .child(60.0, 20.0)
+            .id(2);
+        let b = HStack::new(0.0)
+            .child(60.0, 20.0)
+            .id(2)
+            .child(40.0, 20.0)
+            .id(1);
         let ra = a.layout(Rect::new(0.0, 0.0, 100.0, 20.0));
         let rb = b.layout(Rect::new(0.0, 0.0, 100.0, 20.0));
         // Positional indices disagree after the swap...
@@ -2201,7 +2246,10 @@ mod tests {
 
     #[test]
     fn layout_into_clears_stale_entries() {
-        let big = VStack::new(0.0).child(10.0, 20.0).child(10.0, 20.0).child(10.0, 20.0);
+        let big = VStack::new(0.0)
+            .child(10.0, 20.0)
+            .child(10.0, 20.0)
+            .child(10.0, 20.0);
         let small = VStack::new(0.0).child(10.0, 20.0);
         let mut buf = LayoutResult::default();
         big.layout_into(Rect::new(0.0, 0.0, 20.0, 60.0), &mut buf);
@@ -2224,7 +2272,11 @@ mod tests {
         stack.layout_into(bounds, &mut buf);
         assert_eq!(buf.len(), fresh.len());
         for i in 0..fresh.len() {
-            assert_eq!(buf.get(i), fresh.get(i), "entry {i} must match fresh layout");
+            assert_eq!(
+                buf.get(i),
+                fresh.get(i),
+                "entry {i} must match fresh layout"
+            );
         }
     }
 

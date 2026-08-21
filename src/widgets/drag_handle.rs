@@ -34,9 +34,9 @@
 //! // `win` has now moved by the drag; `out.dragging` is true while held.
 //! ```
 
+use crate::StyleKey;
 use crate::layout::Rect;
 use crate::text::TextBlock;
-use crate::StyleKey;
 
 use super::{DragCapture, DragId, DrawContext};
 

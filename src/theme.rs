@@ -195,7 +195,11 @@ mod tests {
     fn get_set_match_typed_field_accessor() {
         let mut theme = Theme::default();
         theme.set(StyleKey::Accent, StyleValue::Color([0.1, 0.2, 0.3, 1.0]));
-        assert_eq!(theme.accent, [0.1, 0.2, 0.3, 1.0], "set writes the typed field");
+        assert_eq!(
+            theme.accent,
+            [0.1, 0.2, 0.3, 1.0],
+            "set writes the typed field"
+        );
         theme.button = [0.4, 0.5, 0.6, 1.0];
         assert_eq!(
             theme.get(StyleKey::Button).unwrap().as_color().unwrap(),
@@ -225,7 +229,11 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(theme.animation_duration, 0.12);
         assert_eq!(
-            theme.get(StyleKey::AnimationDuration).unwrap().as_scalar().unwrap(),
+            theme
+                .get(StyleKey::AnimationDuration)
+                .unwrap()
+                .as_scalar()
+                .unwrap(),
             0.12
         );
     }

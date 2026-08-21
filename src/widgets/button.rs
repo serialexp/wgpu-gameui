@@ -134,6 +134,10 @@ fn draw_label(list: &mut DrawList, s: &StyleResolver, rect: Rect, label: &str, e
                 (text_color[2] * 255.0) as u8,
             )
             .with_max_width((rect.width - inset * 2.0).max(0.0))
+            // Button captions are intrinsically single-line. Truncate a label
+            // that does not fit rather than allowing the text shaper's default
+            // wrapping to paint a second line outside the button allocation.
+            .with_ellipsis()
             .with_align(TextAlign::Center)
             .with_font_opt(font),
     );
@@ -242,7 +246,9 @@ impl Button {
         // `ctx`, so it stays valid across the `&mut self` `animate_color` calls
         // below and the later `&mut *ctx.draw_list` borrow.
         let s = ctx.styles();
-        let radius = self.radius.unwrap_or_else(|| s.scalar(StyleKey::BorderRadius));
+        let radius = self
+            .radius
+            .unwrap_or_else(|| s.scalar(StyleKey::BorderRadius));
         // Resolve discrete target colors, then ease toward them (no-op without an
         // AnimationState/anim_id → returns the target unchanged, byte-identical).
         let target_bg = v.bg_color(&s);
@@ -496,6 +502,37 @@ mod tests {
     }
 
     #[test]
+    fn narrow_button_label_is_single_line_and_ellipsized() {
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut focus = FocusState::new();
+        let mut list = DrawList::new();
+        let button = Rect::new(10.0, 10.0, 84.0, 24.0);
+
+        Button::new("Reconnect").draw(button, &mut with_ctx(&mut list, &mut focus, &theme, &input));
+
+        assert_eq!(list.texts.len(), 1);
+        let label = list.texts[0].clone();
+        assert!(label.ellipsize, "button labels must use ellipsis mode");
+        let inset = theme.padding.min(button.width * 0.15);
+        assert_eq!(label.max_width, button.width - inset * 2.0);
+        assert_eq!(
+            label.y,
+            list.vcentered_text_y(
+                button.y,
+                button.height,
+                theme.font_size,
+                theme.font.as_ref(),
+                "Reconnect",
+            )
+        );
+        assert!(
+            list.measure_block(&label).1 <= button.height,
+            "the constrained caption must remain inside the button height",
+        );
+    }
+
+    #[test]
     fn draw_at_matches_builder() {
         let theme = Theme::default();
         let input = input_at(50.0, 25.0, true, true);
@@ -696,7 +733,10 @@ mod tests {
         let input = input_at(0.0, 0.0, false, false);
         let mut plain = DrawList::new();
         let mut focus = FocusState::new();
-        Button::new("Go").draw(rect(), &mut with_ctx(&mut plain, &mut focus, &theme, &input));
+        Button::new("Go").draw(
+            rect(),
+            &mut with_ctx(&mut plain, &mut focus, &theme, &input),
+        );
         let mut anim = DrawList::new();
         let mut focus = FocusState::new();
         Button::new("Go")

@@ -1039,7 +1039,11 @@ impl UiRenderer {
         scale_factor: f32,
         params: &BlurParams,
     ) {
-        let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+        let scale = if scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
         let region_phys = [
             region.x * scale,
             region.y * scale,
@@ -1838,7 +1842,10 @@ mod tests {
         let mut d = StaleListDetector::default();
         for i in 0..(StaleListDetector::WARN_AFTER * 4) {
             let id = if i % 2 == 0 { 7 } else { 9 };
-            assert!(!d.observe(id), "alternating persistent stacks must not warn");
+            assert!(
+                !d.observe(id),
+                "alternating persistent stacks must not warn"
+            );
         }
     }
 

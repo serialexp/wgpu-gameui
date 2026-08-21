@@ -11,21 +11,18 @@
 //! content `Rect` to draw into, so adding a widget is one `flow.cell(...)` call
 //! plus the widget's own draw call — no hand-placed coordinates.
 
+use wgpu_gameui::debug::DebugReport;
 use wgpu_gameui::layout::{Flow as LayoutFlow, HStack, LayoutNode, MainAlign, Rect};
 use wgpu_gameui::{
-    Backdrop, BlurParams,
-    Banner, Button, Checkbox, ColorPicker, ColumnWidth, Corner, DragCapture, DragHandle,
-    DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState, Group, HitZone, Hsva,
-    ImageButton, ImageFit, InputState, LayerStack, List,
-    ListItem, ListState, NumberInput, ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView,
-    SelectionMode, Separator, Severity, Slider, StyleKey, StyleOverlay, StyleResolver, Table,
-    TableCell, TableColumn,
-    Tabs, TextAlign, TextBlock, TextDirection, TextInput, Toast, ToastStack, TextSpan, Theme,
-    TooltipContent, Underline,
-    TooltipLayer,
-    TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState, ease, lerp_color,
+    Backdrop, Banner, BlurParams, Button, Checkbox, ColorPicker, ColumnWidth, Corner, DragCapture,
+    DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState, Group, HitZone,
+    Hsva, ImageButton, ImageFit, InputState, LayerStack, List, ListItem, ListState, NumberInput,
+    ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode, Separator,
+    Severity, Slider, StyleKey, StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs,
+    TextAlign, TextBlock, TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack,
+    TooltipContent, TooltipLayer, TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState,
+    Underline, ease, lerp_color,
 };
-use wgpu_gameui::debug::DebugReport;
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
 
@@ -476,8 +473,7 @@ fn render_widget_gallery() {
             let mut sel_focus = FocusState::new();
             sel_focus.focus(SEL_ID);
             sel_focus.begin_frame(&sel_input);
-            let mut field =
-                TextInput::new(r.x, r.y, r.width, r.height).with_value("Hello, world");
+            let mut field = TextInput::new(r.x, r.y, r.width, r.height).with_value("Hello, world");
             field.cursor_pos = field.value.len();
             field.selection_start = Some(0);
             field.draw(
@@ -953,7 +949,12 @@ fn render_widget_gallery() {
                 {
                     let mut ui = UiContext::interactive(list, &input, &mut vstate, &theme);
                     ui.translate(r.x, r.y);
-                    let mut hsva = Hsva { h: 200.0, s: 0.8, v: 0.9, a: 1.0 };
+                    let mut hsva = Hsva {
+                        h: 200.0,
+                        s: 0.8,
+                        v: 0.9,
+                        a: 1.0,
+                    };
                     let _ = ui.color_picker(100, &mut hsva, Some(200.0));
                 }
                 vstate.end_frame();
@@ -1772,9 +1773,11 @@ fn render_widget_gallery() {
             // Inset horizontal rule between two faux text lines.
             let r = flow.cell(list, "inset 16px", 200.0, 40.0);
             list.text(TextBlock::new("above", r.x, r.y).with_size(13.0));
-            Separator::horizontal()
-                .with_inset(16.0)
-                .draw(Rect::new(r.x, r.y + 18.0, r.width, 4.0), list, &style);
+            Separator::horizontal().with_inset(16.0).draw(
+                Rect::new(r.x, r.y + 18.0, r.width, 4.0),
+                list,
+                &style,
+            );
             list.text(TextBlock::new("below", r.x, r.y + 24.0).with_size(13.0));
 
             // Thick accent rule (overridden thickness + color).
@@ -1971,7 +1974,12 @@ fn render_widget_gallery() {
     // Floating dropdown list (Popup layer above the base content).
     {
         let popup = dropdowns.push_open_layer(&mut layers);
-        dropdowns.draw_open_layer(&mut layers, popup, &StyleResolver::new(&theme), &InputState::default());
+        dropdowns.draw_open_layer(
+            &mut layers,
+            popup,
+            &StyleResolver::new(&theme),
+            &InputState::default(),
+        );
     }
 
     // Tooltip layer, hovering the reserved target.
@@ -1982,7 +1990,13 @@ fn render_widget_gallery() {
         tip_input.mouse_x = tooltip_rect.x + tooltip_rect.width / 2.0;
         tip_input.mouse_y = tooltip_rect.y + tooltip_rect.height / 2.0;
         tooltip.tick(999.0, &tip_input);
-        tooltip.draw_into_layers(&mut layers, &tip_input, &StyleResolver::new(&theme), W as f32, h as f32);
+        tooltip.draw_into_layers(
+            &mut layers,
+            &tip_input,
+            &StyleResolver::new(&theme),
+            W as f32,
+            h as f32,
+        );
     }
 
     // Dump the layout report alongside the PNG. The gallery is the largest real
@@ -2100,7 +2114,15 @@ fn render_widget_gallery() {
                 occlusion_query_set: None,
             });
         }
-        ui.render(&device, &queue, &mut scene_enc, &scene_view, (W, h), 1.0, &scene_list);
+        ui.render(
+            &device,
+            &queue,
+            &mut scene_enc,
+            &scene_view,
+            (W, h),
+            1.0,
+            &scene_list,
+        );
         queue.submit(Some(scene_enc.finish()));
     }
 
@@ -2189,7 +2211,15 @@ fn render_widget_gallery() {
                 .with_size(13.0)
                 .with_color(255, 255, 255),
         );
-        ui.render(&device, &queue, &mut encoder, &view, (W, h), 1.0, &panel_list);
+        ui.render(
+            &device,
+            &queue,
+            &mut encoder,
+            &view,
+            (W, h),
+            1.0,
+            &panel_list,
+        );
     }
 
     encoder.copy_texture_to_buffer(

@@ -474,8 +474,7 @@ fn bench_text_shape(c: &mut Criterion) {
     let mut group = c.benchmark_group("text_shape");
     for &count in counts {
         // Use identical string patterns for both paths.
-        let hit_strings: Vec<String> =
-            (0..count).map(|i| format!("item{i:05}")).collect();
+        let hit_strings: Vec<String> = (0..count).map(|i| format!("item{i:05}")).collect();
 
         // Pre-populate the cache so the hit path hits.
         for s in &hit_strings {
@@ -494,19 +493,23 @@ fn bench_text_shape(c: &mut Criterion) {
 
         // --- cache miss: cache cleared, entirely disjoint string set -----
         measurer.clear_cache();
-        group.bench_with_input(BenchmarkId::new("cache_miss", count), &count, |b, &count| {
-            b.iter(|| {
-                measurer.clear_cache();
-                for i in 0..count {
-                    // Offset by count so these never collide with hit_strings.
-                    std::hint::black_box(measurer.measure(
-                        &format!("miss{i:05}x{count:05}"),
-                        FONT_SIZE,
-                        None,
-                    ));
-                }
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("cache_miss", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    measurer.clear_cache();
+                    for i in 0..count {
+                        // Offset by count so these never collide with hit_strings.
+                        std::hint::black_box(measurer.measure(
+                            &format!("miss{i:05}x{count:05}"),
+                            FONT_SIZE,
+                            None,
+                        ));
+                    }
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -534,9 +537,8 @@ fn bench_interactive_widgets(c: &mut Criterion) {
                 list.clear();
                 let mut focus = FocusState::new();
                 let mut capture = DragCapture::new();
-                let mut ctx = DrawContext::new(
-                    &mut list, &mut focus, &theme, &input, W as f32, H as f32,
-                );
+                let mut ctx =
+                    DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
                 for i in 0..count {
                     let r = grid_rect(i, cols_for(count));
                     std::hint::black_box(slider.draw(
@@ -559,9 +561,8 @@ fn bench_interactive_widgets(c: &mut Criterion) {
             b.iter(|| {
                 list.clear();
                 let mut focus = FocusState::new();
-                let mut ctx = DrawContext::new(
-                    &mut list, &mut focus, &theme, &input, W as f32, H as f32,
-                );
+                let mut ctx =
+                    DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
                 for i in 0..count {
                     let r = grid_rect(i, cols_for(count));
                     std::hint::black_box(cb.draw(i % 2 == 0, "X", r, &mut ctx));
@@ -573,51 +574,57 @@ fn bench_interactive_widgets(c: &mut Criterion) {
     // --- TextInput -------------------------------------------------------
     for &count in counts {
         group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::new("text_input", count), &count, |b, &count| {
-            b.iter(|| {
-                list.clear();
-                let mut focus = FocusState::new();
-                let mut ctx = DrawContext::new(
-                    &mut list, &mut focus, &theme, &input, W as f32, H as f32,
-                );
-                // Fresh TextInputs each iter — they carry internal cursor state
-                // but we want the pure draw cost, not state-accumulation effects.
-                let mut tis: Vec<TextInput> = (0..count)
-                    .map(|i| {
-                        let r = grid_rect(i, cols_for(count));
-                        TextInput::new(r.x, r.y, r.width, r.height)
-                    })
-                    .collect();
-                for (i, ti) in tis.iter_mut().enumerate() {
-                    std::hint::black_box(ti.draw(i as u64, &mut ctx));
-                }
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("text_input", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    list.clear();
+                    let mut focus = FocusState::new();
+                    let mut ctx =
+                        DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
+                    // Fresh TextInputs each iter — they carry internal cursor state
+                    // but we want the pure draw cost, not state-accumulation effects.
+                    let mut tis: Vec<TextInput> = (0..count)
+                        .map(|i| {
+                            let r = grid_rect(i, cols_for(count));
+                            TextInput::new(r.x, r.y, r.width, r.height)
+                        })
+                        .collect();
+                    for (i, ti) in tis.iter_mut().enumerate() {
+                        std::hint::black_box(ti.draw(i as u64, &mut ctx));
+                    }
+                });
+            },
+        );
     }
 
     // --- NumberInput -----------------------------------------------------
     for &count in counts {
         let ni = NumberInput::new().with_range(0.0, 100.0).with_step(1.0);
         group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::new("number_input", count), &count, |b, &count| {
-            b.iter(|| {
-                list.clear();
-                let mut focus = FocusState::new();
-                let mut ctx = DrawContext::new(
-                    &mut list, &mut focus, &theme, &input, W as f32, H as f32,
-                );
-                let mut tis: Vec<TextInput> = (0..count)
-                    .map(|i| {
+        group.bench_with_input(
+            BenchmarkId::new("number_input", count),
+            &count,
+            |b, &count| {
+                b.iter(|| {
+                    list.clear();
+                    let mut focus = FocusState::new();
+                    let mut ctx =
+                        DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
+                    let mut tis: Vec<TextInput> = (0..count)
+                        .map(|i| {
+                            let r = grid_rect(i, cols_for(count));
+                            TextInput::new(r.x, r.y, r.width, r.height)
+                        })
+                        .collect();
+                    for (i, ti) in tis.iter_mut().enumerate() {
                         let r = grid_rect(i, cols_for(count));
-                        TextInput::new(r.x, r.y, r.width, r.height)
-                    })
-                    .collect();
-                for (i, ti) in tis.iter_mut().enumerate() {
-                    let r = grid_rect(i, cols_for(count));
-                    std::hint::black_box(ni.draw(50.0, i as u64, ti, r, &mut ctx));
-                }
-            });
-        });
+                        std::hint::black_box(ni.draw(50.0, i as u64, ti, r, &mut ctx));
+                    }
+                });
+            },
+        );
     }
 
     group.finish();
@@ -645,16 +652,14 @@ fn bench_text_input_edit(c: &mut Criterion) {
                 // One key-down edge per field: Backspace (trims last char).
                 let mut input = InputState::default();
                 input.backspace_pressed = true;
-                let mut ctx = DrawContext::new(
-                    &mut list, &mut focus, &theme, &input, W as f32, H as f32,
-                );
+                let mut ctx =
+                    DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
                 // Fresh TextInputs each iteration with a starting value so
                 // backspace hit is consistent.
                 let mut tis: Vec<TextInput> = (0..count)
                     .map(|i| {
                         let r = grid_rect(i, cols_for(count));
-                        TextInput::new(r.x, r.y, r.width, r.height)
-                            .with_value(format!("item {i}"))
+                        TextInput::new(r.x, r.y, r.width, r.height).with_value(format!("item {i}"))
                     })
                     .collect();
                 for (i, ti) in tis.iter_mut().enumerate() {
@@ -696,10 +701,34 @@ fn bench_scroll_view(c: &mut Criterion) {
                     sv.draw(&mut state, &mut list, &style, &mut input, |list, inner| {
                         // Simulate a small content payload: 5 colored quads.
                         list.quad(inner.x, inner.y, inner.width, 30.0, [0.2, 0.3, 0.8, 1.0]);
-                        list.quad(inner.x, inner.y + 60.0, inner.width, 30.0, [0.3, 0.6, 0.3, 1.0]);
-                        list.quad(inner.x, inner.y + 120.0, inner.width, 30.0, [0.8, 0.3, 0.2, 1.0]);
-                        list.quad(inner.x, inner.y + 250.0, inner.width, 30.0, [0.5, 0.3, 0.7, 1.0]);
-                        list.quad(inner.x, inner.y + 400.0, inner.width, 30.0, [0.2, 0.7, 0.7, 1.0]);
+                        list.quad(
+                            inner.x,
+                            inner.y + 60.0,
+                            inner.width,
+                            30.0,
+                            [0.3, 0.6, 0.3, 1.0],
+                        );
+                        list.quad(
+                            inner.x,
+                            inner.y + 120.0,
+                            inner.width,
+                            30.0,
+                            [0.8, 0.3, 0.2, 1.0],
+                        );
+                        list.quad(
+                            inner.x,
+                            inner.y + 250.0,
+                            inner.width,
+                            30.0,
+                            [0.5, 0.3, 0.7, 1.0],
+                        );
+                        list.quad(
+                            inner.x,
+                            inner.y + 400.0,
+                            inner.width,
+                            30.0,
+                            [0.2, 0.7, 0.7, 1.0],
+                        );
                     });
                 }
                 std::hint::black_box(&list);
@@ -821,16 +850,15 @@ fn bench_ui_context_frame(c: &mut Criterion) {
                 list.clear();
                 let mut input = InputState::default();
                 let mut state = UiState::new();
-                Frame::new(&mut state, &mut input, &theme, &KeyboardNav)
-                    .run(&mut list, |ui| {
-                        for i in 0..count {
-                            ui.text_button(&format!("Btn {i}"), None, None);
-                            ui.checkbox("X", i % 2 == 0);
-                            ui.slider(i as u64, 0.5, 0.0, 1.0, None);
-                            let mut buf = format!("field {i}");
-                            ui.text_input(i as u64, &mut buf, "placeholder", None);
-                        }
-                    });
+                Frame::new(&mut state, &mut input, &theme, &KeyboardNav).run(&mut list, |ui| {
+                    for i in 0..count {
+                        ui.text_button(&format!("Btn {i}"), None, None);
+                        ui.checkbox("X", i % 2 == 0);
+                        ui.slider(i as u64, 0.5, 0.0, 1.0, None);
+                        let mut buf = format!("field {i}");
+                        ui.text_input(i as u64, &mut buf, "placeholder", None);
+                    }
+                });
                 std::hint::black_box(&list);
             });
         });

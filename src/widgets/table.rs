@@ -343,7 +343,13 @@ impl<'a> Table<'a> {
         widths
     }
 
-    fn draw_header(&self, rect: Rect, col_widths: &[f32], list: &mut DrawList, style: &StyleResolver) {
+    fn draw_header(
+        &self,
+        rect: Rect,
+        col_widths: &[f32],
+        list: &mut DrawList,
+        style: &StyleResolver,
+    ) {
         let header_rect = Rect::new(rect.x, rect.y, rect.width, self.header_height);
 
         // Header background

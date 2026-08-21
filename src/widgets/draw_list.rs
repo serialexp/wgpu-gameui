@@ -2279,7 +2279,10 @@ mod tests {
                     .all(|(a, b)| (a - b).abs() < 1e-3)
             })
         };
-        assert!(has_colour(span_red), "inherit underline should use span colour");
+        assert!(
+            has_colour(span_red),
+            "inherit underline should use span colour"
+        );
         assert!(
             has_colour(block_green),
             "inherit underline w/o span colour should fall back to block colour"
@@ -2733,7 +2736,13 @@ mod tests {
     #[test]
     fn debug_scope_records_span_of_emitted_primitives() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.push_debug_scope("inner");
         list.chrome_rect(Rect::new(0.0, 0.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
         list.chrome_rect(Rect::new(5.0, 0.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
@@ -2826,7 +2835,10 @@ mod tests {
         list.chrome_rect(Rect::new(0.0, 0.0, 4.0, 4.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
 
         let s = &list.debug_scopes()[0];
-        assert!(!s.closed, "an unpopped scope must be flagged, not silently closed");
+        assert!(
+            !s.closed,
+            "an unpopped scope must be flagged, not silently closed"
+        );
         assert_eq!(s.end, s.start, "end is only stamped on pop");
         assert_eq!(list.debug_scope_depth(), 1);
     }
@@ -2891,11 +2903,21 @@ mod tests {
         list.pop_debug_scope();
 
         // One merged draw command spanning both scopes...
-        assert_eq!(list.color_cmds.len(), 1, "runs merge across the scope boundary");
+        assert_eq!(
+            list.color_cmds.len(),
+            1,
+            "runs merge across the scope boundary"
+        );
         // ...but the scopes still own disjoint, correct instance ranges.
         let s = list.debug_scopes();
-        assert_eq!((s[0].start.chrome_instances, s[0].end.chrome_instances), (0, 1));
-        assert_eq!((s[1].start.chrome_instances, s[1].end.chrome_instances), (1, 2));
+        assert_eq!(
+            (s[0].start.chrome_instances, s[0].end.chrome_instances),
+            (0, 1)
+        );
+        assert_eq!(
+            (s[1].start.chrome_instances, s[1].end.chrome_instances),
+            (1, 2)
+        );
     }
 
     // ---- Degenerate-drop counter ----
@@ -2950,8 +2972,15 @@ mod tests {
 
         let s = &list.debug_scopes()[0];
         assert_eq!(s.counts().dropped_degenerate, 2, "attributed to the scope");
-        assert!(s.counts().is_empty(), "a scope that only dropped draws nothing");
-        assert_eq!(list.dropped_degenerate(), 3, "list-wide total includes the loose one");
+        assert!(
+            s.counts().is_empty(),
+            "a scope that only dropped draws nothing"
+        );
+        assert_eq!(
+            list.dropped_degenerate(),
+            3,
+            "list-wide total includes the loose one"
+        );
     }
 
     #[test]

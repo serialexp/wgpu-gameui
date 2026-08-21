@@ -283,8 +283,13 @@ fn windows_name_themselves_and_check_their_own_bounds() {
         // screen — the sort of thing that only shows up once you look.
         ui.window_begin_named("inventory", 400.0, 300.0, false, true);
         // Local coordinates: the active transform places this at (500, 400).
-        ui.list()
-            .chrome_rect(Rect::new(0.0, 0.0, 400.0, 300.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        ui.list().chrome_rect(
+            Rect::new(0.0, 0.0, 400.0, 300.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         ui.pop();
     }
 
@@ -328,7 +333,13 @@ fn the_report_names_what_it_can_without_any_scopes() {
 #[test]
 fn json_and_text_agree_on_the_problem_count() {
     let mut list = DrawList::new();
-    list.chrome_rect(Rect::new(2000.0, 0.0, 40.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+    list.chrome_rect(
+        Rect::new(2000.0, 0.0, 40.0, 20.0),
+        0.0,
+        0.0,
+        [1.0; 4],
+        [0.0; 4],
+    );
     let report = DebugReport::measured(&mut list, screen());
 
     let json = report.to_json();
@@ -344,7 +355,13 @@ fn write_to_dir_emits_both_renderings() {
 
     let mut list = DrawList::new();
     list.push_debug_scope_rect("panel", Rect::new(0.0, 0.0, 100.0, 40.0));
-    list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 40.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+    list.chrome_rect(
+        Rect::new(0.0, 0.0, 100.0, 40.0),
+        0.0,
+        0.0,
+        [1.0; 4],
+        [0.0; 4],
+    );
     list.pop_debug_scope();
 
     DebugReport::measured(&mut list, screen())

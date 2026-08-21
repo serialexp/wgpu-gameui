@@ -182,7 +182,13 @@ impl Checkbox {
 
             // Hover highlight over the box area (eased alpha when animated).
             if hover_alpha > 0.0 {
-                list.quad(box_rect.x, box_rect.y, size, size, [1.0, 1.0, 1.0, hover_alpha]);
+                list.quad(
+                    box_rect.x,
+                    box_rect.y,
+                    size,
+                    size,
+                    [1.0, 1.0, 1.0, hover_alpha],
+                );
             }
 
             // Label to the right of the checkbox.
@@ -231,7 +237,13 @@ impl Checkbox {
 
 /// Draw the theme-driven vector checkbox: a rounded box, filled with the accent
 /// color and stamped with a contrast checkmark when `checked`.
-fn draw_vector_box(list: &mut DrawList, s: &StyleResolver, box_rect: Rect, checked: bool, fill: [f32; 4]) {
+fn draw_vector_box(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    box_rect: Rect,
+    checked: bool,
+    fill: [f32; 4],
+) {
     let size = box_rect.width.min(box_rect.height);
     let radius = s.scalar(StyleKey::BorderRadius).min(size * 0.3).max(0.0);
     let border = s.scalar(StyleKey::BorderWidth).max(1.0).min(size * 0.5);
@@ -522,7 +534,9 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut l1, &mut focus, &th, &idle, 800.0, 600.0)
                 .with_animations(&mut state);
-            Checkbox::new().animated(1).draw(false, "", rect(), &mut ctx);
+            Checkbox::new()
+                .animated(1)
+                .draw(false, "", rect(), &mut ctx);
         }
         assert_eq!(box_fill(&l1), th.input_background);
 
@@ -536,7 +550,10 @@ mod tests {
             Checkbox::new().animated(1).draw(true, "", rect(), &mut ctx);
         }
         let fill = box_fill(&l2);
-        let (lo, hi) = (th.input_background[0].min(th.accent[0]), th.input_background[0].max(th.accent[0]));
+        let (lo, hi) = (
+            th.input_background[0].min(th.accent[0]),
+            th.input_background[0].max(th.accent[0]),
+        );
         assert!(
             fill[0] > lo && fill[0] < hi,
             "mid-transition fill {} should be strictly between {} and {}",
@@ -559,7 +576,9 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut l1, &mut focus, &th, &idle, 800.0, 600.0)
                 .with_animations(&mut state);
-            Checkbox::new().animated(1).draw(false, "", rect(), &mut ctx);
+            Checkbox::new()
+                .animated(1)
+                .draw(false, "", rect(), &mut ctx);
         }
         let base_quads = l1.chrome_instances.len();
 
@@ -572,7 +591,9 @@ mod tests {
         {
             let mut ctx = DrawContext::new(&mut l2, &mut focus, &th, &hover, 800.0, 600.0)
                 .with_animations(&mut state);
-            Checkbox::new().animated(1).draw(false, "", rect(), &mut ctx);
+            Checkbox::new()
+                .animated(1)
+                .draw(false, "", rect(), &mut ctx);
         }
         assert!(
             l2.chrome_instances.len() > base_quads,

@@ -752,7 +752,10 @@ impl TextInput {
     /// [`set_clipboard_set`](Self::set_clipboard_set) before drawing.
     pub fn draw(&mut self, id: FocusId, ctx: &mut DrawContext) -> bool {
         // I-beam cursor while hovering the field (before borrowing ctx fields).
-        if ctx.input.is_hovered(self.x, self.y, self.width, self.height) {
+        if ctx
+            .input
+            .is_hovered(self.x, self.y, self.width, self.height)
+        {
             ctx.request_cursor(crate::CursorIcon::Text);
         }
         // The field owns its own geometry, so it declares the box it was
@@ -811,8 +814,7 @@ impl TextInput {
         } else {
             let m = list.font_vmetrics(s.theme().font.as_ref());
             let font_size = s.scalar(StyleKey::FontSize);
-            self.y + self.height / 2.0 - font_size * m.baseline_ratio
-                + font_size * m.x_ratio / 2.0
+            self.y + self.height / 2.0 - font_size * m.baseline_ratio + font_size * m.x_ratio / 2.0
         };
         let inner_rect = Rect::new(
             text_x,
@@ -855,21 +857,18 @@ impl TextInput {
         // logical movement + left-edge caret rendering so it stays coherent
         // (single-line is the bidi-precise editing surface — multiline RTL caret
         // edge-precision is a documented limitation, like boundary affinity).
-        let move_vis: Vec<VisualGlyph> = if focused
-            && !multiline
-            && self.mask.is_none()
-            && !self.value.is_empty()
-        {
-            list.text_visual_layout(
-                &self.value,
-                s.scalar(StyleKey::FontSize),
-                Some(text_max_w),
-                wrap,
-                self.direction,
-            )
-        } else {
-            Vec::new()
-        };
+        let move_vis: Vec<VisualGlyph> =
+            if focused && !multiline && self.mask.is_none() && !self.value.is_empty() {
+                list.text_visual_layout(
+                    &self.value,
+                    s.scalar(StyleKey::FontSize),
+                    Some(text_max_w),
+                    wrap,
+                    self.direction,
+                )
+            } else {
+                Vec::new()
+            };
 
         // ---- Click-to-position ----
         if clicked && focused {
@@ -903,7 +902,8 @@ impl TextInput {
                         s.scalar(StyleKey::FontSize),
                         Some(text_max_w),
                     );
-                    let byte_pos = self.display_to_value_byte(closest_cursor_pos(&positions, local_x));
+                    let byte_pos =
+                        self.display_to_value_byte(closest_cursor_pos(&positions, local_x));
                     if input.shift_pressed {
                         // Extend selection.
                         if self.selection_start.is_none() {
@@ -1009,11 +1009,7 @@ impl TextInput {
         }
 
         // The vertical shift applied to text/selection/caret in multiline mode.
-        let scroll = if multiline {
-            self.scroll_offset
-        } else {
-            0.0
-        };
+        let scroll = if multiline { self.scroll_offset } else { 0.0 };
 
         // Render-time visual-order glyph layout of the *display* string for
         // single-line fields, shared by the bidi selection fill and the
@@ -1317,7 +1313,10 @@ mod tests {
 
     #[test]
     fn password_builder_sets_bullet_mask() {
-        assert_eq!(TextInput::new(0.0, 0.0, 100.0, 24.0).password().mask, Some('•'));
+        assert_eq!(
+            TextInput::new(0.0, 0.0, 100.0, 24.0).password().mask,
+            Some('•')
+        );
         assert_eq!(
             TextInput::new(0.0, 0.0, 100.0, 24.0).with_mask('*').mask,
             Some('*')
@@ -1329,7 +1328,11 @@ mod tests {
     fn display_value_masks_per_char_but_value_is_plaintext() {
         let ti = make_input("secret").password();
         assert_eq!(ti.value, "secret", "value stays plaintext");
-        assert_eq!(&*ti.display_value(), "••••••", "display is one bullet per char");
+        assert_eq!(
+            &*ti.display_value(),
+            "••••••",
+            "display is one bullet per char"
+        );
         // Unmasked borrows the value unchanged.
         let plain = make_input("secret");
         assert_eq!(&*plain.display_value(), "secret");
@@ -1383,7 +1386,10 @@ mod tests {
         let mut ev = fake_input();
         ev.enter_pressed = true;
         ti.process_keyboard(&ev);
-        assert_eq!(ti.value, "pw", "masked field ignores multiline newline insertion");
+        assert_eq!(
+            ti.value, "pw",
+            "masked field ignores multiline newline insertion"
+        );
     }
 
     #[test]

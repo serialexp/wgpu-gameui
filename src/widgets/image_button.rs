@@ -213,7 +213,12 @@ mod tests {
         let mut list = DrawList::new();
         let theme = Theme::default();
         let input = input_at(50.0, 50.0, true, true);
-        assert!(ImageButton::sprite(ID).draw(rect(), &mut list, &StyleResolver::new(&theme), &input));
+        assert!(ImageButton::sprite(ID).draw(
+            rect(),
+            &mut list,
+            &StyleResolver::new(&theme),
+            &input
+        ));
     }
 
     #[test]
@@ -221,7 +226,12 @@ mod tests {
         let mut list = DrawList::new();
         let theme = Theme::default();
         let input = input_at(200.0, 200.0, true, true);
-        assert!(!ImageButton::sprite(ID).draw(rect(), &mut list, &StyleResolver::new(&theme), &input));
+        assert!(!ImageButton::sprite(ID).draw(
+            rect(),
+            &mut list,
+            &StyleResolver::new(&theme),
+            &input
+        ));
     }
 
     #[test]
@@ -229,11 +239,12 @@ mod tests {
         let mut list = DrawList::new();
         let theme = Theme::default();
         let input = input_at(50.0, 50.0, true, true);
-        assert!(
-            !ImageButton::sprite(ID)
-                .enabled(false)
-                .draw(rect(), &mut list, &StyleResolver::new(&theme), &input)
-        );
+        assert!(!ImageButton::sprite(ID).enabled(false).draw(
+            rect(),
+            &mut list,
+            &StyleResolver::new(&theme),
+            &input
+        ));
     }
 
     #[test]
@@ -242,7 +253,12 @@ mod tests {
         let theme = Theme::default();
         let mut input = input_at(50.0, 50.0, true, true);
         input.mouse_consumed = true;
-        assert!(!ImageButton::sprite(ID).draw(rect(), &mut list, &StyleResolver::new(&theme), &input));
+        assert!(!ImageButton::sprite(ID).draw(
+            rect(),
+            &mut list,
+            &StyleResolver::new(&theme),
+            &input
+        ));
     }
 
     #[test]
@@ -250,9 +266,12 @@ mod tests {
         let mut list = DrawList::new();
         let theme = Theme::default();
         let input = input_at(0.0, 0.0, false, false);
-        ImageButton::sprite(ID)
-            .padding(12.0)
-            .draw(rect(), &mut list, &StyleResolver::new(&theme), &input);
+        ImageButton::sprite(ID).padding(12.0).draw(
+            rect(),
+            &mut list,
+            &StyleResolver::new(&theme),
+            &input,
+        );
         // Stretch fills the inset box; recover it from the last icon's TL corner.
         let c = list.icons.last().expect("an icon was drawn").corners;
         assert!((c[0][0] - 22.0).abs() < 1e-3, "inset x: {}", c[0][0]); // 10 + 12

@@ -207,7 +207,10 @@ fn blur_smears_a_sharp_edge() {
 
     // Far from the edge stays saturated black / white.
     assert!(red_at(&px, 2, mid) < 30, "far-left should stay dark");
-    assert!(red_at(&px, SIZE - 3, mid) > 225, "far-right should stay bright");
+    assert!(
+        red_at(&px, SIZE - 3, mid) > 225,
+        "far-right should stay bright"
+    );
 
     // At the edge the value is an intermediate gray (proves the smear). It is
     // NOT the green clear sentinel — green's red channel would be ~0, but we
@@ -218,7 +221,10 @@ fn blur_smears_a_sharp_edge() {
         "edge column should be mid-gray, got {edge}"
     );
     let edge_blue = px[((mid * SIZE + mid) * 4 + 2) as usize];
-    assert!(edge_blue > 30, "edge should be gray (blue present), not green clear");
+    assert!(
+        edge_blue > 30,
+        "edge should be gray (blue present), not green clear"
+    );
 }
 
 /// Count columns in the middle row whose red channel is strictly between the

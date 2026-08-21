@@ -323,7 +323,9 @@ impl<'a> StyleResolver<'a> {
 
     /// Resolve a color key, falling back to `default` when unset or non-color.
     pub fn color_or(&self, key: StyleKey, default: [f32; 4]) -> [f32; 4] {
-        self.get(key).and_then(StyleValue::as_color).unwrap_or(default)
+        self.get(key)
+            .and_then(StyleValue::as_color)
+            .unwrap_or(default)
     }
 
     /// Resolve a scalar key. Built-in scalar keys always resolve; otherwise `0.0`
@@ -426,7 +428,10 @@ mod tests {
 
     #[test]
     fn style_value_accessors() {
-        assert_eq!(StyleValue::Color([1.0, 2.0, 3.0, 4.0]).as_color(), Some([1.0, 2.0, 3.0, 4.0]));
+        assert_eq!(
+            StyleValue::Color([1.0, 2.0, 3.0, 4.0]).as_color(),
+            Some([1.0, 2.0, 3.0, 4.0])
+        );
         assert_eq!(StyleValue::Color([1.0, 2.0, 3.0, 4.0]).as_scalar(), None);
         assert_eq!(StyleValue::Scalar(7.0).as_scalar(), Some(7.0));
         assert_eq!(StyleValue::Scalar(7.0).as_color(), None);
@@ -446,11 +451,17 @@ mod tests {
         let mut o = StyleOverlay::new();
         assert!(o.is_empty());
         o.set_color(StyleKey::Button, [0.1, 0.2, 0.3, 1.0]);
-        assert_eq!(o.get(StyleKey::Button), Some(StyleValue::Color([0.1, 0.2, 0.3, 1.0])));
+        assert_eq!(
+            o.get(StyleKey::Button),
+            Some(StyleValue::Color([0.1, 0.2, 0.3, 1.0]))
+        );
         // Replace, not duplicate.
         o.set_color(StyleKey::Button, [0.9, 0.9, 0.9, 1.0]);
         assert_eq!(o.entries.len(), 1);
-        assert_eq!(o.get(StyleKey::Button), Some(StyleValue::Color([0.9, 0.9, 0.9, 1.0])));
+        assert_eq!(
+            o.get(StyleKey::Button),
+            Some(StyleValue::Color([0.9, 0.9, 0.9, 1.0]))
+        );
         o.clear();
         assert!(o.is_empty());
     }

@@ -1,0 +1,8 @@
+#!/bin/sh
+# ABOUTME: Rejects commits whose Rust sources are not rustfmt-clean.
+# ABOUTME: Keeps formatting changes out of later functional commits.
+
+set -eu
+
+echo "Checking Rust formatting..."
+cargo fmt --all -- --check

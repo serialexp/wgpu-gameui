@@ -22,9 +22,9 @@
 //! }
 //! ```
 
+use crate::StyleKey;
 use crate::color::{Hsva, hsv_to_rgb};
 use crate::layout::Rect;
-use crate::StyleKey;
 
 use super::{DragCapture, DragId, DrawContext};
 
@@ -54,9 +54,7 @@ const REGION_ALPHA: u64 = 2;
 /// pickers with adjacent base ids — or a picker next to a slider id — never share
 /// a region id by accident.
 fn region_id(base: DragId, region: u64) -> DragId {
-    (base.wrapping_add(1))
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ region
+    (base.wrapping_add(1)).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ region
 }
 
 /// Color picker: an SV square with a vertical hue bar (and optional alpha bar).
@@ -233,7 +231,12 @@ impl ColorPicker {
             let bot = hsv_to_rgb((i + 1) as f32 * 60.0, 1.0, 1.0);
             let top_c = [top[0], top[1], top[2], 1.0];
             let bot_c = [bot[0], bot[1], bot[2], 1.0];
-            let seg = Rect::new(hue_rect.x, hue_rect.y + i as f32 * seg_h, hue_rect.width, seg_h);
+            let seg = Rect::new(
+                hue_rect.x,
+                hue_rect.y + i as f32 * seg_h,
+                hue_rect.width,
+                seg_h,
+            );
             list.quad_gradient(seg, [top_c, top_c, bot_c, bot_c]);
         }
         list.rect_outline(hue_rect, border_w, border);
@@ -272,7 +275,13 @@ fn draw_bar_cursor(list: &mut super::DrawList, bar: Rect, t: f32) {
     let h = 3.0;
     let over = CURSOR_OVERHANG;
     let tick = Rect::new(bar.x - over, y - h * 0.5, bar.width + 2.0 * over, h);
-    list.quad(tick.x, tick.y, tick.width, tick.height, [1.0, 1.0, 1.0, 1.0]);
+    list.quad(
+        tick.x,
+        tick.y,
+        tick.width,
+        tick.height,
+        [1.0, 1.0, 1.0, 1.0],
+    );
     list.rect_outline(tick, 1.0, [0.0, 0.0, 0.0, 1.0]);
 }
 
@@ -353,7 +362,10 @@ mod tests {
         let sv = region_id(7, REGION_SV);
         let hue = region_id(7, REGION_HUE);
         let alpha = region_id(7, REGION_ALPHA);
-        assert!(sv != hue && hue != alpha && sv != alpha, "three distinct ids");
+        assert!(
+            sv != hue && hue != alpha && sv != alpha,
+            "three distinct ids"
+        );
         assert_eq!(sv, region_id(7, REGION_SV), "stable across calls");
         // A sibling picker with an adjacent base must not collide.
         assert!(region_id(8, REGION_SV) != sv);
@@ -365,10 +377,20 @@ mod tests {
         let mut cap = DragCapture::new();
         // SV square spans x∈[0,200-bar-gap]=~[0,176], y∈[0,120].
         // Press near right edge (high saturation), near top (high value).
-        let out = draw(&picker, Hsva::opaque(0.0, 0.5, 0.5), 0, &mut cap, &press_at(170.0, 6.0));
+        let out = draw(
+            &picker,
+            Hsva::opaque(0.0, 0.5, 0.5),
+            0,
+            &mut cap,
+            &press_at(170.0, 6.0),
+        );
         assert!(out.dragging);
         assert!(out.changed);
-        assert!(out.hsva.s > 0.9, "right edge → high saturation, got {}", out.hsva.s);
+        assert!(
+            out.hsva.s > 0.9,
+            "right edge → high saturation, got {}",
+            out.hsva.s
+        );
         assert!(out.hsva.v > 0.9, "top → high value, got {}", out.hsva.v);
         // Hue untouched by an SV drag.
         assert_eq!(out.hsva.h, 0.0);
@@ -380,7 +402,13 @@ mod tests {
         let mut cap = DragCapture::new();
         // Hue bar is the right-most 16px column. x ≈ 184..200.
         // Press at mid-height → hue ≈ 180.
-        let out = draw(&picker, Hsva::opaque(0.0, 1.0, 1.0), 0, &mut cap, &press_at(192.0, 60.0));
+        let out = draw(
+            &picker,
+            Hsva::opaque(0.0, 1.0, 1.0),
+            0,
+            &mut cap,
+            &press_at(192.0, 60.0),
+        );
         assert!(out.dragging);
         assert!(
             (out.hsva.h - 180.0).abs() < 5.0,
@@ -395,9 +423,19 @@ mod tests {
         let mut cap = DragCapture::new();
         // With alpha on: SV | hue | alpha. Alpha is the right-most 16px column,
         // x ≈ 184..200; hue is the column to its left. Press low → low alpha.
-        let out = draw(&picker, Hsva::new(0.0, 1.0, 1.0, 1.0), 0, &mut cap, &press_at(192.0, 114.0));
+        let out = draw(
+            &picker,
+            Hsva::new(0.0, 1.0, 1.0, 1.0),
+            0,
+            &mut cap,
+            &press_at(192.0, 114.0),
+        );
         assert!(out.dragging);
-        assert!(out.hsva.a < 0.1, "bottom of alpha bar → ~0 alpha, got {}", out.hsva.a);
+        assert!(
+            out.hsva.a < 0.1,
+            "bottom of alpha bar → ~0 alpha, got {}",
+            out.hsva.a
+        );
     }
 
     #[test]
@@ -418,7 +456,13 @@ mod tests {
         // hue must be untouched, proving the hue region didn't also grab it.
         let picker = ColorPicker::new();
         let mut cap = DragCapture::new();
-        let out = draw(&picker, Hsva::opaque(123.0, 0.5, 0.5), 0, &mut cap, &press_at(80.0, 60.0));
+        let out = draw(
+            &picker,
+            Hsva::opaque(123.0, 0.5, 0.5),
+            0,
+            &mut cap,
+            &press_at(80.0, 60.0),
+        );
         assert!(out.dragging);
         assert_eq!(out.hsva.h, 123.0, "SV drag leaves hue alone");
     }

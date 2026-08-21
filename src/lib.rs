@@ -54,23 +54,22 @@ mod text;
 pub use text::{
     CaretPos, FontHandle, FontSystemHandle, FontVMetrics, SelRect, TextAlign, TextBlock,
     TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
-    Underline,
-    VisualCaret, VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte,
-    load_font_bytes, load_font_file, register_bundled_fonts, resolve_span_color, selection_rects,
-    shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
-    visual_caret_neighbor, visual_caret_pos, vcentered_line_y,
+    Underline, VisualCaret, VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line,
+    caret_for_byte, load_font_bytes, load_font_file, register_bundled_fonts, resolve_span_color,
+    selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
+    text_visual_layout, vcentered_line_y, visual_caret_neighbor, visual_caret_pos,
 };
 
 /// Font weight and style selectors (re-exported from `glyphon`/`cosmic-text`)
 /// for `TextBlock::with_weight`/`with_style` and the `UiContext` font stack.
 pub use glyphon::{Style, Weight};
 
-mod animation;
 pub mod affine;
+mod animation;
 mod click_tracker;
 pub mod color;
-pub mod debug;
 mod cursor;
+pub mod debug;
 mod drag_tracker;
 mod frame;
 pub mod layer;
@@ -88,23 +87,23 @@ pub use animation::{AnimSlot, AnimationState, Easing, ease, lerp, lerp_color};
 pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};
 pub use color::Hsva;
 pub use cursor::{CursorIcon, CursorState};
+/// The entry point to layout inspection — see [`mod@debug`] for the full API.
+pub use debug::DebugReport;
 pub use drag_tracker::{DEFAULT_DRAG_THRESHOLD, DragTracker};
 pub use frame::Frame;
 pub use layer::{Layer, LayerKind, LayerStack};
 pub use nav::{GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard};
 pub use projection::{world_to_screen, world_to_screen_na};
-#[cfg(feature = "phosphor-icons")]
-pub use render::{
-    IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
-};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{
     Backdrop, BlurParams, CAPTURE_FORMAT, NineSliceMeta, SpriteAtlas, SpriteId, UiRenderer,
     capture_draw_list, capture_layers, write_png,
 };
-/// The entry point to layout inspection — see [`mod@debug`] for the full API.
-pub use debug::DebugReport;
+#[cfg(feature = "phosphor-icons")]
+pub use render::{
+    IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
+};
 pub use style::{StyleKey, StyleOverlay, StyleResolver, StyleValue};
 pub use theme::Theme;
 pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};

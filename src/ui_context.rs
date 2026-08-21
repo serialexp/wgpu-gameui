@@ -11,22 +11,21 @@
 
 use crate::InputState;
 use crate::affine::Affine2;
+use crate::animation::AnimationState;
 use crate::color::Hsva;
 use crate::layer::{LayerKind, LayerStack};
 use crate::layout::Rect;
+use crate::render::SpriteId;
 use crate::style::{StyleKey, StyleOverlay, StyleResolver, StyleValue};
 use crate::text::{FontHandle, TextBlock};
 use crate::theme::Theme;
 use crate::widgets::DrawList;
-use crate::animation::AnimationState;
-use crate::render::SpriteId;
 use crate::widgets::{
     Banner, Button, Checkbox, ColorPicker, ColorPickerOutput, DragCapture, DragHandle,
-    DragHandleOutput, DragId, DrawContext, Dropdown, DropdownId, DropdownState,
-    FocusId, FocusState, Group, HitZone, HitZoneOutput, ImageButton, NumberInput, Panel,
-    ProgressBar, RadioGroup, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider,
-    Tabs, TextInput, ToastStack, TooltipLayer, TreeId, TreeNode, TreeNodeOutput,
-    TreeState,
+    DragHandleOutput, DragId, DrawContext, Dropdown, DropdownId, DropdownState, FocusId,
+    FocusState, Group, HitZone, HitZoneOutput, ImageButton, NumberInput, Panel, ProgressBar,
+    RadioGroup, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Tabs, TextInput,
+    ToastStack, TooltipLayer, TreeId, TreeNode, TreeNodeOutput, TreeState,
 };
 use glyphon::{Style, Weight};
 use std::collections::HashMap;
@@ -792,14 +791,7 @@ impl<'a> UiContext<'a> {
     ///
     /// The scope closes at the matching [`pop`](Self::pop), like the window
     /// itself.
-    pub fn window_begin_named(
-        &mut self,
-        name: &str,
-        w: f32,
-        h: f32,
-        clip: bool,
-        inherit: bool,
-    ) {
+    pub fn window_begin_named(&mut self, name: &str, w: f32, h: f32, clip: bool, inherit: bool) {
         let local = Rect::new(0.0, 0.0, w, h);
         let rect = self
             .backend
@@ -1343,7 +1335,8 @@ impl<'a> UiContext<'a> {
                     return value;
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0).with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
             // Reuse the DragId value as the FocusId so the slider is also
             // keyboard-adjustable (arrow keys) through the façade.
             Slider::new(min, max)
@@ -1428,7 +1421,8 @@ impl<'a> UiContext<'a> {
                 .state
                 .as_mut()
                 .expect("radio_group requires interactive state");
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0).with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
             RadioGroup::new(options)
                 .focusable(fid)
                 .draw(selected, local, &mut ctx)
@@ -1531,7 +1525,8 @@ impl<'a> UiContext<'a> {
                 ti.selection_start = None;
             }
             let before = ti.value.clone();
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0).with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
             ti.draw(id, &mut ctx);
             let changed = ti.value != before;
             if changed {
@@ -1601,7 +1596,8 @@ impl<'a> UiContext<'a> {
                 ti.selection_start = None;
             }
             let before = ti.value.clone();
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0).with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
             ti.draw(id, &mut ctx);
             let changed = ti.value != before;
             if changed {
@@ -1660,7 +1656,8 @@ impl<'a> UiContext<'a> {
             let ti = text_inputs
                 .entry(id)
                 .or_insert_with(|| TextInput::new(local.x, local.y, local.width, local.height));
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0).with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
             let out = NumberInput::new()
                 .with_range(min, max)
                 .with_step(step)
@@ -1726,7 +1723,8 @@ impl<'a> UiContext<'a> {
                 }
             };
             let UiState { tree, focus, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0).with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
             let out = node.with_depth(depth).draw(id, local, tree, &mut ctx);
             // Focus ring on the selected row while the tree holds keyboard focus.
             if ctx.focus.is_focused(TREE_FOCUS_ID) && tree.is_selected(id) {
@@ -1804,10 +1802,7 @@ impl<'a> UiContext<'a> {
         let (local, local_input) = self.localize(inv, world, input);
         let clicked = {
             let list = self.backend.list_mut();
-            let style = StyleResolver::with_overlay_opt(
-                theme,
-                self.style_stack.last(),
-            );
+            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             let anim = self.state.as_mut().map(|s| &mut s.anim);
             Tabs::new(labels)
                 .with_height(tab_height)
@@ -1830,10 +1825,7 @@ impl<'a> UiContext<'a> {
         let (local, local_input) = self.localize(inv, world, input);
         let clicked = {
             let list = self.backend.list_mut();
-            let style = StyleResolver::with_overlay_opt(
-                theme,
-                self.style_stack.last(),
-            );
+            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             ImageButton::key(key)
                 .natural_size(w, h)
                 .draw(local, list, &style, &local_input)
@@ -1854,10 +1846,7 @@ impl<'a> UiContext<'a> {
         let (local, local_input) = self.localize(inv, world, input);
         let clicked = {
             let list = self.backend.list_mut();
-            let style = StyleResolver::with_overlay_opt(
-                theme,
-                self.style_stack.last(),
-            );
+            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             ImageButton::sprite(sprite)
                 .natural_size(w, h)
                 .draw(local, list, &style, &local_input)
@@ -1884,7 +1873,7 @@ impl<'a> UiContext<'a> {
                     rgba: [hsva.h, hsva.s, hsva.v, hsva.a],
                     changed: false,
                     dragging: false,
-                }
+                };
             }
         };
         let width = w.unwrap_or_else(|| self.default_field_width());
@@ -1922,12 +1911,7 @@ impl<'a> UiContext<'a> {
     /// Draw a drag handle (grab/move region) and report this frame's drag result.
     /// `id` is a stable [`DragId`]; the handle claims the drag only when the
     /// capture is free and the press lands on its rect. Auto-advances by `h`.
-    pub fn drag_handle(
-        &mut self,
-        id: DragId,
-        w: Option<f32>,
-        h: f32,
-    ) -> DragHandleOutput {
+    pub fn drag_handle(&mut self, id: DragId, w: Option<f32>, h: f32) -> DragHandleOutput {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => return DragHandleOutput::idle(),
@@ -1984,10 +1968,7 @@ impl<'a> UiContext<'a> {
         let inv = self.backend.list_mut().current_transform().inverse();
         let (viewport, mut local_input) = self.localize(inv, world, input);
         let sv = ScrollView::new(viewport);
-        let style = StyleResolver::with_overlay_opt(
-            theme,
-            self.style_stack.last(),
-        );
+        let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
         let begun = {
             let list = self.backend.list_mut();
             let state = match self.state.as_mut() {
@@ -2023,22 +2004,25 @@ impl<'a> UiContext<'a> {
         let viewport = match self.pending_scroll_viewport.take() {
             Some(v) => v,
             None => {
-                debug_assert!(false, "UiContext::scroll_end called without a matching scroll_begin");
+                debug_assert!(
+                    false,
+                    "UiContext::scroll_end called without a matching scroll_begin"
+                );
                 return;
             }
         };
         let begun = match self.pending_scroll_begin.take() {
             Some(b) => b,
             None => {
-                debug_assert!(false, "UiContext::scroll_end called without a matching scroll_begin");
+                debug_assert!(
+                    false,
+                    "UiContext::scroll_end called without a matching scroll_begin"
+                );
                 return;
             }
         };
         let sv = ScrollView::new(viewport);
-        let style = StyleResolver::with_overlay_opt(
-            theme,
-            self.style_stack.last(),
-        );
+        let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
         let inv = self.pending_scroll_inv.take().unwrap_or(Affine2::IDENTITY);
         let mut local_input = self.effective_input(input);
         let [mx, my] = inv.transform_point([local_input.mouse_x, local_input.mouse_y]);
@@ -2063,13 +2047,7 @@ impl<'a> UiContext<'a> {
     /// The caller applies the selection returned by
     /// [`draw_dropdown_layer`](UiState::draw_dropdown_layer). Auto-advances by
     /// `theme.input_height`.
-    pub fn dropdown(
-        &mut self,
-        id: DropdownId,
-        options: &[&str],
-        selected: usize,
-        w: Option<f32>,
-    ) {
+    pub fn dropdown(&mut self, id: DropdownId, options: &[&str], selected: usize, w: Option<f32>) {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => return,
@@ -2349,7 +2327,10 @@ mod tests {
         ui.disabled_scope(|ui| {
             clicked = ui.text_button("OK", Some(100.0), Some(30.0));
         });
-        assert!(!clicked, "button click is swallowed inside a disabled scope");
+        assert!(
+            !clicked,
+            "button click is swallowed inside a disabled scope"
+        );
     }
 
     #[test]
@@ -2361,8 +2342,14 @@ mod tests {
         let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
         ui.disabled_scope(|ui| {
             let out = ui.hit_zone(Some(100.0), 30.0);
-            assert!(!out.hovered, "hit_zone does not hover inside a disabled scope");
-            assert!(!out.clicked, "hit_zone does not click inside a disabled scope");
+            assert!(
+                !out.hovered,
+                "hit_zone does not hover inside a disabled scope"
+            );
+            assert!(
+                !out.clicked,
+                "hit_zone does not click inside a disabled scope"
+            );
         });
     }
 
@@ -2379,10 +2366,16 @@ mod tests {
             ui.enabled_scope(true, |ui| {
                 clicked = ui.text_button("OK", Some(100.0), Some(30.0));
             });
-            assert!(clicked, "enabled_scope(true) re-enables inside a disabled scope");
+            assert!(
+                clicked,
+                "enabled_scope(true) re-enables inside a disabled scope"
+            );
             // ...and restores the disabled state for siblings after it.
             let also_clicked = ui.text_button("OK2", Some(100.0), Some(30.0));
-            assert!(!also_clicked, "disabled state is restored after the inner scope");
+            assert!(
+                !also_clicked,
+                "disabled state is restored after the inner scope"
+            );
         });
     }
 
@@ -3321,13 +3314,24 @@ mod tests {
                 let mut ui = UiContext::interactive(&mut list, &input2, &mut state, &theme);
                 ui.password_input(1, &mut buffer, "", Some(150.0))
             };
-            let drawn = list.texts.last().map(|t| t.content.clone()).unwrap_or_default();
+            let drawn = list
+                .texts
+                .last()
+                .map(|t| t.content.clone())
+                .unwrap_or_default();
             (changed, drawn)
         };
         state.end_frame();
         assert!(changed, "typing should report a change");
-        assert_eq!(buffer.chars().count(), 3, "buffer keeps real plaintext char");
-        assert!(buffer.contains('x'), "typed char reached the plaintext buffer");
+        assert_eq!(
+            buffer.chars().count(),
+            3,
+            "buffer keeps real plaintext char"
+        );
+        assert!(
+            buffer.contains('x'),
+            "typed char reached the plaintext buffer"
+        );
         assert_eq!(drawn, "•••", "rendered field shows one bullet per char");
         assert!(!drawn.contains('x'), "plaintext must not be drawn");
     }

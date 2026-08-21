@@ -92,7 +92,13 @@ impl<'a> RadioGroup<'a> {
     /// Returns `None` for out-of-range `i`. Horizontal cell widths are measured
     /// from the label text (via `list.measure_text`), so this needs `&mut
     /// DrawList`.
-    fn cell_rect(&self, i: usize, rect: Rect, s: &StyleResolver, list: &mut DrawList) -> Option<Rect> {
+    fn cell_rect(
+        &self,
+        i: usize,
+        rect: Rect,
+        s: &StyleResolver,
+        list: &mut DrawList,
+    ) -> Option<Rect> {
         if i >= self.options.len() {
             return None;
         }
@@ -147,11 +153,20 @@ impl<'a> RadioGroup<'a> {
     }
 
     /// Width of a horizontal option cell: dot + gap + measured label width.
-    fn h_cell_width(&self, label: &str, diameter: f32, s: &StyleResolver, list: &mut DrawList) -> f32 {
+    fn h_cell_width(
+        &self,
+        label: &str,
+        diameter: f32,
+        s: &StyleResolver,
+        list: &mut DrawList,
+    ) -> f32 {
         let label_w = if label.is_empty() {
             0.0
         } else {
-            LABEL_GAP + list.measure_text(label, s.scalar(StyleKey::FontSize), None).0
+            LABEL_GAP
+                + list
+                    .measure_text(label, s.scalar(StyleKey::FontSize), None)
+                    .0
         };
         diameter + label_w
     }
@@ -201,7 +216,13 @@ impl<'a> RadioGroup<'a> {
             }
             // Hover highlight over the whole cell.
             if hovered {
-                list.quad(cell.x, cell.y, cell.width, cell.height, [1.0, 1.0, 1.0, 0.06]);
+                list.quad(
+                    cell.x,
+                    cell.y,
+                    cell.width,
+                    cell.height,
+                    [1.0, 1.0, 1.0, 0.06],
+                );
             }
 
             // Label to the right of the dot.
@@ -255,8 +276,12 @@ impl<'a> RadioGroup<'a> {
                 }
                 // Focus ring hugs the selected option's dot.
                 if let Some((cx, cy)) = focus_circle {
-                    ctx.draw_list
-                        .circle_outline((cx, cy), radius + 3.0, 2.0, s.color(StyleKey::FocusRing));
+                    ctx.draw_list.circle_outline(
+                        (cx, cy),
+                        radius + 3.0,
+                        2.0,
+                        s.color(StyleKey::FocusRing),
+                    );
                 }
             }
         }

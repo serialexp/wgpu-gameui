@@ -25,8 +25,8 @@ mod separator;
 mod slider;
 mod table;
 mod tabs;
-mod toast;
 mod text_input;
+mod toast;
 mod tooltip;
 mod tree;
 
@@ -66,7 +66,9 @@ pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
 pub use tooltip::{TooltipContent, TooltipLayer};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 
-use crate::{AnimSlot, AnimationState, Easing, InputState, StyleKey, StyleOverlay, StyleResolver, Theme};
+use crate::{
+    AnimSlot, AnimationState, Easing, InputState, StyleKey, StyleOverlay, StyleResolver, Theme,
+};
 
 /// Context for drawing UI elements.
 ///
@@ -251,7 +253,8 @@ impl<'a> DrawContext<'a> {
     pub fn draw_focus_ring(&mut self, rect: crate::layout::Rect) {
         let radius = self.scalar(StyleKey::BorderRadius);
         let color = self.color(StyleKey::FocusRing);
-        self.draw_list.rounded_rect_outline(rect, radius, 2.0, color);
+        self.draw_list
+            .rounded_rect_outline(rect, radius, 2.0, color);
     }
 
     /// Open a debug scope declaring the box this widget was allocated — see

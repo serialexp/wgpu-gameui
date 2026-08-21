@@ -254,8 +254,12 @@ impl ApplicationHandler for App {
                 gpu.config.width = size.width.max(1);
                 gpu.config.height = size.height.max(1);
                 gpu.surface.configure(&gpu.device, &gpu.config);
-                gpu.ui
-                    .resize(&gpu.queue, gpu.config.width, gpu.config.height);
+                gpu.ui.resize(
+                    &gpu.queue,
+                    gpu.config.width,
+                    gpu.config.height,
+                    window.scale_factor() as f32,
+                );
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {

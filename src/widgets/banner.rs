@@ -164,7 +164,13 @@ impl<'a> Banner<'a> {
         let accent = self.severity.resolved_accent(style);
 
         // Tinted background + left accent bar.
-        list.quad(rect.x, rect.y, rect.width, rect.height, self.severity.resolved_background(style));
+        list.quad(
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            self.severity.resolved_background(style),
+        );
         list.quad(rect.x, rect.y, BAR_W, rect.height, accent);
 
         let text_x = Self::text_x(rect, pad);
@@ -243,7 +249,10 @@ mod tests {
         Banner::success("Saved").draw(Rect::new(0.0, 0.0, 200.0, 40.0), &mut list, &s);
         // The accent bar is the second chrome instance; its color follows the overlay.
         let bar = list.chrome_instances[1];
-        assert_eq!(bar.bg, custom, "accent bar resolves through the style system");
+        assert_eq!(
+            bar.bg, custom,
+            "accent bar resolves through the style system"
+        );
     }
 
     #[test]
@@ -294,9 +303,11 @@ mod tests {
     fn draw_emits_bar_background_and_text() {
         let s = style();
         let mut list = DrawList::new();
-        Banner::error("Disk full")
-            .with_title("Error")
-            .draw(Rect::new(0.0, 0.0, 300.0, 60.0), &mut list, &s);
+        Banner::error("Disk full").with_title("Error").draw(
+            Rect::new(0.0, 0.0, 300.0, 60.0),
+            &mut list,
+            &s,
+        );
         // background + accent bar → 2 chrome instances; title + message → 2 texts.
         assert_eq!(list.chrome_instances.len(), 2);
         assert_eq!(list.texts.len(), 2);

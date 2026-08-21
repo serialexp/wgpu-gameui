@@ -312,8 +312,7 @@ impl DropdownState {
                 } else {
                     (txt_r, txt_g, txt_b)
                 };
-                let text_y =
-                    l.vcentered_text_y(iy, geom.item_h, font_size, font.as_ref(), item);
+                let text_y = l.vcentered_text_y(iy, geom.item_h, font_size, font.as_ref(), item);
                 l.text(
                     TextBlock::new(item.clone(), list_rect.x + pad, text_y)
                         .with_size(font_size)
@@ -454,7 +453,10 @@ impl<'a> Dropdown<'a> {
         ctx.register_focus(id);
 
         // Hand cursor over the closed dropdown button (before borrowing ctx).
-        if ctx.input.is_hovered(rect.x, rect.y, rect.width, rect.height) {
+        if ctx
+            .input
+            .is_hovered(rect.x, rect.y, rect.width, rect.height)
+        {
             ctx.request_cursor(crate::CursorIcon::Pointer);
         }
 
@@ -635,7 +637,11 @@ mod tests {
         let menu = Dropdown::new(&ITEMS, 0)
             .with_max_visible(2)
             .open_list_rect(btn);
-        assert_eq!(menu.height, 2.0 * ITEM_HEIGHT, "scrollable list caps at max_visible rows");
+        assert_eq!(
+            menu.height,
+            2.0 * ITEM_HEIGHT,
+            "scrollable list caps at max_visible rows"
+        );
     }
 
     #[test]

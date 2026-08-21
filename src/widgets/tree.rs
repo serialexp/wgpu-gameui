@@ -541,7 +541,13 @@ impl<'a> TreeNode<'a> {
 
         // ---- full-row highlight (selection wins over hover) ---------------
         if selected {
-            list.quad(rect.x, rect.y, rect.width, rect.height, s.color(StyleKey::Accent));
+            list.quad(
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                s.color(StyleKey::Accent),
+            );
         } else if row_hovered {
             list.quad(
                 rect.x,

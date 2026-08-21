@@ -50,6 +50,12 @@ cargo build --all-targets      # must be warning-clean
 cargo test --lib               # all widget/layout/text unit tests
 ```
 
+The tracked pre-commit hook rejects unformatted Rust. Enable it once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
 ## Releasing
 
 Releases are automated by [just-release](https://github.com/serialexp/just-release)

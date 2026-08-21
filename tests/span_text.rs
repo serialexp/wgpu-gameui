@@ -8,7 +8,7 @@
 //! - "RED" appears in red, "WHITE" in white, "BLUE" in blue (top row).
 //! - The second row shows a yellow underline beneath an underlined word.
 
-use wgpu_gameui::{DrawList, TextBlock, TextSpan, Underline, UiRenderer};
+use wgpu_gameui::{DrawList, TextBlock, TextSpan, UiRenderer, Underline};
 
 const W: u32 = 512;
 const H: u32 = 256;

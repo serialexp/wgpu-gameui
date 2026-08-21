@@ -473,7 +473,11 @@ impl TextRenderer {
     /// the same coordinates as the geometry pipeline, which also projects in
     /// logical space.
     pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
-        let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+        let scale = if scale_factor > 0.0 {
+            scale_factor
+        } else {
+            1.0
+        };
         // Store the logical dimensions — ortho_matrix needs these, not physical.
         self.width = ((width as f32 / scale) as u32).max(1);
         self.height = ((height as f32 / scale) as u32).max(1);
@@ -578,7 +582,8 @@ impl TextRenderer {
             let Some(data) = fonts.get(g.font.index() as usize) else {
                 continue;
             };
-            self.icon_atlas.glyph(g.font.index() as u64, g.glyph_id, data);
+            self.icon_atlas
+                .glyph(g.font.index() as u64, g.glyph_id, data);
         }
         self.icon_gpu
             .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
@@ -811,7 +816,9 @@ impl TextRenderer {
             // mode never sets a cosmic align — it centers each row manually within
             // the column width (below), which is deterministic and font-agnostic
             // regardless of the shrink-to-content buffer width.
-            if !block.vertical && let Some(align) = cosmic_align(block.align) {
+            if !block.vertical
+                && let Some(align) = cosmic_align(block.align)
+            {
                 for line in buffer.lines.iter_mut() {
                     line.set_align(Some(align));
                 }
@@ -2219,10 +2226,11 @@ fn ink_band_with_font_system(
         for glyph in run.glyphs {
             // Same baseline expression `build_vertices` uses to place the quad.
             let baseline = run.line_y + glyph.y - glyph.font_size * glyph.y_offset;
-            by_font
-                .entry(glyph.font_id)
-                .or_default()
-                .push((glyph.glyph_id, baseline, glyph.font_size));
+            by_font.entry(glyph.font_id).or_default().push((
+                glyph.glyph_id,
+                baseline,
+                glyph.font_size,
+            ));
         }
     }
 
@@ -2627,7 +2635,8 @@ pub fn text_caret_layout(
             .glyphs
             .iter()
             .find(|g| line_base + g.start as usize >= prefix_len);
-        let line_start_byte = to_orig(line_base + first_real.map(|g| g.start as usize).unwrap_or(0));
+        let line_start_byte =
+            to_orig(line_base + first_real.map(|g| g.start as usize).unwrap_or(0));
         out.push(CaretPos {
             byte: line_start_byte,
             x: 0.0,
@@ -2919,11 +2928,21 @@ pub fn selection_rects(glyphs: &[VisualGlyph], sel_start: usize, sel_end: usize)
             if s <= cur.1 + EPS {
                 cur.1 = cur.1.max(e);
             } else {
-                out.push(SelRect { x: cur.0, y: lt, w: cur.1 - cur.0, h: lh });
+                out.push(SelRect {
+                    x: cur.0,
+                    y: lt,
+                    w: cur.1 - cur.0,
+                    h: lh,
+                });
                 cur = (s, e);
             }
         }
-        out.push(SelRect { x: cur.0, y: lt, w: cur.1 - cur.0, h: lh });
+        out.push(SelRect {
+            x: cur.0,
+            y: lt,
+            w: cur.1 - cur.0,
+            h: lh,
+        });
     }
     out
 }
@@ -2960,10 +2979,7 @@ pub fn visual_caret_neighbor(glyphs: &[VisualGlyph], cursor_byte: usize, dir: i3
             .filter(|s| s.byte == cursor_byte)
             .max_by(|a, b| a.x.total_cmp(&b.x))
     };
-    let Some(&CaretStop {
-        x: cur_x, line, ..
-    }) = cur
-    else {
+    let Some(&CaretStop { x: cur_x, line, .. }) = cur else {
         return cursor_byte;
     };
     const EPS: f32 = 0.01;
@@ -3526,12 +3542,12 @@ impl TextBlock {
 mod tests {
     use super::{
         CaretPos, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, MsdfVertex, SelRect, TextAlign,
-        TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, VisualGlyph, WrapMode,
-        byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba, cosmic_align,
-        direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase, load_font_bytes,
-        measure_with_font_system, resolve_span_color, selection_rects, shared_font_system,
-        text_caret_layout, text_cursor_positions, text_visual_layout, Underline, vcentered_line_y,
-        vertical_stack_string, visual_caret_neighbor,
+        TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, Underline, VisualGlyph,
+        WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
+        cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
+        load_font_bytes, measure_with_font_system, resolve_span_color, selection_rects,
+        shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
+        vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
 
@@ -3867,7 +3883,16 @@ mod tests {
     fn caret_layout(text: &str, wrap: WrapMode, max_width: f32) -> Vec<CaretPos> {
         let fsh = shared_font_system();
         let mut fs = fsh.lock().unwrap();
-        text_caret_layout(&mut fs, text, 16.0, 20.0, max_width, wrap, None, TextDirection::Auto)
+        text_caret_layout(
+            &mut fs,
+            text,
+            16.0,
+            20.0,
+            max_width,
+            wrap,
+            None,
+            TextDirection::Auto,
+        )
     }
 
     #[test]
@@ -4141,8 +4166,16 @@ mod tests {
     #[test]
     fn direction_and_align_defaults_and_builders() {
         let plain = TextBlock::new("x", 0.0, 0.0);
-        assert_eq!(plain.align, TextAlign::Start, "default align is reading-start");
-        assert_eq!(plain.direction, TextDirection::Auto, "default direction is auto");
+        assert_eq!(
+            plain.align,
+            TextAlign::Start,
+            "default align is reading-start"
+        );
+        assert_eq!(
+            plain.direction,
+            TextDirection::Auto,
+            "default direction is auto"
+        );
 
         let forced = TextBlock::new("x", 0.0, 0.0)
             .with_direction(TextDirection::Rtl)
@@ -4216,11 +4249,18 @@ mod tests {
         // Selecting logical [1,4) covers b (LTR, x 10..20) and ג (RTL, x 30..40),
         // skipping ד (x 20..30) which is outside the range → two disjoint rects.
         let rects = selection_rects(&bidi_line(), 1, 4);
-        assert_eq!(rects.len(), 2, "bidi-straddling selection is two visual spans");
+        assert_eq!(
+            rects.len(),
+            2,
+            "bidi-straddling selection is two visual spans"
+        );
         let mut xs: Vec<f32> = rects.iter().map(|r| r.x).collect();
         xs.sort_by(f32::total_cmp);
         assert!((xs[0] - 10.0).abs() < 0.6, "first span starts at b: {xs:?}");
-        assert!((xs[1] - 30.0).abs() < 0.6, "second span starts at ג: {xs:?}");
+        assert!(
+            (xs[1] - 30.0).abs() < 0.6,
+            "second span starts at ג: {xs:?}"
+        );
     }
 
     #[test]
@@ -4229,12 +4269,18 @@ mod tests {
         let rects = selection_rects(&bidi_line(), 0, 2);
         assert_eq!(rects.len(), 1);
         let r = rects[0];
-        assert!(r.x.abs() < 0.6 && (r.w - 20.0).abs() < 0.6, "merged ab span: {r:?}");
+        assert!(
+            r.x.abs() < 0.6 && (r.w - 20.0).abs() < 0.6,
+            "merged ab span: {r:?}"
+        );
     }
 
     #[test]
     fn selection_rects_empty_when_degenerate() {
-        assert!(selection_rects(&bidi_line(), 3, 3).is_empty(), "empty range");
+        assert!(
+            selection_rects(&bidi_line(), 3, 3).is_empty(),
+            "empty range"
+        );
         assert!(selection_rects(&[], 0, 5).is_empty(), "no glyphs");
     }
 
@@ -4322,7 +4368,12 @@ mod tests {
     // builds that compile only a subset of tests.
     #[allow(dead_code)]
     fn _selrect_is_constructible() -> SelRect {
-        SelRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }
+        SelRect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        }
     }
 
     #[test]
@@ -4843,8 +4894,16 @@ mod tests {
         // but `byte_start` is corrected back so per-span colour resolution is
         // unaffected. The set of emitted fills must match between Auto and Rtl.
         let spans = vec![
-            TextSpan { text: "AB".into(), color: Some(red()), underline: Underline::None },
-            TextSpan { text: "cd".into(), color: Some(blue()), underline: Underline::None },
+            TextSpan {
+                text: "AB".into(),
+                color: Some(red()),
+                underline: Underline::None,
+            },
+            TextSpan {
+                text: "cd".into(),
+                color: Some(blue()),
+                underline: Underline::None,
+            },
         ];
         let auto = label("ABcd", &font).with_spans(spans.clone());
         let rtl = label("ABcd", &font)
@@ -5172,8 +5231,14 @@ mod tests {
         let (vw, vh) = m.measure_vertical(text, 24.0);
         let (hw, hh) = m.measure(text, 24.0, None);
 
-        assert!(vh > vw, "vertical column should be taller than wide: {vw}x{vh}");
-        assert!(hw > hh, "horizontal run should be wider than tall: {hw}x{hh}");
+        assert!(
+            vh > vw,
+            "vertical column should be taller than wide: {vw}x{vh}"
+        );
+        assert!(
+            hw > hh,
+            "horizontal run should be wider than tall: {hw}x{hh}"
+        );
         // Stacked height ≈ 5 rows; clearly taller than the single-line height.
         assert!(
             vh > hh * 4.0,
@@ -5306,7 +5371,10 @@ mod tests {
             (30.0..70.0).contains(&min_x),
             "centred column should be inset ~half the slack from the left (min_x={min_x})"
         );
-        assert!(max_x < max_width, "column stays within max_width (max_x={max_x})");
+        assert!(
+            max_x < max_width,
+            "column stays within max_width (max_x={max_x})"
+        );
     }
 }
 
@@ -5436,7 +5504,9 @@ mod icon_tests {
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
         let g = PhosphorIcon::Check.glyph().unwrap();
         let data = icon_font_snapshot()[g.font.index() as usize];
-        let tile = atlas.glyph(g.font.index() as u64, g.glyph_id, data).unwrap();
+        let tile = atlas
+            .glyph(g.font.index() as u64, g.glyph_id, data)
+            .unwrap();
 
         let icon = IconMsdf {
             local: Rect::new(0.0, 0.0, 32.0, 32.0),

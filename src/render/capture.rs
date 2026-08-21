@@ -277,12 +277,7 @@ impl HeadlessGpu {
     }
 
     /// [`capture`](Self::capture) with an explicit clear colour.
-    pub fn capture_on(
-        &mut self,
-        list: &DrawList,
-        size: (u32, u32),
-        clear: wgpu::Color,
-    ) -> Vec<u8> {
+    pub fn capture_on(&mut self, list: &DrawList, size: (u32, u32), clear: wgpu::Color) -> Vec<u8> {
         capture_draw_list(
             &self.device,
             &self.queue,
@@ -331,7 +326,11 @@ mod tests {
 
     #[test]
     fn row_padding_rounds_up_to_256() {
-        assert_eq!(padded_bytes_per_row(64), 256, "64px = 256B, already aligned");
+        assert_eq!(
+            padded_bytes_per_row(64),
+            256,
+            "64px = 256B, already aligned"
+        );
         assert_eq!(padded_bytes_per_row(65), 512);
         assert_eq!(padded_bytes_per_row(512), 2048, "512px = 2048B, aligned");
         assert_eq!(padded_bytes_per_row(800), 3328, "800px = 3200B -> 3328B");
@@ -344,7 +343,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         // 2x2 opaque red.
-        let pixels: Vec<u8> = std::iter::repeat_n([255u8, 0, 0, 255], 4).flatten().collect();
+        let pixels: Vec<u8> = std::iter::repeat_n([255u8, 0, 0, 255], 4)
+            .flatten()
+            .collect();
         write_png(&path, &pixels, (2, 2)).expect("write png");
 
         let decoded = image::open(&path).expect("read back").to_rgba8();

@@ -156,7 +156,10 @@ fn build(list: &mut DrawList) -> (DebugReport, f32) {
     let probe = Rect::new(0.0, 0.0, 400.0, 400.0);
     let inner = Group::new("probe").content_rect(probe, &style);
     let (ins_x, ins_y) = (inner.x - probe.x, inner.y - probe.y);
-    let (pad_x, pad_y) = (probe.right() - inner.right(), probe.bottom() - inner.bottom());
+    let (pad_x, pad_y) = (
+        probe.right() - inner.right(),
+        probe.bottom() - inner.bottom(),
+    );
 
     let mut y = MARGIN;
     for case in cases() {

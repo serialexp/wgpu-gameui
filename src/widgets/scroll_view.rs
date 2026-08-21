@@ -581,14 +581,26 @@ mod tests {
             mouse_clicked: true,
             ..InputState::default()
         };
-        ScrollView::new(viewport).draw(&mut state, &mut list, &StyleResolver::new(&theme), &mut input, |_, _| {});
+        ScrollView::new(viewport).draw(
+            &mut state,
+            &mut list,
+            &StyleResolver::new(&theme),
+            &mut input,
+            |_, _| {},
+        );
         assert!(state.drag_axis.is_some());
 
         // Now drag down by 80 pixels with mouse held.
         list.clear();
         input.mouse_clicked = false;
         input.mouse_y = 90.0;
-        ScrollView::new(viewport).draw(&mut state, &mut list, &StyleResolver::new(&theme), &mut input, |_, _| {});
+        ScrollView::new(viewport).draw(
+            &mut state,
+            &mut list,
+            &StyleResolver::new(&theme),
+            &mut input,
+            |_, _| {},
+        );
 
         // Thumb travel = 200 - 40 = 160px.  Content travel = 1000 - 200 = 800px.
         // 80px of mouse drag -> 80 * (800/160) = 400px content offset.
@@ -758,7 +770,13 @@ mod tests {
         let mut input = input_at(-10.0, -10.0);
 
         let viewport = Rect::new(0.0, 0.0, 100.0, 100.0);
-        ScrollView::new(viewport).draw(&mut state, &mut list, &StyleResolver::new(&theme), &mut input, |_, _| {});
+        ScrollView::new(viewport).draw(
+            &mut state,
+            &mut list,
+            &StyleResolver::new(&theme),
+            &mut input,
+            |_, _| {},
+        );
 
         // The corner quad should sit at (viewport.x + width - bar, y + height - bar)
         // = (100 - 6, 100 - 6) = (94, 94). `quad` now records a chrome instance

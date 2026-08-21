@@ -209,6 +209,10 @@ mod tests {
     #[test]
     fn unknown_name_is_none() {
         assert_eq!(PhosphorIcon::from_name("definitely-not-an-icon"), None);
-        assert_eq!(PhosphorIcon::from_name("Gear"), None, "lookup is by kebab name, not variant");
+        assert_eq!(
+            PhosphorIcon::from_name("Gear"),
+            None,
+            "lookup is by kebab name, not variant"
+        );
     }
 }

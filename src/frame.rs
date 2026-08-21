@@ -262,8 +262,14 @@ mod tests {
                 ui.text_button("OK", Some(100.0), Some(30.0));
             });
         let bg = list2.chrome_instances[0].bg;
-        assert_ne!(bg, theme.button, "hover should have started easing away from idle");
-        assert_ne!(bg, theme.button_hover, "a sub-duration dt should not reach the hover color yet");
+        assert_ne!(
+            bg, theme.button,
+            "hover should have started easing away from idle"
+        );
+        assert_ne!(
+            bg, theme.button_hover,
+            "a sub-duration dt should not reach the hover color yet"
+        );
     }
 
     #[test]

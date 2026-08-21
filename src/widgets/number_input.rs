@@ -18,9 +18,9 @@
 //!
 //! Integer fields are just `decimals == 0` (the default).
 
-use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
 use crate::StyleKey;
+use crate::layout::Rect;
 
 use super::{Button, DrawContext, FocusId, TextInput};
 
@@ -677,7 +677,10 @@ mod tests {
         input.enter_pressed = true;
         let out = draw_number(&ni, 0.0, 0, &mut ti, rect(), &mut focus, &input);
         assert_eq!(out.value, 9.0);
-        assert_eq!(ti.value, "09", "Enter re-canonicalises through the formatter");
+        assert_eq!(
+            ti.value, "09",
+            "Enter re-canonicalises through the formatter"
+        );
     }
 
     /// A toy custom format ("3h" / "12h") paired with a matching parser, to

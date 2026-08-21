@@ -1,8 +1,8 @@
 //! Progress bar widget.
 
 use crate::layout::Rect;
-use crate::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
+use crate::{StyleKey, StyleResolver};
 
 use super::DrawList;
 
@@ -241,7 +241,10 @@ mod tests {
     fn default_policy_is_stat_banding() {
         assert_eq!(
             ProgressFill::default(),
-            ProgressFill::Stat { low: 0.25, medium: 0.5 }
+            ProgressFill::Stat {
+                low: 0.25,
+                medium: 0.5
+            }
         );
         assert_eq!(ProgressBar::new(0.5).fill, ProgressFill::default());
     }
@@ -250,7 +253,10 @@ mod tests {
     fn stat_banding_picks_palette_by_threshold() {
         let t = theme();
         assert_eq!(fill_color(&ProgressBar::new(0.10), &t), t.progress_fill_low);
-        assert_eq!(fill_color(&ProgressBar::new(0.40), &t), t.progress_fill_medium);
+        assert_eq!(
+            fill_color(&ProgressBar::new(0.40), &t),
+            t.progress_fill_medium
+        );
         assert_eq!(fill_color(&ProgressBar::new(0.90), &t), t.progress_fill);
     }
 
@@ -258,7 +264,10 @@ mod tests {
     fn custom_thresholds_shift_the_bands() {
         let t = theme();
         // With low=0.5 the 0.40 value now reads as "low" rather than "medium".
-        let bar = ProgressBar::new(0.40).with_fill(ProgressFill::Stat { low: 0.5, medium: 0.8 });
+        let bar = ProgressBar::new(0.40).with_fill(ProgressFill::Stat {
+            low: 0.5,
+            medium: 0.8,
+        });
         assert_eq!(fill_color(&bar, &t), t.progress_fill_low);
     }
 

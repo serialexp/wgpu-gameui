@@ -158,9 +158,11 @@ mod tests {
     fn horizontal_is_centered_and_full_width() {
         let s = style();
         let mut list = DrawList::new();
-        Separator::horizontal()
-            .with_thickness(2.0)
-            .draw(Rect::new(10.0, 20.0, 100.0, 10.0), &mut list, &s);
+        Separator::horizontal().with_thickness(2.0).draw(
+            Rect::new(10.0, 20.0, 100.0, 10.0),
+            &mut list,
+            &s,
+        );
         let (x, y, w, h) = only_quad(&list);
         assert_eq!((x, w), (10.0, 100.0), "spans the full width");
         assert_eq!(h, 2.0, "thickness honored");
@@ -172,9 +174,11 @@ mod tests {
     fn vertical_is_centered_and_full_height() {
         let s = style();
         let mut list = DrawList::new();
-        Separator::vertical()
-            .with_thickness(4.0)
-            .draw(Rect::new(10.0, 20.0, 12.0, 80.0), &mut list, &s);
+        Separator::vertical().with_thickness(4.0).draw(
+            Rect::new(10.0, 20.0, 12.0, 80.0),
+            &mut list,
+            &s,
+        );
         let (x, y, w, h) = only_quad(&list);
         assert_eq!((y, h), (20.0, 80.0), "spans the full height");
         assert_eq!(w, 4.0, "thickness honored");
@@ -223,12 +227,11 @@ mod tests {
         let s = style();
         let mut list = DrawList::new();
         // Inset larger than half the width collapses the line entirely.
-        Separator::horizontal()
-            .with_inset(60.0)
-            .draw(Rect::new(0.0, 0.0, 100.0, 1.0), &mut list, &s);
-        assert!(
-            list.chrome_instances.is_empty(),
-            "no quad when length ≤ 0"
+        Separator::horizontal().with_inset(60.0).draw(
+            Rect::new(0.0, 0.0, 100.0, 1.0),
+            &mut list,
+            &s,
         );
+        assert!(list.chrome_instances.is_empty(), "no quad when length ≤ 0");
     }
 }

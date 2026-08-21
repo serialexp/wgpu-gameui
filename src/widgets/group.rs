@@ -52,7 +52,9 @@ impl<'a> Group<'a> {
     /// The inner content rect for `rect` without drawing (useful for measuring
     /// or pre-laying-out children). Clamped so width/height never go negative.
     pub fn content_rect(&self, rect: Rect, style: &StyleResolver) -> Rect {
-        let pad = self.padding.unwrap_or_else(|| style.scalar(StyleKey::Padding));
+        let pad = self
+            .padding
+            .unwrap_or_else(|| style.scalar(StyleKey::Padding));
         let title_size = style.scalar(StyleKey::FontSize);
         let header_h = Self::header_height(pad, title_size);
         Rect::new(
@@ -66,7 +68,9 @@ impl<'a> Group<'a> {
     /// Draw the group and return its inner content rect.
     pub fn draw(&self, rect: Rect, list: &mut DrawList, style: &StyleResolver) -> Rect {
         list.push_debug_scope_rect(crate::widgets::scope_name("Group", self.title), rect);
-        let pad = self.padding.unwrap_or_else(|| style.scalar(StyleKey::Padding));
+        let pad = self
+            .padding
+            .unwrap_or_else(|| style.scalar(StyleKey::Padding));
         let title_size = style.scalar(StyleKey::FontSize);
         let header_h = Self::header_height(pad, title_size);
         let border = style.scalar(StyleKey::BorderWidth).max(1.0);

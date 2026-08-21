@@ -21,8 +21,8 @@
 //! toasts.draw(screen_w, screen_h, &mut list, &style); // draw last
 //! ```
 
-use crate::layout::Rect;
 use crate::StyleResolver;
+use crate::layout::Rect;
 
 use super::{Banner, DrawList, Severity};
 
@@ -184,7 +184,10 @@ impl ToastStack {
 
     /// Enqueue a toast.
     pub fn push(&mut self, toast: Toast) {
-        self.active.push(Active { toast, elapsed: 0.0 });
+        self.active.push(Active {
+            toast,
+            elapsed: 0.0,
+        });
     }
 
     /// Age all toasts by `dt` seconds and drop any that have outlived their ttl.
@@ -337,7 +340,10 @@ mod tests {
         s.draw(800.0, 600.0, &mut right, &s_style);
         // First chrome instance is the toast bg; its left edge.
         let right_x = right.chrome_instances[0].rect[0];
-        assert!((right_x - (800.0 - 16.0 - 300.0)).abs() < 1e-3, "right-anchored");
+        assert!(
+            (right_x - (800.0 - 16.0 - 300.0)).abs() < 1e-3,
+            "right-anchored"
+        );
 
         let s = ToastStack::new()
             .with_width(300.0)
@@ -356,7 +362,9 @@ mod tests {
         let s_style = style();
 
         // Top corner: first (newest) toast near the top margin.
-        let mut top = ToastStack::new().with_corner(Corner::TopRight).with_margin(16.0);
+        let mut top = ToastStack::new()
+            .with_corner(Corner::TopRight)
+            .with_margin(16.0);
         top.push(Toast::info("a"));
         let mut tlist = DrawList::new();
         top.draw(800.0, 600.0, &mut tlist, &s_style);

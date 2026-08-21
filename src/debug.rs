@@ -978,7 +978,13 @@ impl DebugReport {
             node.declared = Some(layer.rect);
             node.layer = Some(i);
             raw.push(node);
-            collect_nodes(&layer.list, Some(&layer_ink[i]), Some(root), Some(i), &mut raw);
+            collect_nodes(
+                &layer.list,
+                Some(&layer_ink[i]),
+                Some(root),
+                Some(i),
+                &mut raw,
+            );
             let bounds = child_union(&raw, root, layer.list.viewport_clips());
             raw[root].bounds = bounds;
         }
@@ -1124,14 +1130,22 @@ fn collect_nodes(
             RenderPass::NineSlice,
             0,
         );
-        node.parent = Some(scope.parent.map_or(root.unwrap_or(usize::MAX), |p| base + p));
+        node.parent = Some(
+            scope
+                .parent
+                .map_or(root.unwrap_or(usize::MAX), |p| base + p),
+        );
         if node.parent == Some(usize::MAX) {
             node.parent = None;
         }
         node.declared = scope.declared;
         node.clip = scope.clip;
         node.layer = layer;
-        let end = if scope.closed { scope.end } else { final_counts };
+        let end = if scope.closed {
+            scope.end
+        } else {
+            final_counts
+        };
         node.counts = end.since(scope.start);
         out.push(node);
     }
@@ -1225,9 +1239,11 @@ fn collect_nodes(
         let mut groups: BTreeMap<Option<usize>, (Rect, usize, Option<Rect>)> = BTreeMap::new();
         for (i, v) in list.vertices.iter().enumerate() {
             let parent = own(i, |c| c.vertices);
-            let entry = groups
-                .entry(parent)
-                .or_insert((Rect::zero(), 0, clip_from_parts(v.clip, v.clip_enabled)));
+            let entry = groups.entry(parent).or_insert((
+                Rect::zero(),
+                0,
+                clip_from_parts(v.clip, v.clip_enabled),
+            ));
             let p = Rect::new(v.position[0], v.position[1], 0.0, 0.0);
             // Points have no area, so fold manually rather than via `union`.
             entry.0 = if entry.1 == 0 {
@@ -1341,9 +1357,7 @@ fn collect_nodes(
             end.since(s.start).dropped_degenerate
         })
         .sum();
-    let loose = final_counts
-        .dropped_degenerate
-        .saturating_sub(scoped_drops);
+    let loose = final_counts.dropped_degenerate.saturating_sub(scoped_drops);
     if loose > 0 {
         match root {
             Some(r) => out[r].counts.dropped_degenerate += loose,
@@ -1409,10 +1423,7 @@ fn nest_by_containment(out: &mut [RawNode], base: usize, root: Option<usize>) {
         let my_area = me.width * me.height;
         let mut best: Option<(usize, f32)> = None;
         for &(j, rect, area) in &candidates {
-            if j == i
-                || out[j].kind == NodeKind::Text
-                || out[j].kind == NodeKind::Geometry
-            {
+            if j == i || out[j].kind == NodeKind::Text || out[j].kind == NodeKind::Geometry {
                 continue;
             }
             // Strictly larger, and containing — ties would make a cycle.
@@ -1759,10 +1770,8 @@ fn check_alignment(nodes: &[DebugNode], cfg: &LintConfig, out: &mut Vec<Problem>
         // it. `ALIGN_EDGES` is ordered to put those origin edges first.
         let mut reported: HashSet<(usize, usize)> = HashSet::new();
         for (edge_name, axis, get) in ALIGN_EDGES {
-            let mut values: Vec<(&DebugNode, f32)> = siblings
-                .iter()
-                .map(|n| (*n, get(&n.lint_rect())))
-                .collect();
+            let mut values: Vec<(&DebugNode, f32)> =
+                siblings.iter().map(|n| (*n, get(&n.lint_rect()))).collect();
             values.sort_by(|a, b| a.1.total_cmp(&b.1));
 
             // Cluster values that are within `align_max` of each other, then
@@ -1874,10 +1883,7 @@ fn check_overlap(nodes: &[DebugNode], out: &mut Vec<Problem>) {
 // ---------------------------------------------------------------------------
 
 fn fmt_rect(r: Rect) -> String {
-    format!(
-        "{:.1},{:.1} {:.1}x{:.1}",
-        r.x, r.y, r.width, r.height
-    )
+    format!("{:.1},{:.1} {:.1}x{:.1}", r.x, r.y, r.width, r.height)
 }
 
 impl DebugReport {
@@ -1994,11 +2000,11 @@ impl DebugReport {
     pub fn to_json(&self) -> String {
         let mut s = String::from("{\n");
         s.push_str(&format!("  \"screen\": {},\n", json_rect(self.screen)));
+        s.push_str(&format!("  \"text_measured\": {},\n", self.text_measured));
         s.push_str(&format!(
-            "  \"text_measured\": {},\n",
-            self.text_measured
+            "  \"inferred_nodes\": {},\n",
+            self.inferred_count()
         ));
-        s.push_str(&format!("  \"inferred_nodes\": {},\n", self.inferred_count()));
         s.push_str("  \"viewports\": [");
         for (i, v) in self.viewports.iter().enumerate() {
             if i > 0 {
@@ -2147,9 +2153,9 @@ impl Problem {
             Problem::DegenerateDeclaredRect { declared, .. } => {
                 format!("declared {} has zero or negative area", fmt_rect(*declared))
             }
-            Problem::DroppedDegenerate { count, .. } => format!(
-                "{count} primitive(s) dropped for non-positive size/radius/thickness"
-            ),
+            Problem::DroppedDegenerate { count, .. } => {
+                format!("{count} primitive(s) dropped for non-positive size/radius/thickness")
+            }
             Problem::TextOverflowsBox { ink, text_box, .. } => format!(
                 "shaped ink {} exceeds layout box {}",
                 fmt_rect(*ink),
@@ -2168,7 +2174,10 @@ impl Problem {
                 "{edge} edge at {actual:.2}, siblings agree on {expected:.2} (off by {delta:+.2}px)"
             ),
             Problem::InvisibleAlpha { bounds, .. } => {
-                format!("rect {} has zero alpha in fill and border", fmt_rect(*bounds))
+                format!(
+                    "rect {} has zero alpha in fill and border",
+                    fmt_rect(*bounds)
+                )
             }
             Problem::SiblingOverlap { a, b, overlap } => {
                 format!("node {a} and node {b} overlap over {}", fmt_rect(*overlap))
@@ -2206,8 +2215,20 @@ mod tests {
     fn scope_bounds_are_the_union_of_what_it_painted() {
         let mut list = DrawList::new();
         list.push_debug_scope("toolbar");
-        list.chrome_rect(Rect::new(10.0, 10.0, 40.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
-        list.chrome_rect(Rect::new(60.0, 15.0, 40.0, 30.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(10.0, 10.0, 40.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.chrome_rect(
+            Rect::new(60.0, 15.0, 40.0, 30.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2223,7 +2244,13 @@ mod tests {
         let mut list = DrawList::new();
         list.push_debug_scope("window");
         list.push_debug_scope("row");
-        list.chrome_rect(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
         list.pop_debug_scope();
 
@@ -2242,9 +2269,21 @@ mod tests {
     fn primitives_attach_to_their_innermost_scope() {
         let mut list = DrawList::new();
         list.push_debug_scope("outer");
-        list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 100.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.push_debug_scope("inner");
-        list.chrome_rect(Rect::new(10.0, 10.0, 20.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(10.0, 10.0, 20.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
         list.pop_debug_scope();
 
@@ -2257,7 +2296,13 @@ mod tests {
     #[test]
     fn unscoped_draws_are_still_reported_and_marked_inferred() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(5.0, 5.0, 50.0, 50.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(5.0, 5.0, 50.0, 50.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.text(TextBlock::new("Save", 10.0, 10.0));
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2266,27 +2311,46 @@ mod tests {
         let save = find(&report, "\"Save\"");
         assert!(!save.named);
         assert_eq!(save.text.as_deref(), Some("Save"));
-        assert!(report.to_text().contains("push_debug_scope_rect"), "hints at better naming");
+        assert!(
+            report.to_text().contains("push_debug_scope_rect"),
+            "hints at better naming"
+        );
     }
 
     #[test]
     fn unscoped_nodes_nest_by_geometric_containment() {
         let mut list = DrawList::new();
         // A background with a label on it, drawn with no scopes at all.
-        list.chrome_rect(Rect::new(0.0, 0.0, 200.0, 60.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 200.0, 60.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.text(TextBlock::new("Hello", 20.0, 20.0).with_max_width(80.0));
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
         let bg = find(&report, "chrome#0");
         let label = find(&report, "\"Hello\"");
-        assert_eq!(label.parent, Some(bg.id), "the label sits inside the background");
+        assert_eq!(
+            label.parent,
+            Some(bg.id),
+            "the label sits inside the background"
+        );
     }
 
     #[test]
     fn unclosed_scope_still_owns_everything_after_it() {
         let mut list = DrawList::new();
         list.push_debug_scope("leaked");
-        list.chrome_rect(Rect::new(0.0, 0.0, 30.0, 30.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 30.0, 30.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         // no pop
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2300,11 +2364,25 @@ mod tests {
         // or any reasoning about what covers what is backwards.
         let mut list = DrawList::new();
         list.text(TextBlock::new("label", 0.0, 0.0));
-        list.chrome_rect(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        let text_pos = report.nodes.iter().position(|n| n.kind == NodeKind::Text).unwrap();
-        let chrome_pos = report.nodes.iter().position(|n| n.kind == NodeKind::Chrome).unwrap();
+        let text_pos = report
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Text)
+            .unwrap();
+        let chrome_pos = report
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Chrome)
+            .unwrap();
         assert!(chrome_pos < text_pos, "chrome renders under text");
     }
 
@@ -2313,15 +2391,31 @@ mod tests {
     #[test]
     fn off_screen_element_is_reported() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(900.0, 100.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(900.0, 100.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(codes(&report).contains(&"off_screen"), "{}", report.to_text());
+        assert!(
+            codes(&report).contains(&"off_screen"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]
     fn on_screen_element_is_not_reported() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(100.0, 100.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(100.0, 100.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         let report = DebugReport::from_draw_list(&list, SCREEN);
         assert!(report.problems.is_empty(), "{}", report.to_text());
     }
@@ -2329,7 +2423,13 @@ mod tests {
     #[test]
     fn partially_off_screen_is_off_by_default_and_on_under_strict() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(780.0, 10.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(780.0, 10.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
         assert!(!codes(&report).contains(&"partially_off_screen"));
@@ -2342,10 +2442,20 @@ mod tests {
     fn fully_clipped_element_is_reported() {
         let mut list = DrawList::new();
         list.push_clip(Rect::new(0.0, 0.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(200.0, 200.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(200.0, 200.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(codes(&report).contains(&"fully_clipped"), "{}", report.to_text());
+        assert!(
+            codes(&report).contains(&"fully_clipped"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]
@@ -2354,8 +2464,20 @@ mod tests {
         // A viewport showing one row and hiding the next: exactly a scroll view
         // doing its job. Neither the hidden row nor the visible one is a defect.
         list.push_clip_viewport(Rect::new(0.0, 0.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(10.0, 10.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
-        list.chrome_rect(Rect::new(10.0, 200.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(10.0, 10.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.chrome_rect(
+            Rect::new(10.0, 200.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2383,8 +2505,20 @@ mod tests {
         let mut list = DrawList::new();
         list.push_debug_scope_rect("ScrollView", Rect::new(0.0, 0.0, 100.0, 100.0));
         list.push_clip_viewport(Rect::new(0.0, 0.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 40.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
-        list.chrome_rect(Rect::new(0.0, 40.0, 100.0, 260.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.chrome_rect(
+            Rect::new(0.0, 40.0, 100.0, 260.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
         list.pop_debug_scope();
 
@@ -2405,8 +2539,20 @@ mod tests {
         let mut list = DrawList::new();
         list.push_debug_scope_rect("Panel", Rect::new(0.0, 0.0, 100.0, 100.0));
         list.push_clip(Rect::new(0.0, 0.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 40.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
-        list.chrome_rect(Rect::new(0.0, 40.0, 100.0, 260.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.chrome_rect(
+            Rect::new(0.0, 40.0, 100.0, 260.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
         list.pop_debug_scope();
 
@@ -2426,7 +2572,13 @@ mod tests {
         list.pop_clip();
         // ...must not excuse an unrelated hard boundary losing its content.
         list.push_clip(Rect::new(300.0, 300.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(500.0, 500.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(500.0, 500.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2444,7 +2596,13 @@ mod tests {
         // A row that pushes its own clip and is then scrolled out of view: its
         // effective clip is a sub-rect of the viewport, so containment excuses it.
         list.push_clip(Rect::new(10.0, 10.0, 50.0, 20.0));
-        list.chrome_rect(Rect::new(10.0, 400.0, 50.0, 20.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(10.0, 400.0, 50.0, 20.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
         list.pop_clip();
 
@@ -2470,7 +2628,13 @@ mod tests {
     fn partially_clipped_is_off_by_default_because_scroll_views_do_it() {
         let mut list = DrawList::new();
         list.push_clip(Rect::new(0.0, 0.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(10.0, 50.0, 50.0, 200.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(10.0, 50.0, 50.0, 200.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_clip();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2483,7 +2647,13 @@ mod tests {
     fn overflow_of_a_declared_box_is_reported_with_the_overshoot() {
         let mut list = DrawList::new();
         list.push_debug_scope_rect("card", Rect::new(0.0, 0.0, 100.0, 50.0));
-        list.chrome_rect(Rect::new(0.0, 0.0, 130.0, 50.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 130.0, 50.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2504,7 +2674,13 @@ mod tests {
     fn a_scope_within_its_declared_box_is_clean() {
         let mut list = DrawList::new();
         list.push_debug_scope_rect("card", Rect::new(0.0, 0.0, 100.0, 50.0));
-        list.chrome_rect(Rect::new(5.0, 5.0, 90.0, 40.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(5.0, 5.0, 90.0, 40.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
@@ -2518,7 +2694,11 @@ mod tests {
         list.pop_debug_scope();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(codes(&report).contains(&"missing_paint"), "{}", report.to_text());
+        assert!(
+            codes(&report).contains(&"missing_paint"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]
@@ -2529,7 +2709,11 @@ mod tests {
         list.pop_debug_scope();
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(codes(&report).contains(&"degenerate_declared_rect"), "{}", report.to_text());
+        assert!(
+            codes(&report).contains(&"degenerate_declared_rect"),
+            "{}",
+            report.to_text()
+        );
     }
 
     /// A label centred by `vcentered_text_y` sits with its *line box* poking out
@@ -2610,7 +2794,11 @@ mod tests {
         let mut list = DrawList::new();
         list.quad(0.0, 0.0, 10.0, -1.0, [1.0; 4]);
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(codes(&report).contains(&"dropped_degenerate"), "{}", report.to_text());
+        assert!(
+            codes(&report).contains(&"dropped_degenerate"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]
@@ -2624,7 +2812,11 @@ mod tests {
             [1.0, 1.0, 1.0, 0.0],
         );
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(codes(&report).contains(&"invisible_alpha"), "{}", report.to_text());
+        assert!(
+            codes(&report).contains(&"invisible_alpha"),
+            "{}",
+            report.to_text()
+        );
     }
 
     #[test]
@@ -2714,7 +2906,11 @@ mod tests {
             list.chrome_rect(Rect::new(x, 0.0, 5.0, 100.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
         }
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        assert!(!codes(&report).contains(&"near_miss_alignment"), "{}", report.to_text());
+        assert!(
+            !codes(&report).contains(&"near_miss_alignment"),
+            "{}",
+            report.to_text()
+        );
     }
 
     /// Lay out `rects` as named scopes inside a `form` scope and report.
@@ -2860,7 +3056,13 @@ mod tests {
     #[should_panic(expected = "layout problem")]
     fn assert_clean_panics_with_the_report() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(2000.0, 0.0, 10.0, 10.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(2000.0, 0.0, 10.0, 10.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         DebugReport::from_draw_list(&list, SCREEN).assert_clean();
     }
 
@@ -2868,7 +3070,13 @@ mod tests {
     fn assert_clean_passes_on_a_good_layout() {
         let mut list = DrawList::new();
         list.push_debug_scope_rect("panel", Rect::new(10.0, 10.0, 200.0, 100.0));
-        list.chrome_rect(Rect::new(10.0, 10.0, 200.0, 100.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(10.0, 10.0, 200.0, 100.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
         DebugReport::from_draw_list(&list, SCREEN).assert_clean();
     }
@@ -2895,7 +3103,13 @@ mod tests {
     fn text_rendering_lists_nodes_and_problems() {
         let mut list = DrawList::new();
         list.push_debug_scope_rect("sidebar", Rect::new(0.0, 0.0, 100.0, 100.0));
-        list.chrome_rect(Rect::new(0.0, 0.0, 100.0, 100.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         list.pop_debug_scope();
 
         let text = DebugReport::from_draw_list(&list, SCREEN).to_text();
@@ -2907,7 +3121,13 @@ mod tests {
     #[test]
     fn lint_config_none_finds_nothing_but_still_builds_the_tree() {
         let mut list = DrawList::new();
-        list.chrome_rect(Rect::new(5000.0, 0.0, 10.0, 10.0), 0.0, 0.0, [1.0; 4], [0.0; 4]);
+        list.chrome_rect(
+            Rect::new(5000.0, 0.0, 10.0, 10.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
         let report = DebugReport::from_draw_list(&list, SCREEN).with_lints(&LintConfig::none());
         assert!(report.problems.is_empty());
         assert!(!report.nodes.is_empty());

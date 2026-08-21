@@ -1,8 +1,8 @@
 //! Slider widget - a horizontal bar with a draggable scrubber.
 
+use crate::StyleKey;
 use crate::layout::Rect;
 use crate::text::TextBlock;
-use crate::StyleKey;
 
 use super::{DragCapture, DragId, DrawContext, FocusId};
 
