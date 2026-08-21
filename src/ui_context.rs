@@ -27,6 +27,8 @@ use crate::widgets::{
     RadioGroup, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Tabs, TextInput,
     ToastStack, TooltipLayer, TreeId, TreeNode, TreeNodeOutput, TreeState,
 };
+#[cfg(feature = "phosphor-icons")]
+use crate::{Icon, PhosphorIcon};
 use glyphon::{Style, Weight};
 use std::collections::HashMap;
 
@@ -1286,6 +1288,58 @@ impl<'a> UiContext<'a> {
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim);
             button.focusable(fid).animated(fid).draw(local, &mut ctx)
+        };
+        self.advance(height);
+        clicked
+    }
+
+    /// Draw a square button containing a fit-centered Phosphor vector icon.
+    /// Width and height default to the themed button height. Auto-advances by
+    /// the resolved height.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn icon_button(&mut self, icon: PhosphorIcon, w: Option<f32>, h: Option<f32>) -> bool {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return false,
+        };
+        let height = h.unwrap_or(theme.button_height);
+        let width = w.unwrap_or(height);
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let fid = self
+            .state
+            .as_mut()
+            .map(|s| s.auto_id())
+            .expect("icon_button requires interactive state");
+        let clicked = {
+            let list = self.backend.list_mut();
+            let state = self
+                .state
+                .as_mut()
+                .expect("icon_button requires interactive state");
+            let UiState { focus, anim, .. } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_animations(anim);
+            let clicked = Button::new("")
+                .focusable(fid)
+                .animated(fid)
+                .draw(local, &mut ctx);
+            let styles = ctx.styles();
+            let pad = styles
+                .scalar(StyleKey::Padding)
+                .min(width.min(height) * 0.2);
+            let icon_rect = Rect::new(
+                local.x + pad,
+                local.y + pad,
+                (local.width - pad * 2.0).max(0.0),
+                (local.height - pad * 2.0).max(0.0),
+            );
+            Icon::new(icon)
+                .tint(styles.color(StyleKey::Text))
+                .draw(icon_rect, ctx.draw_list);
+            clicked
         };
         self.advance(height);
         clicked
@@ -3226,6 +3280,22 @@ mod tests {
         drop(ui);
         let scope = list.debug_scopes().last().expect("dropdown scope");
         assert_eq!(scope.declared.expect("declared rect").width, expected);
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn icon_button_draws_vector_icon_and_uses_square_default() {
+        let theme = Theme::default();
+        let input = click_at(10.0, 10.0);
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        assert!(ui.icon_button(PhosphorIcon::X, None, None));
+        drop(ui);
+        assert_eq!(list.chrome_instances[0].rect[2], theme.button_height);
+        assert_eq!(list.chrome_instances[0].rect[3], theme.button_height);
+        assert_eq!(list.icons_msdf.len(), 1);
+        assert!(list.texts.iter().all(|text| text.content.is_empty()));
     }
 
     #[test]

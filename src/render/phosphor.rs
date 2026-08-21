@@ -94,6 +94,8 @@ icons! {
     Check = '\u{e182}', "check";
     /// Cross (close / cancel).
     X = '\u{e4f6}', "x";
+    /// Filled right-pointing play control.
+    Play = '\u{e3d0}', "play";
     /// Open eye (reveal / visible).
     Eye = '\u{e220}', "eye";
     /// Crossed-out eye (hide / hidden).
