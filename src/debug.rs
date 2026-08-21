@@ -530,9 +530,15 @@ pub struct LintConfig {
     pub near_miss_alignment: bool,
     /// Report fully transparent chrome rects. Default on.
     pub invisible_alpha: bool,
-    /// Report overlapping siblings. Default **off** — backgrounds legitimately
-    /// sit under their own contents.
+    /// Report overlaps between layout peers outside a widget boundary. Default
+    /// on: these are separate controls/content placed by their application
+    /// parent, so sharing pixels is normally a layout defect.
     pub sibling_overlap: bool,
+    /// Also report overlaps between a widget's own paint nodes. Default off:
+    /// chrome legitimately sits behind labels and icons, but this is useful when
+    /// asking for every symptom of a widget implementation defect. Enabled by
+    /// [`strict`](Self::strict).
+    pub sibling_overlap_inside_widgets: bool,
     /// Slack in pixels before a rect counts as escaping its container. Default
     /// `0.5` (sub-pixel rounding is not a bug).
     pub overflow_tolerance: f32,
@@ -562,7 +568,8 @@ impl Default for LintConfig {
             text_ellipsized: true,
             near_miss_alignment: true,
             invisible_alpha: true,
-            sibling_overlap: false,
+            sibling_overlap: true,
+            sibling_overlap_inside_widgets: false,
             overflow_tolerance: 0.5,
             align_min: 0.5,
             align_max: 8.0,
@@ -579,6 +586,7 @@ impl LintConfig {
             partially_off_screen: true,
             partially_clipped: true,
             sibling_overlap: true,
+            sibling_overlap_inside_widgets: true,
             ..Self::default()
         }
     }
@@ -598,6 +606,7 @@ impl LintConfig {
             near_miss_alignment: false,
             invisible_alpha: false,
             sibling_overlap: false,
+            sibling_overlap_inside_widgets: false,
             ..Self::default()
         }
     }
@@ -1650,7 +1659,7 @@ fn lint(nodes: &[DebugNode], screen: Rect, cfg: &LintConfig, text_measured: bool
         check_alignment(nodes, cfg, &mut out);
     }
     if cfg.sibling_overlap {
-        check_overlap(nodes, &mut out);
+        check_overlap(nodes, cfg.sibling_overlap_inside_widgets, &mut out);
     }
 
     out.sort_by(|a, b| {
@@ -1852,17 +1861,48 @@ fn other_axis(axis: Axis) -> Axis {
 
 /// Flag siblings covering the same pixels, ignoring the containment case (a
 /// background under its own content is the normal way to draw a panel).
-fn check_overlap(nodes: &[DebugNode], out: &mut Vec<Problem>) {
+///
+/// By default this operates at application/layout boundaries only: children of
+/// a named scope whose parent is not itself a declared widget allocation. A
+/// widget scope's direct children are implementation paint (chrome, caption,
+/// icon) and are intentionally skipped unless `inside_widgets` asks for every
+/// internal symptom as well.
+fn check_overlap(nodes: &[DebugNode], inside_widgets: bool, out: &mut Vec<Problem>) {
     use std::collections::BTreeMap;
     let mut by_parent: BTreeMap<Option<usize>, Vec<&DebugNode>> = BTreeMap::new();
     for node in nodes {
-        if !node.bounds.is_empty() && node.axis_aligned {
-            by_parent.entry(node.parent).or_default().push(node);
+        if node.bounds.is_empty() || !node.axis_aligned {
+            continue;
         }
+        if !inside_widgets
+            && node
+                .parent
+                .and_then(|parent| nodes.get(parent))
+                .is_some_and(|parent| parent.named && parent.declared.is_some())
+        {
+            continue;
+        }
+        by_parent.entry(node.parent).or_default().push(node);
     }
     for siblings in by_parent.values() {
         for (i, a) in siblings.iter().enumerate() {
             for b in siblings.iter().skip(i + 1) {
+                // At an application boundary, inferred chrome/geometry is
+                // usually a row or panel background. Compare named controls and
+                // readable text, not those implementation primitives. Strict
+                // mode keeps every pair for widget-author diagnostics.
+                if !inside_widgets
+                    && !(a.named || a.kind == NodeKind::Text)
+                    && !(b.named || b.kind == NodeKind::Text)
+                {
+                    continue;
+                }
+                if !inside_widgets
+                    && ((a.named || a.kind == NodeKind::Text)
+                        != (b.named || b.kind == NodeKind::Text))
+                {
+                    continue;
+                }
                 if a.bounds.contains_rect(b.bounds, 0.0) || b.bounds.contains_rect(a.bounds, 0.0) {
                     continue;
                 }
@@ -2641,6 +2681,55 @@ mod tests {
         assert!(!codes(&report).contains(&"partially_clipped"));
         let strict = report.with_lints(&LintConfig::strict());
         assert!(codes(&strict).contains(&"partially_clipped"));
+    }
+
+    #[test]
+    fn overlap_defaults_to_layout_peers_but_strict_includes_widget_internals() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("form");
+
+        // Application peers: a caption intrudes into the neighbouring widget.
+        list.push_debug_scope_rect("TextInput", Rect::new(40.0, 0.0, 60.0, 24.0));
+        list.chrome_rect(
+            Rect::new(40.0, 0.0, 60.0, 24.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.pop_debug_scope();
+        list.text(TextBlock::new("Label", 0.0, 0.0).with_max_width(50.0));
+
+        // Widget internals: chrome and a wrapped caption partially overlap. This
+        // is useful in strict/all diagnostics, but redundant in the default view
+        // because the widget's declared allocation owns the implementation bug.
+        list.push_debug_scope_rect("Dropdown", Rect::new(0.0, 40.0, 60.0, 24.0));
+        list.chrome_rect(
+            Rect::new(0.0, 40.0, 60.0, 24.0),
+            0.0,
+            0.0,
+            [1.0; 4],
+            [0.0; 4],
+        );
+        list.text(TextBlock::new("Long dropdown caption", 8.0, 40.0).with_max_width(44.0));
+        list.pop_debug_scope();
+        list.pop_debug_scope();
+
+        let report = DebugReport::measured(&mut list, SCREEN);
+        let default_overlaps = report
+            .problems
+            .iter()
+            .filter(|problem| problem.code() == "sibling_overlap")
+            .count();
+        assert_eq!(default_overlaps, 1, "{}", report.to_text());
+
+        let strict = report.with_lints(&LintConfig::strict());
+        let strict_overlaps = strict
+            .problems
+            .iter()
+            .filter(|problem| problem.code() == "sibling_overlap")
+            .count();
+        assert_eq!(strict_overlaps, 2, "{}", strict.to_text());
     }
 
     #[test]
