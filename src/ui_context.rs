@@ -639,6 +639,19 @@ impl<'a> UiContext<'a> {
         self.text_block(block);
     }
 
+    /// Natural size of a single line under the active font stack. Use this when
+    /// composing custom horizontal rows so the next widget starts after the
+    /// actual label rather than a guessed character width.
+    pub fn text_line_size(&mut self, text: &str) -> (f32, f32) {
+        let spec = self.current_font();
+        let block = TextBlock::new(text, 0.0, 0.0)
+            .with_size(spec.size)
+            .with_font_opt(spec.font)
+            .with_weight(spec.weight)
+            .with_style(spec.style);
+        self.backend.list_mut().measure_block(&block)
+    }
+
     /// Replace the current tint (Teardown's `UiColor`).
     pub fn color(&mut self, r: f32, g: f32, b: f32, a: f32) {
         self.backend.list_mut().set_tint([r, g, b, a]);
@@ -1221,6 +1234,18 @@ impl<'a> UiContext<'a> {
         self.advance(size);
     }
 
+    /// Natural size of a text button under the active theme and style scope.
+    pub fn text_button_size(&mut self, label: &str) -> (f32, f32) {
+        let theme = self
+            .theme
+            .expect("text_button_size requires interactive state");
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        Button::new(label).intrinsic_size(self.backend.list_mut(), &styles)
+    }
+
     /// Draw a chrome text button and report whether it was clicked this frame.
     /// An omitted width fits the caption plus themed horizontal padding; an
     /// omitted height uses `theme.button_height`. Pass an explicit width for
@@ -1360,10 +1385,12 @@ impl<'a> UiContext<'a> {
             Some(v) => v,
             None => return checked,
         };
-        let height = theme.font_size.max(20.0);
-        // The checkbox box is fitted to rect height; give the row enough width
-        // for the box plus the label area (default field width).
-        let width = self.default_field_width();
+        let checkbox = Checkbox::new();
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let (width, height) = checkbox.intrinsic_size(label, self.backend.list_mut(), &styles);
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
@@ -1382,7 +1409,7 @@ impl<'a> UiContext<'a> {
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim);
-            Checkbox::new()
+            checkbox
                 .focusable(fid)
                 .animated(fid)
                 .draw(checked, label, local, &mut ctx)
@@ -2045,6 +2072,19 @@ impl<'a> UiContext<'a> {
         }
     }
 
+    /// Natural size required by a dropdown's widest option under the active
+    /// theme and style scope.
+    pub fn dropdown_size(&mut self, options: &[&str], selected: usize) -> (f32, f32) {
+        let theme = self
+            .theme
+            .expect("dropdown_size requires interactive state");
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        Dropdown::new(options, selected).intrinsic_size(self.backend.list_mut(), &styles)
+    }
+
     /// Draw a dropdown button showing `options[selected]`. Clicking the button
     /// toggles the open option list (rendered separately via
     /// [`UiState::push_dropdown_layer`] / [`UiState::draw_dropdown_layer`]).
@@ -2056,8 +2096,13 @@ impl<'a> UiContext<'a> {
             Some(v) => v,
             None => return,
         };
-        let width = w.unwrap_or_else(|| self.default_field_width());
-        let height = theme.input_height;
+        let dropdown = Dropdown::new(options, selected);
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let (fit_width, height) = dropdown.intrinsic_size(self.backend.list_mut(), &styles);
+        let width = w.unwrap_or(fit_width);
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
@@ -2075,7 +2120,7 @@ impl<'a> UiContext<'a> {
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
-            Dropdown::new(options, selected).draw(id, local, dropdowns, &mut ctx)
+            dropdown.draw(id, local, dropdowns, &mut ctx)
         };
         self.advance(height);
     }
@@ -3133,6 +3178,54 @@ mod tests {
         let (local, li) = ui.localize(inv, world, &input);
         assert!(approx(local.x, 5.0) && approx(local.width, 10.0));
         assert!(local.contains(li.mouse_x, li.mouse_y));
+    }
+
+    #[test]
+    fn text_line_size_uses_the_active_font_stack() {
+        let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        let normal = ui.text_line_size("Settings");
+        ui.font_size(28.0);
+        let large = ui.text_line_size("Settings");
+        assert!(large.0 > normal.0);
+        assert!(large.1 > normal.1);
+    }
+
+    #[test]
+    fn checkbox_fits_its_caption_by_default() {
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let expected = Checkbox::new()
+            .intrinsic_size(
+                "A substantially long caption",
+                &mut list,
+                &StyleResolver::new(&theme),
+            )
+            .0;
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        ui.checkbox("A substantially long caption", false);
+        drop(ui);
+        let scope = list.debug_scopes().last().expect("checkbox scope");
+        assert_eq!(scope.declared.expect("declared rect").width, expected);
+    }
+
+    #[test]
+    fn dropdown_without_width_fits_its_widest_option() {
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let options = ["Short", "A much wider option"];
+        let expected = Dropdown::new(&options, 0)
+            .intrinsic_size(&mut list, &StyleResolver::new(&theme))
+            .0;
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        ui.dropdown(1, &options, 0, None);
+        drop(ui);
+        let scope = list.debug_scopes().last().expect("dropdown scope");
+        assert_eq!(scope.declared.expect("declared rect").width, expected);
     }
 
     #[test]

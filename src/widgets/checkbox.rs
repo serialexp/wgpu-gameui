@@ -77,6 +77,23 @@ impl Checkbox {
         }
     }
 
+    /// Natural row size for `label`: the themed checkbox square, label gap, and
+    /// the label's actual width in the themed font.
+    pub fn intrinsic_size(
+        &self,
+        label: &str,
+        list: &mut DrawList,
+        styles: &StyleResolver,
+    ) -> (f32, f32) {
+        let height = styles.scalar(StyleKey::FontSize).max(20.0);
+        let label_width = if label.is_empty() {
+            0.0
+        } else {
+            list.measure_block(&styles.text_block(label, 0.0, 0.0)).0 + 6.0
+        };
+        (height + label_width, height)
+    }
+
     /// Smooth the box fill (check/uncheck) and hover highlight transitions using
     /// the context's [`AnimationState`](crate::AnimationState), keyed by `id`. A
     /// no-op when no animation state is attached (byte-identical to the instant

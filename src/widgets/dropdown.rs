@@ -419,6 +419,21 @@ impl<'a> Dropdown<'a> {
         self
     }
 
+    /// Natural size required to show the widest option without truncation,
+    /// including horizontal padding and the chevron affordance.
+    pub fn intrinsic_size(&self, list: &mut DrawList, styles: &StyleResolver) -> (f32, f32) {
+        let widest = self
+            .items
+            .iter()
+            .map(|item| list.measure_block(&styles.text_block(*item, 0.0, 0.0)).0)
+            .fold(0.0, f32::max);
+        let padding = styles.scalar(StyleKey::Padding);
+        (
+            widest + padding * 2.0 + CHEVRON * 3.0,
+            styles.scalar(StyleKey::InputHeight),
+        )
+    }
+
     /// The screen-space rect the open option list occupies when this dropdown is
     /// open below `button_rect` — it floats directly below the button and is as
     /// tall as `min(items, max_visible)` rows.
