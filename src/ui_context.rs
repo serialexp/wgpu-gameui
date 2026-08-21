@@ -1222,15 +1222,22 @@ impl<'a> UiContext<'a> {
     }
 
     /// Draw a chrome text button and report whether it was clicked this frame.
-    /// `w`/`h` default to `default_field_width` /
-    /// `theme.button_height`. Auto-advances by the button height.
+    /// An omitted width fits the caption plus themed horizontal padding; an
+    /// omitted height uses `theme.button_height`. Pass an explicit width for
+    /// fill/fixed layouts. Auto-advances by the button height.
     pub fn text_button(&mut self, label: &str, w: Option<f32>, h: Option<f32>) -> bool {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => return false,
         };
-        let width = w.unwrap_or_else(|| self.default_field_width());
-        let height = h.unwrap_or(theme.button_height);
+        let button = Button::new(label);
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let (fit_width, fit_height) = button.intrinsic_size(self.backend.list_mut(), &styles);
+        let width = w.unwrap_or(fit_width);
+        let height = h.unwrap_or(fit_height);
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
@@ -1253,10 +1260,7 @@ impl<'a> UiContext<'a> {
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim);
-            Button::new(label)
-                .focusable(fid)
-                .animated(fid)
-                .draw(local, &mut ctx)
+            button.focusable(fid).animated(fid).draw(local, &mut ctx)
         };
         self.advance(height);
         clicked
@@ -3150,6 +3154,26 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
             assert!(!ui.text_button("OK", Some(100.0), Some(30.0)));
         }
+    }
+
+    #[test]
+    fn text_button_without_width_fits_caption_and_padding() {
+        let mut theme = Theme::default();
+        theme.padding = 7.0;
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let expected = Button::new("Fit me")
+            .intrinsic_size(&mut list, &StyleResolver::new(&theme))
+            .0;
+
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        ui.text_button("Fit me", None, None);
+        drop(ui);
+
+        assert!((list.chrome_instances[0].rect[2] - expected).abs() < 0.01);
+        assert!(list.chrome_instances[0].rect[2] < 200.0);
+        assert_eq!(list.chrome_instances[0].rect[3], theme.button_height);
     }
 
     #[test]

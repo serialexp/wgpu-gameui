@@ -176,6 +176,17 @@ impl Button {
         }
     }
 
+    /// Natural size of this button under `styles`: one unwrapped label line plus
+    /// the same horizontal inset used by [`draw`](Self::draw), and the themed
+    /// button height. Layout façades use this for fit-content sizing.
+    pub fn intrinsic_size(&self, list: &mut DrawList, styles: &StyleResolver) -> (f32, f32) {
+        let label = styles.text_block(&self.label, 0.0, 0.0);
+        let label_width = list.measure_block(&label).0;
+        let padding = styles.scalar(StyleKey::Padding);
+        let height = styles.scalar(StyleKey::ButtonHeight);
+        (label_width + padding * 2.0, height)
+    }
+
     /// Animate the chrome fill + border transitions under `id` (hover/press fade
     /// in/out over [`Theme::animation_duration`](crate::Theme::animation_duration)).
     /// Only takes effect when the [`DrawContext`] has an
