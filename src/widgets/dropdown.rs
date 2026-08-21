@@ -317,7 +317,8 @@ impl DropdownState {
                     TextBlock::new(item.clone(), list_rect.x + pad, text_y)
                         .with_size(font_size)
                         .with_color(r, g, b)
-                        .with_max_width(list_rect.width - pad * 2.0)
+                        .with_max_width((list_rect.width - pad * 2.0).max(0.0))
+                        .with_ellipsis()
                         .with_font_opt(font.clone()),
                 );
             }
@@ -544,7 +545,8 @@ impl<'a> Dropdown<'a> {
             TextBlock::new(label, rect.x + pad, text_y)
                 .with_size(font_size)
                 .with_color(r, g, b)
-                .with_max_width(rect.width - pad * 2.0 - CHEVRON * 3.0)
+                .with_max_width((rect.width - pad * 2.0 - CHEVRON * 3.0).max(0.0))
+                .with_ellipsis()
                 .with_font_opt(s.theme().font.clone()),
         );
 
@@ -649,6 +651,59 @@ mod tests {
         let s = DropdownState::new();
         assert_eq!(s.open(), None);
         assert!(!s.is_open(1));
+    }
+
+    #[test]
+    fn narrow_selected_label_is_single_line_and_ellipsized() {
+        const LONG: [&str; 1] = ["A selected option that cannot fit"];
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = DropdownState::new();
+        let mut focus = FocusState::new();
+        let mut list = DrawList::new();
+        let rect = Rect::new(10.0, 10.0, 80.0, 24.0);
+
+        Dropdown::new(&LONG, 0).draw(
+            1,
+            rect,
+            &mut state,
+            &mut DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0),
+        );
+
+        assert_eq!(list.texts.len(), 1);
+        let label = list.texts[0].clone();
+        assert!(
+            label.ellipsize,
+            "selected dropdown labels must be single-line"
+        );
+        assert!(
+            list.measure_block(&label).1 <= rect.height,
+            "selected label must remain inside the dropdown chrome",
+        );
+    }
+
+    #[test]
+    fn open_list_labels_are_single_line_and_ellipsized() {
+        const LONG: [&str; 1] = ["An option that cannot fit in its popup row"];
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = DropdownState::new();
+        let mut layers = LayerStack::new();
+        let button = Rect::new(10.0, 10.0, 80.0, 24.0);
+        state.open_for_test(1, button, &LONG, 0);
+
+        state.begin_frame(&input);
+        let popup = state.push_open_layer(&mut layers);
+        state.draw_open_layer(&mut layers, popup, &StyleResolver::new(&theme), &input);
+
+        let list = &mut layers.layers_mut()[popup.expect("popup layer")].list;
+        assert_eq!(list.texts.len(), 1);
+        let label = list.texts[0].clone();
+        assert!(label.ellipsize, "popup option labels must be single-line");
+        assert!(
+            list.measure_block(&label).1 <= ITEM_HEIGHT,
+            "popup option must remain inside its row",
+        );
     }
 
     #[test]
