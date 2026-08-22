@@ -131,7 +131,7 @@ fn a_column_misaligned_by_a_fraction_is_caught() {
         c.draw_list.push_debug_scope("form");
         for (i, left) in lefts.into_iter().enumerate() {
             let rect = Rect::new(left, 40.0 + i as f32 * 36.0, 220.0, 28.0);
-            Button::new(&format!("field{i}")).draw(rect, &mut c);
+            Button::new(format!("field{i}")).draw(rect, &mut c);
         }
         c.draw_list.pop_debug_scope();
     }

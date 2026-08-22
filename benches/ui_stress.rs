@@ -14,8 +14,9 @@
 //! What's measured is **CPU main-thread cost** — building the `DrawList`, then
 //! `UiRenderer::render` (tessellation + MSDF text shaping + `queue.write_buffer`
 //! + command encode + submit). GPU execution is async and not captured (that
-//! would need timestamp queries); CPU stall is what makes a frame feel
-//! unresponsive. Glyph MSDF generation is a one-time atlas cost absorbed by
+//!
+//! GPU execution would need timestamp queries; CPU stall is what makes a frame
+//! feel unresponsive. Glyph MSDF generation is a one-time atlas cost absorbed by
 //! Criterion's warmup, so steady-state samples reflect re-shaping + tessellation.
 //!
 //! Three groups:
@@ -461,7 +462,8 @@ fn bench_layout(c: &mut Criterion) {
 /// Cache-hit re-measures the same strings every iteration (hash lookup, no
 /// shaping). Cache-miss measures a fresh unique string each time (FontSystem lock
 /// + cosmic-text shape + insert), with the TextMeasurer cache cleared between
-/// iterations so every call is a genuine miss.
+///
+/// Iterations vary the text so every call is a genuine miss.
 ///
 /// Note: cosmic-text has its own internal glyph cache that survives
 /// `TextMeasurer::clear_cache()`, so "miss" times represent a warm-glyph-cache
@@ -650,8 +652,10 @@ fn bench_text_input_edit(c: &mut Criterion) {
                 list.clear();
                 let mut focus = FocusState::new();
                 // One key-down edge per field: Backspace (trims last char).
-                let mut input = InputState::default();
-                input.backspace_pressed = true;
+                let input = InputState {
+                    backspace_pressed: true,
+                    ..Default::default()
+                };
                 let mut ctx =
                     DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
                 // Fresh TextInputs each iteration with a starting value so
@@ -767,7 +771,7 @@ fn bench_list_virtual(c: &mut Criterion) {
                     |list, rect, item: ListItem| {
                         // Minimal closure: one text label per visible row.
                         list.text(TextBlock::new(
-                            &format!("Item {}", item.index),
+                            format!("Item {}", item.index),
                             rect.x,
                             rect.y,
                         ));

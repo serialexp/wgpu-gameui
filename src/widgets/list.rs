@@ -316,6 +316,7 @@ impl List {
     }
 
     /// Draw the list and return interaction results.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw<F>(
         &self,
         rect: Rect,
@@ -424,10 +425,8 @@ impl List {
                 state.scroll.clamp([rect.width, rect.height]);
             }
 
-            if k.activate {
-                if let Some(c) = state.cursor {
-                    activated = Some(c);
-                }
+            if k.activate && state.cursor.is_some() {
+                activated = state.cursor;
             }
         }
 

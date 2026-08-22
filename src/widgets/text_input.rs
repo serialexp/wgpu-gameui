@@ -473,10 +473,8 @@ impl TextInput {
     /// Cut: copy selection to clipboard then delete it.
     fn cut(&mut self) {
         let text = self.selected_text().map(|s| s.to_string());
-        if let Some(ref text) = text {
-            if let Some(ref mut set) = self.clipboard_set {
-                set(text.clone());
-            }
+        if let (Some(text), Some(set)) = (&text, &mut self.clipboard_set) {
+            set(text.clone());
         }
         if text.is_some() {
             self.delete_selection();
@@ -486,10 +484,8 @@ impl TextInput {
     /// Copy: copy selection to clipboard.
     fn copy(&mut self) {
         let text = self.selected_text().map(|s| s.to_string());
-        if let Some(ref text) = text {
-            if let Some(ref mut set) = self.clipboard_set {
-                set(text.clone());
-            }
+        if let (Some(text), Some(set)) = (&text, &mut self.clipboard_set) {
+            set(text.clone());
         }
     }
 
@@ -560,7 +556,7 @@ impl TextInput {
                 Some((c as u8 + b'a' - 1) as char)
             } else {
                 let lower = c.to_ascii_lowercase();
-                if ('a'..='z').contains(&lower) {
+                if lower.is_ascii_lowercase() {
                     Some(lower)
                 } else {
                     None
@@ -1029,58 +1025,59 @@ impl TextInput {
             };
 
         // ---- Draw selection highlight ----
+        #[allow(clippy::collapsible_if)]
         if focused && !composing && !self.value.is_empty() {
-            if let Some((sel_start, sel_end)) = self.selection_range() {
-                if sel_start < sel_end {
-                    if multiline {
-                        let start_line = caret_for_byte(&render_layout, sel_start).line;
-                        let end_line = caret_for_byte(&render_layout, sel_end).line;
-                        for line in start_line..=end_line {
-                            let (line_lo, line_hi) = line_byte_range(&render_layout, line);
-                            let a = sel_start.max(line_lo);
-                            let b = sel_end.min(line_hi);
-                            if b < a {
-                                continue;
-                            }
-                            let x1 = line_x_for_byte(&render_layout, line, a);
-                            // Selection that continues onto the next line fills to
-                            // the inner edge (shows the newline is selected).
-                            let x2 = if sel_end > line_hi {
-                                text_max_w
-                            } else {
-                                line_x_for_byte(&render_layout, line, b)
-                            };
-                            let lt = render_layout
-                                .iter()
-                                .find(|p| p.line == line)
-                                .map(|p| p.line_top)
-                                .unwrap_or(0.0);
-                            list.quad(
-                                text_x + x1,
-                                text_top - scroll + lt,
-                                (x2 - x1).max(1.0),
-                                line_height,
-                                s.color(StyleKey::Accent),
-                            );
+            if let Some((sel_start, sel_end)) =
+                self.selection_range().filter(|(start, end)| start < end)
+            {
+                if multiline {
+                    let start_line = caret_for_byte(&render_layout, sel_start).line;
+                    let end_line = caret_for_byte(&render_layout, sel_end).line;
+                    for line in start_line..=end_line {
+                        let (line_lo, line_hi) = line_byte_range(&render_layout, line);
+                        let a = sel_start.max(line_lo);
+                        let b = sel_end.min(line_hi);
+                        if b < a {
+                            continue;
                         }
-                    } else {
-                        // Single-line: resolve bidi-correct visual rectangles.
-                        // A logically-contiguous selection can map to several
-                        // disjoint visual spans across an LTR↔RTL boundary, so
-                        // we draw one quad per returned rect. Selection bytes are
-                        // mapped to display bytes first (identity when unmasked;
-                        // masked bullets are LTR so this yields a single span).
-                        let ds = self.value_to_display_byte(sel_start);
-                        let de = self.value_to_display_byte(sel_end);
-                        for r in selection_rects(&caret_vis, ds, de) {
-                            list.quad(
-                                text_x + r.x,
-                                sl_band_top,
-                                r.w.max(1.0),
-                                sl_band_h,
-                                s.color(StyleKey::Accent),
-                            );
-                        }
+                        let x1 = line_x_for_byte(&render_layout, line, a);
+                        // Selection that continues onto the next line fills to
+                        // the inner edge (shows the newline is selected).
+                        let x2 = if sel_end > line_hi {
+                            text_max_w
+                        } else {
+                            line_x_for_byte(&render_layout, line, b)
+                        };
+                        let lt = render_layout
+                            .iter()
+                            .find(|p| p.line == line)
+                            .map(|p| p.line_top)
+                            .unwrap_or(0.0);
+                        list.quad(
+                            text_x + x1,
+                            text_top - scroll + lt,
+                            (x2 - x1).max(1.0),
+                            line_height,
+                            s.color(StyleKey::Accent),
+                        );
+                    }
+                } else {
+                    // Single-line: resolve bidi-correct visual rectangles.
+                    // A logically-contiguous selection can map to several
+                    // disjoint visual spans across an LTR↔RTL boundary, so
+                    // we draw one quad per returned rect. Selection bytes are
+                    // mapped to display bytes first (identity when unmasked;
+                    // masked bullets are LTR so this yields a single span).
+                    let ds = self.value_to_display_byte(sel_start);
+                    let de = self.value_to_display_byte(sel_end);
+                    for r in selection_rects(&caret_vis, ds, de) {
+                        list.quad(
+                            text_x + r.x,
+                            sl_band_top,
+                            r.w.max(1.0),
+                            sl_band_h,
+                            s.color(StyleKey::Accent),
+                        );
                     }
                 }
             }

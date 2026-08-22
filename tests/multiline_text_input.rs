@@ -36,6 +36,7 @@ fn gpu_setup() -> Option<(wgpu::Device, wgpu::Queue, wgpu::TextureFormat)> {
 }
 
 /// Render the given field once into an RGBA image.
+#[allow(clippy::too_many_arguments)]
 fn render_field(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -218,8 +219,10 @@ fn render_focused_multiline_text_input() {
     // (b) Autoscroll engages when the caret is driven to the bottom of a value
     // taller than the box. Type enough newlines to exceed the field height, then
     // confirm scroll_offset became positive.
-    let mut typed = InputState::default();
-    typed.enter_pressed = true;
+    let typed = InputState {
+        enter_pressed: true,
+        ..Default::default()
+    };
     // Drive the caret to the end first.
     field.cursor_pos = field.value.len();
     // A handful of Enter presses (each one frame) to push the caret below the box.

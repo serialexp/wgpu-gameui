@@ -178,9 +178,7 @@ impl DropdownState {
     /// `input_for_base`/`input_for_layer` account for it) and is drawn into by
     /// index in [`draw_open_layer`](Self::draw_open_layer).
     pub fn push_open_layer(&mut self, layers: &mut LayerStack) -> Option<usize> {
-        if self.open.is_none() {
-            return None;
-        }
+        self.open?;
         let geom = self.geom.as_ref()?;
         let rect = Self::list_rect(geom);
         let idx = layers.push_popup(rect);

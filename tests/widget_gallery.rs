@@ -1161,8 +1161,10 @@ fn render_widget_gallery() {
         let r = flow.cell(list, "Text input (composing)", 200.0, 28.0);
         {
             const COMPOSE_ID: u64 = 200;
-            let mut compose_input = InputState::default();
-            compose_input.preedit = "nihongo".to_string();
+            let compose_input = InputState {
+                preedit: "nihongo".to_string(),
+                ..Default::default()
+            };
             let mut compose_focus = FocusState::new();
             compose_focus.focus(COMPOSE_ID);
             compose_focus.begin_frame(&compose_input);
@@ -1353,7 +1355,7 @@ fn render_widget_gallery() {
                     // edge-to-edge; the row only pads its own text.
                     list.quad(vp.x, y + 2.0, vp.width, 18.0, bg);
                     list.text(
-                        TextBlock::new(&format!("Item #{:02}", i), vp.x + 8.0, y + 3.0)
+                        TextBlock::new(format!("Item #{:02}", i), vp.x + 8.0, y + 3.0)
                             .with_size(12.0)
                             .with_color(180, 190, 210),
                     );
@@ -1507,7 +1509,7 @@ fn render_widget_gallery() {
                             fill,
                         );
                         list.text(
-                            TextBlock::new(&format!("{}", it.index), cell.x + 6.0, cell.y + 9.0)
+                            TextBlock::new(format!("{}", it.index), cell.x + 6.0, cell.y + 9.0)
                                 .with_size(12.0)
                                 .with_color(240, 245, 255),
                         );
@@ -1540,20 +1542,16 @@ fn render_widget_gallery() {
                     // reserves it), so the item fills the cell edge-to-edge and
                     // only pads its *own* text.
                     list.rect_outline(cell, 1.0, [1.0, 0.25, 0.8, 0.9]);
-                    let bg = if it.index % 2 == 0 {
+                    let bg = if it.index.is_multiple_of(2) {
                         [0.13, 0.15, 0.20, 1.0]
                     } else {
                         [0.09, 0.11, 0.16, 1.0]
                     };
                     list.quad(cell.x, cell.y, cell.width, cell.height, bg);
                     list.text(
-                        TextBlock::new(
-                            &format!("Row #{:04}", it.index),
-                            cell.x + 8.0,
-                            cell.y + 3.0,
-                        )
-                        .with_size(12.0)
-                        .with_color(180, 190, 210),
+                        TextBlock::new(format!("Row #{:04}", it.index), cell.x + 8.0, cell.y + 3.0)
+                            .with_size(12.0)
+                            .with_color(180, 190, 210),
                     );
                 },
             );
@@ -1986,9 +1984,11 @@ fn render_widget_gallery() {
     {
         let mut tooltip = TooltipLayer::new();
         tooltip.register(tooltip_rect, TooltipContent::text("This is a tooltip!"));
-        let mut tip_input = InputState::default();
-        tip_input.mouse_x = tooltip_rect.x + tooltip_rect.width / 2.0;
-        tip_input.mouse_y = tooltip_rect.y + tooltip_rect.height / 2.0;
+        let tip_input = InputState {
+            mouse_x: tooltip_rect.x + tooltip_rect.width / 2.0,
+            mouse_y: tooltip_rect.y + tooltip_rect.height / 2.0,
+            ..Default::default()
+        };
         tooltip.tick(999.0, &tip_input);
         tooltip.draw_into_layers(
             &mut layers,

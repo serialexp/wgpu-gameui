@@ -345,10 +345,8 @@ impl ApplicationHandler for App {
                         KeyCode::ControlLeft | KeyCode::ControlRight => {
                             self.input.ctrl_pressed = pressed;
                         }
-                        KeyCode::Enter => {
-                            if pressed {
-                                self.input.enter_pressed = true;
-                            }
+                        KeyCode::Enter if pressed => {
+                            self.input.enter_pressed = true;
                         }
                         _ => {}
                     }
@@ -356,15 +354,13 @@ impl ApplicationHandler for App {
                 // Capture text from the key event (winit 0.30 replaces `ReceivedCharacter` with
                 // `KeyEvent::text`).
                 if pressed {
-                    if let Some(ref text) = ke.text {
+                    ke.text.iter().for_each(|text| {
                         // Filter out control characters (Enter, Tab, etc.) — they're
                         // handled via physical key mappings above.
-                        for c in text.chars() {
-                            if !c.is_control() {
-                                self.input.text_input.push(c);
-                            }
-                        }
-                    }
+                        self.input
+                            .text_input
+                            .extend(text.chars().filter(|c| !c.is_control()));
+                    });
                 }
                 window.request_redraw();
             }
@@ -507,7 +503,7 @@ impl ApplicationHandler for App {
                             };
                             list.quad(vp.x + 4.0, y + 2.0, vp.width - 12.0, 20.0, bg);
                             list.text(
-                                TextBlock::new(&format!("Row #{:02}", i), vp.x + 12.0, y + 4.0)
+                                TextBlock::new(format!("Row #{:02}", i), vp.x + 12.0, y + 4.0)
                                     .with_size(14.0)
                                     .with_color(200, 210, 230),
                             );
@@ -558,7 +554,7 @@ impl ApplicationHandler for App {
                     {
                         list.text(
                             TextBlock::new(
-                                &format!(
+                                format!(
                                     "Buttons (Tab to focus, Space/Enter to click): {} clicks",
                                     self.state.button_clicks
                                 ),
@@ -743,15 +739,18 @@ impl ApplicationHandler for App {
 
                 // Deferred dropdown list (Popup layer above the base content).
                 // Picking an option updates the selection and closes the menu.
-                if let Some((id, idx)) = self.state.dropdowns.draw_open_layer(
-                    &mut layers,
-                    dropdown_popup,
-                    &StyleResolver::new(&self.theme),
-                    &self.input,
-                ) {
-                    if id == DROPDOWN_ID {
-                        self.state.dropdown_sel = idx;
-                    }
+                if let Some((_, idx)) = self
+                    .state
+                    .dropdowns
+                    .draw_open_layer(
+                        &mut layers,
+                        dropdown_popup,
+                        &StyleResolver::new(&self.theme),
+                        &self.input,
+                    )
+                    .filter(|(id, _)| *id == DROPDOWN_ID)
+                {
+                    self.state.dropdown_sel = idx;
                 }
                 self.state.dropdowns.end_frame();
 

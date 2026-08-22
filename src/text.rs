@@ -1912,6 +1912,7 @@ impl TextMeasurer {
     /// `(font, weight, style, wrap)` combination is a distinct cache entry — a
     /// measurement under this path matches a [`TextBlock`] rendered with the same
     /// font/weight/style/wrap.
+    #[allow(clippy::too_many_arguments)]
     pub fn measure_styled(
         &mut self,
         text: &str,
@@ -2488,7 +2489,7 @@ pub fn text_cursor_positions(
 
     for run in buffer.layout_runs() {
         for glyph in run.glyphs.iter() {
-            let start_idx = glyph.start as usize;
+            let start_idx = glyph.start;
             // Only record the first time we see each byte index.
             if start_idx > positions.last().map(|(i, _)| *i).unwrap_or(0) {
                 positions.push((start_idx, glyph.x));
@@ -2498,7 +2499,7 @@ pub fn text_cursor_positions(
         let line_end_x = run.line_w;
         // Find the last byte index of this run.
         if let Some(last_glyph) = run.glyphs.last() {
-            let end_idx = last_glyph.end as usize;
+            let end_idx = last_glyph.end;
             if end_idx > positions.last().map(|(i, _)| *i).unwrap_or(0) {
                 positions.push((end_idx, line_end_x));
             }
@@ -2634,9 +2635,8 @@ pub fn text_caret_layout(
         let first_real = run
             .glyphs
             .iter()
-            .find(|g| line_base + g.start as usize >= prefix_len);
-        let line_start_byte =
-            to_orig(line_base + first_real.map(|g| g.start as usize).unwrap_or(0));
+            .find(|g| line_base + g.start >= prefix_len);
+        let line_start_byte = to_orig(line_base + first_real.map(|g| g.start).unwrap_or(0));
         out.push(CaretPos {
             byte: line_start_byte,
             x: 0.0,
@@ -2646,7 +2646,7 @@ pub fn text_caret_layout(
         });
 
         for g in run.glyphs.iter() {
-            let abs = line_base + g.start as usize;
+            let abs = line_base + g.start;
             if abs < prefix_len {
                 continue; // the direction mark — not a caret stop
             }
@@ -2666,7 +2666,7 @@ pub fn text_caret_layout(
         // Run-end caret (x = line width). For a hard newline this is the byte of
         // the '\n'; for a soft wrap it duplicates the next line's start byte.
         if let Some(last) = run.glyphs.last() {
-            let end_b = to_orig(line_base + last.end as usize);
+            let end_b = to_orig(line_base + last.end);
             if out.last().map(|p| p.byte) != Some(end_b) {
                 out.push(CaretPos {
                     byte: end_b,
@@ -2878,12 +2878,12 @@ pub fn text_visual_layout(
         let lt = run.line_top;
         let lh = run.line_height;
         for g in run.glyphs.iter() {
-            let abs = line_base + g.start as usize;
+            let abs = line_base + g.start;
             if abs < prefix_len {
                 continue; // the zero-width direction mark
             }
             let a = to_orig(abs);
-            let b = to_orig(line_base + g.end as usize);
+            let b = to_orig(line_base + g.end);
             out.push(VisualGlyph {
                 byte_start: a.min(b),
                 byte_end: a.max(b),

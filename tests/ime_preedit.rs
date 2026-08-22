@@ -71,8 +71,10 @@ fn render_focused_composing_text_input() {
 
     // A focused text field that is composing: the IME has delivered the preedit
     // "ンゴ" but it is not yet committed into the value "ab|cd".
-    let mut input = InputState::default();
-    input.preedit = "ンゴ".to_string();
+    let input = InputState {
+        preedit: "ンゴ".to_string(),
+        ..Default::default()
+    };
 
     let mut focus = FocusState::new();
     const FIELD_ID: u64 = 0;

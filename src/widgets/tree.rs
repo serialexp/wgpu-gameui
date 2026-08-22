@@ -303,12 +303,11 @@ impl TreeState {
                 }
             }
         } else if keys.activate {
-            if let Some(i) = cur {
-                let NavRow { id, branch, .. } = nav[i];
-                if branch {
-                    self.toggle(id);
-                }
-            }
+            cur.map(|i| nav[i])
+                .filter(|row| row.branch)
+                .map(|row| row.id)
+                .into_iter()
+                .for_each(|id| self.toggle(id));
         }
     }
 }
@@ -634,9 +633,10 @@ impl<'a> TreeNode<'a> {
         // navigation activates after a click. Safe here: the `ctx.input` borrow
         // ended above (we snapshot `mouse_clicked`), so `&mut ctx` is free.
         if body_clicked || toggled || action.is_some() {
-            if let Some(fid) = state.focus_id {
-                ctx.focus.request(fid);
-            }
+            state
+                .focus_id
+                .into_iter()
+                .for_each(|focus_id| ctx.focus.request(focus_id));
         }
 
         ctx.pop_debug_scope();

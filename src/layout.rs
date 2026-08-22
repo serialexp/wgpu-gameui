@@ -237,7 +237,7 @@ impl Anchor {
 }
 
 /// Size specification for a dimension.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum SizeSpec {
     /// Fixed pixel size.
     Fixed(f32),
@@ -246,13 +246,8 @@ pub enum SizeSpec {
     /// Fill remaining space (used in stacks).
     Fill,
     /// Size to fit content (for containers).
+    #[default]
     Fit,
-}
-
-impl Default for SizeSpec {
-    fn default() -> Self {
-        SizeSpec::Fit
-    }
 }
 
 impl SizeSpec {
