@@ -128,7 +128,7 @@ pub struct CircleInstance {
     pub params: [f32; 4],
 }
 
-/// One entry in a [`DrawList`]'s ordered color-stage command stream.
+/// One entry in a [`DrawList`]'s ordered paint stream.
 ///
 /// The colored-quad stage is no longer a single soup draw: chrome rects are
 /// instanced and must interleave with surrounding soup geometry in submission
@@ -138,13 +138,22 @@ pub struct CircleInstance {
 /// pipeline. When no `chrome_rect` is ever called the stream stays empty and the
 /// renderer keeps its original single-draw fast path.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ColorCmd {
+pub(crate) enum PaintCmd {
     /// Draw soup index positions `start..end` (absolute into `indices`).
     Soup { indices: std::ops::Range<u32> },
     /// Draw chrome instances `start..end` (into `chrome_instances`).
     Chrome { instances: std::ops::Range<u32> },
     /// Draw circle instances `start..end` (into `circle_instances`).
     Circle { instances: std::ops::Range<u32> },
+    /// Draw nine-slice payloads `start..end`.
+    NineSlice { draws: std::ops::Range<u32> },
+    /// Draw atlas icon/image payloads `start..end`.
+    Icon { draws: std::ops::Range<u32> },
+    /// Draw MSDF icon payloads `start..end`.
+    #[cfg(feature = "phosphor-icons")]
+    IconMsdf { draws: std::ops::Range<u32> },
+    /// Draw text payloads `start..end`.
+    Text { draws: std::ops::Range<u32> },
 }
 
 /// Opaque handle to a registered nine-slice resource.
@@ -347,15 +356,15 @@ pub struct DrawList {
     pub icons_msdf: Vec<IconMsdf>,
     /// Instanced chrome rects (button backgrounds/borders, plus rect/rounded-rect
     /// fills and outlines). Drawn by the chrome pipeline; interleaved with soup
-    /// geometry via `DrawList::color_cmds`.
+    /// geometry via `DrawList::paint_cmds`.
     pub chrome_instances: Vec<ChromeInstance>,
     /// Instanced circles (filled discs + ring outlines). Drawn by the circle
-    /// SDF pipeline; interleaved with soup/chrome via `DrawList::color_cmds`.
+    /// SDF pipeline; interleaved with soup/chrome via `DrawList::paint_cmds`.
     pub circle_instances: Vec<CircleInstance>,
     /// Ordered color-stage command stream (soup runs interleaved with chrome
     /// instance runs). Empty unless [`DrawList::chrome_rect`] was used, in which
     /// case the renderer falls back to a single soup draw.
-    pub(crate) color_cmds: Vec<ColorCmd>,
+    pub(crate) paint_cmds: Vec<PaintCmd>,
     /// Count of soup index positions already committed to a `Soup` command. Soup
     /// appended after the last command is the implicit trailing run.
     pub(crate) soup_committed_indices: u32,
@@ -397,7 +406,7 @@ impl Default for DrawList {
             icons_msdf: Vec::new(),
             chrome_instances: Vec::new(),
             circle_instances: Vec::new(),
-            color_cmds: Vec::new(),
+            paint_cmds: Vec::new(),
             soup_committed_indices: 0,
             text_measurer: TextMeasurer::default(),
             clip_stack: Vec::new(),
@@ -445,7 +454,7 @@ impl DrawList {
             icons_msdf: Vec::new(),
             chrome_instances: Vec::new(),
             circle_instances: Vec::new(),
-            color_cmds: Vec::new(),
+            paint_cmds: Vec::new(),
             soup_committed_indices: 0,
             text_measurer: TextMeasurer::with_font_system(font_system),
             clip_stack: Vec::new(),
@@ -485,7 +494,7 @@ impl DrawList {
         self.icons_msdf.clear();
         self.chrome_instances.clear();
         self.circle_instances.clear();
-        self.color_cmds.clear();
+        self.paint_cmds.clear();
         self.soup_committed_indices = 0;
         self.clip_stack.clear();
         self.viewport_clips.clear();
@@ -1458,11 +1467,11 @@ impl DrawList {
         let idx = self.chrome_instances.len() as u32;
         self.chrome_instances.push(inst);
 
-        match self.color_cmds.last_mut() {
-            Some(ColorCmd::Chrome { instances }) if instances.end == idx => {
+        match self.paint_cmds.last_mut() {
+            Some(PaintCmd::Chrome { instances }) if instances.end == idx => {
                 instances.end = idx + 1;
             }
-            _ => self.color_cmds.push(ColorCmd::Chrome {
+            _ => self.paint_cmds.push(PaintCmd::Chrome {
                 instances: idx..idx + 1,
             }),
         }
@@ -1511,23 +1520,79 @@ impl DrawList {
         let idx = self.circle_instances.len() as u32;
         self.circle_instances.push(inst);
 
-        match self.color_cmds.last_mut() {
-            Some(ColorCmd::Circle { instances }) if instances.end == idx => {
+        match self.paint_cmds.last_mut() {
+            Some(PaintCmd::Circle { instances }) if instances.end == idx => {
                 instances.end = idx + 1;
             }
-            _ => self.color_cmds.push(ColorCmd::Circle {
+            _ => self.paint_cmds.push(PaintCmd::Circle {
                 instances: idx..idx + 1,
             }),
         }
     }
 
+    /// Ordered commands consumed by the renderer and debug report.
+    pub(crate) fn paint_commands(&self) -> &[PaintCmd] {
+        &self.paint_cmds
+    }
+
+    /// Index range for soup not yet represented by an explicit command.
+    ///
+    /// The renderer submits this once after the command stream. Keeping the
+    /// mapping here prevents non-rendering consumers from duplicating the
+    /// implicit-tail rule.
+    pub(crate) fn trailing_soup_range(&self) -> std::ops::Range<u32> {
+        self.soup_committed_indices..self.indices.len() as u32
+    }
+
+    fn push_paint_cmd(&mut self, cmd: PaintCmd) {
+        match (self.paint_cmds.last_mut(), &cmd) {
+            (Some(PaintCmd::Soup { indices: a }), PaintCmd::Soup { indices: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            (Some(PaintCmd::Chrome { instances: a }), PaintCmd::Chrome { instances: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            (Some(PaintCmd::Circle { instances: a }), PaintCmd::Circle { instances: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            (Some(PaintCmd::NineSlice { draws: a }), PaintCmd::NineSlice { draws: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            (Some(PaintCmd::Icon { draws: a }), PaintCmd::Icon { draws: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            #[cfg(feature = "phosphor-icons")]
+            (Some(PaintCmd::IconMsdf { draws: a }), PaintCmd::IconMsdf { draws: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            (Some(PaintCmd::Text { draws: a }), PaintCmd::Text { draws: b })
+                if a.end == b.start =>
+            {
+                a.end = b.end
+            }
+            _ => self.paint_cmds.push(cmd),
+        }
+    }
+
     /// Commit soup geometry appended since the last command into a `Soup`
-    /// command, so a following chrome instance draws after it. No-op if nothing
+    /// command, so a following command draws after it. No-op if nothing
     /// new was appended.
     fn flush_soup(&mut self) {
         let total = self.indices.len() as u32;
         if total > self.soup_committed_indices {
-            self.color_cmds.push(ColorCmd::Soup {
+            self.push_paint_cmd(PaintCmd::Soup {
                 indices: self.soup_committed_indices..total,
             });
             self.soup_committed_indices = total;
@@ -1537,6 +1602,7 @@ impl DrawList {
     /// Emit a thick arc band between `inner` and `outer` radius from
     /// `start_angle` to `end_angle` as a strip of `segments` quads (two
     /// triangles each).
+    #[allow(clippy::too_many_arguments)]
     fn stroked_arc(
         &mut self,
         center: (f32, f32),
@@ -1773,7 +1839,12 @@ impl DrawList {
                 .intersection(clip)
                 .or_else(|| Some(Rect::new(clip.x, clip.y, 0.0, 0.0)));
         }
+        self.flush_soup();
+        let start = self.texts.len() as u32;
         self.texts.push(block);
+        self.push_paint_cmd(PaintCmd::Text {
+            draws: start..start + 1,
+        });
     }
 
     /// Add a vector icon from any registered icon font, fit-centered into `rect`
@@ -1789,12 +1860,17 @@ impl DrawList {
             self.dropped_degenerate += 1;
             return;
         }
+        self.flush_soup();
+        let start = self.icons_msdf.len() as u32;
         self.icons_msdf.push(IconMsdf {
             local: rect,
             transform: self.current_transform(),
             glyph,
             tint: self.apply_tint(tint),
             clip: self.current_clip(),
+        });
+        self.push_paint_cmd(PaintCmd::IconMsdf {
+            draws: start..start + 1,
         });
     }
 
@@ -1814,6 +1890,8 @@ impl DrawList {
         let corners = self
             .current_transform()
             .transform_rect_corners(Rect::new(x, y, width, height));
+        self.flush_soup();
+        let start = self.icons.len() as u32;
         self.icons.push(IconDraw {
             corners,
             sprite: None,
@@ -1821,6 +1899,9 @@ impl DrawList {
             tint: self.current_tint(),
             clip: self.current_clip(),
             src: None,
+        });
+        self.push_paint_cmd(PaintCmd::Icon {
+            draws: start..start + 1,
         });
     }
 
@@ -1838,6 +1919,8 @@ impl DrawList {
         let corners = self
             .current_transform()
             .transform_rect_corners(Rect::new(x, y, width, height));
+        self.flush_soup();
+        let start = self.icons.len() as u32;
         self.icons.push(IconDraw {
             corners,
             sprite: Some(sprite),
@@ -1845,6 +1928,9 @@ impl DrawList {
             tint: self.apply_tint(tint),
             clip: self.current_clip(),
             src: None,
+        });
+        self.push_paint_cmd(PaintCmd::Icon {
+            draws: start..start + 1,
         });
     }
 
@@ -1870,6 +1956,8 @@ impl DrawList {
 
     fn push_image(&mut self, sprite: SpriteId, dest: Rect, src: Option<[f32; 4]>, tint: [f32; 4]) {
         let corners = self.current_transform().transform_rect_corners(dest);
+        self.flush_soup();
+        let start = self.icons.len() as u32;
         self.icons.push(IconDraw {
             corners,
             sprite: Some(sprite),
@@ -1878,10 +1966,15 @@ impl DrawList {
             clip: self.current_clip(),
             src,
         });
+        self.push_paint_cmd(PaintCmd::Icon {
+            draws: start..start + 1,
+        });
     }
 
     /// Add a nine-slice textured panel by name.
     pub fn nine_slice(&mut self, x: f32, y: f32, width: f32, height: f32, texture_key: &str) {
+        self.flush_soup();
+        let start = self.nine_slices.len() as u32;
         self.nine_slices.push(NineSliceDraw {
             local: Rect::new(x, y, width, height),
             transform: self.current_transform(),
@@ -1889,6 +1982,9 @@ impl DrawList {
             texture_key: texture_key.to_string(),
             tint: self.current_tint(),
             clip: self.current_clip(),
+        });
+        self.push_paint_cmd(PaintCmd::NineSlice {
+            draws: start..start + 1,
         });
     }
 
@@ -1902,6 +1998,8 @@ impl DrawList {
         height: f32,
         tint: [f32; 4],
     ) {
+        self.flush_soup();
+        let start = self.nine_slices.len() as u32;
         self.nine_slices.push(NineSliceDraw {
             local: Rect::new(x, y, width, height),
             transform: self.current_transform(),
@@ -1909,6 +2007,9 @@ impl DrawList {
             texture_key: String::new(),
             tint: self.apply_tint(tint),
             clip: self.current_clip(),
+        });
+        self.push_paint_cmd(PaintCmd::NineSlice {
+            draws: start..start + 1,
         });
     }
 }
@@ -1940,7 +2041,7 @@ mod tests {
     use crate::affine::Affine2;
     use crate::layout::Rect;
 
-    use super::{DrawList, PrimCounts};
+    use super::{DrawList, PaintCmd, PrimCounts};
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -2577,8 +2678,8 @@ mod tests {
         // One instance, one Chrome command, no soup geometry.
         assert_eq!(list.chrome_instances.len(), 1);
         assert_eq!(
-            list.color_cmds,
-            vec![super::ColorCmd::Chrome { instances: 0..1 }]
+            list.paint_cmds,
+            vec![super::PaintCmd::Chrome { instances: 0..1 }]
         );
         assert!(list.vertices.is_empty());
         let inst = list.chrome_instances[0];
@@ -2617,8 +2718,8 @@ mod tests {
         assert_eq!(list.chrome_instances.len(), 4);
         // All four collapse into a single contiguous Chrome run.
         assert_eq!(
-            list.color_cmds,
-            vec![super::ColorCmd::Chrome { instances: 0..4 }]
+            list.paint_cmds,
+            vec![super::PaintCmd::Chrome { instances: 0..4 }]
         );
     }
 
@@ -2632,12 +2733,12 @@ mod tests {
         list.line([0.0, 0.0], [10.0, 0.0], 2.0, [1.0; 4]); // 6 more indices
         list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
         assert_eq!(
-            list.color_cmds,
+            list.paint_cmds,
             vec![
-                super::ColorCmd::Soup { indices: 0..6 },
-                super::ColorCmd::Chrome { instances: 0..1 },
-                super::ColorCmd::Soup { indices: 6..12 },
-                super::ColorCmd::Chrome { instances: 1..2 },
+                super::PaintCmd::Soup { indices: 0..6 },
+                super::PaintCmd::Chrome { instances: 0..1 },
+                super::PaintCmd::Soup { indices: 6..12 },
+                super::PaintCmd::Chrome { instances: 1..2 },
             ]
         );
         // Trailing soup (after the last command) is implicit: committed cursor
@@ -2654,8 +2755,8 @@ mod tests {
         // The trailing line is NOT in a command; the renderer draws
         // indices[committed..total] as the trailing run.
         assert_eq!(
-            list.color_cmds,
-            vec![super::ColorCmd::Chrome { instances: 0..1 }]
+            list.paint_cmds,
+            vec![super::PaintCmd::Chrome { instances: 0..1 }]
         );
         assert_eq!(list.soup_committed_indices, 0);
         assert_eq!(list.indices.len(), 6);
@@ -2674,7 +2775,7 @@ mod tests {
         );
         // No instance recorded; geometry went into the soup, transformed.
         assert!(list.chrome_instances.is_empty());
-        assert!(list.color_cmds.is_empty());
+        assert!(list.paint_cmds.is_empty());
         assert!(!list.vertices.is_empty());
     }
 
@@ -2715,7 +2816,7 @@ mod tests {
         let mut list = DrawList::new();
         list.chrome_rect(Rect::new(0.0, 0.0, 0.0, 10.0), 4.0, 1.0, [1.0; 4], [0.0; 4]);
         assert!(list.chrome_instances.is_empty());
-        assert!(list.color_cmds.is_empty());
+        assert!(list.paint_cmds.is_empty());
     }
 
     #[test]
@@ -2724,10 +2825,10 @@ mod tests {
         list.quad(0.0, 0.0, 10.0, 10.0, [1.0; 4]);
         list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
         assert!(!list.chrome_instances.is_empty());
-        assert!(!list.color_cmds.is_empty());
+        assert!(!list.paint_cmds.is_empty());
         list.clear();
         assert!(list.chrome_instances.is_empty());
-        assert!(list.color_cmds.is_empty());
+        assert!(list.paint_cmds.is_empty());
         assert_eq!(list.soup_committed_indices, 0);
     }
 
@@ -2891,8 +2992,8 @@ mod tests {
     #[test]
     fn adjacent_scopes_own_disjoint_ranges_despite_command_run_merging() {
         // `push_chrome_instance` MERGES consecutive chrome draws into one
-        // `ColorCmd::Chrome` run by mutating the last command in place, so
-        // `color_cmds` is NOT append-only and must never be spanned. The
+        // `PaintCmd::Chrome` run by mutating the last command in place, so
+        // `paint_cmds` is NOT append-only and must never be spanned. The
         // instance buffers themselves are, which is what scopes rely on.
         let mut list = DrawList::new();
         list.push_debug_scope("a");
@@ -2904,7 +3005,7 @@ mod tests {
 
         // One merged draw command spanning both scopes...
         assert_eq!(
-            list.color_cmds.len(),
+            list.paint_cmds.len(),
             1,
             "runs merge across the scope boundary"
         );
@@ -3027,5 +3128,21 @@ mod tests {
         let br = n.transform.transform_point([10.0, 10.0]);
         assert!(approx(tl[0], 50.0) && approx(tl[1], 60.0));
         assert!(approx(br[0], 70.0) && approx(br[1], 80.0));
+    }
+
+    #[test]
+    fn paint_stream_records_and_coalesces_all_payload_kinds() {
+        let mut d = DrawList::new();
+        d.nine_slice_id(7, 0.0, 0.0, 10.0, 10.0, [1.0; 4]);
+        d.nine_slice_id(7, 10.0, 0.0, 10.0, 10.0, [1.0; 4]);
+        d.icon("first", 0.0, 0.0, 8.0, 8.0);
+        d.icon("second", 8.0, 0.0, 8.0, 8.0);
+        d.triangle((0.0, 0.0), (1.0, 0.0), (0.0, 1.0), [1.0; 4]);
+        d.quad(0.0, 0.0, 4.0, 4.0, [1.0; 4]);
+
+        assert!(matches!(&d.paint_cmds[0], PaintCmd::NineSlice { draws } if draws == &(0..2)));
+        assert!(matches!(&d.paint_cmds[1], PaintCmd::Icon { draws } if draws == &(0..2)));
+        assert!(matches!(&d.paint_cmds[2], PaintCmd::Soup { indices } if indices == &(0..3)));
+        assert!(matches!(&d.paint_cmds[3], PaintCmd::Chrome { instances } if instances == &(0..1)));
     }
 }

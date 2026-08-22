@@ -227,25 +227,47 @@ impl Button {
         self
     }
 
-    /// Draw the button at `rect` and return true if clicked this frame.
+    /// Draw the button at `rect` and return true if activated this frame.
+    ///
+    /// This compatibility wrapper delegates to [`draw_response`](Self::draw_response).
     pub fn draw(&self, rect: Rect, ctx: &mut DrawContext) -> bool {
+        self.draw_response(rect, ctx).clicked
+    }
+
+    /// Draw the button and return its complete interaction response. When the
+    /// context has a retained interaction scene and this button is
+    /// [`focusable`](Self::focusable), its stable focus ID also identifies its hit
+    /// region; otherwise interaction retains the legacy immediate rect test.
+    pub fn draw_response(&self, rect: Rect, ctx: &mut DrawContext) -> crate::Response {
+        let response_id = crate::WidgetId(self.focus_id.unwrap_or(0));
         if rect.width <= 0.0 || rect.height <= 0.0 {
-            return false;
+            return crate::Response::idle(response_id, rect);
         }
         // Pushed before `ctx.styles()` / the `&mut *ctx.draw_list` reborrow
         // below, which hold `ctx` for the rest of the body.
         ctx.push_debug_scope_rect(crate::widgets::scope_name("Button", &self.label), rect);
+        let retained = self
+            .focus_id
+            .filter(|_| ctx.has_interactions())
+            .map(|id| ctx.interact(crate::WidgetId(id), rect, self.enabled));
+        let retained = retained.filter(|response| response.resolved);
         let input = ctx.input;
 
-        // Honor layer capture so a button under a modal/popup doesn't react to
-        // clicks meant for the overlay.
-        let hovered =
-            self.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
+        // Legacy raw DrawContexts retain immediate behavior. Interaction-backed
+        // widgets use the sole topmost winner from the previous presented scene.
+        let hovered = retained.as_ref().map_or_else(
+            || self.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y),
+            |response| response.hovered,
+        );
         if hovered {
             ctx.request_cursor(crate::CursorIcon::Pointer);
         }
-        let pressed = hovered && input.mouse_down;
-        let clicked = hovered && input.mouse_clicked;
+        let pressed = retained
+            .as_ref()
+            .map_or(hovered && input.mouse_down, |r| r.pressed);
+        let clicked = retained
+            .as_ref()
+            .map_or(hovered && input.mouse_clicked, |r| r.clicked);
         let key_activate = input.nav.confirm;
         let v = ButtonVisual {
             enabled: self.enabled,
@@ -302,7 +324,21 @@ impl Button {
         }
 
         ctx.pop_debug_scope();
-        activated
+        let mut response = retained.unwrap_or_else(|| crate::Response {
+            id: self.focus_id.map(crate::WidgetId),
+            rect,
+            resolved: false,
+            hovered,
+            pressed,
+            clicked,
+            released: hovered && input.mouse_released,
+            held: hovered && input.mouse_held,
+            double_clicked: hovered && input.mouse_double_clicked,
+            local_pos: hovered.then_some([input.mouse_x - rect.x, input.mouse_y - rect.y]),
+            scroll_delta: 0.0,
+        });
+        response.clicked = activated;
+        response
     }
 
     /// Draw a chrome button at a layout-computed rect. Returns true if clicked.
@@ -688,6 +724,37 @@ mod tests {
             focus.is_focused(7),
             "clicking a focusable button focuses it"
         );
+    }
+
+    #[test]
+    fn retained_scene_targets_only_the_later_overlapping_button() {
+        let theme = Theme::default();
+        let idle = InputState::default();
+        let mut scene = crate::InteractionScene::new();
+        scene.begin_frame(&idle);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        {
+            let mut ctx =
+                with_ctx(&mut list, &mut focus, &theme, &idle).with_interactions(&mut scene);
+            Button::new("Back").focusable(1).draw(rect(), &mut ctx);
+            Button::new("Front").focusable(2).draw(rect(), &mut ctx);
+        }
+        scene.end_frame();
+
+        let input = input_at(50.0, 25.0, true, true);
+        scene.begin_frame(&input);
+        list.clear();
+        let mut ctx = with_ctx(&mut list, &mut focus, &theme, &input).with_interactions(&mut scene);
+        let back = Button::new("Back")
+            .focusable(1)
+            .draw_response(rect(), &mut ctx);
+        let front = Button::new("Front")
+            .focusable(2)
+            .draw_response(rect(), &mut ctx);
+        assert!(!back.clicked && !back.hovered);
+        assert!(front.clicked && front.hovered);
+        assert!(focus.is_focused(2));
     }
 
     #[test]

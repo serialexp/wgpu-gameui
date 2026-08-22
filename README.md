@@ -174,17 +174,18 @@ DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
 ### Rendering pipeline
 
 `UiRenderer` owns the wgpu pipelines, a dynamic sprite atlas, a nine-slice
-metadata table, and the MSDF glyph atlas. `render(&DrawList)` tessellates and
-encodes four sub-passes in order:
+metadata table, and the MSDF glyph atlas. `render(&DrawList)` preserves primitive
+submission order across nine-slices, coloured geometry, sprite/MSDF icons, and
+text. Adjacent compatible submissions are coalesced into ranged paint commands,
+but commands are never regrouped across another primitive family: a later
+widget therefore paints completely over an earlier overlapping widget.
 
-```
-nine-slices → colored quads → icons → MSDF text
-```
-
-`render_layers(&LayerStack)` does the same for each layer in z-order, so a
-popup's quads correctly overlap a base layer's text. The renderer never samples
-its own framebuffer; `blur_backdrop` takes an app-provided scene texture for
-frosted-glass effects.
+`render_layers(&LayerStack)` renders each ordered list in layer order, so outer
+popup/modal/tooltip ordering remains explicit. Direct mutation of `DrawList`'s
+public payload vectors cannot record submission order; a wholly unrecorded list
+retains the legacy fixed-pass compatibility path. Prefer the drawing methods for
+new code. The renderer never samples its own framebuffer; `blur_backdrop` takes
+an app-provided scene texture for frosted-glass effects.
 
 ### Image & atlas lifecycle
 

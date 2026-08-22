@@ -59,23 +59,23 @@
 //! sit a pixel apart by construction.) To get alignment analysis over a region,
 //! name it: `ui.debug_scope("Toolbar", |ui| …)`.
 //!
-//! # Z order is not buffer order
+//! # Tree order is paint submission order
 //!
-//! The renderer draws pass by pass — nine-slices, then colour geometry, then
-//! atlas icons, then MSDF icons, then text (see `UiRenderer::render_one`). A
-//! quad pushed *after* a label still renders *under* it. Nodes therefore carry a
-//! [`RenderPass`], and the report orders by it rather than by insertion.
+//! The renderer walks the [`DrawList`] paint-command stream, which can freely
+//! interleave nine-slices, colour geometry, icons, and text. Sibling nodes (and
+//! scopes through their earliest painted descendant) therefore appear in that
+//! same submission order. [`RenderPass`] remains on each leaf as useful pipeline
+//! metadata; it no longer determines tree order.
 
 use crate::layer::LayerStack;
 use crate::layout::Rect;
 use crate::text::{TextAlign, TextBlock};
-use crate::widgets::{DrawList, PrimCounts};
+use crate::widgets::{DrawList, PaintCmd, PrimCounts};
 
-/// Which render pass draws a node, i.e. its coarse Z order.
+/// Which pipeline family draws a node.
 ///
-/// The renderer runs these bottom-to-top in this exact order, so a node in a
-/// later pass covers one in an earlier pass regardless of the order the two were
-/// pushed onto the [`DrawList`].
+/// This is metadata, not an ordering key: the submission-order renderer may
+/// interleave these families arbitrarily through its paint-command stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RenderPass {
     /// Nine-slice backgrounds (drawn first, under everything).
@@ -160,7 +160,7 @@ pub struct DebugNode {
     pub named: bool,
     /// What this node is.
     pub kind: NodeKind,
-    /// Which pass draws it (its coarse Z order).
+    /// Which pipeline family draws it (metadata, not tree order).
     pub pass: RenderPass,
     /// The area actually painted, in world space. For text this is the **ink**
     /// box (alignment resolved), not the layout box — see
@@ -618,8 +618,8 @@ impl LintConfig {
 pub struct DebugReport {
     /// The viewport the frame was laid out for.
     pub screen: Rect,
-    /// Every node, ordered by [`RenderPass`] then by insertion. Parents always
-    /// precede their children.
+    /// Every node in paint-command submission order. Scopes are positioned by
+    /// their earliest painted descendant; parents always precede children.
     pub nodes: Vec<DebugNode>,
     /// Everything the enabled lints found.
     pub problems: Vec<Problem>,
@@ -865,8 +865,8 @@ struct RawNode {
     effects: Vec<&'static str>,
     ellipsize: bool,
     layer: Option<usize>,
-    /// Sort key within a parent: render pass first, then insertion.
-    order: (RenderPass, usize),
+    /// Sort key within a parent: list/layer, paint command, then item in run.
+    order: (usize, usize, usize),
 }
 
 impl RawNode {
@@ -887,7 +887,7 @@ impl RawNode {
             effects: Vec::new(),
             ellipsize: false,
             layer: None,
-            order: (pass, index),
+            order: (0, usize::MAX, index),
         }
     }
 }
@@ -1185,7 +1185,44 @@ fn collect_nodes(
         owner(scopes, final_counts, scope_base, i, pick).or(root)
     };
 
-    // ---- 2. Leaf nodes, in render-pass order. ----
+    // Map each payload to the command which submits it. Public payload arrays
+    // can still be filled directly; those entries retain the renderer's legacy
+    // family order after the explicit stream.
+    let stream_len = list.paint_commands().len();
+    let mut nine_order = vec![(stream_len, 0); list.nine_slices.len()];
+    let mut chrome_order = vec![(stream_len + 1, 0); list.chrome_instances.len()];
+    let mut circle_order = vec![(stream_len + 1, 0); list.circle_instances.len()];
+    let mut icon_order = vec![(stream_len + 2, 0); list.icons.len()];
+    #[cfg(feature = "phosphor-icons")]
+    let mut msdf_order = vec![(stream_len + 3, 0); list.icons_msdf.len()];
+    let mut text_order = vec![(stream_len + 4, 0); list.texts.len()];
+    let mut soup_runs = Vec::new();
+    for (command, cmd) in list.paint_commands().iter().enumerate() {
+        let map = |range: &std::ops::Range<u32>, orders: &mut [(usize, usize)]| {
+            for (within, i) in (range.start as usize..range.end as usize).enumerate() {
+                if let Some(order) = orders.get_mut(i) {
+                    *order = (command, within);
+                }
+            }
+        };
+        match cmd {
+            PaintCmd::Soup { indices } => soup_runs.push((command, indices.clone())),
+            PaintCmd::Chrome { instances } => map(instances, &mut chrome_order),
+            PaintCmd::Circle { instances } => map(instances, &mut circle_order),
+            PaintCmd::NineSlice { draws } => map(draws, &mut nine_order),
+            PaintCmd::Icon { draws } => map(draws, &mut icon_order),
+            #[cfg(feature = "phosphor-icons")]
+            PaintCmd::IconMsdf { draws } => map(draws, &mut msdf_order),
+            PaintCmd::Text { draws } => map(draws, &mut text_order),
+        }
+    }
+    let trailing = list.trailing_soup_range();
+    if !trailing.is_empty() {
+        soup_runs.push((stream_len, trailing));
+    }
+    let list_order = layer.map_or(0, |i| i + 1);
+
+    // ---- 2. Leaf nodes, in paint-command submission order. ----
 
     for (i, ns) in list.nine_slices.iter().enumerate() {
         let name = if ns.texture_key.is_empty() {
@@ -1200,6 +1237,7 @@ fn collect_nodes(
         n.clip = ns.clip;
         n.counts.nine_slices = 1;
         n.layer = layer;
+        n.order = (list_order, nine_order[i].0, nine_order[i].1);
         out.push(n);
     }
 
@@ -1220,6 +1258,7 @@ fn collect_nodes(
         if c.bg[3] <= 0.0 && c.border[3] <= 0.0 {
             n.effects.push("invisible");
         }
+        n.order = (list_order, chrome_order[i].0, chrome_order[i].1);
         out.push(n);
     }
 
@@ -1237,16 +1276,25 @@ fn collect_nodes(
         n.clip = clip_from_parts(c.clip, c.params[0]);
         n.counts.circle_instances = 1;
         n.layer = layer;
+        n.order = (list_order, circle_order[i].0, circle_order[i].1);
         out.push(n);
     }
 
-    // Soup vertices are individually meaningless; aggregate them per innermost
-    // scope so the geometry still shows up in the bounds without flooding the
-    // tree with one node per triangle.
-    {
+    // Soup vertices are individually meaningless. Aggregate each command run
+    // separately (and then by owner), so an intervening command remains visible
+    // in tree order instead of being swallowed by one cross-run geometry node.
+    let mut geometry_index = 0;
+    for (command, indices) in soup_runs {
         use std::collections::BTreeMap;
         let mut groups: BTreeMap<Option<usize>, (Rect, usize, Option<Rect>)> = BTreeMap::new();
-        for (i, v) in list.vertices.iter().enumerate() {
+        let mut vertex_ids = std::collections::BTreeSet::new();
+        for &index in &list.indices[indices.start as usize..indices.end as usize] {
+            vertex_ids.insert(index as usize);
+        }
+        for i in vertex_ids {
+            let Some(v) = list.vertices.get(i) else {
+                continue;
+            };
             let parent = own(i, |c| c.vertices);
             let entry = groups.entry(parent).or_insert((
                 Rect::zero(),
@@ -1254,7 +1302,6 @@ fn collect_nodes(
                 clip_from_parts(v.clip, v.clip_enabled),
             ));
             let p = Rect::new(v.position[0], v.position[1], 0.0, 0.0);
-            // Points have no area, so fold manually rather than via `union`.
             entry.0 = if entry.1 == 0 {
                 p
             } else {
@@ -1266,19 +1313,21 @@ fn collect_nodes(
             };
             entry.1 += 1;
         }
-        for (gi, (parent, (bounds, count, clip))) in groups.into_iter().enumerate() {
+        for (within, (parent, (bounds, count, clip))) in groups.into_iter().enumerate() {
             let mut n = RawNode::new(
-                format!("geometry#{gi}"),
+                format!("geometry#{geometry_index}"),
                 false,
                 NodeKind::Geometry,
                 RenderPass::Color,
-                gi,
+                geometry_index,
             );
+            geometry_index += 1;
             n.parent = parent;
             n.bounds = bounds;
             n.clip = clip;
             n.counts.vertices = count;
             n.layer = layer;
+            n.order = (list_order, command, within);
             out.push(n);
         }
     }
@@ -1296,6 +1345,7 @@ fn collect_nodes(
         n.clip = icon.clip;
         n.counts.icons = 1;
         n.layer = layer;
+        n.order = (list_order, icon_order[i].0, icon_order[i].1);
         out.push(n);
     }
 
@@ -1314,6 +1364,7 @@ fn collect_nodes(
         n.clip = icon.clip;
         n.counts.icons_msdf = 1;
         n.layer = layer;
+        n.order = (list_order, msdf_order[i].0, msdf_order[i].1);
         out.push(n);
     }
 
@@ -1344,6 +1395,7 @@ fn collect_nodes(
         n.effects = text_effects(block);
         n.ellipsize = block.ellipsize;
         n.layer = layer;
+        n.order = (list_order, text_order[i].0, text_order[i].1);
         out.push(n);
     }
 
@@ -1356,6 +1408,21 @@ fn collect_nodes(
 
     // ---- 4. Nest orphans by geometric containment. ----
     nest_by_containment(out, base, root);
+
+    // A scope occupies the paint position of its earliest descendant while
+    // retaining ownership, bounds, and parent-before-child tree structure.
+    for si in (0..scopes.len()).rev() {
+        let node = scope_base + si;
+        if let Some(order) = out
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != node && descends_from(out, *i, node))
+            .map(|(_, n)| n.order)
+            .min()
+        {
+            out[node].order = order;
+        }
+    }
 
     // ---- 5. Attribute list-wide degenerate drops not owned by any scope. ----
     let scoped_drops: usize = scopes
@@ -1485,8 +1552,8 @@ fn finalize(raw: Vec<RawNode>) -> Vec<DebugNode> {
         }
     }
     // Any node left unvisited (a cycle we refused to follow) is emitted flat.
-    for i in 0..n {
-        if !seen[i] {
+    for (i, &visited) in seen.iter().enumerate().take(n) {
+        if !visited {
             order.push(i);
         }
     }
@@ -1631,26 +1698,26 @@ fn lint(nodes: &[DebugNode], screen: Rect, cfg: &LintConfig, text_measured: bool
 
         // Text checks need real shaped extents; a report built without
         // measuring has only the layout box, where these would be meaningless.
-        if text_measured && node.kind == NodeKind::Text {
-            if let Some(text_box) = node.text_box {
-                if node.ellipsize {
-                    if cfg.text_ellipsized && bounds.width > text_box.width + tol {
-                        out.push(Problem::TextEllipsized {
-                            node: node.id,
-                            wanted: bounds.width,
-                            available: text_box.width,
-                        });
-                    }
-                } else if cfg.text_overflows_box
-                    && (bounds.width > text_box.width + tol
-                        || bounds.height > text_box.height + tol)
-                {
-                    out.push(Problem::TextOverflowsBox {
+        if text_measured
+            && node.kind == NodeKind::Text
+            && let Some(text_box) = node.text_box
+        {
+            if node.ellipsize {
+                if cfg.text_ellipsized && bounds.width > text_box.width + tol {
+                    out.push(Problem::TextEllipsized {
                         node: node.id,
-                        ink: bounds,
-                        text_box,
+                        wanted: bounds.width,
+                        available: text_box.width,
                     });
                 }
+            } else if cfg.text_overflows_box
+                && (bounds.width > text_box.width + tol || bounds.height > text_box.height + tol)
+            {
+                out.push(Problem::TextOverflowsBox {
+                    node: node.id,
+                    ink: bounds,
+                    text_box,
+                });
             }
         }
     }
@@ -1690,7 +1757,9 @@ enum Axis {
 }
 
 /// The six edges alignment is checked on, with the axis each measures along.
-const ALIGN_EDGES: [(&str, Axis, fn(&Rect) -> f32); 6] = [
+type AlignEdge = (&'static str, Axis, fn(&Rect) -> f32);
+
+const ALIGN_EDGES: [AlignEdge; 6] = [
     ("left", Axis::X, |r| r.x),
     ("right", Axis::X, |r| r.right()),
     ("center_x", Axis::X, |r| r.x + r.width * 0.5),
@@ -1956,10 +2025,10 @@ impl DebugReport {
                 node.kind.label(),
                 fmt_rect(node.bounds)
             ));
-            if let Some(d) = node.declared {
-                if d != node.bounds {
-                    s.push_str(&format!("  declared={}", fmt_rect(d)));
-                }
+            if let Some(d) = node.declared
+                && d != node.bounds
+            {
+                s.push_str(&format!("  declared={}", fmt_rect(d)));
             }
             if let Some(c) = node.clip {
                 s.push_str(&format!("  clip={}", fmt_rect(c)));
@@ -2399,9 +2468,7 @@ mod tests {
     }
 
     #[test]
-    fn nodes_are_ordered_by_render_pass_not_insertion() {
-        // Text is pushed first but renders last; the report must reflect that,
-        // or any reasoning about what covers what is backwards.
+    fn nodes_are_ordered_by_paint_submission_across_families() {
         let mut list = DrawList::new();
         list.text(TextBlock::new("label", 0.0, 0.0));
         list.chrome_rect(
@@ -2413,17 +2480,26 @@ mod tests {
         );
 
         let report = DebugReport::from_draw_list(&list, SCREEN);
-        let text_pos = report
-            .nodes
-            .iter()
-            .position(|n| n.kind == NodeKind::Text)
-            .unwrap();
-        let chrome_pos = report
-            .nodes
-            .iter()
-            .position(|n| n.kind == NodeKind::Chrome)
-            .unwrap();
-        assert!(chrome_pos < text_pos, "chrome renders under text");
+        let kinds: Vec<_> = report.nodes.iter().map(|n| n.kind).collect();
+        assert_eq!(kinds, [NodeKind::Text, NodeKind::Chrome]);
+        assert_eq!(report.nodes[0].pass, RenderPass::Text);
+    }
+
+    #[test]
+    fn soup_runs_separated_by_another_command_stay_separate() {
+        let mut list = DrawList::new();
+        list.triangle((0.0, 0.0), (2.0, 0.0), (0.0, 2.0), [1.0; 4]);
+        list.text(TextBlock::new("middle", 10.0, 10.0));
+        list.triangle((20.0, 20.0), (22.0, 20.0), (20.0, 22.0), [1.0; 4]);
+
+        let report = DebugReport::from_draw_list(&list, SCREEN);
+        let kinds: Vec<_> = report.nodes.iter().map(|n| n.kind).collect();
+        assert_eq!(
+            kinds,
+            [NodeKind::Geometry, NodeKind::Text, NodeKind::Geometry]
+        );
+        assert_eq!(report.nodes[0].name, "geometry#0");
+        assert_eq!(report.nodes[2].name, "geometry#1");
     }
 
     // ---- Lints ----

@@ -163,6 +163,10 @@ pub struct UiState {
     pub focus: FocusState,
     /// Open-dropdown / selection state for `Dropdown` widgets.
     pub dropdowns: DropdownState,
+    /// Retained hit geometry used for topmost-first pointer dispatch. Input is
+    /// resolved against the previous completed frame while this frame registers
+    /// replacement geometry.
+    pub interactions: crate::InteractionScene,
     /// Scroll offsets for `ScrollView` widgets.
     pub scroll: ScrollState,
     /// Expansion + selection state for `tree_node`/`tree_leaf` verbs.
@@ -227,6 +231,7 @@ impl UiState {
         nav: &dyn crate::NavMap,
     ) {
         nav.apply(input);
+        self.interactions.begin_frame(input);
         self.focus.begin_frame(input);
         self.tree.begin_frame(input);
         self.dropdowns.begin_frame(input);
@@ -246,6 +251,7 @@ impl UiState {
         self.focus.end_frame(None);
         // Dismiss the open dropdown on Escape or click-outside.
         self.dropdowns.end_frame();
+        self.interactions.end_frame();
     }
 
     /// Push the popup layer for the open dropdown (using last frame's geometry)
@@ -1283,10 +1289,16 @@ impl<'a> UiContext<'a> {
                 .expect("text_button requires interactive state");
             // Two disjoint `UiState` fields at once: focus (Tab ring) + anim
             // (hover/press easing). The eased path reuses `fid` as the anim key.
-            let UiState { focus, anim, .. } = &mut **state;
+            let UiState {
+                focus,
+                anim,
+                interactions,
+                ..
+            } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
-                .with_animations(anim);
+                .with_animations(anim)
+                .with_interactions(interactions);
             button.focusable(fid).animated(fid).draw(local, &mut ctx)
         };
         self.advance(height);
@@ -1318,10 +1330,16 @@ impl<'a> UiContext<'a> {
                 .state
                 .as_mut()
                 .expect("icon_button requires interactive state");
-            let UiState { focus, anim, .. } = &mut **state;
+            let UiState {
+                focus,
+                anim,
+                interactions,
+                ..
+            } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
-                .with_animations(anim);
+                .with_animations(anim)
+                .with_interactions(interactions);
             let clicked = Button::new("")
                 .focusable(fid)
                 .animated(fid)
@@ -1876,10 +1894,7 @@ impl<'a> UiContext<'a> {
     /// Draw a row of tab buttons. Returns `Some(index)` when a tab was clicked
     /// this frame (the caller updates `active`). Auto-advances by the tab height.
     pub fn tabs(&mut self, labels: &[&str], active: usize) -> Option<usize> {
-        let (input, theme) = match self.interactive_refs() {
-            Some(v) => v,
-            None => return None,
-        };
+        let (input, theme) = self.interactive_refs()?;
         let width = self.default_field_width();
         let tab_height = theme.font_size + theme.padding * 2.0;
         let world = self.place_rect(width, tab_height);
@@ -2118,7 +2133,7 @@ impl<'a> UiContext<'a> {
             Some(s) => s,
             None => return,
         };
-        sv.end(&mut state.scroll, list, &style, &mut local_input, begun);
+        sv.end(&mut state.scroll, list, &style, &local_input, begun);
         // Now that `end` has popped the scroll transform, move the layout cursor
         // past the whole viewport so the next verb does not draw over it.
         if let Some(h) = self.pending_scroll_height.take() {

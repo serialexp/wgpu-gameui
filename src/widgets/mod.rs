@@ -36,9 +36,9 @@ pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
 pub use drag::{DragCapture, DragId};
 pub use drag_handle::{DragHandle, DragHandleOutput};
-pub(crate) use draw_list::ColorCmd;
 #[cfg(feature = "phosphor-icons")]
 pub use draw_list::IconMsdf;
+pub(crate) use draw_list::PaintCmd;
 pub use draw_list::{
     ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw, NineSliceDraw, NineSliceId,
     PrimCounts, Vertex,
@@ -117,6 +117,10 @@ pub struct DrawContext<'a> {
     /// [`CursorIcon`](crate::CursorIcon) after the frame and applies it to its
     /// window.
     pub cursor: Option<&'a mut crate::CursorState>,
+    /// Optional retained interaction scene. When attached, widgets with stable
+    /// IDs register their local geometry here and receive topmost-first responses
+    /// resolved against the previous completed frame.
+    pub interactions: Option<&'a mut crate::InteractionScene>,
 }
 
 impl<'a> DrawContext<'a> {
@@ -140,6 +144,7 @@ impl<'a> DrawContext<'a> {
             style: None,
             animations: None,
             cursor: None,
+            interactions: None,
         }
     }
 
@@ -170,6 +175,45 @@ impl<'a> DrawContext<'a> {
     pub fn with_cursor(mut self, cursor: &'a mut crate::CursorState) -> Self {
         self.cursor = Some(cursor);
         self
+    }
+
+    /// Attach the retained interaction scene for this surface. Widgets that use
+    /// [`interact`](Self::interact) then share their exact local allocation,
+    /// active transform, clip, and layer ordering with hit testing.
+    pub fn with_interactions(mut self, interactions: &'a mut crate::InteractionScene) -> Self {
+        self.interactions = Some(interactions);
+        self
+    }
+
+    /// Register a rectangular interactive allocation and return the response
+    /// resolved from the same widget ID in the previous completed frame.
+    pub fn interact(
+        &mut self,
+        id: impl Into<crate::WidgetId>,
+        rect: crate::layout::Rect,
+        enabled: bool,
+    ) -> crate::Response {
+        let id = id.into();
+        let transform = self.draw_list.current_transform();
+        let clip = self.draw_list.current_clip();
+        let layer = self.active_layer.map_or(0, |index| index as u32 + 1);
+        match self.interactions.as_deref_mut() {
+            Some(scene) => scene.register(
+                id,
+                crate::HitShape::Rect(rect),
+                transform,
+                clip,
+                layer,
+                enabled,
+                crate::PointerPolicy::Target,
+            ),
+            None => crate::Response::idle(id, rect),
+        }
+    }
+
+    /// Whether this context has retained interaction dispatch attached.
+    pub fn has_interactions(&self) -> bool {
+        self.interactions.is_some()
     }
 
     /// Request an OS cursor shape for this frame on behalf of a hovered widget.

@@ -48,6 +48,16 @@
 // and method must carry rustdoc. `warn` (not `deny`) so a work-in-progress
 // build still compiles, but the project's warning-clean bar surfaces any gap.
 #![warn(missing_docs)]
+// Tests intentionally build input snapshots incrementally to make event intent
+// obvious, and use explicit `drop(ctx)` to end mutable borrows before assertions.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::drop_non_drop,
+        clippy::field_reassign_with_default,
+        clippy::items_after_test_module
+    )
+)]
 
 mod text;
 
@@ -72,6 +82,7 @@ mod cursor;
 pub mod debug;
 mod drag_tracker;
 mod frame;
+mod interaction;
 pub mod layer;
 pub mod layout;
 mod nav;
@@ -91,6 +102,9 @@ pub use cursor::{CursorIcon, CursorState};
 pub use debug::DebugReport;
 pub use drag_tracker::{DEFAULT_DRAG_THRESHOLD, DragTracker};
 pub use frame::Frame;
+pub use interaction::{
+    HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
+};
 pub use layer::{Layer, LayerKind, LayerStack};
 pub use nav::{GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard};
 pub use projection::{world_to_screen, world_to_screen_na};

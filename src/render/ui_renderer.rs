@@ -14,7 +14,7 @@ use crate::render::blur::{Backdrop, Blur, BlurParams};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
 use crate::text::FontSystemHandle;
 use crate::widgets::{
-    ChromeInstance, CircleInstance, ColorCmd, DrawList, IconDraw, NineSliceDraw, NineSliceId,
+    ChromeInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, NineSliceId, PaintCmd,
     Vertex,
 };
 
@@ -949,6 +949,7 @@ impl UiRenderer {
     /// by `scale_factor` when building its projection, so geometry stays the same
     /// logical size while text rasterizes against the higher-resolution
     /// framebuffer (the MSDF path sharpens automatically). Pass `1.0` to disable.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -971,6 +972,7 @@ impl UiRenderer {
     /// Render a `LayerStack`: base list first, then each layer in push order.
     /// Each layer goes through the full 4-pass pipeline so a higher-z layer's
     /// quads correctly overlap a lower-z layer's text/icons.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_layers(
         &mut self,
         device: &wgpu::Device,
@@ -1116,69 +1118,84 @@ impl UiRenderer {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_render_one").entered();
 
-        // Layering, bottom→top: nine-slice backgrounds, colored quads (panels,
-        // rounded-rect fills, sliders, custom shapes), icons, text. Each
-        // requires its own pass because consecutive layers swap pipelines or
-        // change vertex formats.
-
-        // ---------- 1. Nine-slices (instanced) ----------
-        {
-            #[cfg(feature = "tracy")]
-            let _s = tracing::info_span!("gameui_nine_slices").entered();
-            let instances = self.build_nine_slice_instances(&draw_list.nine_slices);
-            if !instances.is_empty() {
-                self.draw_nine_slices(device, queue, encoder, view, &instances);
+        // Compatibility for callers which fill the public payload arrays directly.
+        // Normal enqueue APIs always populate the ordered stream.
+        if draw_list.paint_cmds.is_empty() {
+            let nine = self.build_nine_slice_instances(&draw_list.nine_slices);
+            if !nine.is_empty() {
+                self.draw_nine_slices(device, queue, encoder, view, &nine);
             }
-        }
-
-        // ---------- 2. Colored quads (+ instanced chrome) ----------
-        {
-            #[cfg(feature = "tracy")]
-            let _s = tracing::info_span!("gameui_color_quads").entered();
-            if draw_list.color_cmds.is_empty() {
-                // No chrome instances recorded: original single-draw fast path.
-                if !draw_list.vertices.is_empty() && !draw_list.indices.is_empty() {
-                    self.draw_color(
-                        device,
-                        queue,
-                        encoder,
-                        view,
-                        &draw_list.vertices,
-                        &draw_list.indices,
-                    );
-                }
-            } else {
-                self.draw_color_interleaved(device, queue, encoder, view, draw_list);
+            if !draw_list.vertices.is_empty() && !draw_list.indices.is_empty() {
+                self.draw_color(
+                    device,
+                    queue,
+                    encoder,
+                    view,
+                    &draw_list.vertices,
+                    &draw_list.indices,
+                );
             }
-        }
-
-        // ---------- 3. Icons (instanced) ----------
-        {
-            #[cfg(feature = "tracy")]
-            let _s = tracing::info_span!("gameui_icons").entered();
-            let instances = self.build_icon_instances(&draw_list.icons);
-            if !instances.is_empty() {
-                self.draw_icons(device, queue, encoder, view, &instances);
+            let icons = self.build_icon_instances(&draw_list.icons);
+            if !icons.is_empty() {
+                self.draw_icons(device, queue, encoder, view, &icons);
             }
-        }
-
-        // ---------- 3b. MSDF vector icons (Phosphor) ----------
-        // After sprite icons, before text — icons sit under text just like sprite
-        // icons do. Shares the text renderer's MSDF pipeline/uniform/vbo.
-        #[cfg(feature = "phosphor-icons")]
-        {
-            #[cfg(feature = "tracy")]
-            let _s = tracing::info_span!("gameui_icons_msdf").entered();
+            #[cfg(feature = "phosphor-icons")]
             self.text_renderer
                 .render_icons(device, queue, encoder, view, &draw_list.icons_msdf);
-        }
-
-        // ---------- 4. Text ----------
-        {
-            #[cfg(feature = "tracy")]
-            let _s = tracing::info_span!("gameui_text").entered();
             self.text_renderer
                 .render(device, queue, encoder, view, &draw_list.texts);
+            return;
+        }
+
+        for cmd in &draw_list.paint_cmds {
+            match cmd {
+                PaintCmd::Soup { .. } | PaintCmd::Chrome { .. } | PaintCmd::Circle { .. } => {
+                    self.draw_color_interleaved(device, queue, encoder, view, draw_list, cmd);
+                }
+                PaintCmd::NineSlice { draws } => {
+                    let instances = self.build_nine_slice_instances(
+                        &draw_list.nine_slices[draws.start as usize..draws.end as usize],
+                    );
+                    if !instances.is_empty() {
+                        self.draw_nine_slices(device, queue, encoder, view, &instances);
+                    }
+                }
+                PaintCmd::Icon { draws } => {
+                    let instances = self.build_icon_instances(
+                        &draw_list.icons[draws.start as usize..draws.end as usize],
+                    );
+                    if !instances.is_empty() {
+                        self.draw_icons(device, queue, encoder, view, &instances);
+                    }
+                }
+                #[cfg(feature = "phosphor-icons")]
+                PaintCmd::IconMsdf { draws } => self.text_renderer.render_icons(
+                    device,
+                    queue,
+                    encoder,
+                    view,
+                    &draw_list.icons_msdf[draws.start as usize..draws.end as usize],
+                ),
+                PaintCmd::Text { draws } => self.text_renderer.render(
+                    device,
+                    queue,
+                    encoder,
+                    view,
+                    &draw_list.texts[draws.start as usize..draws.end as usize],
+                ),
+            }
+        }
+        // Public arrays can still be appended directly after normal API calls.
+        let committed = draw_list.soup_committed_indices as usize;
+        if draw_list.indices.len() > committed {
+            self.draw_color(
+                device,
+                queue,
+                encoder,
+                view,
+                &draw_list.vertices,
+                &draw_list.indices[committed..],
+            );
         }
     }
 
@@ -1319,8 +1336,8 @@ impl UiRenderer {
         let (v_off, i_off) = self.ensure_color_capacity(device, verts.len(), indices.len());
         queue.write_buffer(&self.color_vbo, v_off, bytemuck::cast_slice(verts));
         queue.write_buffer(&self.color_ibo, i_off, bytemuck::cast_slice(indices));
-        self.color_vbo_offset = v_off + (verts.len() * std::mem::size_of::<Vertex>()) as u64;
-        self.color_ibo_offset = i_off + (indices.len() * std::mem::size_of::<u32>()) as u64;
+        self.color_vbo_offset = v_off + std::mem::size_of_val(verts) as u64;
+        self.color_ibo_offset = i_off + std::mem::size_of_val(indices) as u64;
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ui color pass"),
@@ -1380,7 +1397,7 @@ impl UiRenderer {
     }
 
     /// Render the colored stage as an ordered interleave of soup index runs and
-    /// instanced chrome / circle runs (see [`ColorCmd`]). Soup + instances are
+    /// instanced chrome / circle runs (see [`PaintCmd`]). Soup + instances are
     /// each uploaded once at their frame bump offsets, then a single render pass
     /// issues the draws in submission order so layering is preserved.
     fn draw_color_interleaved(
@@ -1390,6 +1407,7 @@ impl UiRenderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         draw_list: &DrawList,
+        cmd: &PaintCmd,
     ) {
         let verts = &draw_list.vertices;
         let indices = &draw_list.indices;
@@ -1403,8 +1421,8 @@ impl UiRenderer {
             let (v_off, i_off) = self.ensure_color_capacity(device, verts.len(), indices.len());
             queue.write_buffer(&self.color_vbo, v_off, bytemuck::cast_slice(verts));
             queue.write_buffer(&self.color_ibo, i_off, bytemuck::cast_slice(indices));
-            self.color_vbo_offset = v_off + (verts.len() * std::mem::size_of::<Vertex>()) as u64;
-            self.color_ibo_offset = i_off + (indices.len() * std::mem::size_of::<u32>()) as u64;
+            self.color_vbo_offset = v_off + std::mem::size_of_val(verts) as u64;
+            self.color_ibo_offset = i_off + std::mem::size_of_val(indices) as u64;
             (v_off, i_off)
         } else {
             (0, 0)
@@ -1460,37 +1478,23 @@ impl UiRenderer {
             pass.draw_indexed(range, 0, 0..1);
         };
 
-        for cmd in &draw_list.color_cmds {
-            match cmd {
-                ColorCmd::Soup { indices } => draw_soup(&mut pass, indices.clone()),
-                ColorCmd::Chrome { instances } => {
-                    pass.set_pipeline(&self.chrome_pipeline);
-                    pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                    pass.set_vertex_buffer(1, self.chrome_inst_buffer.slice(inst_off..));
-                    pass.set_index_buffer(
-                        self.chrome_base_ibo.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
-                }
-                ColorCmd::Circle { instances } => {
-                    pass.set_pipeline(&self.circle_pipeline);
-                    pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                    pass.set_vertex_buffer(1, self.circle_inst_buffer.slice(circle_off..));
-                    pass.set_index_buffer(
-                        self.chrome_base_ibo.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
-                }
+        match cmd {
+            PaintCmd::Soup { indices } => draw_soup(&mut pass, indices.clone()),
+            PaintCmd::Chrome { instances } => {
+                pass.set_pipeline(&self.chrome_pipeline);
+                pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
+                pass.set_vertex_buffer(1, self.chrome_inst_buffer.slice(inst_off..));
+                pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
             }
-        }
-
-        // Soup appended after the last recorded command is the trailing run.
-        let committed = draw_list.soup_committed_indices;
-        let total = indices.len() as u32;
-        if total > committed {
-            draw_soup(&mut pass, committed..total);
+            PaintCmd::Circle { instances } => {
+                pass.set_pipeline(&self.circle_pipeline);
+                pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
+                pass.set_vertex_buffer(1, self.circle_inst_buffer.slice(circle_off..));
+                pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
+            }
+            _ => unreachable!("non-color command passed to color renderer"),
         }
     }
 
@@ -1507,8 +1511,7 @@ impl UiRenderer {
     ) {
         let off = self.ensure_icon_capacity(device, instances.len());
         queue.write_buffer(&self.icon_inst_buffer, off, bytemuck::cast_slice(instances));
-        self.icon_inst_offset =
-            off + (instances.len() * std::mem::size_of::<IconInstance>()) as u64;
+        self.icon_inst_offset = off + std::mem::size_of_val(instances) as u64;
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ui icon pass"),
@@ -1569,8 +1572,7 @@ impl UiRenderer {
     ) {
         let off = self.ensure_nine_capacity(device, instances.len());
         queue.write_buffer(&self.nine_inst_buffer, off, bytemuck::cast_slice(instances));
-        self.nine_inst_offset =
-            off + (instances.len() * std::mem::size_of::<NineSliceInstance>()) as u64;
+        self.nine_inst_offset = off + std::mem::size_of_val(instances) as u64;
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ui nine-slice pass"),
@@ -1813,13 +1815,12 @@ mod tests {
     fn stale_detector_fresh_list_each_frame_warns_once() {
         // The footgun: a brand-new id every frame (LayerStack::new() in the loop).
         let mut d = StaleListDetector::default();
-        let mut id = 1u64;
         let mut warnings = 0;
-        for _ in 0..(StaleListDetector::WARN_AFTER * 2) {
+        for id in 1u64..=(StaleListDetector::WARN_AFTER * 2) as u64 {
             if d.observe(id) {
                 warnings += 1;
             }
-            id += 1; // never repeats — every frame is a fresh list
+            // never repeats — every frame is a fresh list
         }
         assert_eq!(warnings, 1, "must warn exactly once, not spam every frame");
     }

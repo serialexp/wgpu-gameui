@@ -132,20 +132,39 @@ impl Checkbox {
     }
 
     /// Draw a checkbox at the given rect. Returns true if clicked (toggled).
-    ///
-    /// The box is drawn at the left of the rect (square, fitted to rect height),
-    /// with the label to its right.
     pub fn draw(&self, checked: bool, label: &str, rect: Rect, ctx: &mut DrawContext) -> bool {
+        self.draw_response(checked, label, rect, ctx).clicked
+    }
+
+    /// Draw the checkbox and return its complete interaction response. The whole
+    /// allocated row is the canonical hit geometry; the focus ring still hugs
+    /// only the square control.
+    pub fn draw_response(
+        &self,
+        checked: bool,
+        label: &str,
+        rect: Rect,
+        ctx: &mut DrawContext,
+    ) -> crate::Response {
         ctx.push_debug_scope_rect(crate::widgets::scope_name("Checkbox", label), rect);
+        let retained = self
+            .focus_id
+            .filter(|_| ctx.has_interactions())
+            .map(|id| ctx.interact(crate::WidgetId(id), rect, true))
+            .filter(|response| response.resolved);
         let input = ctx.input;
         let s = ctx.styles();
-        // Honor layer capture (`mouse_consumed`) so a checkbox under a
-        // modal/popup doesn't react to clicks meant for the overlay.
-        let hovered = rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
+        // Honor layer capture (`mouse_consumed`) on the compatibility path.
+        let hovered = retained.as_ref().map_or_else(
+            || rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed,
+            |response| response.hovered,
+        );
         if hovered {
             ctx.request_cursor(crate::CursorIcon::Pointer);
         }
-        let clicked = hovered && input.mouse_clicked;
+        let clicked = retained
+            .as_ref()
+            .map_or(hovered && input.mouse_clicked, |response| response.clicked);
         let key_activate = input.nav.confirm;
 
         // Checkbox box (square, fitted to rect height).
@@ -248,7 +267,21 @@ impl Checkbox {
         }
 
         ctx.pop_debug_scope();
-        toggled
+        let mut response = retained.unwrap_or_else(|| crate::Response {
+            id: self.focus_id.map(crate::WidgetId),
+            rect,
+            resolved: false,
+            hovered,
+            pressed: hovered && input.mouse_down,
+            clicked,
+            released: hovered && input.mouse_released,
+            held: hovered && input.mouse_held,
+            double_clicked: hovered && input.mouse_double_clicked,
+            local_pos: hovered.then_some([input.mouse_x - rect.x, input.mouse_y - rect.y]),
+            scroll_delta: 0.0,
+        });
+        response.clicked = toggled;
+        response
     }
 }
 

@@ -12,6 +12,139 @@ Use this as the working backlog for the package. Cross items off as PRs land.
 
 ---
 
+## Cross-notifier follow-up audit (2026-08-19)
+
+These items came from regressions found while migrating cross-notifier to gameui.
+The crate already has `SizeSpec::Fit`, constraints, reusable `LayoutResult`,
+font-aware `TextBlock` measurement, `LayerStack`, animation clock plumbing,
+`ScrollView`, and extensive debug reports. The work below should integrate and
+harden those foundations rather than create parallel replacements.
+
+### P0 — Start here
+
+- [x] **P0 — Make paint and input z-order first-class and shared.** A `DrawList`
+      is rendered in primitive pass order (nine-slices → colour → icons → MSDF
+      icons → text), not arbitrary painter's order. `LayerStack` correctly orders
+      whole lists, but widgets within one list cannot express cross-primitive
+      overlap safely. Introduce an explicit ordered command/node model with a
+      stable layer ID, z-index/pass group, and insertion sequence. Render it
+      back-to-front and dispatch input through the same ordering topmost-first.
+      Give popups/tooltips/menus explicit priorities rather than relying only on
+      layer push order. Add regressions for overlapping quad/text/icon widgets,
+      multiple popups, and input targeting the visually topmost widget.
+
+- [x] **P0 — Unify painted geometry and hit geometry.** Widgets currently paint
+      a `Rect` and independently perform `rect.contains`, while more complex
+      widgets separately derive popup, row, and child hit regions. Emit a stable
+      `InteractionNode`/`HitRegion` alongside paint commands, carrying widget ID,
+      final bounds or shape, inherited clip/transform, z/layer, enabled/capture
+      policy, and cursor. Centralize topmost-first hit traversal and return a
+      common `Response { rect, hovered, pressed, clicked, focused, ... }` from
+      interactive widgets. The exact arranged geometry must drive both painting
+      and interaction. Test clipped, transformed, scrolled, animated, and
+      overlapping controls, and expose the candidate/winner chain in diagnostics.
+
+- [ ] **P0 — Integrate interactive `UiContext` widgets with the existing layout
+      system.** `HStack`/`VStack`, `Fit`/`Fill`, constraints, stable `NodeId`, and
+      reusable `LayoutResult` already exist, but ordinary interactive UI still
+      requires callers to measure controls and manually advance coordinates.
+      Add ergonomic `ui.row`/`ui.column` composition backed by those primitives,
+      supporting fixed/fit/fill children, min/preferred/max constraints, gaps,
+      padding, cross-axis and baseline alignment, and child `Response`s. Measure,
+      arrange, paint, and hit-test from one layout result. Use cross-notifier's
+      server/rule/calendar/settings rows as migration fixtures and ensure font,
+      localization, or caption changes require no guessed width constants.
+
+### P1 — Complete the pipeline
+
+- [ ] **P1 — Extend intrinsic measurement with context and two-pass container
+      layout.** Add a `MeasureContext` containing resolved styles/font system,
+      available width, scale factor, and wrapping policy. Widgets should expose
+      minimum/preferred/maximum size and optional baseline. Extend intrinsic
+      sizing beyond Button/Checkbox/Dropdown to text inputs, panels, image
+      buttons, and list/table rows; let containers propagate child measurements
+      and constrained wrapping instead of requiring caller-supplied content size.
+
+- [ ] **P1 — Make font-aware measurement the only widget-layout path.** Deprecate
+      default-font `measure_text` for layout and migrate remaining internal users
+      (including panel, table, and progress calculations) to resolved
+      `TextBlock` measurement. Return structured metrics (advance, line box, ink
+      bounds, baseline, line count), and where practical reuse the measured text
+      layout for painting so measurement, ellipsis, caret placement, and render
+      cannot disagree.
+
+- [ ] **P1 — Return repaint requirements and deadlines from a UI frame.** Build
+      on the existing animation clock with a host-facing
+      `UiFrameResult { changed, needs_repaint, next_deadline }` that aggregates
+      widget transitions, toast/tooltip timing, caret blinking, and externally
+      registered animation. Clamp invalid or very large delta times. Event-driven
+      hosts must be able to schedule another frame without relying on incidental
+      mouse movement.
+
+- [ ] **P1 — Harden animation IDs and lifecycle.** Replace untyped `(u64,
+      AnimSlot)` usage with scoped/typed widget IDs and generations; diagnose
+      duplicate IDs and reuse by another widget kind, and support explicit
+      cancellation/removal. Dynamic lists must not transfer animation state when
+      items are inserted, removed, or reordered.
+
+- [ ] **P1 — Add stable, reusable keyed layers and atomic compositing groups.**
+      Avoid allocating a transient `DrawList` for every pushed layer each frame.
+      Retain layer storage by `LayerId`, clear/reorder it at frame start, and keep
+      stable debug/cache identity. Separately support compositing groups for
+      rounded clipping, transforms, shadows, and group opacity so a translucent
+      card can be composited atomically rather than making every child primitive
+      independently translucent.
+
+- [ ] **P1 — Improve the existing `ScrollView`, rather than adding another one.**
+      `src/widgets/scroll_view.rs` already provides clipping, wheel input, thumb
+      dragging, and caller-owned `ScrollState`, and `UiContext` exposes
+      `scroll_begin`/`scroll_end`. Integrate it with measured interactive
+      row/column layout so content extent can be known in the same frame instead
+      of being supplied from the previous draw. Make transformed child hit nodes,
+      automatic clamping after content changes, `scroll_to`/`ensure_visible`, and
+      fixed headers/footers compose naturally. Migrate both cross-notifier
+      settings and notification center to validate the improved API.
+
+### P2 — Diagnostics and application ergonomics
+
+- [ ] **P2 — Extend `DebugReport` with z/input/animation diagnostics.** Include
+      final command order and pass group, stable layer/z identity, clip/transform
+      chain, interaction bounds, hit candidates and winner, widget identity,
+      active animation slots/next repaint, and resolved font identity. Warn when
+      overlapping scopes in one `DrawList` cannot preserve intended painter's
+      order, and when painted and interactive bounds diverge.
+
+- [ ] **P2 — Explain layout decisions and provide semantic test assertions.**
+      Report intrinsic/measured/allocated/painted sizes, sizing policy, baseline,
+      overflow amount, and the reason for ellipsis. Add helpers such as
+      `assert_clean`, `assert_no_unexpected_ellipsis`, `assert_hit_target`, and
+      `assert_visual_order`, with scoped exceptions for intentional clipping or
+      ellipsis. Add a shared widget conformance suite covering measurement,
+      painted bounds, hit bounds, constraints, font changes, disabled/focus
+      behavior, scaling, and clipping.
+
+- [ ] **P2 — Add semantic form/layout conveniences on top of interactive rows.**
+      Provide `FormRow`, `FormGrid`, `FieldLabel`, `Section`, `InlineError`, and
+      trailing-action patterns, plus compact/application/game-menu density
+      presets. Add standard text, icon, and icon+text button variants and generate
+      the Phosphor enum/codepoint mapping from bundled-font metadata.
+
+- [ ] **P2 — Add optional host integrations.** Provide a winit input adapter for
+      logical coordinates, text/key/mouse/wheel routing, and per-window state;
+      provide one surface-host rendering path for clear/load policy, `DrawList`
+      or `LayerStack`, submit, and present.
+
+### Suggested implementation order
+
+1. Stable widget/interaction IDs and shared paint/input ordering.
+2. Emitted interaction geometry and standard widget `Response`.
+3. Interactive rows/columns over the existing layout engine.
+4. Measurement context and measured `ScrollView` integration.
+5. Frame repaint/deadline output and robust animation lifecycle.
+6. Keyed layers/compositing groups, diagnostics, and form/host conveniences.
+
+---
+
 ## Architecture / Core Plumbing
 
 - [x] **P0 — Public `UiRenderer`/`Backend`** that owns the wgpu pipeline, sampler,
