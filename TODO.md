@@ -44,16 +44,16 @@ harden those foundations rather than create parallel replacements.
       and interaction. Test clipped, transformed, scrolled, animated, and
       overlapping controls, and expose the candidate/winner chain in diagnostics.
 
-- [ ] **P0 — Integrate interactive `UiContext` widgets with the existing layout
-      system.** `HStack`/`VStack`, `Fit`/`Fill`, constraints, stable `NodeId`, and
-      reusable `LayoutResult` already exist, but ordinary interactive UI still
-      requires callers to measure controls and manually advance coordinates.
-      Add ergonomic `ui.row`/`ui.column` composition backed by those primitives,
-      supporting fixed/fit/fill children, min/preferred/max constraints, gaps,
-      padding, cross-axis and baseline alignment, and child `Response`s. Measure,
-      arrange, paint, and hit-test from one layout result. Use cross-notifier's
-      server/rule/calendar/settings rows as migration fixtures and ensure font,
-      localization, or caption changes require no guessed width constants.
+- [x] **P0 — Integrate interactive `UiContext` widgets with the existing layout
+      system.** Added binding-neutral `StackChild` declarations for existing
+      `HStack`/`VStack` fixed/fit/fill/percent sizing, constraints, weights,
+      cross-axis alignment, and stable `NodeId`; `LayoutResult::child_items()`
+      exposes identity with geometry. `UiContext::rect_begin`/`rect_end` and
+      `draw_in_rect` draw each child exactly once in its resolved local rect with
+      no callback replay. Cross-notifier's server settings row is the first real
+      migration fixture and no longer maintains manual x coordinates or guessed
+      button padding. Baseline measurement remains part of contextual measurement
+      work below rather than this replay-free P0.
 
 ### P1 — Complete the pipeline
 
@@ -106,6 +106,13 @@ harden those foundations rather than create parallel replacements.
       settings and notification center to validate the improved API.
 
 ### P2 — Diagnostics and application ergonomics
+
+- [ ] **P2 — Expose declarative stack layout in voxel's two Lua adapters.** Add
+      mirrored `UiLayoutRow`/`UiLayoutColumn` and `UiRectBegin`/`UiRectEnd`
+      bindings over the plain-data APIs, return ordered `children` plus `by_id`,
+      domain-separate string/integer external IDs, reject duplicate/malformed IDs,
+      and retain `UiVStack` as a compatibility wrapper. Layout remains local-space
+      geometry and scripts are never replayed for measurement.
 
 - [ ] **P2 — Extend `DebugReport` with z/input/animation diagnostics.** Include
       final command order and pass group, stable layer/z identity, clip/transform

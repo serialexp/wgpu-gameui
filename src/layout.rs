@@ -237,7 +237,7 @@ impl Anchor {
 }
 
 /// Size specification for a dimension.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum SizeSpec {
     /// Fixed pixel size.
     Fixed(f32),
@@ -477,10 +477,15 @@ pub trait LayoutNode {
 }
 
 /// One laid-out node: its caller-assigned [`NodeId`] (if any) and computed rect.
-#[derive(Debug, Clone, Copy)]
-struct LayoutEntry {
-    id: Option<NodeId>,
-    rect: Rect,
+///
+/// `LayoutItem` is the stable, declarative counterpart to positional rect access:
+/// callers can inspect both identity and geometry without copying or allocating.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayoutItem {
+    /// Stable identity supplied by the corresponding layout specification.
+    pub id: Option<NodeId>,
+    /// Rectangle computed for the item.
+    pub rect: Rect,
 }
 
 /// Result of layout computation — entries in traversal order, entry 0 the
@@ -493,20 +498,20 @@ struct LayoutEntry {
 /// [`get_by_id`](Self::get_by_id).
 #[derive(Debug, Clone, Default)]
 pub struct LayoutResult {
-    entries: Vec<LayoutEntry>,
+    entries: Vec<LayoutItem>,
 }
 
 impl LayoutResult {
     /// A result holding a single (container) rect with no id.
     pub fn single(rect: Rect) -> Self {
         Self {
-            entries: vec![LayoutEntry { id: None, rect }],
+            entries: vec![LayoutItem { id: None, rect }],
         }
     }
 
     /// Append an entry. Internal — nodes build results via `layout_into`.
     fn push(&mut self, id: Option<NodeId>, rect: Rect) {
-        self.entries.push(LayoutEntry { id, rect });
+        self.entries.push(LayoutItem { id, rect });
     }
 
     /// The container rect (entry 0), or a zero rect if empty.
@@ -543,6 +548,20 @@ impl LayoutResult {
     /// Number of child entries (excludes the container).
     pub fn child_count(&self) -> usize {
         self.entries.len().saturating_sub(1)
+    }
+
+    /// All layout items in traversal order, including the container.
+    ///
+    /// This borrows the result's existing storage and performs no allocation.
+    pub fn items(&self) -> &[LayoutItem] {
+        &self.entries
+    }
+
+    /// Child layout items in order (skips the container at index 0).
+    ///
+    /// This borrows the result's existing storage and performs no allocation.
+    pub fn child_items(&self) -> &[LayoutItem] {
+        self.entries.get(1..).unwrap_or_default()
     }
 
     /// All rects in order, including the container.
@@ -719,7 +738,14 @@ pub struct HStack {
     pub main_align: MainAlign,
 }
 
-/// A child in a stack with its sizing.
+/// A declarative child specification shared by [`HStack`] and [`VStack`].
+///
+/// The dimensions are expressed as `main_size`/`cross_size`, so the same value
+/// can describe a horizontal or vertical stack. Use [`fixed`](Self::fixed),
+/// [`fill`](Self::fill), [`percent`](Self::percent), or [`fit`](Self::fit), then
+/// optionally apply the builder methods for constraints, alignment, weight, and
+/// stable identity.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StackChild {
     /// Main-axis sizing spec.
     pub size: SizeSpec,
@@ -743,9 +769,9 @@ pub struct StackChild {
 }
 
 impl StackChild {
-    /// Construct a child with default `constraint`/`align`/`weight`/`id`. The
-    /// `child*` builders funnel through this so new fields are set in one place.
-    fn new(size: SizeSpec, content_size: f32, cross_size: f32) -> Self {
+    /// Construct a child from an arbitrary main-axis sizing policy and natural
+    /// main/cross sizes. Prefer the policy-specific constructors when possible.
+    pub fn new(size: SizeSpec, content_size: f32, cross_size: f32) -> Self {
         Self {
             size,
             content_size,
@@ -756,17 +782,77 @@ impl StackChild {
             id: None,
         }
     }
+
+    /// A fixed-size child (`main_size` is width in HStack, height in VStack).
+    pub fn fixed(main_size: f32, cross_size: f32) -> Self {
+        Self::new(SizeSpec::Fixed(main_size), main_size, cross_size)
+    }
+
+    /// A child that receives a share of remaining main-axis space.
+    pub fn fill(cross_size: f32) -> Self {
+        Self::new(SizeSpec::Fill, 0.0, cross_size)
+    }
+
+    /// A child sized to a fraction of the stack's inner main-axis extent.
+    pub fn percent(percent: f32, cross_size: f32) -> Self {
+        Self::new(SizeSpec::Percent(percent), 0.0, cross_size)
+    }
+
+    /// A child sized to its natural `main_size`.
+    pub fn fit(main_size: f32, cross_size: f32) -> Self {
+        Self::new(SizeSpec::Fit, main_size, cross_size)
+    }
+
+    /// Clamp the resolved main-axis size.
+    pub fn constrain(mut self, constraint: Constraint) -> Self {
+        self.constraint = constraint;
+        self
+    }
+
+    /// Set cross-axis alignment.
+    pub fn align(mut self, align: CrossAlign) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// Set this child's fill weight. Negative values are clamped to zero.
+    pub fn weight(mut self, weight: f32) -> Self {
+        self.weight = weight.max(0.0);
+        self
+    }
+
+    /// Attach a stable identity for [`LayoutResult::get_by_id`].
+    pub fn id(mut self, id: impl Into<NodeId>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
 }
 
 impl VStack {
     /// A vertical stack with `spacing` pixels between children and no padding.
     pub fn new(spacing: f32) -> Self {
+        Self::from_children(spacing, Vec::new())
+    }
+
+    /// Construct a vertical stack from declarative child specifications.
+    pub fn from_children(spacing: f32, children: impl IntoIterator<Item = StackChild>) -> Self {
         Self {
             spacing,
             padding: 0.0,
-            children: Vec::new(),
+            children: children.into_iter().collect(),
             main_align: MainAlign::Start,
         }
+    }
+
+    /// Append a declarative child specification.
+    pub fn push_child(&mut self, child: StackChild) {
+        self.children.push(child);
+    }
+
+    /// Append a declarative child specification using builder syntax.
+    pub fn child_spec(mut self, child: StackChild) -> Self {
+        self.push_child(child);
+        self
     }
 
     /// Set the inset applied on all four sides.
@@ -959,12 +1045,28 @@ impl LayoutNode for VStack {
 impl HStack {
     /// A horizontal stack with `spacing` pixels between children and no padding.
     pub fn new(spacing: f32) -> Self {
+        Self::from_children(spacing, Vec::new())
+    }
+
+    /// Construct a horizontal stack from declarative child specifications.
+    pub fn from_children(spacing: f32, children: impl IntoIterator<Item = StackChild>) -> Self {
         Self {
             spacing,
             padding: 0.0,
-            children: Vec::new(),
+            children: children.into_iter().collect(),
             main_align: MainAlign::Start,
         }
+    }
+
+    /// Append a declarative child specification.
+    pub fn push_child(&mut self, child: StackChild) {
+        self.children.push(child);
+    }
+
+    /// Append a declarative child specification using builder syntax.
+    pub fn child_spec(mut self, child: StackChild) -> Self {
+        self.push_child(child);
+        self
     }
 
     /// Set the inset applied on all four sides.

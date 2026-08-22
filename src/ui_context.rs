@@ -328,6 +328,10 @@ pub struct UiContext<'a> {
     /// modal_end / popup_end to verify the caller closed the right kind, and
     /// to detect unbalanced begin/end pairs. Length == number of open layers.
     open_layer_kinds: Vec<LayerKind>,
+    /// Number of local rectangle scopes opened by [`rect_begin`](Self::rect_begin)
+    /// and not yet closed by [`rect_end`](Self::rect_end). Kept separate from the
+    /// general push stack so bindings get a useful mismatched-end assertion.
+    open_rect_scopes: usize,
     /// Names of unknown align tokens we've already warned about, to keep one
     /// typo from spamming the log every frame.
     warned_align_tokens: std::collections::HashSet<String>,
@@ -400,6 +404,7 @@ impl<'a> UiContext<'a> {
             window_depth_stack: Vec::new(),
             debug_scope_depth_stack: Vec::new(),
             open_layer_kinds: Vec::new(),
+            open_rect_scopes: 0,
             warned_align_tokens: std::collections::HashSet::new(),
             font_stack: vec![FontSpec::default()],
             style_stack: vec![StyleOverlay::new()],
@@ -426,6 +431,7 @@ impl<'a> UiContext<'a> {
             window_depth_stack: Vec::new(),
             debug_scope_depth_stack: Vec::new(),
             open_layer_kinds: Vec::new(),
+            open_rect_scopes: 0,
             warned_align_tokens: std::collections::HashSet::new(),
             font_stack: vec![FontSpec::default()],
             style_stack: vec![StyleOverlay::new()],
@@ -824,6 +830,73 @@ impl<'a> UiContext<'a> {
         if clip {
             self.clip_rect(w, h, inherit);
         }
+    }
+
+    /// Begin drawing inside a layout-resolved rectangle local to the current
+    /// transform. This pushes all normal UI state, translates the origin to the
+    /// rectangle, resets alignment to left/top, and establishes a local window of
+    /// the rectangle's size. Balance with [`rect_end`](Self::rect_end).
+    ///
+    /// This explicit begin/end form is suitable for scripting bindings. Rust code
+    /// usually prefers [`draw_in_rect`](Self::draw_in_rect). Drawing remains
+    /// immediate: no widget commands or callbacks are retained or replayed.
+    pub fn rect_begin(&mut self, rect: Rect, clip: bool, inherit_clip: bool) {
+        let depth = self.open_rect_scopes;
+        self.rect_begin_named(&format!("rect#{depth}"), rect, clip, inherit_clip);
+    }
+
+    /// Named variant of [`rect_begin`](Self::rect_begin) for debug reports.
+    pub fn rect_begin_named(&mut self, name: &str, rect: Rect, clip: bool, inherit_clip: bool) {
+        self.push();
+        self.open_rect_scopes += 1;
+        self.translate(rect.x, rect.y);
+        if let Some(align) = self.align_stack.last_mut() {
+            *align = AlignSpec::DEFAULT;
+        }
+        self.window_begin_named(name, rect.width, rect.height, clip, inherit_clip);
+    }
+
+    /// End the innermost local rectangle scope opened by
+    /// [`rect_begin`](Self::rect_begin) or
+    /// [`rect_begin_named`](Self::rect_begin_named).
+    pub fn rect_end(&mut self) {
+        debug_assert!(
+            self.open_rect_scopes > 0,
+            "UiContext::rect_end called without a matching rect_begin"
+        );
+        if self.open_rect_scopes == 0 {
+            return;
+        }
+        self.open_rect_scopes -= 1;
+        self.pop();
+    }
+
+    /// Draw once inside a local layout rectangle and restore all UI state after
+    /// `body` returns. The body is never invoked for a separate measurement pass.
+    pub fn draw_in_rect<R>(
+        &mut self,
+        rect: Rect,
+        clip: bool,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.rect_begin(rect, clip, true);
+        let result = body(self);
+        self.rect_end();
+        result
+    }
+
+    /// Named [`draw_in_rect`](Self::draw_in_rect) variant for debug reports.
+    pub fn draw_in_rect_named<R>(
+        &mut self,
+        name: &str,
+        rect: Rect,
+        clip: bool,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.rect_begin_named(name, rect, clip, true);
+        let result = body(self);
+        self.rect_end();
+        result
     }
 
     /// Open a named debug scope (see [`DrawList::push_debug_scope`]). Pure
@@ -2296,6 +2369,11 @@ impl<'a> Drop for UiContext<'a> {
             "UiContext dropped with {} unbalanced modal_begin/end or popup_begin/end pair(s)",
             self.open_layer_kinds.len()
         );
+        debug_assert_eq!(
+            self.open_rect_scopes, 0,
+            "UiContext dropped with {} unbalanced rect_begin/rect_end pair(s)",
+            self.open_rect_scopes
+        );
         // An unbalanced debug scope does not corrupt rendering, but it silently
         // swallows every later draw into the leaked scope and makes the layout
         // report wrong — which is exactly when someone is relying on it.
@@ -2321,6 +2399,54 @@ mod tests {
         let mut ui = UiContext::new(&mut list);
         let r = ui.place_rect(10.0, 20.0);
         assert_eq!(r, Rect::new(0.0, 0.0, 10.0, 20.0));
+    }
+
+    #[test]
+    fn rect_scope_translates_once_and_restores_state() {
+        let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        ui.translate(100.0, 50.0);
+        ui.align("center middle");
+        let before = ui.list().current_transform();
+
+        let mut calls = 0;
+        let returned =
+            ui.draw_in_rect_named("cell", Rect::new(10.0, 20.0, 30.0, 40.0), false, |ui| {
+                calls += 1;
+                assert_eq!(ui.place_rect(4.0, 6.0), Rect::new(110.0, 70.0, 4.0, 6.0));
+                ui.quad(4.0, 6.0, [1.0; 4]);
+                17
+            });
+
+        assert_eq!(calls, 1);
+        assert_eq!(returned, 17);
+        assert_eq!(ui.list().current_transform(), before);
+        assert_eq!(ui.place_rect(4.0, 6.0), Rect::new(98.0, 47.0, 4.0, 6.0));
+        let chrome = ui.list().chrome_instances.last().expect("quad instance");
+        assert_eq!(chrome.rect, [110.0, 70.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn nested_rect_scopes_and_clips_restore() {
+        let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        ui.push();
+        ui.clip_rect(100.0, 100.0, true);
+        let outer_clip = ui.list().current_clip();
+        ui.rect_begin(Rect::new(10.0, 10.0, 40.0, 40.0), true, true);
+        assert_eq!(
+            ui.list().current_clip(),
+            Some(Rect::new(10.0, 10.0, 40.0, 40.0))
+        );
+        ui.rect_begin(Rect::new(5.0, 5.0, 10.0, 10.0), true, true);
+        assert_eq!(
+            ui.list().current_clip(),
+            Some(Rect::new(15.0, 15.0, 10.0, 10.0))
+        );
+        ui.rect_end();
+        ui.rect_end();
+        assert_eq!(ui.list().current_clip(), outer_clip);
+        ui.pop();
     }
 
     #[test]

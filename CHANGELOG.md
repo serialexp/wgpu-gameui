@@ -8,6 +8,8 @@
   primitive families instead of globally forcing text above icons and geometry.
 - Added retained, transformed, clipped hit geometry and topmost-first interaction
   responses for stable-ID widgets; legacy immediate widget APIs remain available.
+- Added binding-neutral declarative stack children, identity-bearing layout
+  results, and immediate local rectangle scopes for drawing resolved layouts once.
 
 ## 0.2.0 (2026-08-04)
 

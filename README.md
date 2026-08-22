@@ -225,10 +225,31 @@ widgets each frame:
 
 A separate flexbox-style layout system (`layout` module) computes `Rect`s from
 a tree of `VStack` / `HStack` / `Flow` / `Positioned` nodes. It does not touch
-`DrawList` — you call `layout_screen(w, h)` once, then draw widgets at the
-resulting rects. Supports `Fill`/`Fixed`/`Percent`/`Fit` sizing, weighted
+`DrawList` — resolve the layout, then draw each widget exactly once in its
+resulting local rect. Supports `Fill`/`Fixed`/`Percent`/`Fit` sizing, weighted
 flex-grow, `CrossAlign`, `MainAlign` (justify-content), wrap/flow, min/max
 constraints, and stable node IDs for order-independent lookup.
+
+`StackChild` is the binding-neutral declaration form for stack children, and
+`LayoutResult::child_items()` returns IDs with their rects without allocating:
+
+```rust
+use wgpu_gameui::layout::{CrossAlign, HStack, LayoutNode, NodeId, Rect, StackChild};
+
+let row = HStack::from_children(8.0, [
+    StackChild::fit(label_width, 20.0).align(CrossAlign::Center).id(NodeId(1)),
+    StackChild::fill(24.0).id(NodeId(2)),
+    StackChild::fixed(24.0, 24.0).id(NodeId(3)),
+]).layout(Rect::new(0.0, 0.0, available_width, 24.0));
+
+ui.draw_in_rect(row.get_by_id(NodeId(1)).unwrap(), false, |ui| ui.text("URL"));
+```
+
+`Fit` uses a preferred size measured explicitly by the caller; widgets and Lua
+callbacks are never run twice or retained for replay. Scripting bindings can
+marshal plain child tables into `StackChild`, return ordered `children` plus a
+`by_id` table from `LayoutItem`, and use `rect_begin`/`rect_end` to draw in local
+rectangles. Layout `NodeId`s are independent of interaction `WidgetId`s.
 
 ### Theming & styling
 
