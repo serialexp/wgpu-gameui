@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0 (2026-08-22)
+
+### Features
+
+- widgets declare their own allocation; app API drops the rect
+- report layout-peer overlaps by default
+- fit text buttons to content by default
+- fit labels and selection controls to content
+- add phosphor icon buttons
+- order painting and unify hit geometry
+- add binding-neutral stack declarations
+
+### Bug Fixes
+
+- viewport content no longer inflates its scope's bounds; ColorPicker fits its rect
+- measure text ink, not the line box it is centred in
+- alignment analysis only claims what the frame can support
+- use logical dimensions for the text ortho projection
+- ellipsize labels and enforce formatting
+- ellipsize labels within their rows
+- stabilize ordered paint uploads
+
+### Documentation
+
+- separate 'name' from 'declared rect' in the inspection docs
+- rect declaration is a widget-implementor concern
+
+### Chores
+
+- satisfy Rust 1.97 clippy
+- enforce format and strict clippy
+
+### Other
+
+- vector icon support (phosphor + custom icon fonts)
+
 ## Unreleased
 
 ### Changed
