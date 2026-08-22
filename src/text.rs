@@ -305,6 +305,11 @@ pub struct TextRenderer {
     /// aliasing offset 0 and reading the last-written data at draw time. Reset
     /// to 0 by [`begin_frame`](Self::begin_frame) each frame.
     vbo_offset: u64,
+    /// Replaced buffers retained for the renderer's lifetime. Ordered painting
+    /// can grow the VBO while encoded or submitted passes still reference its
+    /// predecessor. Growth is geometric, so this remains a small bounded set and
+    /// avoids backend-specific completion polling before releasing resources.
+    retired_vbos: Vec<wgpu::Buffer>,
 
     /// Stable per-font keys for the atlas, assigned on first sighting. Decouples
     /// the atlas from cosmic-text's `fontdb::ID`.
@@ -448,6 +453,7 @@ impl TextRenderer {
             vbo,
             vbo_capacity,
             vbo_offset: 0,
+            retired_vbos: Vec::new(),
             font_keys: HashMap::new(),
             next_font_key: 0,
             shape_cache: HashMap::new(),
@@ -584,6 +590,44 @@ impl TextRenderer {
             };
             self.icon_atlas
                 .glyph(g.font.index() as u64, g.glyph_id, data);
+        }
+        self.icon_gpu
+            .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
+    }
+
+    /// Resolve every glyph needed by an ordered paint stream before encoding its
+    /// first text pass. Text runs are rendered separately to preserve submission
+    /// order; without this preflight, a later run can grow the atlas after earlier
+    /// passes have baked UVs against its old dimensions.
+    pub(crate) fn prepare_texts(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texts: &[TextBlock],
+    ) {
+        if texts.is_empty() {
+            return;
+        }
+        let _ = self.build_vertices(texts);
+        self.upload_atlas(device, queue);
+    }
+
+    /// Resolve every icon glyph needed by an ordered paint stream before its first
+    /// icon pass, for the same atlas-stability reason as [`prepare_texts`](Self::prepare_texts).
+    #[cfg(feature = "phosphor-icons")]
+    pub(crate) fn prepare_icons(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        icons: &[IconMsdf],
+    ) {
+        let fonts = icon_font_snapshot();
+        for icon in icons {
+            let Some(data) = fonts.get(icon.glyph.font.index() as usize) else {
+                continue;
+            };
+            self.icon_atlas
+                .glyph(icon.glyph.font.index() as u64, icon.glyph.glyph_id, data);
         }
         self.icon_gpu
             .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
@@ -1105,12 +1149,14 @@ impl TextRenderer {
         let needed = offset + bytes;
         if needed > self.vbo_capacity {
             self.vbo_capacity = needed.next_power_of_two();
-            self.vbo = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("msdf text vbo"),
                 size: self.vbo_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_vbos
+                .push(std::mem::replace(&mut self.vbo, replacement));
         }
         offset
     }
@@ -1517,6 +1563,10 @@ struct MsdfTextureGpu {
     #[allow(dead_code)]
     sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
+    /// Atlas resources replaced while encoding the current frame. A newly seen
+    /// glyph may grow the atlas between ordered text runs; earlier render passes
+    /// still reference the previous bind group and texture until submission.
+    retired: Vec<(wgpu::Texture, wgpu::Sampler, wgpu::BindGroup)>,
     /// Atlas width last uploaded to the GPU. Starts at 0 so the first `upload`
     /// always writes pixels (the texture is created empty).
     current_size: u32,
@@ -1530,6 +1580,7 @@ impl MsdfTextureGpu {
             texture,
             sampler,
             bind_group,
+            retired: Vec::new(),
             current_size: 0,
         }
     }
@@ -1546,9 +1597,11 @@ impl MsdfTextureGpu {
         if atlas.width() != self.current_size {
             let (texture, sampler, _bgl, bind_group) =
                 create_msdf_texture_with_bgl(device, bgl, atlas.width(), atlas.height());
-            self.texture = texture;
-            self.sampler = sampler;
-            self.bind_group = bind_group;
+            let old_texture = std::mem::replace(&mut self.texture, texture);
+            let old_sampler = std::mem::replace(&mut self.sampler, sampler);
+            let old_bind_group = std::mem::replace(&mut self.bind_group, bind_group);
+            self.retired
+                .push((old_texture, old_sampler, old_bind_group));
             self.current_size = atlas.width();
             let _ = atlas.take_dirty();
             self.write_pixels(queue, atlas);

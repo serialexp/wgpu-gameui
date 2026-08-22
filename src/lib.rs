@@ -111,8 +111,8 @@ pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{
-    Backdrop, BlurParams, CAPTURE_FORMAT, NineSliceMeta, SpriteAtlas, SpriteId, UiRenderer,
-    capture_draw_list, capture_layers, write_png,
+    Backdrop, BlurParams, CAPTURE_FORMAT, NineSliceMeta, RenderStats, SpriteAtlas, SpriteId,
+    UiRenderer, capture_draw_list, capture_layers, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{

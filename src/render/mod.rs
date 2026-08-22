@@ -42,6 +42,6 @@ pub use capture::HeadlessGpu;
 pub use capture::{CAPTURE_FORMAT, capture_draw_list, capture_layers, write_png};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub(crate) use ui_renderer::ortho_matrix;
-pub use ui_renderer::{NineSliceMeta, UiRenderer};
+pub use ui_renderer::{NineSliceMeta, RenderStats, UiRenderer};
 
 pub use crate::widgets::NineSliceId;

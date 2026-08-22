@@ -637,7 +637,7 @@ impl DrawList {
     // ---- Debug scopes ----
 
     /// Current buffer lengths, as a [`PrimCounts`] snapshot.
-    fn prim_counts(&self) -> PrimCounts {
+    pub(crate) fn prim_counts(&self) -> PrimCounts {
         PrimCounts {
             vertices: self.vertices.len(),
             indices: self.indices.len(),

@@ -69,6 +69,7 @@
 
 use crate::layer::LayerStack;
 use crate::layout::Rect;
+use crate::render::RenderStats;
 use crate::text::{TextAlign, TextBlock};
 use crate::widgets::{DrawList, PaintCmd, PrimCounts};
 
@@ -632,6 +633,8 @@ pub struct DebugReport {
     /// with [`from_draw_list`](DebugReport::from_draw_list), where text nodes
     /// fall back to their layout box and the text lints do not run.
     pub text_measured: bool,
+    /// Renderer telemetry attached after rendering.
+    pub render_stats: Option<RenderStats>,
 }
 
 impl DebugReport {
@@ -667,6 +670,12 @@ impl DebugReport {
     /// Re-run the lints with a different configuration, keeping the tree.
     pub fn with_lints(mut self, cfg: &LintConfig) -> Self {
         self.problems = lint(&self.nodes, self.screen, cfg, self.text_measured);
+        self
+    }
+
+    /// Attach renderer telemetry collected for this frame.
+    pub fn with_render_stats(mut self, stats: RenderStats) -> Self {
+        self.render_stats = Some(stats);
         self
     }
 
@@ -927,6 +936,7 @@ impl DebugReport {
             problems,
             viewports,
             text_measured,
+            render_stats: None,
         }
     }
 
@@ -964,6 +974,7 @@ impl DebugReport {
             problems,
             viewports,
             text_measured,
+            render_stats: None,
         }
     }
 
@@ -1007,6 +1018,7 @@ impl DebugReport {
             problems,
             viewports,
             text_measured: true,
+            render_stats: None,
         }
     }
 }
@@ -2014,6 +2026,16 @@ impl DebugReport {
                 "unmeasured (layout boxes only)"
             }
         ));
+        if let Some(stats) = self.render_stats {
+            s.push_str("RENDER:\n");
+            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations));
+            for warning in stats.warnings() {
+                s.push_str(&format!("!! WARN  render {warning}\n"));
+            }
+            s.push_str(&"─".repeat(72));
+            s.push('\n');
+        }
+
         s.push_str(&"─".repeat(72));
         s.push('\n');
 
@@ -2122,6 +2144,20 @@ impl DebugReport {
             s.push_str(&json_rect(*v));
         }
         s.push_str("],\n");
+
+        match self.render_stats {
+            Some(stats) => {
+                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations, stats.fragmentation_ratio()));
+                for (i, warning) in stats.warnings().iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&json_str(warning));
+                }
+                s.push_str("]},\n");
+            }
+            None => s.push_str("  \"render_stats\": null,\n"),
+        }
 
         s.push_str("  \"nodes\": [\n");
         for (i, n) in self.nodes.iter().enumerate() {
@@ -3281,6 +3317,39 @@ mod tests {
         assert!(text.contains("sidebar"));
         assert!(text.contains("PROBLEMS: none"));
         assert!(text.contains("screen 0.0,0.0 800.0x600.0"));
+    }
+
+    #[test]
+    fn render_stats_are_opt_in_and_render_in_text_and_json() {
+        let list = DrawList::new();
+        let plain = DebugReport::from_draw_list(&list, SCREEN);
+        assert!(plain.render_stats.is_none());
+        assert!(plain.to_json().contains("\"render_stats\": null"));
+
+        let stats = RenderStats {
+            draw_lists: 2,
+            primitives: 100,
+            paint_runs: 130,
+            draw_calls: 7,
+            color_runs: 3,
+            text_runs: 2,
+            icon_runs: 2,
+            buffer_write_calls: 4,
+            buffer_bytes_uploaded: 4096,
+            atlas_uploads: 2,
+            atlas_bytes_uploaded: 512,
+            buffer_reallocations: 1,
+        };
+        let report = plain.with_render_stats(stats);
+        let text = report.to_text();
+        assert!(text.contains("RENDER:"));
+        assert!(text.contains("draw_lists=2 primitives=100 paint_runs=130 draw_calls=7"));
+        assert!(text.contains("!! WARN  render"));
+        let json = report.to_json();
+        assert!(json.contains("\"render_stats\": {"));
+        assert!(json.contains("\"buffer_bytes_uploaded\": 4096"));
+        assert!(json.contains("\"fragmentation_ratio\": 1.300000"));
+        assert!(json.contains("\"warnings\": ["));
     }
 
     #[test]

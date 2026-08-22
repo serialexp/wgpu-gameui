@@ -657,13 +657,37 @@ impl<'a> UiContext<'a> {
     /// composing custom horizontal rows so the next widget starts after the
     /// actual label rather than a guessed character width.
     pub fn text_line_size(&mut self, text: &str) -> (f32, f32) {
+        let block = self.text_line_block(text, [1.0; 4]);
+        self.backend.list_mut().measure_block(&block)
+    }
+
+    /// Draw wrapping text constrained to `max_width`, returning its measured
+    /// `(width, height)`. This is the non-auto-advancing counterpart to
+    /// [`text`](Self::text): callers composing variable-height content can advance
+    /// by the returned height rather than assuming a single line.
+    pub fn wrapped_text(&mut self, text: &str, color: [f32; 4], max_width: f32) -> (f32, f32) {
+        let block = self
+            .text_line_block(text, color)
+            .with_max_width(max_width.max(0.0));
+        let size = self.backend.list_mut().measure_block(&block);
+        self.text_block(block);
+        size
+    }
+
+    fn text_line_block(&self, text: &str, color: [f32; 4]) -> TextBlock {
         let spec = self.current_font();
-        let block = TextBlock::new(text, 0.0, 0.0)
+        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
+        TextBlock::new(text, 0.0, 0.0)
             .with_size(spec.size)
+            .with_rgba(
+                to_u8(color[0]),
+                to_u8(color[1]),
+                to_u8(color[2]),
+                to_u8(color[3]),
+            )
             .with_font_opt(spec.font)
             .with_weight(spec.weight)
-            .with_style(spec.style);
-        self.backend.list_mut().measure_block(&block)
+            .with_style(spec.style)
     }
 
     /// Replace the current tint (Teardown's `UiColor`).
@@ -3384,6 +3408,23 @@ mod tests {
         let large = ui.text_line_size("Settings");
         assert!(large.0 > normal.0);
         assert!(large.1 > normal.1);
+    }
+
+    #[test]
+    fn wrapped_text_reports_multiline_height_without_advancing() {
+        let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        let origin = ui.cursor();
+        let single = ui.text_line_size("calendar URL").1;
+        let (_, wrapped) = ui.wrapped_text(
+            "https://calendar.example.test/a/very/long/path/to/calendar.ics",
+            [1.0; 4],
+            60.0,
+        );
+        assert!(wrapped > single, "{wrapped} should exceed {single}");
+        assert_eq!(ui.cursor(), origin);
+        assert_eq!(ui.list().texts.len(), 1);
+        assert_eq!(ui.list().texts[0].max_width, 60.0);
     }
 
     #[test]

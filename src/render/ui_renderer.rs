@@ -35,6 +35,14 @@ struct Uniforms {
     view_proj: [[f32; 4]; 4],
 }
 
+#[derive(Clone, Copy)]
+struct OrderedColorUpload {
+    vertex_offset: u64,
+    index_offset: u64,
+    chrome_offset: u64,
+    circle_offset: u64,
+}
+
 /// Per-instance icon/image record — matches `vs_icon` in `ui.wgsl`.
 ///
 /// Icons, sprites, and cropped images all flow through this path. The four
@@ -209,6 +217,93 @@ impl StaleListDetector {
     }
 }
 
+/// Cheap counters describing the GPU work encoded by one UI render call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderStats {
+    /// Draw lists rendered, including layers.
+    pub draw_lists: usize,
+    /// Total submitted primitives.
+    pub primitives: usize,
+    /// Ordered paint-stream runs.
+    pub paint_runs: usize,
+    /// GPU draw calls encoded.
+    pub draw_calls: usize,
+    /// Soup/chrome/circle runs.
+    pub color_runs: usize,
+    /// Text runs.
+    pub text_runs: usize,
+    /// Atlas-image, nine-slice, and vector-icon runs.
+    pub icon_runs: usize,
+    /// Queue buffer-write operations.
+    pub buffer_write_calls: usize,
+    /// Bytes written to dynamic GPU buffers.
+    pub buffer_bytes_uploaded: u64,
+    /// Full or partial atlas texture uploads.
+    pub atlas_uploads: usize,
+    /// Approximate bytes uploaded to atlas textures.
+    pub atlas_bytes_uploaded: u64,
+    /// Dynamic buffers replaced to increase capacity.
+    pub buffer_reallocations: usize,
+}
+
+impl RenderStats {
+    /// Paint runs per primitive; values above one indicate very fine-grained
+    /// family alternation rather than simply a large UI.
+    pub fn fragmentation_ratio(self) -> f32 {
+        self.paint_runs as f32 / self.primitives.max(1) as f32
+    }
+
+    /// Human-readable performance findings suitable for logs and debug reports.
+    pub fn warnings(self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.paint_runs >= 128 && self.fragmentation_ratio() >= 0.75 {
+            warnings.push(format!(
+                "{} paint runs for {} primitives ({:.2} runs/primitive); primitive-family alternation is producing many small submissions",
+                self.paint_runs,
+                self.primitives,
+                self.fragmentation_ratio()
+            ));
+        }
+        if self.buffer_reallocations > 0 {
+            warnings.push(format!(
+                "{} dynamic GPU buffer reallocation(s); capacity is warming or the frame exceeded its previous high-water mark",
+                self.buffer_reallocations
+            ));
+        }
+        if self.atlas_uploads > 1 {
+            warnings.push(format!(
+                "{} atlas uploads in one frame; batch resource/glyph registration before rendering where possible",
+                self.atlas_uploads
+            ));
+        }
+        warnings
+    }
+}
+
+#[derive(Default)]
+struct RenderPressureDetector {
+    streak: u32,
+    warned: bool,
+}
+
+impl RenderPressureDetector {
+    const WARN_AFTER: u32 = 120;
+
+    fn observe(&mut self, stats: RenderStats) -> bool {
+        if stats.warnings().is_empty() {
+            self.streak = 0;
+        } else {
+            self.streak = self.streak.saturating_add(1);
+        }
+        if !self.warned && self.streak >= Self::WARN_AFTER {
+            self.warned = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Public renderer.
 pub struct UiRenderer {
     // Pipelines
@@ -248,6 +343,10 @@ pub struct UiRenderer {
     color_ibo_capacity: u64,
     color_vbo_offset: u64,
     color_ibo_offset: u64,
+    // Replaced dynamic buffers remain alive for the renderer's lifetime. Wgpu
+    // work can outlive the frame in which it was submitted; geometric growth
+    // keeps this set small while avoiding backend-specific completion polling.
+    retired_buffers: Vec<wgpu::Buffer>,
 
     // Instanced icons: reuses the chrome unit-quad base mesh + a growing
     // per-frame instance buffer (bump offset, reset in `prepare_frame`).
@@ -292,6 +391,8 @@ pub struct UiRenderer {
     // text-measure cache → per-frame reshaping). Fed the rendered list's id in
     // `render`/`render_layers`; warns once if it's always a brand-new list.
     stale_list: StaleListDetector,
+    pressure: RenderPressureDetector,
+    frame_stats: RenderStats,
 }
 
 impl UiRenderer {
@@ -655,6 +756,7 @@ impl UiRenderer {
             color_ibo_capacity,
             color_vbo_offset: 0,
             color_ibo_offset: 0,
+            retired_buffers: Vec::new(),
             icon_inst_buffer,
             icon_inst_capacity,
             icon_inst_offset: 0,
@@ -674,6 +776,8 @@ impl UiRenderer {
             text_renderer,
             warned_missing: RefCell::new(HashSet::new()),
             stale_list: StaleListDetector::default(),
+            pressure: RenderPressureDetector::default(),
+            frame_stats: RenderStats::default(),
         }
     }
 
@@ -959,7 +1063,7 @@ impl UiRenderer {
         viewport: (u32, u32),
         scale_factor: f32,
         draw_list: &DrawList,
-    ) {
+    ) -> RenderStats {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_render").entered();
         if self.stale_list.observe(draw_list.id()) {
@@ -967,6 +1071,7 @@ impl UiRenderer {
         }
         self.prepare_frame(device, queue, viewport, scale_factor);
         self.render_one(device, queue, encoder, view, draw_list);
+        self.finish_frame_stats()
     }
 
     /// Render a `LayerStack`: base list first, then each layer in push order.
@@ -982,7 +1087,7 @@ impl UiRenderer {
         viewport: (u32, u32),
         scale_factor: f32,
         layers: &LayerStack,
-    ) {
+    ) -> RenderStats {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_render_layers").entered();
         // Key the footgun detector on the BASE list only: modal/popup/tooltip
@@ -996,6 +1101,19 @@ impl UiRenderer {
         for layer in layers.layers() {
             self.render_one(device, queue, encoder, view, &layer.list);
         }
+        self.finish_frame_stats()
+    }
+
+    fn finish_frame_stats(&mut self) -> RenderStats {
+        let stats = self.frame_stats;
+        if self.pressure.observe(stats) {
+            log::warn!(
+                "wgpu-gameui: sustained render pressure for {}+ frames: {}. Inspect the returned RenderStats or attach it to DebugReport::with_render_stats().",
+                RenderPressureDetector::WARN_AFTER,
+                stats.warnings().join("; ")
+            );
+        }
+        stats
     }
 
     /// Emit the once-per-renderer warning that the caller is feeding a
@@ -1097,6 +1215,7 @@ impl UiRenderer {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
         self.text_renderer.resize(viewport.0, viewport.1, scale);
         // Reset the per-frame bump cursors so this frame's draws start at 0.
+        self.frame_stats = RenderStats::default();
         self.color_vbo_offset = 0;
         self.color_ibo_offset = 0;
         self.icon_inst_offset = 0;
@@ -1117,6 +1236,24 @@ impl UiRenderer {
     ) {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_render_one").entered();
+
+        self.frame_stats.draw_lists += 1;
+        self.frame_stats.primitives += draw_list.prim_counts().total();
+        self.frame_stats.paint_runs += draw_list.paint_commands().len();
+        for cmd in draw_list.paint_commands() {
+            match cmd {
+                PaintCmd::Soup { .. } | PaintCmd::Chrome { .. } | PaintCmd::Circle { .. } => {
+                    self.frame_stats.color_runs += 1;
+                }
+                PaintCmd::Text { .. } => self.frame_stats.text_runs += 1,
+                PaintCmd::NineSlice { .. } | PaintCmd::Icon { .. } => {
+                    self.frame_stats.icon_runs += 1;
+                }
+                #[cfg(feature = "phosphor-icons")]
+                PaintCmd::IconMsdf { .. } => self.frame_stats.icon_runs += 1,
+            }
+        }
+        self.frame_stats.draw_calls += draw_list.paint_commands().len();
 
         // Compatibility for callers which fill the public payload arrays directly.
         // Normal enqueue APIs always populate the ordered stream.
@@ -1147,10 +1284,21 @@ impl UiRenderer {
             return;
         }
 
+        // Ordered text/icon runs must all use one stable atlas extent. Resolve the
+        // complete frame's glyph working set before any run bakes UVs or captures
+        // an atlas bind group; later runs can then render independently without
+        // invalidating earlier encoded passes.
+        self.text_renderer
+            .prepare_texts(device, queue, &draw_list.texts);
+        #[cfg(feature = "phosphor-icons")]
+        self.text_renderer
+            .prepare_icons(device, queue, &draw_list.icons_msdf);
+
+        let color_upload = self.upload_ordered_color(device, queue, draw_list);
         for cmd in &draw_list.paint_cmds {
             match cmd {
                 PaintCmd::Soup { .. } | PaintCmd::Chrome { .. } | PaintCmd::Circle { .. } => {
-                    self.draw_color_interleaved(device, queue, encoder, view, draw_list, cmd);
+                    self.draw_color_interleaved(encoder, view, cmd, color_upload);
                 }
                 PaintCmd::NineSlice { draws } => {
                     let instances = self.build_nine_slice_instances(
@@ -1284,24 +1432,30 @@ impl UiRenderer {
         let v_off = self.color_vbo_offset;
         let needed_v = v_off + (verts * std::mem::size_of::<Vertex>()) as u64;
         if needed_v > self.color_vbo_capacity {
+            self.frame_stats.buffer_reallocations += 1;
             self.color_vbo_capacity = needed_v.next_power_of_two();
-            self.color_vbo = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ui color vbo"),
                 size: self.color_vbo_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_buffers
+                .push(std::mem::replace(&mut self.color_vbo, replacement));
         }
         let i_off = self.color_ibo_offset;
         let needed_i = i_off + (indices * std::mem::size_of::<u32>()) as u64;
         if needed_i > self.color_ibo_capacity {
+            self.frame_stats.buffer_reallocations += 1;
             self.color_ibo_capacity = needed_i.next_power_of_two();
-            self.color_ibo = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ui color ibo"),
                 size: self.color_ibo_capacity,
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_buffers
+                .push(std::mem::replace(&mut self.color_ibo, replacement));
         }
         (v_off, i_off)
     }
@@ -1313,13 +1467,16 @@ impl UiRenderer {
         let off = self.icon_inst_offset;
         let needed = off + (count * std::mem::size_of::<IconInstance>()) as u64;
         if needed > self.icon_inst_capacity {
+            self.frame_stats.buffer_reallocations += 1;
             self.icon_inst_capacity = needed.next_power_of_two();
-            self.icon_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ui icon inst buffer"),
                 size: self.icon_inst_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_buffers
+                .push(std::mem::replace(&mut self.icon_inst_buffer, replacement));
         }
         off
     }
@@ -1369,13 +1526,16 @@ impl UiRenderer {
         let off = self.chrome_inst_offset;
         let needed = off + (count * std::mem::size_of::<ChromeInstance>()) as u64;
         if needed > self.chrome_inst_capacity {
+            self.frame_stats.buffer_reallocations += 1;
             self.chrome_inst_capacity = needed.next_power_of_two();
-            self.chrome_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ui chrome inst buffer"),
                 size: self.chrome_inst_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_buffers
+                .push(std::mem::replace(&mut self.chrome_inst_buffer, replacement));
         }
         off
     }
@@ -1385,75 +1545,104 @@ impl UiRenderer {
         let off = self.circle_inst_offset;
         let needed = off + (count * std::mem::size_of::<CircleInstance>()) as u64;
         if needed > self.circle_inst_capacity {
+            self.frame_stats.buffer_reallocations += 1;
             self.circle_inst_capacity = needed.next_power_of_two();
-            self.circle_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ui circle inst buffer"),
                 size: self.circle_inst_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_buffers
+                .push(std::mem::replace(&mut self.circle_inst_buffer, replacement));
         }
         off
     }
 
-    /// Render the colored stage as an ordered interleave of soup index runs and
-    /// instanced chrome / circle runs (see [`PaintCmd`]). Soup + instances are
-    /// each uploaded once at their frame bump offsets, then a single render pass
-    /// issues the draws in submission order so layering is preserved.
-    fn draw_color_interleaved(
+    /// Upload each ordered color payload once. Previously this happened once per
+    /// `PaintCmd`, repeatedly rewriting and bump-allocating the complete soup and
+    /// instance arrays; enough alternating runs eventually overflowed the dynamic
+    /// buffers and corrupted soup draws into screen-sized triangles.
+    fn upload_ordered_color(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
         draw_list: &DrawList,
-        cmd: &PaintCmd,
-    ) {
-        let verts = &draw_list.vertices;
-        let indices = &draw_list.indices;
-        let instances = &draw_list.chrome_instances;
-        let circles = &draw_list.circle_instances;
-
-        // Upload the whole soup once. Soup indices are absolute, so binding the
-        // full sliced vbo/ibo with base_vertex 0 lets each `Soup` sub-range draw
-        // its slice directly.
-        let (v_off, i_off) = if !indices.is_empty() {
-            let (v_off, i_off) = self.ensure_color_capacity(device, verts.len(), indices.len());
-            queue.write_buffer(&self.color_vbo, v_off, bytemuck::cast_slice(verts));
-            queue.write_buffer(&self.color_ibo, i_off, bytemuck::cast_slice(indices));
-            self.color_vbo_offset = v_off + std::mem::size_of_val(verts) as u64;
-            self.color_ibo_offset = i_off + std::mem::size_of_val(indices) as u64;
-            (v_off, i_off)
-        } else {
+    ) -> OrderedColorUpload {
+        let (vertex_offset, index_offset) = if draw_list.indices.is_empty() {
             (0, 0)
+        } else {
+            let offsets = self.ensure_color_capacity(
+                device,
+                draw_list.vertices.len(),
+                draw_list.indices.len(),
+            );
+            queue.write_buffer(
+                &self.color_vbo,
+                offsets.0,
+                bytemuck::cast_slice(&draw_list.vertices),
+            );
+            queue.write_buffer(
+                &self.color_ibo,
+                offsets.1,
+                bytemuck::cast_slice(&draw_list.indices),
+            );
+            self.frame_stats.buffer_write_calls += 2;
+            self.frame_stats.buffer_bytes_uploaded += (std::mem::size_of_val(&*draw_list.vertices)
+                + std::mem::size_of_val(&*draw_list.indices))
+                as u64;
+            self.color_vbo_offset = offsets.0 + std::mem::size_of_val(&*draw_list.vertices) as u64;
+            self.color_ibo_offset = offsets.1 + std::mem::size_of_val(&*draw_list.indices) as u64;
+            offsets
         };
-
-        // Upload all chrome instances once.
-        let inst_off = if !instances.is_empty() {
-            let off = self.ensure_chrome_capacity(device, instances.len());
+        let chrome_offset = if draw_list.chrome_instances.is_empty() {
+            0
+        } else {
+            let offset = self.ensure_chrome_capacity(device, draw_list.chrome_instances.len());
             queue.write_buffer(
                 &self.chrome_inst_buffer,
-                off,
-                bytemuck::cast_slice(instances),
+                offset,
+                bytemuck::cast_slice(&draw_list.chrome_instances),
             );
-            self.chrome_inst_offset =
-                off + (instances.len() * std::mem::size_of::<ChromeInstance>()) as u64;
-            off
-        } else {
-            0
+            self.frame_stats.buffer_write_calls += 1;
+            self.frame_stats.buffer_bytes_uploaded +=
+                std::mem::size_of_val(&*draw_list.chrome_instances) as u64;
+            self.chrome_inst_offset = offset
+                + (draw_list.chrome_instances.len() * std::mem::size_of::<ChromeInstance>()) as u64;
+            offset
         };
-
-        // Upload all circle instances once.
-        let circle_off = if !circles.is_empty() {
-            let off = self.ensure_circle_capacity(device, circles.len());
-            queue.write_buffer(&self.circle_inst_buffer, off, bytemuck::cast_slice(circles));
-            self.circle_inst_offset =
-                off + (circles.len() * std::mem::size_of::<CircleInstance>()) as u64;
-            off
-        } else {
+        let circle_offset = if draw_list.circle_instances.is_empty() {
             0
+        } else {
+            let offset = self.ensure_circle_capacity(device, draw_list.circle_instances.len());
+            queue.write_buffer(
+                &self.circle_inst_buffer,
+                offset,
+                bytemuck::cast_slice(&draw_list.circle_instances),
+            );
+            self.frame_stats.buffer_write_calls += 1;
+            self.frame_stats.buffer_bytes_uploaded +=
+                std::mem::size_of_val(&*draw_list.circle_instances) as u64;
+            self.circle_inst_offset = offset
+                + (draw_list.circle_instances.len() * std::mem::size_of::<CircleInstance>()) as u64;
+            offset
         };
+        OrderedColorUpload {
+            vertex_offset,
+            index_offset,
+            chrome_offset,
+            circle_offset,
+        }
+    }
 
+    /// Draw one ordered color run from the payload uploaded once above.
+    fn draw_color_interleaved(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        cmd: &PaintCmd,
+        upload: OrderedColorUpload,
+    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ui color+chrome pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1473,8 +1662,11 @@ impl UiRenderer {
         // Draw a soup index sub-range with the color pipeline.
         let draw_soup = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
             pass.set_pipeline(&self.color_pipeline);
-            pass.set_vertex_buffer(0, self.color_vbo.slice(v_off..));
-            pass.set_index_buffer(self.color_ibo.slice(i_off..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.color_vbo.slice(upload.vertex_offset..));
+            pass.set_index_buffer(
+                self.color_ibo.slice(upload.index_offset..),
+                wgpu::IndexFormat::Uint32,
+            );
             pass.draw_indexed(range, 0, 0..1);
         };
 
@@ -1483,14 +1675,14 @@ impl UiRenderer {
             PaintCmd::Chrome { instances } => {
                 pass.set_pipeline(&self.chrome_pipeline);
                 pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                pass.set_vertex_buffer(1, self.chrome_inst_buffer.slice(inst_off..));
+                pass.set_vertex_buffer(1, self.chrome_inst_buffer.slice(upload.chrome_offset..));
                 pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
             }
             PaintCmd::Circle { instances } => {
                 pass.set_pipeline(&self.circle_pipeline);
                 pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                pass.set_vertex_buffer(1, self.circle_inst_buffer.slice(circle_off..));
+                pass.set_vertex_buffer(1, self.circle_inst_buffer.slice(upload.circle_offset..));
                 pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
             }
@@ -1511,6 +1703,8 @@ impl UiRenderer {
     ) {
         let off = self.ensure_icon_capacity(device, instances.len());
         queue.write_buffer(&self.icon_inst_buffer, off, bytemuck::cast_slice(instances));
+        self.frame_stats.buffer_write_calls += 1;
+        self.frame_stats.buffer_bytes_uploaded += std::mem::size_of_val(instances) as u64;
         self.icon_inst_offset = off + std::mem::size_of_val(instances) as u64;
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1547,13 +1741,16 @@ impl UiRenderer {
         let off = self.nine_inst_offset;
         let needed = off + (count * std::mem::size_of::<NineSliceInstance>()) as u64;
         if needed > self.nine_inst_capacity {
+            self.frame_stats.buffer_reallocations += 1;
             self.nine_inst_capacity = needed.next_power_of_two();
-            self.nine_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("ui nine-slice inst buffer"),
                 size: self.nine_inst_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            self.retired_buffers
+                .push(std::mem::replace(&mut self.nine_inst_buffer, replacement));
         }
         off
     }
@@ -1572,6 +1769,8 @@ impl UiRenderer {
     ) {
         let off = self.ensure_nine_capacity(device, instances.len());
         queue.write_buffer(&self.nine_inst_buffer, off, bytemuck::cast_slice(instances));
+        self.frame_stats.buffer_write_calls += 1;
+        self.frame_stats.buffer_bytes_uploaded += std::mem::size_of_val(instances) as u64;
         self.nine_inst_offset = off + std::mem::size_of_val(instances) as u64;
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1862,6 +2061,37 @@ mod tests {
             }
             assert!(!d.observe(id), "occasional rebuilds must not warn");
         }
+    }
+
+    #[test]
+    fn render_stats_warns_about_fragmentation_not_merely_size() {
+        let fragmented = RenderStats {
+            primitives: 160,
+            paint_runs: 140,
+            ..RenderStats::default()
+        };
+        assert_eq!(fragmented.warnings().len(), 1);
+        let large_batched = RenderStats {
+            primitives: 10_000,
+            paint_runs: 20,
+            ..RenderStats::default()
+        };
+        assert!(large_batched.warnings().is_empty());
+    }
+
+    #[test]
+    fn pressure_detector_requires_sustained_bad_frames_and_warns_once() {
+        let bad = RenderStats {
+            primitives: 160,
+            paint_runs: 140,
+            ..RenderStats::default()
+        };
+        let mut detector = RenderPressureDetector::default();
+        for _ in 1..RenderPressureDetector::WARN_AFTER {
+            assert!(!detector.observe(bad));
+        }
+        assert!(detector.observe(bad));
+        assert!(!detector.observe(bad));
     }
 
     // ---- DrawList / LayerStack identity (backs the detector) ----
