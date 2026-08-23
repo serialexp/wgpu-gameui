@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 (2026-08-23)
+
+### Bug Fixes
+
+- generate MSDF glyphs lazily
+
 ## 0.3.0 (2026-08-22)
 
 ### Features
