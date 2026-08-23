@@ -699,13 +699,10 @@ impl UiRenderer {
             mapped_at_creation: false,
         });
 
-        let mut text_renderer = TextRenderer::with_font_system(device, queue, format, font_system);
-        // Generate the printable-ASCII MSDF set up front so the first frame that
-        // shows text doesn't hitch on per-glyph generation.
-        text_renderer.prewarm_ascii(device, queue);
-        // Same for the curated Phosphor icon set.
-        #[cfg(feature = "phosphor-icons")]
-        text_renderer.prewarm_icons(device, queue);
+        // Glyphs are generated lazily from the first frame's actual working set.
+        // Eagerly rasterizing every ASCII and Phosphor glyph here made renderer
+        // construction needlessly CPU-heavy for small or usually-hidden UIs.
+        let text_renderer = TextRenderer::with_font_system(device, queue, format, font_system);
 
         let current_atlas_size = atlas.width();
 
@@ -810,10 +807,9 @@ impl UiRenderer {
     /// Pre-generate MSDF tiles for icon glyphs from an application-registered
     /// icon font, so the first frame that shows them doesn't hitch on generation.
     ///
-    /// The built-in Phosphor set is already warmed by [`UiRenderer::new`]; this is
-    /// the route for a font added via
-    /// [`register_icon_font`](crate::render::register_icon_font), whose glyph set
-    /// the library cannot enumerate for itself. Call once after registering.
+    /// This is opt-in for both the built-in Phosphor font and fonts added via
+    /// [`register_icon_font`](crate::render::register_icon_font). Pass only the
+    /// glyphs an application expects to need; all others remain lazily generated.
     #[cfg(feature = "phosphor-icons")]
     pub fn prewarm_icons(
         &mut self,

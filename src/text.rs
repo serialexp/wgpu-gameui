@@ -561,8 +561,8 @@ impl TextRenderer {
     }
 
     /// Pre-generate every curated [`PhosphorIcon`] into the icon atlas so the
-    /// first frame that shows an icon doesn't hitch. Call once after construction
-    /// (the renderer does this in `UiRenderer::new`).
+    /// first frame that shows an icon doesn't hitch. This is intentionally opt-in;
+    /// renderer construction otherwise generates icon glyphs lazily.
     #[cfg(feature = "phosphor-icons")]
     pub fn prewarm_icons(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let glyphs: Vec<IconGlyph> = PhosphorIcon::ALL.iter().filter_map(|i| i.glyph()).collect();
