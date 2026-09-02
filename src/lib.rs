@@ -221,6 +221,14 @@ pub struct InputState {
     pub key_end: bool,
     /// Delete key was pressed this frame.
     pub key_delete: bool,
+    /// Platform select-all shortcut (Ctrl+A, or Cmd+A on macOS) was pressed.
+    pub key_select_all: bool,
+    /// Platform cut shortcut (Ctrl+X, or Cmd+X on macOS) was pressed.
+    pub key_cut: bool,
+    /// Platform copy shortcut (Ctrl+C, or Cmd+C on macOS) was pressed.
+    pub key_copy: bool,
+    /// Platform paste shortcut (Ctrl+V, or Cmd+V on macOS) was pressed.
+    pub key_paste: bool,
     /// Tab key was pressed this frame. Drives focus navigation
     /// (Shift+Tab reverses via [`shift_pressed`](Self::shift_pressed)).
     pub key_tab: bool,
@@ -286,6 +294,10 @@ impl InputState {
         self.key_home = false;
         self.key_end = false;
         self.key_delete = false;
+        self.key_select_all = false;
+        self.key_cut = false;
+        self.key_copy = false;
+        self.key_paste = false;
         self.key_tab = false;
         self.key_escape = false;
         self.key_space = false;

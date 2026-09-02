@@ -61,7 +61,7 @@ pub use separator::{Orientation, Separator};
 pub use slider::{Slider, SliderOutput};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
-pub use text_input::TextInput;
+pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
 pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
 pub use tooltip::{TooltipContent, TooltipLayer};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};

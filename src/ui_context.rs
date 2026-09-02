@@ -176,6 +176,10 @@ pub struct UiState {
     /// these directly — the verb owns the cursor while the caller owns the
     /// `String`.
     text_inputs: HashMap<FocusId, TextInput>,
+    /// Shared platform clipboard reader installed on retained text editors.
+    clipboard_get: Option<crate::widgets::ClipboardGet>,
+    /// Shared platform clipboard writer installed on retained text editors.
+    clipboard_set: Option<crate::widgets::ClipboardSet>,
     /// Vertical gap inserted between auto-advanced verbs. Re-seeded from
     /// `theme.spacing` each frame by [`UiState::begin_frame`].
     pub item_gap: f32,
@@ -207,6 +211,16 @@ impl UiState {
     /// [`begin_frame`](Self::begin_frame) seeds it from the theme.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Install platform clipboard callbacks used by all text and textarea fields.
+    pub fn set_clipboard(
+        &mut self,
+        get: impl FnMut() -> String + 'static,
+        set: impl FnMut(String) + 'static,
+    ) {
+        self.clipboard_get = Some(std::rc::Rc::new(std::cell::RefCell::new(get)));
+        self.clipboard_set = Some(std::rc::Rc::new(std::cell::RefCell::new(set)));
     }
 
     /// Per-frame setup: fill this frame's navigation intents via `nav`, arm focus
@@ -1698,9 +1712,13 @@ impl<'a> UiContext<'a> {
                     return false;
                 }
             };
-            // Touch two `UiState` fields at once.
+            // Touch the retained editor, focus, and shared clipboard together.
             let UiState {
-                text_inputs, focus, ..
+                text_inputs,
+                focus,
+                clipboard_get,
+                clipboard_set,
+                ..
             } = &mut **state;
             let ti = text_inputs.entry(id).or_insert_with(|| {
                 let mut t = TextInput::new(local.x, local.y, local.width, local.height);
@@ -1714,6 +1732,12 @@ impl<'a> UiContext<'a> {
             ti.width = local.width;
             ti.height = local.height;
             ti.mask = mask;
+            if let Some(get) = clipboard_get {
+                ti.set_shared_clipboard_get(get.clone());
+            }
+            if let Some(set) = clipboard_set {
+                ti.set_shared_clipboard_set(set.clone());
+            }
             ti.placeholder.clear();
             ti.placeholder.push_str(placeholder);
             // External changes to the caller's buffer win over our cached value.
@@ -1772,7 +1796,11 @@ impl<'a> UiContext<'a> {
                 }
             };
             let UiState {
-                text_inputs, focus, ..
+                text_inputs,
+                focus,
+                clipboard_get,
+                clipboard_set,
+                ..
             } = &mut **state;
             let ti = text_inputs.entry(id).or_insert_with(|| {
                 let mut t = TextInput::new(local.x, local.y, local.width, local.height)
@@ -1786,6 +1814,12 @@ impl<'a> UiContext<'a> {
             ti.width = local.width;
             ti.height = local.height;
             ti.multiline = true;
+            if let Some(get) = clipboard_get {
+                ti.set_shared_clipboard_get(get.clone());
+            }
+            if let Some(set) = clipboard_set {
+                ti.set_shared_clipboard_set(set.clone());
+            }
             ti.placeholder.clear();
             ti.placeholder.push_str(placeholder);
             if ti.value != *buffer {
