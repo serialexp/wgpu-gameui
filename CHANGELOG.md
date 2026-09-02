@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 (2026-09-02)
+
+### Features
+
+- add selection clipboard and scrolling
+
 ## 0.3.1 (2026-08-23)
 
 ### Bug Fixes
