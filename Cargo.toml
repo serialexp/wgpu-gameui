@@ -32,9 +32,17 @@ notosans = { version = "0.1.0", optional = true }
 # Blocking executor used only to create a headless wgpu adapter/device in
 # `render::capture::HeadlessGpu`. Zero transitive dependencies.
 pollster = { version = "0.3", optional = true }
+# Generic Tree-sitter highlighting is entirely opt-in. Language grammars are
+# separate features so normal text widgets do not compile parser dependencies.
+tree-sitter-highlight = { version = "0.25.10", optional = true }
+tree-sitter-lua = { version = "0.5.0", optional = true }
 
 [features]
 default = ["bundled-font", "phosphor-icons", "headless"]
+# Generic retained Tree-sitter highlighting API.
+syntax-highlighting = ["dep:tree-sitter-highlight"]
+# Lua grammar and its configured highlighter constructor.
+syntax-lua = ["syntax-highlighting", "dep:tree-sitter-lua"]
 # Emit tracing spans around the render path for Tracy profiling.
 tracy = ["dep:tracing"]
 # Embed Noto Sans and register it as the default sans-serif family. Disable

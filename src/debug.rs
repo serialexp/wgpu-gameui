@@ -2795,6 +2795,7 @@ mod tests {
         assert!(codes(&strict).contains(&"partially_clipped"));
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn overlap_defaults_to_layout_peers_but_strict_includes_widget_internals() {
         let mut list = DrawList::new();
@@ -2921,6 +2922,7 @@ mod tests {
     /// of the row on purpose — the box is slid up so the glyph ink, not the box,
     /// lands on the row's centre. Measuring the box instead of the ink turned
     /// every centred label in the widget gallery into an overflow warning.
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn an_optically_centred_label_does_not_overflow_its_row() {
         let row = Rect::new(0.0, 100.0, 120.0, 20.0);

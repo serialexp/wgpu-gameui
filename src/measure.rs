@@ -790,6 +790,7 @@ mod tests {
         assert_eq!(measured.measurement.measured_width, None);
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn constrained_height_clips_prepared_paint_but_preserves_shaped_metrics() {
         let theme = crate::Theme::default();

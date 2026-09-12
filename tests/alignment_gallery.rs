@@ -306,6 +306,7 @@ fn an_unscoped_column_is_not_analysed() {
 }
 
 /// Render the fixture so it can be eyeballed alongside the dump.
+#[cfg(feature = "headless")]
 #[test]
 #[ignore = "needs a GPU adapter"]
 fn render_alignment_gallery() {

@@ -1291,6 +1291,16 @@ pub fn resolve_span_color(byte_start: u32, spans: &[TextSpan]) -> Option<[f32; 4
     None
 }
 
+/// Resolve a glyph colour from sorted byte-range styles in logarithmic time.
+pub fn resolve_range_color(byte_start: u32, ranges: &[TextStyleRange]) -> Option<[f32; 4]> {
+    let byte = byte_start as usize;
+    let candidate = ranges.partition_point(|range| range.range.start <= byte);
+    candidate.checked_sub(1).and_then(|index| {
+        let range = &ranges[index];
+        (byte < range.range.end).then_some(range.color).flatten()
+    })
+}
+
 /// Turn a block's cached relative glyph layout into `GlyphPlacement`s, applying
 /// the block's position, color, clip and effects. Shared by the cache-hit and
 /// cache-miss paths so both produce identical output. Takes the atlas / font-key
@@ -1331,11 +1341,21 @@ fn append_placements(
         let Some(tile) = atlas.glyph(font_key, g.glyph_id, &[]) else {
             continue; // present on every later frame; defensive only
         };
-        // Per-span colour override: only evaluated when spans are present.
-        let fill = if spans.is_empty() {
-            block_fill
-        } else {
+        // Byte ranges are searched logarithmically, avoiding the old
+        // glyphs-times-tokens scan. Legacy owned spans remain supported.
+        let fill = if !block.style_ranges.is_empty() {
+            resolve_range_color(g.byte_start, &block.style_ranges)
+                .map(|mut color| {
+                    for (channel, tint) in color.iter_mut().zip(block.style_range_tint) {
+                        *channel = (*channel * tint).clamp(0.0, 1.0);
+                    }
+                    color
+                })
+                .unwrap_or(block_fill)
+        } else if !spans.is_empty() {
             resolve_span_color(g.byte_start, spans).unwrap_or(block_fill)
+        } else {
+            block_fill
         };
         out.push(GlyphPlacement {
             tile,
@@ -3253,6 +3273,19 @@ impl From<[f32; 4]> for Underline {
     }
 }
 
+/// A colour/underline override over a half-open byte range of a [`TextBlock`]'s
+/// existing [`TextBlock::content`]. Ranges avoid copying text into one `String`
+/// per token and should be sorted, non-overlapping, and on UTF-8 boundaries.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyleRange {
+    /// Half-open byte range in [`TextBlock::content`].
+    pub range: std::ops::Range<usize>,
+    /// Per-range fill colour, or `None` to inherit the block colour.
+    pub color: Option<[f32; 4]>,
+    /// Underline style for this range.
+    pub underline: Underline,
+}
+
 /// A run of text within a [`TextBlock`] with optional per-span colour and
 /// underline overrides.
 ///
@@ -3375,6 +3408,12 @@ pub struct TextBlock {
     /// draw time and need not be set by the caller. All spans must share the
     /// block's global font attributes (see [`TextSpan`]).
     pub spans: Vec<TextSpan>,
+    /// Sorted byte-range style overrides over `content`. Unlike `spans`, these
+    /// retain the original content and allocate no string per styled token.
+    pub style_ranges: std::sync::Arc<Vec<TextStyleRange>>,
+    /// Draw-list tint applied lazily to range colours during glyph placement.
+    /// Keeping it separate preserves shared range storage under tinted scopes.
+    pub style_range_tint: [f32; 4],
     /// Line-wrapping policy when the content exceeds `max_width` (default
     /// [`WrapMode::WordOrGlyph`], matching the historical implicit behaviour).
     /// Ignored in `ellipsize` mode, which always lays out on a single line.
@@ -3414,6 +3453,8 @@ impl TextBlock {
             weight: Weight::NORMAL,
             style: Style::Normal,
             spans: Vec::new(),
+            style_ranges: std::sync::Arc::new(Vec::new()),
+            style_range_tint: [1.0; 4],
             wrap: WrapMode::default(),
             vertical: false,
         }
@@ -3579,6 +3620,24 @@ impl TextBlock {
     /// must share the block's global font attributes).
     pub fn with_spans(mut self, spans: Vec<TextSpan>) -> Self {
         self.spans = spans;
+        self.style_ranges = std::sync::Arc::new(Vec::new());
+        self
+    }
+
+    /// Apply sorted byte-range styles without replacing or copying `content`.
+    /// Invalid/out-of-order ranges are ignored defensively by colour resolution;
+    /// callers should produce non-overlapping ranges on UTF-8 boundaries.
+    pub fn with_style_ranges(mut self, ranges: Vec<TextStyleRange>) -> Self {
+        self.style_ranges = std::sync::Arc::new(ranges);
+        self.spans.clear();
+        self
+    }
+
+    /// Apply shared sorted byte-range styles. Cloning the `Arc` is constant time,
+    /// making this suitable for retained editor caches submitted every frame.
+    pub fn with_shared_style_ranges(mut self, ranges: std::sync::Arc<Vec<TextStyleRange>>) -> Self {
+        self.style_ranges = ranges;
+        self.spans.clear();
         self
     }
 
@@ -3598,9 +3657,9 @@ mod tests {
         TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, Underline, VisualGlyph,
         WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
         cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
-        load_font_bytes, measure_with_font_system, resolve_span_color, selection_rects,
-        shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
-        vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
+        load_font_bytes, measure_with_font_system, resolve_range_color, resolve_span_color,
+        selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
+        text_visual_layout, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
 
@@ -3650,6 +3709,26 @@ mod tests {
     #[test]
     fn resolve_span_color_empty_spans_returns_none() {
         assert_eq!(resolve_span_color(0, &[]), None);
+    }
+
+    #[test]
+    fn resolve_range_color_binary_searches_sorted_ranges() {
+        let ranges = vec![
+            super::TextStyleRange {
+                range: 0..5,
+                color: Some(red()),
+                underline: Underline::None,
+            },
+            super::TextStyleRange {
+                range: 8..12,
+                color: Some(blue()),
+                underline: Underline::None,
+            },
+        ];
+        assert_eq!(resolve_range_color(4, &ranges), Some(red()));
+        assert_eq!(resolve_range_color(5, &ranges), None);
+        assert_eq!(resolve_range_color(9, &ranges), Some(blue()));
+        assert_eq!(resolve_range_color(12, &ranges), None);
     }
 
     #[test]

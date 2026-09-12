@@ -1757,7 +1757,7 @@ impl DrawList {
                 (nb * 255.0).round() as u8,
                 (na * 255.0).round() as u8,
             );
-            // Tint per-span colour and underline overrides with the same factor.
+            // Tint per-span/range colour and underline overrides with the same factor.
             for span in &mut block.spans {
                 if let Some(c) = &mut span.color {
                     c[0] = (c[0] * tint[0]).clamp(0.0, 1.0);
@@ -1775,6 +1775,9 @@ impl DrawList {
                     c[3] = (c[3] * tint[3]).clamp(0.0, 1.0);
                 }
             }
+            // Range styles are shared by retained editors; preserve that Arc and
+            // defer tint multiplication to glyph placement instead of cloning it.
+            block.style_range_tint = tint;
         }
 
         // Emit underline rects for spans that have `underline` set, BEFORE
@@ -2353,6 +2356,21 @@ mod tests {
         list.truncate_clip(base);
         assert_eq!(list.clip_len(), 0);
         assert_eq!(list.current_clip(), None);
+    }
+
+    #[test]
+    fn byte_range_styles_keep_original_content_and_shared_storage() {
+        let ranges = std::sync::Arc::new(vec![crate::TextStyleRange {
+            range: 0..5,
+            color: Some([1.0, 0.0, 0.0, 1.0]),
+            underline: crate::Underline::None,
+        }]);
+        let mut list = DrawList::new();
+        list.text(
+            crate::TextBlock::new("local café", 0.0, 0.0).with_shared_style_ranges(ranges.clone()),
+        );
+        assert_eq!(list.texts[0].content, "local café");
+        assert!(std::sync::Arc::ptr_eq(&list.texts[0].style_ranges, &ranges));
     }
 
     #[test]

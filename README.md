@@ -104,6 +104,7 @@ cargo run --example hello_ui
 | Text input | `text_input(id, buf, placeholder, w) -> bool` | `TextInput::draw(id, ctx)` |
 | Password input | `password_input(id, buf, placeholder, w)` | `TextInput::password()` |
 | Text area | `text_area(id, buf, placeholder, w, rows)` | `TextInput::with_multiline(true)` |
+| Syntax editor (`syntax-highlighting`) | `text_area_syntax(id, buf, placeholder, w, rows, syntax)` | `TextInput::with_syntax_highlighting(...)` |
 | Number input | `number_input(id, val, min, max, step, dec, w)` | `NumberInput::draw(val, id, ti, rect, ctx)` |
 | Dropdown | `dropdown(id, options, selected, w)` | `Dropdown::draw(ctx)` + `DropdownState` |
 | Tree | `tree_node` / `tree_leaf` / `tree_pop` | `TreeNode::draw(rect, ctx)` |
@@ -125,6 +126,14 @@ cargo run --example hello_ui
 | Hit zone | `hit_zone(w, h)` / `hit_zone_at(rect)` | `HitZone::test(rect, input)` |
 | Toast | *(state on `UiState::toasts`)* | `ToastStack::push` / `tick` / `draw` |
 | Tooltip | *(state on `UiState::tooltips`)* | `TooltipLayer::hover_zone` / `tick` / `draw` |
+
+With `syntax-lua`, `SyntaxHighlighting::lua(SyntaxTheme::default())` configures
+Lua highlighting for keywords, functions, literals, strings, comments, and
+operators. Retained text editors cache source-backed byte ranges and only rerun
+Tree-sitter after source or theme changes; normal frames reuse the cached ranges
+and preserve the exact editable string. Other grammars can use
+`SyntaxHighlighting::new(HighlightConfiguration, SyntaxTheme)` with the generic
+`syntax-highlighting` feature.
 
 > **List and Table** stay raw widgets (no façade verb) because their
 > closure-based row/cell APIs don't fit the simple auto-advance verb model.

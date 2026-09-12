@@ -36,6 +36,8 @@ use wgpu_gameui::{
     Slider, StyleResolver, Table, TableCell, TableColumn, TextBlock, TextInput, TextMeasurer,
     Theme, UiRenderer, UiState,
 };
+#[cfg(feature = "syntax-lua")]
+use wgpu_gameui::{SyntaxHighlighting, SyntaxTheme};
 
 const W: u32 = 1920;
 const H: u32 = 1080;
@@ -754,6 +756,49 @@ fn bench_text_input_edit(c: &mut Criterion) {
     group.finish();
 }
 
+/// Doctrine-sized Lua source editor cost. Separates cache-hit frames from an
+/// edit that invalidates and rebuilds the Tree-sitter range cache.
+#[cfg(feature = "syntax-lua")]
+fn bench_lua_syntax_highlighting(c: &mut Criterion) {
+    let harness = Harness::new();
+    let theme = Theme::default();
+    let mut list = harness.draw_list();
+    let input = InputState::default();
+    let syntax = SyntaxHighlighting::lua(SyntaxTheme::default()).expect("valid bundled Lua query");
+    let source = "function tick(state)\n  -- engage every live threat\n  for _, threat in ipairs(state.threats) do\n    if threat.active and state.launcher.ready then\n      launch(state.launcher.id, threat.id)\n    end\n  end\nend\n".repeat(64);
+    let mut field = TextInput::new(0.0, 0.0, 900.0, 700.0)
+        .with_multiline(true)
+        .with_value(source);
+    field.set_syntax_highlighting(Some(syntax));
+
+    let mut group = c.benchmark_group("lua_syntax_highlighting");
+    group.throughput(Throughput::Bytes(field.value.len() as u64));
+    group.bench_function("cached_draw", |b| {
+        b.iter(|| {
+            list.clear();
+            let mut focus = FocusState::new();
+            let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 900.0, 700.0);
+            std::hint::black_box(field.draw(1, &mut ctx));
+        });
+    });
+    let mut next_suffix = ' ';
+    group.bench_function("edit_and_rehighlight", |b| {
+        b.iter(|| {
+            field.value.pop();
+            field.value.push(next_suffix);
+            next_suffix = if next_suffix == ' ' { '\t' } else { ' ' };
+            list.clear();
+            let mut focus = FocusState::new();
+            let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 900.0, 700.0);
+            std::hint::black_box(field.draw(1, &mut ctx));
+        });
+    });
+    group.finish();
+}
+
+#[cfg(not(feature = "syntax-lua"))]
+fn bench_lua_syntax_highlighting(_: &mut Criterion) {}
+
 /// CPU-only cost of drawing N `ScrollView` regions, each wrapping a simple
 /// content closure (a handful of quads). Measures the scroll-clip + transform +
 /// scrollbar overhead independent of the content.
@@ -1012,6 +1057,7 @@ criterion_group!(
     bench_text_shape,
     bench_interactive_widgets,
     bench_text_input_edit,
+    bench_lua_syntax_highlighting,
     bench_scroll_view,
     bench_list_virtual,
     bench_table,

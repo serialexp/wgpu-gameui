@@ -59,15 +59,22 @@
     )
 )]
 
+#[cfg(feature = "syntax-highlighting")]
+mod syntax;
 mod text;
 
+#[cfg(feature = "syntax-lua")]
+pub use syntax::SyntaxConfigurationError;
+#[cfg(feature = "syntax-highlighting")]
+pub use syntax::{HighlightConfiguration, SyntaxHighlighting, SyntaxTheme};
 pub use text::{
     CaretPos, FontHandle, FontSystemHandle, FontVMetrics, SelRect, TextAlign, TextBlock,
     TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
-    Underline, VisualCaret, VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line,
-    caret_for_byte, load_font_bytes, load_font_file, register_bundled_fonts, resolve_span_color,
-    selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
-    text_visual_layout, vcentered_line_y, visual_caret_neighbor, visual_caret_pos,
+    TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, byte_at_point,
+    byte_on_adjacent_line, caret_for_byte, load_font_bytes, load_font_file, register_bundled_fonts,
+    resolve_range_color, resolve_span_color, selection_rects, shared_font_system,
+    text_caret_layout, text_cursor_positions, text_visual_layout, vcentered_line_y,
+    visual_caret_neighbor, visual_caret_pos,
 };
 
 /// Font weight and style selectors (re-exported from `glyphon`/`cosmic-text`)

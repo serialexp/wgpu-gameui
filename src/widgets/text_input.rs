@@ -11,6 +11,10 @@ use crate::text::{
     CaretPos, TextBlock, TextSpan, Underline, VisualGlyph, WrapMode, byte_at_point,
     byte_on_adjacent_line, caret_for_byte, selection_rects, visual_caret_neighbor,
 };
+#[cfg(feature = "syntax-highlighting")]
+use crate::{SyntaxHighlighting, TextStyleRange};
+#[cfg(feature = "syntax-highlighting")]
+use tree_sitter_highlight::Highlighter;
 
 use super::{DrawContext, FocusId};
 
@@ -234,6 +238,22 @@ pub struct TextInput {
     clipboard_get: Option<ClipboardGet>,
     /// Clipboard setter — writes text to the clipboard.
     clipboard_set: Option<ClipboardSet>,
+    /// Optional language and palette for multiline source highlighting.
+    #[cfg(feature = "syntax-highlighting")]
+    syntax: Option<SyntaxHighlighting>,
+    /// Value for which `syntax_ranges` was last built.
+    #[cfg(feature = "syntax-highlighting")]
+    syntax_cached_value: String,
+    /// Cached byte-range styles; cheap `Arc` clone into each frame's TextBlock.
+    #[cfg(feature = "syntax-highlighting")]
+    syntax_ranges: std::sync::Arc<Vec<TextStyleRange>>,
+    /// Reusable range storage and parser, used only when source changes.
+    #[cfg(feature = "syntax-highlighting")]
+    syntax_range_scratch: Vec<TextStyleRange>,
+    #[cfg(feature = "syntax-highlighting")]
+    syntax_highlighter: Highlighter,
+    #[cfg(all(test, feature = "syntax-highlighting"))]
+    syntax_rebuilds: usize,
 }
 
 impl Default for TextInput {
@@ -256,6 +276,18 @@ impl Default for TextInput {
             direction: crate::TextDirection::Auto,
             clipboard_get: None,
             clipboard_set: None,
+            #[cfg(feature = "syntax-highlighting")]
+            syntax: None,
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_cached_value: String::new(),
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_ranges: std::sync::Arc::new(Vec::new()),
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_range_scratch: Vec::new(),
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_highlighter: Highlighter::new(),
+            #[cfg(all(test, feature = "syntax-highlighting"))]
+            syntax_rebuilds: 0,
         }
     }
 }
@@ -281,6 +313,18 @@ impl TextInput {
             direction: crate::TextDirection::Auto,
             clipboard_get: None,
             clipboard_set: None,
+            #[cfg(feature = "syntax-highlighting")]
+            syntax: None,
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_cached_value: String::new(),
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_ranges: std::sync::Arc::new(Vec::new()),
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_range_scratch: Vec::new(),
+            #[cfg(feature = "syntax-highlighting")]
+            syntax_highlighter: Highlighter::new(),
+            #[cfg(all(test, feature = "syntax-highlighting"))]
+            syntax_rebuilds: 0,
         }
     }
 
@@ -301,6 +345,50 @@ impl TextInput {
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    /// Set or clear syntax highlighting. Changing the language or palette
+    /// invalidates the retained byte-range cache; reusing the same configuration
+    /// does not reparse.
+    #[cfg(feature = "syntax-highlighting")]
+    pub fn set_syntax_highlighting(&mut self, syntax: Option<SyntaxHighlighting>) {
+        if self.syntax != syntax {
+            self.syntax = syntax;
+            self.syntax_cached_value.clear();
+            self.syntax_ranges = std::sync::Arc::new(Vec::new());
+        }
+    }
+
+    /// Builder form of [`set_syntax_highlighting`](Self::set_syntax_highlighting).
+    #[cfg(feature = "syntax-highlighting")]
+    pub fn with_syntax_highlighting(mut self, syntax: SyntaxHighlighting) -> Self {
+        self.set_syntax_highlighting(Some(syntax));
+        self
+    }
+
+    #[cfg(feature = "syntax-highlighting")]
+    fn update_syntax_cache(&mut self) {
+        let Some(syntax) = &self.syntax else {
+            return;
+        };
+        if self.syntax_cached_value == self.value {
+            return;
+        }
+        self.syntax_range_scratch.clear();
+        syntax.highlight_into(
+            &mut self.syntax_highlighter,
+            &self.value,
+            &mut self.syntax_range_scratch,
+        );
+        let fresh = std::mem::take(&mut self.syntax_range_scratch);
+        let old = std::mem::replace(&mut self.syntax_ranges, std::sync::Arc::new(fresh));
+        self.syntax_range_scratch = std::sync::Arc::try_unwrap(old).unwrap_or_default();
+        self.syntax_cached_value.clear();
+        self.syntax_cached_value.push_str(&self.value);
+        #[cfg(test)]
+        {
+            self.syntax_rebuilds += 1;
+        }
     }
 
     /// Make this a password field: characters are displayed as a bullet (`•`)
@@ -1080,6 +1168,12 @@ impl TextInput {
         }
 
         // ---- Resolve drawn text ----
+        // Reparse only after an edit or syntax configuration change. Cached byte
+        // ranges are shared into the per-frame TextBlock in constant time.
+        #[cfg(feature = "syntax-highlighting")]
+        if multiline && !composing {
+            self.update_syntax_cache();
+        }
         // The drawn string is the masked display (plaintext when unmasked); the
         // placeholder is shown unmasked when the value is empty. Built after the
         // autoscroll mutation above so the borrow it holds on `self` doesn't clash.
@@ -1218,6 +1312,12 @@ impl TextInput {
                 )
                 .with_max_width(text_max_w)
                 .with_direction(self.direction);
+            #[cfg(feature = "syntax-highlighting")]
+            let text = if multiline && !self.value.is_empty() && self.syntax.is_some() {
+                text.with_shared_style_ranges(self.syntax_ranges.clone())
+            } else {
+                text
+            };
             list.text(text);
         }
 
@@ -2301,5 +2401,33 @@ mod tests {
         assert_eq!(floor_char_boundary("é", 1), 0);
         assert_eq!(floor_char_boundary("é", 2), 2);
         assert_eq!(floor_char_boundary("é", 99), 2, "clamped to len");
+    }
+
+    #[cfg(feature = "syntax-lua")]
+    #[test]
+    fn syntax_cache_rebuilds_only_for_value_or_configuration_changes() {
+        let syntax = crate::SyntaxHighlighting::lua(crate::SyntaxTheme::default()).unwrap();
+        let mut field = TextInput::new(0.0, 0.0, 200.0, 100.0)
+            .with_multiline(true)
+            .with_value("local x = 1")
+            .with_syntax_highlighting(syntax.clone());
+
+        field.update_syntax_cache();
+        assert_eq!(field.syntax_rebuilds, 1);
+        let first = field.syntax_ranges.clone();
+        field.update_syntax_cache();
+        assert_eq!(field.syntax_rebuilds, 1);
+        assert!(std::sync::Arc::ptr_eq(&first, &field.syntax_ranges));
+
+        field.value.push_str("\nreturn x");
+        field.update_syntax_cache();
+        assert_eq!(field.syntax_rebuilds, 2);
+        assert!(!std::sync::Arc::ptr_eq(&first, &field.syntax_ranges));
+
+        let mut changed_theme = crate::SyntaxTheme::default();
+        changed_theme.keyword = [1.0, 0.0, 0.0, 1.0];
+        field.set_syntax_highlighting(Some(crate::SyntaxHighlighting::lua(changed_theme).unwrap()));
+        field.update_syntax_cache();
+        assert_eq!(field.syntax_rebuilds, 3);
     }
 }

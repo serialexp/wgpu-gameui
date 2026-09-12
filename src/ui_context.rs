@@ -1822,6 +1822,42 @@ impl<'a> UiContext<'a> {
         w: Option<f32>,
         rows: u16,
     ) -> bool {
+        self.text_area_impl(
+            id,
+            buffer,
+            placeholder,
+            w,
+            rows,
+            #[cfg(feature = "syntax-highlighting")]
+            None,
+        )
+    }
+
+    /// Multi-line source editor with retained syntax highlighting. This has the
+    /// same sizing, editing, and return contract as [`text_area`](Self::text_area),
+    /// while caching highlight byte ranges until either `buffer` or `syntax` changes.
+    #[cfg(feature = "syntax-highlighting")]
+    pub fn text_area_syntax(
+        &mut self,
+        id: FocusId,
+        buffer: &mut String,
+        placeholder: &str,
+        w: Option<f32>,
+        rows: u16,
+        syntax: &crate::SyntaxHighlighting,
+    ) -> bool {
+        self.text_area_impl(id, buffer, placeholder, w, rows, Some(syntax.clone()))
+    }
+
+    fn text_area_impl(
+        &mut self,
+        id: FocusId,
+        buffer: &mut String,
+        placeholder: &str,
+        w: Option<f32>,
+        rows: u16,
+        #[cfg(feature = "syntax-highlighting")] syntax: Option<crate::SyntaxHighlighting>,
+    ) -> bool {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => return false,
@@ -1860,6 +1896,8 @@ impl<'a> UiContext<'a> {
             ti.width = local.width;
             ti.height = local.height;
             ti.multiline = true;
+            #[cfg(feature = "syntax-highlighting")]
+            ti.set_syntax_highlighting(syntax);
             if let Some(get) = clipboard_get {
                 ti.set_shared_clipboard_get(get.clone());
             }
