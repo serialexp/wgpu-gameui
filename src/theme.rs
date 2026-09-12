@@ -147,7 +147,7 @@ impl Default for Theme {
             progress_fill_medium: [0.8, 0.7, 0.2, 1.0], // Yellow for medium
 
             // Sizing
-            padding: 16.0,
+            padding: 6.0,
             spacing: 12.0,
             border_radius: 6.0,
             border_width: 1.0,

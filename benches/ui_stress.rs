@@ -32,8 +32,9 @@ use wgpu_gameui::layout::{Anchor, LayoutResult, Positioned, Rect, Size, VStack};
 use wgpu_gameui::{
     AnimSlot, AnimationState, Button, Checkbox, ColumnWidth, DragCapture, DrawContext, DrawList,
     Easing, FocusState, FontSystemHandle, Frame, InputState, KeyboardNav, List, ListItem,
-    ListState, NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell,
-    TableColumn, TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
+    ListState, MeasureBuffer, MeasuredChild, Measurement, NumberInput, ScrollState, ScrollView,
+    Slider, StyleResolver, Table, TableCell, TableColumn, TextBlock, TextInput, TextMeasurer,
+    Theme, UiRenderer, UiState,
 };
 
 const W: u32 = 1920;
@@ -450,6 +451,84 @@ fn bench_layout(c: &mut Criterion) {
             b.iter(|| {
                 tree.layout_screen_into(1920.0, 1080.0, &mut buf);
                 std::hint::black_box(&buf);
+            });
+        });
+    }
+    group.finish();
+}
+
+/// CPU-only measured-stack arrangement. Child measurement records and both
+/// output buffers are built once and reused, matching the intended frame path.
+fn bench_measured_layout(c: &mut Criterion) {
+    let counts: &[usize] = &[100, 1_000, 10_000, 50_000];
+    let mut group = c.benchmark_group("measured_layout");
+    for &count in counts {
+        let mut measured = MeasureBuffer::new();
+        for i in 0..count {
+            let measurement = Measurement::new(
+                [8.0, 20.0],
+                [40.0 + (i % 7) as f32, 20.0],
+                [None, Some(20.0)],
+                Some(15.0),
+            );
+            measured.push(MeasuredChild::fit(measurement));
+        }
+        let bounds = Rect::new(0.0, 0.0, 600.0, count as f32 * 22.0);
+        let mut out = LayoutResult::default();
+        measured
+            .arrange_vstack_into(
+                bounds,
+                2.0,
+                0.0,
+                wgpu_gameui::layout::MainAlign::Start,
+                &mut out,
+            )
+            .unwrap();
+
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
+            b.iter(|| {
+                measured
+                    .arrange_vstack_into(
+                        bounds,
+                        2.0,
+                        0.0,
+                        wgpu_gameui::layout::MainAlign::Start,
+                        &mut out,
+                    )
+                    .unwrap();
+                std::hint::black_box(&out);
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Contextual text measurement throughput, including the complete structured
+/// metrics path (intrinsic width, constrained shape, ink band, and font metrics).
+fn bench_contextual_measure(c: &mut Criterion) {
+    let counts: &[usize] = &[100, 1_000, 10_000];
+    let strings: Vec<String> = (0..10_000).map(|i| format!("item {i:05}")).collect();
+    let theme = Theme::default();
+    let mut text = TextMeasurer::new();
+    let mut group = c.benchmark_group("contextual_measure");
+    for &count in counts {
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
+            b.iter(|| {
+                let styles = StyleResolver::new(&theme);
+                let mut cx = wgpu_gameui::MeasureContext::new(
+                    &mut text,
+                    styles,
+                    wgpu_gameui::FontSpec::default(),
+                    wgpu_gameui::MeasureConstraints::with_max_width(120.0),
+                    1.0,
+                    wgpu_gameui::WrapMode::Word,
+                );
+                for s in &strings[..count] {
+                    let block = cx.text_block(s);
+                    std::hint::black_box(cx.measure_text(block));
+                }
             });
         });
     }
@@ -928,6 +1007,8 @@ criterion_group!(
     bench_primitives_build,
     bench_primitives_render,
     bench_layout,
+    bench_measured_layout,
+    bench_contextual_measure,
     bench_text_shape,
     bench_interactive_widgets,
     bench_text_input_edit,

@@ -16,12 +16,12 @@ use wgpu_gameui::layout::{Flow as LayoutFlow, HStack, LayoutNode, MainAlign, Rec
 use wgpu_gameui::{
     Backdrop, Banner, BlurParams, Button, Checkbox, ColorPicker, ColumnWidth, Corner, DragCapture,
     DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState, Group, HitZone,
-    Hsva, ImageButton, ImageFit, InputState, LayerStack, List, ListItem, ListState, NumberInput,
-    ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode, Separator,
-    Severity, Slider, StyleKey, StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs,
-    TextAlign, TextBlock, TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack,
-    TooltipContent, TooltipLayer, TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState,
-    Underline, ease, lerp_color,
+    Hsva, ImageButton, ImageFit, InputState, LayerStack, List, ListItem, ListState, MeasureBuffer,
+    MeasureConstraints, MeasuredChild, NumberInput, ProgressBar, ProgressFill, RadioGroup,
+    ScrollState, ScrollView, SelectionMode, Separator, Severity, Slider, StyleKey, StyleOverlay,
+    StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection,
+    TextInput, TextSpan, Theme, Toast, ToastStack, TooltipContent, TooltipLayer, TreeAction,
+    TreeNode, TreeState, UiContext, UiRenderer, UiState, Underline, ease, lerp_color,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -1847,6 +1847,55 @@ fn render_widget_gallery() {
 
             let r = flow.cell(list, "Radial", 150.0, h);
             list.radial_gradient(r, [1.0, 1.0, 1.0, 1.0], [0.09, 0.10, 0.13, 1.0], 64);
+        }
+
+        // --- Contextual measured layout ------------------------------------
+        // Text and button are measured once under the active style/font, then a
+        // reusable plain-data HStack aligns their first baselines. Each arranged
+        // body is drawn once through `draw_in_rect`.
+        flow.section(list, "Contextual measured layout");
+        {
+            let r = flow.cell(list, "Measured baseline row", 360.0, 54.0);
+            let mut state = UiState::new();
+            let mut layout = wgpu_gameui::layout::LayoutResult::default();
+            let mut measured = MeasureBuffer::new();
+            let mut ui = UiContext::interactive(list, &input, &mut state, &theme);
+            let label = ui.measure(
+                MeasureConstraints::UNBOUNDED,
+                1.0,
+                wgpu_gameui::WrapMode::None,
+                |cx| cx.measure_text(cx.text_block("Player name")).measurement,
+            );
+            let save = ui.measure_text_button("Save", MeasureConstraints::UNBOUNDED, 1.0);
+            measured.push(
+                MeasuredChild::fit(label)
+                    .align(wgpu_gameui::layout::CrossAlign::Baseline)
+                    .id(1),
+            );
+            measured.push(
+                MeasuredChild::fit(save)
+                    .align(wgpu_gameui::layout::CrossAlign::Baseline)
+                    .id(2),
+            );
+            measured
+                .arrange_hstack_into(r, 12.0, 0.0, MainAlign::Start, &mut layout)
+                .unwrap();
+            ui.draw_in_rect_named(
+                "MeasuredLabel",
+                layout.get_by_id(1_u64).unwrap(),
+                false,
+                |ui| {
+                    ui.text("Player name");
+                },
+            );
+            ui.draw_in_rect_named(
+                "MeasuredSave",
+                layout.get_by_id(2_u64).unwrap(),
+                false,
+                |ui| {
+                    ui.text_button("Save", Some(save.preferred[0]), Some(save.preferred[1]));
+                },
+            );
         }
 
         // --- Group / titled panel ------------------------------------------

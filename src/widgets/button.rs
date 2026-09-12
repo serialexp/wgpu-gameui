@@ -18,7 +18,9 @@
 
 use crate::layout::Rect;
 use crate::text::{TextAlign, TextBlock};
-use crate::{AnimSlot, StyleKey, StyleResolver};
+use crate::{
+    AnimSlot, MeasureConstraints, MeasureContext, Measurement, StyleKey, StyleResolver, WrapMode,
+};
 
 use super::{DrawContext, DrawList, FocusId};
 
@@ -185,6 +187,43 @@ impl Button {
         let padding = styles.scalar(StyleKey::Padding);
         let height = styles.scalar(StyleKey::ButtonHeight);
         (label_width + padding * 2.0, height)
+    }
+
+    /// Contextual intrinsic measurement for measured layout. The caption is
+    /// shaped in the exact resolved style used by raw button painting, and the
+    /// returned baseline is relative to the button allocation.
+    pub fn measure(&self, cx: &mut MeasureContext<'_>) -> Measurement {
+        let styles = cx.styles();
+        let label = styles
+            .text_block(&self.label, 0.0, 0.0)
+            .with_wrap(WrapMode::None);
+        let text = cx.measure_text_with(label, MeasureConstraints::UNBOUNDED);
+        let padding = styles.scalar(StyleKey::Padding);
+        let natural = [
+            text.metrics.size[0] + padding * 2.0,
+            styles.scalar(StyleKey::ButtonHeight),
+        ];
+        let constraints = cx.constraints();
+        let preferred = [
+            crate::layout::Constraint {
+                min: Some(constraints.min_width),
+                max: constraints.max_width,
+            }
+            .apply(natural[0]),
+            crate::layout::Constraint {
+                min: Some(constraints.min_height),
+                max: constraints.max_height,
+            }
+            .apply(natural[1]),
+        ];
+        let baseline = (preferred[1] * 0.5 - text.metrics.visual_center + text.metrics.baseline)
+            .clamp(0.0, preferred[1]);
+        Measurement::new(
+            [padding * 2.0, natural[1]],
+            preferred,
+            [None, Some(natural[1])],
+            Some(baseline),
+        )
     }
 
     /// Animate the chrome fill + border transitions under `id` (hover/press fade
@@ -781,6 +820,29 @@ mod tests {
                 .with_style(&overlay),
         );
         assert_eq!(styled.chrome_instances[0].bg, [0.7, 0.1, 0.2, 1.0]);
+    }
+
+    #[test]
+    fn measured_button_baseline_matches_painted_optical_centering() {
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut measurer = crate::TextMeasurer::new();
+        let mut measure = crate::MeasureContext::new(
+            &mut measurer,
+            styles,
+            crate::FontSpec::default(),
+            crate::MeasureConstraints::UNBOUNDED,
+            1.0,
+            crate::WrapMode::None,
+        );
+        let result = Button::new("Save").measure(&mut measure);
+        drop(measure);
+        let block = styles.text_block("Save", 0.0, 0.0);
+        let metrics = measurer.vmetrics(block.font.as_ref(), block.weight, block.style);
+        let painted_top =
+            result.preferred[1] * 0.5 - block.font_size * metrics.visual_center_ratio("Save");
+        let painted_baseline = painted_top + block.font_size * metrics.baseline_ratio;
+        assert!((result.baseline.unwrap() - painted_baseline).abs() < 0.001);
     }
 
     #[test]

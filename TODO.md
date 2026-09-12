@@ -58,15 +58,22 @@ harden those foundations rather than create parallel replacements.
 ### P1 — Complete the pipeline
 
 - [ ] **P1 — Extend intrinsic measurement with context and two-pass container
-      layout.** Add a `MeasureContext` containing resolved styles/font system,
-      available width, scale factor, and wrapping policy. Widgets should expose
-      minimum/preferred/maximum size and optional baseline. Extend intrinsic
-      sizing beyond Button/Checkbox/Dropdown to text inputs, panels, image
-      buttons, and list/table rows; let containers propagate child measurements
-      and constrained wrapping instead of requiring caller-supplied content size.
+      layout.** The first vertical slice is landed: `MeasureContext` carries the
+      resolved style/font, logical constraints, scale, and wrap policy;
+      `Measurement` exposes min/preferred/max, baseline, and prepared-width
+      identity; reusable `MeasureBuffer::arrange_{h,v}stack_into` provides plain
+      measured children, baseline rows, and explicit `WidthMismatch` diagnostics
+      without remeasuring or replaying callbacks. `UiContext::measure` and
+      `measure_text_button` bridge the active scope. Still outstanding: migrate
+      text inputs, panels, image buttons, and list/table rows; add richer automatic
+      nested propagation and same-frame measured scrolling. Design contract:
+      `docs/design/contextual-widget-lifecycle.md`.
 
-- [ ] **P1 — Make font-aware measurement the only widget-layout path.** Deprecate
-      default-font `measure_text` for layout and migrate remaining internal users
+- [ ] **P1 — Make font-aware measurement the only widget-layout path.** Structured
+      `TextMetrics` now reports line-box size, ink bounds, first baseline, line
+      count, and width overflow; `MeasuredText` transfers its configured block to
+      paint without cloning. Continue by deprecating
+      default-font `measure_text` for layout and migrating remaining internal users
       (including panel, table, and progress calculations) to resolved
       `TextBlock` measurement. Return structured metrics (advance, line box, ink
       bounds, baseline, line count), and where practical reuse the measured text
@@ -140,6 +147,12 @@ harden those foundations rather than create parallel replacements.
       logical coordinates, text/key/mouse/wheel routing, and per-window state;
       provide one surface-host rendering path for clear/load policy, `DrawList`
       or `LayerStack`, submit, and present.
+
+- [ ] **P2 — Reuse interaction dispatch scratch.** `InteractionScene::begin_frame`
+      currently allocates a fresh sorted hit vector via `collect()` every frame,
+      and duplicate-ID detection scans the current regions linearly. Retain flat
+      hit/ID scratch in the caller-owned scene and clear it without shrinking so
+      large interactive surfaces do not pay per-frame/per-widget allocation work.
 
 ### Suggested implementation order
 

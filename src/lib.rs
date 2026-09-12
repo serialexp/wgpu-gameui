@@ -85,6 +85,7 @@ mod frame;
 mod interaction;
 pub mod layer;
 pub mod layout;
+mod measure;
 mod nav;
 pub mod projection;
 pub mod render;
@@ -106,6 +107,10 @@ pub use interaction::{
     HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
 };
 pub use layer::{Layer, LayerKind, LayerStack};
+pub use measure::{
+    ArrangeError, MeasureBuffer, MeasureConstraints, MeasureContext, MeasuredChild, MeasuredText,
+    Measurement, TextMetrics,
+};
 pub use nav::{GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard};
 pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]

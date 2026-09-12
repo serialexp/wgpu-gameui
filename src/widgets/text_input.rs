@@ -808,8 +808,27 @@ impl TextInput {
 
         // ---- Geometry & layout policy ----
         let padding = s.scalar(StyleKey::Padding);
-        let text_x = self.x + padding;
-        let text_max_w = self.width - padding * 2.0;
+        // Clamp padding so the inner clip always has positive area. If the
+        // theme padding exceeds what the field can afford, the text clip
+        // collapses to zero and all content becomes invisible — a silent,
+        // baffling failure mode that previously went undetected.
+        let max_pad_h = (self.height / 2.0 - 1.0).max(0.0);
+        let max_pad_w = (self.width / 2.0 - 1.0).max(0.0);
+        if padding > max_pad_h || padding > max_pad_w {
+            log::warn!(
+                "TextInput: theme padding ({padding:.1}px) exceeds field size \
+                 ({w:.0}×{h:.0}px) — clamping to ({pw:.1}, {ph:.1}) so text stays visible. \
+                 Increase the field size or reduce StyleKey::Padding.",
+                w = self.width,
+                h = self.height,
+                pw = max_pad_w,
+                ph = max_pad_h,
+            );
+        }
+        let eff_pad_w = padding.min(max_pad_w);
+        let eff_pad_h = padding.min(max_pad_h);
+        let text_x = self.x + eff_pad_w;
+        let text_max_w = self.width - eff_pad_w * 2.0;
         // Single-line never wraps (a long value overflows + clips); multiline
         // wraps to the field width.
         let wrap = if multiline {
@@ -831,7 +850,7 @@ impl TextInput {
         // and down as the user types capitals vs lowercase — pin it to the
         // x-height band (the common typing case).
         let text_top = if multiline {
-            self.y + padding
+            self.y + eff_pad_h
         } else {
             let m = list.font_vmetrics(s.theme().font.as_ref());
             let font_size = s.scalar(StyleKey::FontSize);
@@ -839,9 +858,9 @@ impl TextInput {
         };
         let inner_rect = Rect::new(
             text_x,
-            self.y + padding,
+            self.y + eff_pad_h,
             text_max_w,
-            (self.height - padding * 2.0).max(0.0),
+            (self.height - eff_pad_h * 2.0).max(1.0),
         );
 
         // Single-line selection/caret band, centred on the field box. `text_top`
@@ -911,8 +930,8 @@ impl TextInput {
                 self.desired_caret_x = None;
             } else {
                 let click_x = input.mouse_x;
-                let text_left = self.x + padding;
-                let text_right = self.x + self.width - padding;
+                let text_left = self.x + eff_pad_w;
+                let text_right = self.x + self.width - eff_pad_w;
 
                 if click_x >= text_left && click_x <= text_right {
                     let local_x = click_x - text_left + self.horizontal_scroll_offset;
@@ -1020,7 +1039,7 @@ impl TextInput {
 
         // ---- Autoscroll to keep the caret visible ----
         if multiline && focused {
-            let inner_h = (self.height - padding * 2.0).max(0.0);
+            let inner_h = (self.height - eff_pad_h * 2.0).max(1.0);
             let caret = caret_for_byte(&render_layout, self.cursor_pos);
             let caret_top = caret.line_top;
             let caret_h = if caret.line_height > 0.0 {

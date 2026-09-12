@@ -675,6 +675,36 @@ impl<'a> UiContext<'a> {
         self.backend.list_mut().measure_block(&block)
     }
 
+    /// Run one pure contextual measurement operation using the active theme,
+    /// style overlay, and font stack. The callback cannot draw or register input:
+    /// it receives only the narrow CPU measurement context.
+    pub fn measure<R>(
+        &mut self,
+        constraints: crate::MeasureConstraints,
+        scale_factor: f32,
+        wrap: crate::WrapMode,
+        measure: impl FnOnce(&mut crate::MeasureContext<'_>) -> R,
+    ) -> R {
+        let theme = self
+            .theme
+            .expect("UiContext::measure requires interactive state");
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let font = self.current_font();
+        let text = self.backend.list_mut().text_measurer_mut();
+        let mut cx =
+            crate::MeasureContext::new(text, styles, font, constraints, scale_factor, wrap);
+        measure(&mut cx)
+    }
+
+    /// Draw prepared text once, consuming its owned block so content/spans are
+    /// transferred into the draw list without cloning.
+    pub fn draw_measured_text(&mut self, text: crate::MeasuredText) {
+        self.text_block(text.into_block());
+    }
+
     /// Draw wrapping text constrained to `max_width`, returning its measured
     /// `(width, height)`. This is the non-auto-advancing counterpart to
     /// [`text`](Self::text): callers composing variable-height content can advance
@@ -1353,16 +1383,27 @@ impl<'a> UiContext<'a> {
         self.advance(size);
     }
 
+    /// Contextual measurement of a text button under the active theme and style
+    /// scope. Buttons use the widget theme font, matching their paint path. Call
+    /// once with the constraints its parent has resolved, then
+    /// pass the returned plain record into measured arrangement.
+    pub fn measure_text_button(
+        &mut self,
+        label: &str,
+        constraints: crate::MeasureConstraints,
+        scale_factor: f32,
+    ) -> crate::Measurement {
+        let button = Button::new(label);
+        self.measure(constraints, scale_factor, crate::WrapMode::None, |cx| {
+            button.measure(cx)
+        })
+    }
+
     /// Natural size of a text button under the active theme and style scope.
     pub fn text_button_size(&mut self, label: &str) -> (f32, f32) {
-        let theme = self
-            .theme
-            .expect("text_button_size requires interactive state");
-        let styles = StyleResolver::with_overlay(
-            theme,
-            self.style_stack.last().expect("style stack is never empty"),
-        );
-        Button::new(label).intrinsic_size(self.backend.list_mut(), &styles)
+        let measurement =
+            self.measure_text_button(label, crate::MeasureConstraints::UNBOUNDED, 1.0);
+        (measurement.preferred[0], measurement.preferred[1])
     }
 
     /// Draw a chrome text button and report whether it was clicked this frame.
@@ -1375,13 +1416,18 @@ impl<'a> UiContext<'a> {
             None => return false,
         };
         let button = Button::new(label);
-        let styles = StyleResolver::with_overlay(
-            theme,
-            self.style_stack.last().expect("style stack is never empty"),
-        );
-        let (fit_width, fit_height) = button.intrinsic_size(self.backend.list_mut(), &styles);
-        let width = w.unwrap_or(fit_width);
-        let height = h.unwrap_or(fit_height);
+        let (width, height) = match (w, h) {
+            (Some(width), Some(height)) => (width, height),
+            (width, height) => {
+                let styles = StyleResolver::with_overlay(
+                    theme,
+                    self.style_stack.last().expect("style stack is never empty"),
+                );
+                let (fit_width, fit_height) =
+                    button.intrinsic_size(self.backend.list_mut(), &styles);
+                (width.unwrap_or(fit_width), height.unwrap_or(fit_height))
+            }
+        };
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
@@ -3790,5 +3836,67 @@ mod tests {
         assert!(approx(ui.default_field_width(), 360.0));
         ui.pop();
         assert!(approx(ui.default_field_width(), 200.0));
+    }
+
+    #[test]
+    fn contextual_measurement_is_pure_and_sees_style_font_and_scale() {
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let before = list.prim_counts();
+        let metrics = {
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.font_size(24.0);
+            ui.set_style_scalar(StyleKey::Padding, 7.0);
+            ui.measure(
+                crate::MeasureConstraints::with_max_width(80.0),
+                2.0,
+                crate::WrapMode::Word,
+                |cx| {
+                    assert_eq!(cx.font().size, 24.0);
+                    assert_eq!(cx.styles().scalar(StyleKey::Padding), 7.0);
+                    assert_eq!(cx.scale_factor(), 2.0);
+                    let block = cx.text_block("contextual text wraps");
+                    cx.measure_text(block).metrics
+                },
+            )
+        };
+        assert!(metrics.line_count > 1);
+        assert_eq!(before, list.prim_counts(), "measurement must not paint");
+    }
+
+    #[test]
+    fn measured_stack_draw_bodies_run_once() {
+        let theme = Theme::default();
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let mut layout = crate::layout::LayoutResult::default();
+        let mut measured = crate::MeasureBuffer::new();
+        let mut calls = 0;
+        {
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            let a = ui.measure_text_button("A", crate::MeasureConstraints::UNBOUNDED, 1.0);
+            let b = ui.measure_text_button("B", crate::MeasureConstraints::UNBOUNDED, 1.0);
+            measured.push(crate::MeasuredChild::fit(a).id(1));
+            measured.push(crate::MeasuredChild::fit(b).id(2));
+            measured
+                .arrange_hstack_into(
+                    Rect::new(0.0, 0.0, 200.0, 44.0),
+                    8.0,
+                    0.0,
+                    crate::layout::MainAlign::Start,
+                    &mut layout,
+                )
+                .unwrap();
+            for item in layout.child_items() {
+                ui.draw_in_rect(item.rect, false, |ui| {
+                    calls += 1;
+                    ui.text_button("button", Some(item.rect.width), Some(item.rect.height));
+                });
+            }
+        }
+        assert_eq!(calls, 2);
     }
 }

@@ -514,6 +514,17 @@ impl LayoutResult {
         self.entries.push(LayoutItem { id, rect });
     }
 
+    /// Reset reusable arrangement output and record its container.
+    pub(crate) fn begin_arrangement(&mut self, bounds: Rect) {
+        self.entries.clear();
+        self.push(None, bounds);
+    }
+
+    /// Append one arranged child to reusable output.
+    pub(crate) fn push_arranged(&mut self, id: Option<NodeId>, rect: Rect) {
+        self.push(id, rect);
+    }
+
     /// The container rect (entry 0), or a zero rect if empty.
     pub fn container(&self) -> Rect {
         self.entries.first().map(|e| e.rect).unwrap_or_default()
@@ -656,6 +667,9 @@ pub enum CrossAlign {
     /// Fill the full cross-axis span (default).
     #[default]
     Stretch,
+    /// Align text-bearing children to a shared first baseline. Meaningful for
+    /// measured horizontal stacks; geometry-only stacks fall back to `Start`.
+    Baseline,
 }
 
 /// Distribution of children along the **main axis** when there is leftover space
@@ -690,7 +704,7 @@ impl MainAlign {
     /// to insert between adjacent children, given `free` leftover space and `n`
     /// children. `Start` (and `n == 0`) yields `(0.0, 0.0)` — byte-identical to
     /// the un-justified layout.
-    fn resolve(self, free: f32, n: usize) -> (f32, f32) {
+    pub(crate) fn distribution(self, free: f32, n: usize) -> (f32, f32) {
         if n == 0 {
             return (0.0, 0.0);
         }
@@ -1002,7 +1016,7 @@ impl LayoutNode for VStack {
         // children resolve to 0 height), so reuse it directly. Default
         // `MainAlign::Start` → (0, 0), byte-identical to the un-justified layout.
         let (justify_offset, justify_gap) = if fill_weight == 0.0 {
-            self.main_align.resolve(remaining, self.children.len())
+            self.main_align.distribution(remaining, self.children.len())
         } else {
             (0.0, 0.0)
         };
@@ -1033,6 +1047,9 @@ impl LayoutNode for VStack {
                 CrossAlign::End => {
                     let w = child.cross_size.min(inner_width);
                     (bounds.x + self.padding + inner_width - w, w)
+                }
+                CrossAlign::Baseline => {
+                    (bounds.x + self.padding, child.cross_size.min(inner_width))
                 }
             };
 
@@ -1216,7 +1233,7 @@ impl LayoutNode for HStack {
         // children resolve to 0 width), so reuse it directly. Default
         // `MainAlign::Start` → (0, 0), byte-identical to the un-justified layout.
         let (justify_offset, justify_gap) = if fill_weight == 0.0 {
-            self.main_align.resolve(remaining, self.children.len())
+            self.main_align.distribution(remaining, self.children.len())
         } else {
             (0.0, 0.0)
         };
@@ -1247,6 +1264,9 @@ impl LayoutNode for HStack {
                 CrossAlign::End => {
                     let h = child.cross_size.min(inner_height);
                     (bounds.y + self.padding + inner_height - h, h)
+                }
+                CrossAlign::Baseline => {
+                    (bounds.y + self.padding, child.cross_size.min(inner_height))
                 }
             };
 

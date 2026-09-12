@@ -251,6 +251,37 @@ marshal plain child tables into `StackChild`, return ordered `children` plus a
 `by_id` table from `LayoutItem`, and use `rect_begin`/`rect_end` to draw in local
 rectangles. Layout `NodeId`s are independent of interaction `WidgetId`s.
 
+For context-dependent sizing, `UiContext::measure` exposes a narrow
+`MeasureContext` carrying the active style/font, logical constraints, scale
+factor, and wrap policy. It returns plain `Measurement` records (minimum,
+preferred, maximum, optional first baseline, and width dependency). Store those
+in a reusable `MeasureBuffer`, arrange an H/V stack into a reused `LayoutResult`,
+then draw each result once:
+
+```rust,ignore
+use wgpu_gameui::{MeasureBuffer, MeasureConstraints, MeasuredChild};
+use wgpu_gameui::layout::{CrossAlign, LayoutResult, MainAlign, NodeId, Rect};
+
+let label = ui.measure(MeasureConstraints::UNBOUNDED, scale, WrapMode::None, |cx| {
+    cx.measure_text(cx.text_block("Player name")).measurement
+});
+let save = ui.measure_text_button("Save", MeasureConstraints::UNBOUNDED, scale);
+
+scratch.clear();
+scratch.push(MeasuredChild::fit(label).align(CrossAlign::Baseline).id(NodeId(1)));
+scratch.push(MeasuredChild::fit(save).align(CrossAlign::Baseline).id(NodeId(2)));
+scratch.arrange_hstack_into(bounds, 8.0, 0.0, MainAlign::Start, &mut layout)?;
+
+for child in layout.child_items() {
+    ui.draw_in_rect(child.rect, false, |ui| { /* one widget call */ });
+}
+```
+
+A public widget measurement operation is single-shot. Width-sensitive prepared
+results remember their measurement width; arrangement reports `WidthMismatch`
+instead of silently remeasuring or using a stale wrapped height. See
+`docs/design/contextual-widget-lifecycle.md` for the lifecycle contract.
+
 ### Theming & styling
 
 `Theme` is a flat struct of colors + font + spacing. Every widget resolves

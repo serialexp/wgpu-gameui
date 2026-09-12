@@ -526,6 +526,12 @@ impl DrawList {
         self.text_measurer.measure_block(block)
     }
 
+    /// Borrow the narrow CPU text-measurement service used by contextual widget
+    /// measurement. It shares font state and caches with this draw list.
+    pub(crate) fn text_measurer_mut(&mut self) -> &mut TextMeasurer {
+        &mut self.text_measurer
+    }
+
     /// The band of real glyph ink a queued [`TextBlock`] paints, as `(top,
     /// bottom)` offsets below its top edge. `None` when it inks nothing.
     ///
@@ -765,6 +771,17 @@ impl DrawList {
     /// approximate (over-clips along the diagonal) under rotation. Document the
     /// limitation rather than silently drawing wrong.
     pub fn push_clip(&mut self, rect: Rect) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            log::warn!(
+                "push_clip: degenerate input rect ({w:.1}×{h:.1} at ({x:.0},{y:.0})) — \
+                 all content under this clip will be invisible. Check that the \
+                 widget's padding doesn't exceed its size.",
+                w = rect.width,
+                h = rect.height,
+                x = rect.x,
+                y = rect.y,
+            );
+        }
         let world_rect = self.current_transform().transform_rect_aabb(rect);
         let clip = match self.current_clip() {
             Some(current) => current
