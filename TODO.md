@@ -1099,3 +1099,68 @@ off-screen. All were one root cause: **`place_rect` returns *world* space, but
   and `ScrollView::end` then popped the transform, discarding the advance so
   nothing after the scroll region moved either. The advance is now in
   `scroll_end`. The gallery's scroll cell rendered completely empty before this.
+
+---
+
+## 2026-09-15 — Menubar (one level), and a renderer bug it surfaced
+
+Design: `docs/design/menubar.md` (phases 1–2 landed).
+
+- [x] **P0 — Menubar widget, one level.** `src/widgets/menubar/`
+  (`mod`/`model`/`placement`/`state`/`paint`/`tests`), re-exported from the crate
+  root as `MenuBar`, `MenuBarState`, `Menu`/`MenuItem`/`MenuItemId`/`MenuBarId`,
+  `MenuTrigger`, `Accelerator`/`Key`/`Modifiers`/`AccelPlatform`, `SubmenuSide`,
+  `ActivatedItem`, `MenuLayers`, `MenuDrawEnv`, plus `place_popup` and
+  `blocker_regions` as pure, unit-testable helpers.
+  Per-frame contract (all caller-owned state, no globals):
+  `state.begin_frame(&mut input)` → `state.push_open_layers(&mut layers)` →
+  `layers.input_for_base(&input)` → `bar.draw(rect, &mut state, &mut ctx) ->
+  MenuBarOutput` → `state.draw_open_layers(&mut layers, slots, menus, &mut env)
+  -> Option<ActivatedItem>` → `state.end_frame(&mut focus)` (before
+  `FocusState::end_frame`).
+  The bar claims the nav intents it acts on by zeroing them in the shared
+  `InputState` at frame-top, so a focused widget later in the frame never sees an
+  edge the menu handled; Tab is never claimed. An open chain registers a
+  full-rect blocker per column and a viewport blocker that excludes the bar strip
+  (so the labels stay live for hover-to-switch); both are registered as
+  `InteractionScene` regions as well, because the scene dispatches among
+  registered regions only. Three new style scalars: `MenuRowHeight`,
+  `MenuItemMinWidth`, `MenuAccelGap`. 46 unit tests; a `widget_gallery` row
+  (strip + File's open column: accelerators, separator, check mark, submenu
+  chevron, disabled row), seeded through the real input path.
+- [ ] **P0 — Two or more `UiRenderer` passes recorded into one submit corrupt
+  each other's geometry.** Any frame that calls `render`/`render_layers` more
+  than once before `Queue::submit` — the documented
+  `render scene → blur_backdrop → render panels` pattern, and the widget gallery
+  itself (blur scene, widget stack, PAUSED panel) — silently loses geometry from
+  every pass but the last.
+  Cause: `UiRenderer::prepare_frame` resets the per-frame bump cursors
+  (`color_vbo_offset`, `chrome_inst_offset`, `circle_inst_offset`,
+  `icon_inst_offset`, `nine_inst_offset`) on *every* call, while
+  `Queue::write_buffer` only lands when the queue is submitted ("enqueued
+  internally to happen at the start of the next `submit()`"). All passes
+  therefore write the same byte ranges, and because every recorded draw executes
+  *after* all of those writes, the last pass's data is what every earlier pass
+  reads. Minimal repro: three `ui.render(...)` calls into one encoder, each
+  drawing one `quad` at a different point — only the last quad appears (drawn
+  three times); the first two vanish. Soup geometry (line/circle) hides it,
+  because immediate primitives live in a different array that the later passes
+  happen not to overlap in small scenes.
+  Visible in the gallery as missing *base-layer* `quad`/`rounded_rect` fills —
+  the "Rounded rect" cell, the scroll view's row stripes, and the menubar's
+  open-menu Accent fill — while popup-layer chrome (the dropdown list, the menu
+  column) renders fine, because those share the `render_layers` call and its
+  single `prepare_frame`. Pre-existing: `git show HEAD:tests/widget_gallery.rs`
+  renders the same missing "Rounded rect" cell with no menubar involved, and the
+  GPU suites (`chrome_instancing`, `ordered_paint_stress`, `blur`) never caught
+  it because each renders exactly one pass.
+  Options for the fix (needs a decision): (a) an explicit frame boundary —
+  `UiRenderer::begin_frame` resets the cursors once per frame and
+  `prepare_frame` stops resetting, with examples/`UiContext`/tests updated (a
+  forgotten call shows up as the arena doubling every frame and the existing
+  pressure warning firing, not as silent corruption); (b) keep the per-call
+  reset and document/enforce "one UI pass per encoder" while making the gallery
+  submit per pass (cheapest, leaves the trap); (c) give each pass within a submit
+  its own buffer region (correct without an API change, at the cost of the
+  steady-state zero-allocation property the arena exists for).
+

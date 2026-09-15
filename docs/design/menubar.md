@@ -1,6 +1,6 @@
 # Menubar — Design
 
-Status: partial — phase 1 (input-model foundations) landed; phases 2+ outstanding
+Status: partial — phases 1 and 2 (input foundations, the one-level widget) landed; phases 2b+ outstanding
 Owner: Bart
 Last updated: 2026-09-15
 
@@ -40,13 +40,43 @@ note) — there is no "implemented but not in the gallery" state.
 
 ### Outstanding
 
-- [ ] **Phase 2 — the widget, one level, checklist-complete.** `src/widgets/menubar.rs`
-      with `mod`/`pub use` wiring, the `MenuItem`/`Menu` data model, `MenuBarState`
-      lifecycle, the `MenuTrigger` activation state machine, `place_popup`
-      flipping, keyboard-driven column scrolling, accelerator hints, unit tests,
-      a `widget_gallery` row (bar + one open menu with separator / disabled /
-      checked rows and hints), the render-and-eyeball pass, and the `TODO.md`
-      note.
+- [x] **Phase 2 — the widget, one level, checklist-complete.** Landed as
+      `src/widgets/menubar/{mod,model,placement,state,paint,tests}.rs`, re-exported
+      from the crate root (`MenuBar`, `MenuBarState`, `Menu`/`MenuItem`/
+      `MenuItemId`/`MenuBarId`, `MenuTrigger`, `Accelerator`/`Key`/`Modifiers`/
+      `AccelPlatform`, `SubmenuSide`, `ActivatedItem`, `MenuLayers`,
+      `MenuDrawEnv`, `place_popup`, `blocker_regions`). Frame contract:
+      `begin_frame(&mut InputState)` → `push_open_layers(&mut LayerStack)` → base
+      input → `MenuBar::draw(rect, &mut state, &mut ctx) -> MenuBarOutput` →
+      `draw_open_layers(..) -> Option<ActivatedItem>` → `end_frame(&mut FocusState)`.
+      Three new `StyleKey` scalars (`MenuRowHeight`, `MenuItemMinWidth`,
+      `MenuAccelGap`) with `Theme` fields/defaults/get/set. 46 unit tests
+      (geometry, placement, the activation state machine, intent claiming, pointer
+      dispatch, layer/region plumbing, buffer reuse). A `widget_gallery` row draws
+      the strip with File open — accelerators, a separator, a check mark, a
+      submenu chevron and a disabled row — seeded through the real input path
+      (Alt tap + Down) rather than a test hook.
+      Three places where the implementation narrowed the design as written:
+      - **The bar's own left/right walk moved into `MenuBar::draw`.** It has to
+        land before the chain's geometry pass (`collect_chain`) runs, or the menu
+        the chain switches *to* cannot be measured until the frame after, which
+        costs a second frame with nothing painted. Rows (up/down/confirm) and
+        cancel still resolve in the chain's own pass.
+      - **The chain's input half runs whether or not its geometry is paintable.**
+        The promoted geometry is a frame behind the state, so the frame after a
+        switch has nothing to draw; if that also disabled input handling, the
+        arrow key that switched a menu would swallow the next one (only every
+        other keypress would move the bar).
+      - **`blocker_regions` returns 1, 2, 3 or 4 rects**, not "2 or 4":
+        zero-area bands are dropped, so a strip docked against the viewport's top
+        edge needs one region, a floating one needs three.
+      Accepted consequence, pinned by tests: a menu opened this frame, and a menu
+      switched this frame, paint no column — the geometry is measured during the
+      bar's own draw and painted from the next promotion (one blank frame, the
+      same class of latency the dropdown accepts).
+      Not in this phase: submenus render their chevron but do not open; hover
+      intent/corridor, mnemonics, accelerator dispatch, item icons and wheel
+      scrolling are later phases.
 - [ ] **Phase 2b — swallow the outside press in the existing `Dropdown`
       (Decision B).** The dropdown pushes only its list rect, so a dismissal
       press falls through to the widget underneath, **and** the dropdown would
@@ -839,9 +869,12 @@ pub fn place_popup(
   viewport region would rank above the base layer and kill the bar labels, which
   must stay live for hover-to-switch. `blocker_regions(viewport, bar_rect,
   out: &mut [Rect; 4]) -> usize` is a pure, unit-testable helper returning the
-  viewport minus the bar strip as up to four rects (two when the strip spans the
-  full width, four when it floats). The regions are registered at the blocker
-  layer, so they beat base-layer widgets everywhere except inside the strip.
+  viewport minus the bar strip as up to four rects (one when the strip is docked
+  against an edge and spans the full width, two when it spans the width
+  mid-viewport, three when it floats below the top edge, four when it floats
+  mid-viewport). Zero-area bands are dropped rather than returned. The regions
+  are registered at the blocker layer, so they beat base-layer widgets everywhere
+  except inside the strip.
 - Each open column additionally registers a **column blocker region** covering
   its full rect (distinct namespaced id, `PointerPolicy::Target`, at that
   column's layer). Without it, a scene-registered base widget underneath a
@@ -868,6 +901,15 @@ One-frame consequences, accepted and tested: a level that closed this frame
 still has its previous regions in the scene for one more frame, and its popup
 layer still gobbled input for the frame it closed on. This is the same class of
 latency the dropdown already accepts.
+
+The chain's own *paint* is one frame behind its state, because the layer rects
+that block the base layer can only come from the previous frame's measurement.
+So two frames paint no column: the frame a menu is opened on (its geometry is
+measured after the bar draws), and the frame the bar switches menus on. Input is
+**not** delayed with it — the chain takes its keyboard whenever it is open, even
+with nothing paintable, which is what keeps arrow-key switching from swallowing
+every other press. The switch case is one frame rather than two because the
+bar's left/right walk resolves before the geometry pass in the same frame.
 
 ### Sizing
 

@@ -149,6 +149,12 @@ pub enum StyleKey {
     /// [`AnimationState`](crate::AnimationState)). `0.0` disables animation
     /// (instant color switches).
     AnimationDuration,
+    /// Height of one menubar strip or menu-item row, in pixels.
+    MenuRowHeight,
+    /// Floor for a menu column's width, in pixels.
+    MenuItemMinWidth,
+    /// Gap between a menu item's label and its accelerator hint, in pixels.
+    MenuAccelGap,
     /// A mod-defined key, addressed by the FNV-1a hash of its name (see
     /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a [`StyleOverlay`].
     Custom(u64),
@@ -416,6 +422,9 @@ pub(crate) const SCALAR_KEYS: &[StyleKey] = &[
     StyleKey::ButtonHeight,
     StyleKey::InputHeight,
     StyleKey::AnimationDuration,
+    StyleKey::MenuRowHeight,
+    StyleKey::MenuItemMinWidth,
+    StyleKey::MenuAccelGap,
 ];
 
 /// Internal helper for [`Theme`]'s custom map type (kept here so the key/value

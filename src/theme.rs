@@ -86,6 +86,15 @@ pub struct Theme {
     pub button_height: f32,
     /// Default text-input height, in pixels.
     pub input_height: f32,
+    /// Height of one menubar strip or menu-item row, in pixels. Read by
+    /// [`MenuBar`](crate::MenuBar) via
+    /// [`StyleKey::MenuRowHeight`](crate::StyleKey::MenuRowHeight).
+    pub menu_row_height: f32,
+    /// Floor for a menu column's width, in pixels — wide enough that a column of
+    /// short labels still reads as a menu rather than a strip of text.
+    pub menu_item_min_width: f32,
+    /// Gap between a menu item's label and its accelerator hint, in pixels.
+    pub menu_accel_gap: f32,
 
     /// Hover/press transition duration in seconds. `0.0` disables animation
     /// (colors switch instantly). Read by widgets via
@@ -110,6 +119,12 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
+        // Sizing values the menu metrics are derived from. Naming them keeps the
+        // derivation visible instead of duplicating literals: a theme that
+        // retunes `padding`/`font_size` for DPI gets proportional menu rows.
+        let padding = 6.0;
+        let spacing = 12.0;
+        let font_size = 14.0;
         Self {
             // Dark, polished color scheme
             background: [0.08, 0.08, 0.12, 1.0],
@@ -147,14 +162,19 @@ impl Default for Theme {
             progress_fill_medium: [0.8, 0.7, 0.2, 1.0], // Yellow for medium
 
             // Sizing
-            padding: 6.0,
-            spacing: 12.0,
+            padding,
+            spacing,
             border_radius: 6.0,
             border_width: 1.0,
-            font_size: 14.0,
+            font_size,
             font_size_title: 24.0,
             button_height: 44.0,
             input_height: 40.0,
+            // Menus: a row is one text line plus the standard inset; a column is
+            // floored at ten characters wide so short labels still read as menu.
+            menu_row_height: font_size + padding * 2.0,
+            menu_item_min_width: font_size * 10.0,
+            menu_accel_gap: spacing,
             animation_duration: 0.12,
 
             font: None,
@@ -179,6 +199,22 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(theme.font_size, 14.0);
         assert_eq!(theme.font_size_title, 24.0);
+    }
+
+    /// The menu metrics are derived from the base sizing values, not duplicated
+    /// literals: retuning `padding`/`font_size`/`spacing` in the default moves
+    /// them together.
+    #[test]
+    fn menu_metrics_follow_the_base_sizing_values() {
+        let theme = Theme::default();
+        assert_eq!(
+            theme.menu_row_height,
+            theme.font_size + theme.padding * 2.0,
+            "a menu row is one text line plus the standard inset"
+        );
+        assert_eq!(theme.menu_item_min_width, theme.font_size * 10.0);
+        assert_eq!(theme.menu_accel_gap, theme.spacing);
+        assert_eq!(theme.menu_row_height, 26.0);
     }
 
     #[test]
@@ -306,6 +342,9 @@ impl Theme {
             ButtonHeight => StyleValue::Scalar(self.button_height),
             InputHeight => StyleValue::Scalar(self.input_height),
             AnimationDuration => StyleValue::Scalar(self.animation_duration),
+            MenuRowHeight => StyleValue::Scalar(self.menu_row_height),
+            MenuItemMinWidth => StyleValue::Scalar(self.menu_item_min_width),
+            MenuAccelGap => StyleValue::Scalar(self.menu_accel_gap),
             // Custom namespace
             Custom(id) => return self.custom.get(&id).copied(),
         };
@@ -360,6 +399,9 @@ impl Theme {
             (ButtonHeight, StyleValue::Scalar(s)) => self.button_height = s,
             (InputHeight, StyleValue::Scalar(s)) => self.input_height = s,
             (AnimationDuration, StyleValue::Scalar(s)) => self.animation_duration = s,
+            (MenuRowHeight, StyleValue::Scalar(s)) => self.menu_row_height = s,
+            (MenuItemMinWidth, StyleValue::Scalar(s)) => self.menu_item_min_width = s,
+            (MenuAccelGap, StyleValue::Scalar(s)) => self.menu_accel_gap = s,
             (k, v) => debug_assert!(
                 false,
                 "Theme::set shape mismatch for {k:?}: built-in key got {v:?}"

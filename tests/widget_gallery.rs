@@ -14,14 +14,15 @@
 use wgpu_gameui::debug::DebugReport;
 use wgpu_gameui::layout::{Flow as LayoutFlow, HStack, LayoutNode, MainAlign, Rect};
 use wgpu_gameui::{
-    Backdrop, Banner, BlurParams, Button, Checkbox, ColorPicker, ColumnWidth, Corner, DragCapture,
-    DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState, Group, HitZone,
-    Hsva, ImageButton, ImageFit, InputState, LayerStack, List, ListItem, ListState, MeasureBuffer,
-    MeasureConstraints, MeasuredChild, NumberInput, ProgressBar, ProgressFill, RadioGroup,
-    ScrollState, ScrollView, SelectionMode, Separator, Severity, Slider, StyleKey, StyleOverlay,
-    StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection,
-    TextInput, TextSpan, Theme, Toast, ToastStack, TooltipContent, TooltipLayer, TreeAction,
-    TreeNode, TreeState, UiContext, UiRenderer, UiState, Underline, ease, lerp_color,
+    Accelerator, Backdrop, Banner, BlurParams, Button, Checkbox, ColorPicker, ColumnWidth, Corner,
+    DragCapture, DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState,
+    Group, HitZone, Hsva, ImageButton, ImageFit, InputState, InteractionScene, Key, LayerStack,
+    List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu, MenuBar,
+    MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, ProgressBar, ProgressFill,
+    RadioGroup, ScrollState, ScrollView, SelectionMode, Separator, Severity, Slider, StyleKey,
+    StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock,
+    TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack, TooltipContent, TooltipLayer,
+    TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState, Underline, ease, lerp_color,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -201,6 +202,33 @@ fn render_widget_gallery() {
     const DROPDOWN_ITEMS: [&str; 4] = ["Red", "Green", "Blue", "Alpha"];
     let mut dropdowns = DropdownState::new();
 
+    // Menubar owner. Seeded OPEN through the real input path (an Alt tap arms the
+    // bar, Down opens the highlighted menu) so the PNG shows the strip with its
+    // open menu highlighted and the dropped column: accelerators, a submenu
+    // chevron, a check mark, a separator and a disabled row.
+    const MENU_BAR_ID: u64 = 300;
+    const FILE_ITEMS: &[MenuItem<'static>] = &[
+        MenuItem::new("New").accel(Accelerator::primary(Key::Char('N'))),
+        MenuItem::new("Open…").shortcut("Ctrl+O"),
+        MenuItem::new("Open Recent").with_children(&[MenuItem::new("project.gui")]),
+        MenuItem::separator(),
+        MenuItem::new("Auto-save").checked(true),
+        MenuItem::new("Locked").enabled(false),
+        MenuItem::new("Quit").accel(Accelerator::primary_shift(Key::Char('Q'))),
+    ];
+    const MENUS: &[Menu<'static>] = &[
+        Menu::new("File").with_items(FILE_ITEMS),
+        Menu::new("Edit").with_items(&[MenuItem::new("Undo"), MenuItem::new("Redo")]),
+        Menu::new("View")
+            .enabled(false)
+            .with_items(&[MenuItem::new("Zoom")]),
+    ];
+    let menu_bar = MenuBar::new(MENU_BAR_ID, MENUS);
+    let mut menu_state = MenuBarState::new();
+    // The frame-2 input (and the one the chain is drawn with): no edges, so nothing
+    // the gallery did to open the menu is replayed.
+    let mut menu_input = InputState::default();
+
     // Reserved by the flow inside the scope below, used afterwards. The scope
     // runs unconditionally, so deferred init is sound (and avoids a dead store).
     let tooltip_rect;
@@ -223,6 +251,56 @@ fn render_widget_gallery() {
         );
 
         let mut flow = Flow::new(20.0, 56.0, (W as f32) - 20.0);
+
+        // ---- Menubar ----------------------------------------------------
+        // Chrome goes first, at the top: that is where a menubar lives, and its
+        // open column then drops into the empty space the flow reserves for it.
+        //
+        // A chain's geometry is measured while the bar draws and promoted at the
+        // next frame-top (a popup layer only blocks input if it is pushed before
+        // the base layer resolves), so the bar is drawn twice: once into a scratch
+        // list to stage the chain, then for real with that geometry promoted. The
+        // open menu comes from the real input path — an Alt tap plus Down — so the
+        // PNG exercises arming and opening rather than a seam.
+        //
+        // Known false negative: the open menu's Accent label fill is one of the
+        // base layer's first instanced-chrome records, and those are clobbered by
+        // the multi-pass arena bug in `TODO.md`, so it is missing from this PNG.
+        // The strip, its labels and the whole column do render. Filled
+        // `rounded_rect` cells elsewhere in the gallery are missing for the same
+        // reason.
+        flow.section(list, "Menubar");
+        let menu_rect = flow.cell(list, "Menu bar (File open)", 220.0, 26.0);
+        {
+            let mut scratch = DrawList::new();
+            let mut opening = InputState {
+                alt_pressed: true,
+                nav: NavInput {
+                    down: true,
+                    ..Default::default()
+                },
+                ..InputState::default()
+            };
+            menu_state.begin_frame(&mut opening);
+            menu_bar.draw(
+                menu_rect,
+                &mut menu_state,
+                &mut DrawContext::new(&mut scratch, &mut focus, &theme, &opening, W as f32, 600.0),
+            );
+        }
+        // Frame 2: the staged chain is promoted, and this frame re-measures it for
+        // the next one.
+        menu_state.begin_frame(&mut menu_input);
+        menu_bar.draw(
+            menu_rect,
+            &mut menu_state,
+            &mut DrawContext::new(list, &mut focus, &theme, &menu_input, W as f32, 600.0),
+        );
+        // The column paints taller than the 26px strip, so the flow has to know how
+        // far it drops or the next row would sit underneath it.
+        if let Some((column, _, _)) = menu_state.debug_geometry() {
+            flow.reserve(column.bottom() - menu_rect.y + 8.0);
+        }
 
         // ---- Primitives -------------------------------------------------
         flow.section(list, "Primitives");
@@ -2027,6 +2105,26 @@ fn render_widget_gallery() {
             &StyleResolver::new(&theme),
             &InputState::default(),
         );
+    }
+
+    // Menubar chain: the viewport blocker plus the open column's own popup layer,
+    // pushed above the base content exactly as a host would.
+    {
+        let slots = menu_state.push_open_layers(&mut layers);
+        let mut interactions = InteractionScene::new();
+        let mut menu_env = MenuDrawEnv {
+            theme: &theme,
+            style: None,
+            input: &menu_input,
+            focus: &mut focus,
+            interactions: &mut interactions,
+            animations: None,
+            cursor: None,
+            screen_width: W as f32,
+            screen_height: h as f32,
+        };
+        menu_state.draw_open_layers(&mut layers, slots, MENUS, &mut menu_env);
+        menu_state.end_frame(&mut focus);
     }
 
     // Tooltip layer, hovering the reserved target.

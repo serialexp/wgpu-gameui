@@ -16,6 +16,7 @@ mod icon;
 mod image;
 mod image_button;
 mod list;
+mod menubar;
 mod number_input;
 mod panel;
 mod progress_bar;
@@ -52,6 +53,11 @@ pub use icon::Icon;
 pub use image::{Image, ImageAlign, ImageFit};
 pub use image_button::ImageButton;
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
+pub use menubar::{
+    AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBar, MenuBarId, MenuBarOutput,
+    MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger, Modifiers,
+    SubmenuSide, blocker_regions, place_popup,
+};
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};
 pub use progress_bar::{ProgressBar, ProgressFill};
