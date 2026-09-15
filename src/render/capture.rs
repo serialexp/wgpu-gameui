@@ -40,7 +40,9 @@ fn padded_bytes_per_row(width: u32) -> u32 {
     (width * 4 + 255) & !255
 }
 
-/// Shared body of [`capture_draw_list`] / [`capture_layers`].
+/// Shared body of [`capture_draw_list`] / [`capture_layers`]. The caller declares
+/// the frame boundary (`UiRenderer::begin_frame`) because the closure below holds
+/// the unique borrow of `ui`.
 fn capture_with(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -156,6 +158,7 @@ pub fn capture_draw_list(
     scale_factor: f32,
     clear: wgpu::Color,
 ) -> Vec<u8> {
+    ui.begin_frame();
     capture_with(device, queue, size, clear, |encoder, view| {
         ui.render(device, queue, encoder, view, size, scale_factor, list);
     })
@@ -172,6 +175,7 @@ pub fn capture_layers(
     scale_factor: f32,
     clear: wgpu::Color,
 ) -> Vec<u8> {
+    ui.begin_frame();
     capture_with(device, queue, size, clear, |encoder, view| {
         ui.render_layers(device, queue, encoder, view, size, scale_factor, layers);
     })

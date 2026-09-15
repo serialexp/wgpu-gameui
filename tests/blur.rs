@@ -249,3 +249,156 @@ fn larger_radius_widens_the_transition() {
         "radius 12 band ({wide}) should be wider than radius 2 band ({narrow})"
     );
 }
+
+/// Two `blur_backdrop` calls recorded into one submission must not clobber each
+/// other's uniforms: each call's region keeps its own radius and tint. This used
+/// to fail exactly like the multi-pass render bug — both calls wrote the same
+/// uniform bytes, and the second call's params reached the GPU for both.
+#[test]
+fn two_blur_calls_in_one_submission_keep_their_own_params() {
+    let (device, queue) = device_queue();
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut ui = UiRenderer::new(&device, &queue, format, shared_font_system());
+    let (_scene, scene_view) = edge_scene(&device, &queue);
+
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("blur two-call target"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let bytes_per_row = ((SIZE * 4) + 255) & !255;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("blur two-call readback"),
+        size: (bytes_per_row * SIZE) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("blur two-call encoder"),
+    });
+    {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+
+    let backdrop = Backdrop {
+        view: &scene_view,
+        size: (SIZE, SIZE),
+    };
+    ui.begin_frame();
+    // Left half: tiny radius (the sharp edge stays put), neutral tint.
+    ui.blur_backdrop(
+        &device,
+        &queue,
+        &mut encoder,
+        &target_view,
+        &backdrop,
+        Rect::new(0.0, 0.0, SIZE as f32 / 2.0, SIZE as f32),
+        (SIZE, SIZE),
+        1.0,
+        &BlurParams {
+            radius: 1.0,
+            downsample: 2,
+            tint: [1.0, 1.0, 1.0, 1.0],
+        },
+    );
+    // Right half: big radius (heavily smeared toward mid grey), red tint.
+    ui.blur_backdrop(
+        &device,
+        &queue,
+        &mut encoder,
+        &target_view,
+        &backdrop,
+        Rect::new(SIZE as f32 / 2.0, 0.0, SIZE as f32 / 2.0, SIZE as f32),
+        (SIZE, SIZE),
+        1.0,
+        &BlurParams {
+            radius: 16.0,
+            downsample: 2,
+            tint: [1.0, 0.0, 0.0, 1.0],
+        },
+    );
+
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(SIZE),
+            },
+        },
+        wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+
+    let slice = readback.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+    device.poll(wgpu::Maintain::Wait);
+    let data = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for row in 0..SIZE as usize {
+        let start = row * bytes_per_row as usize;
+        pixels.extend_from_slice(&data[start..start + (SIZE * 4) as usize]);
+    }
+
+    let sample = |x: u32, y: u32| {
+        let i = ((y * SIZE + x) * 4) as usize;
+        (pixels[i], pixels[i + 1], pixels[i + 2])
+    };
+
+    // The left half was NOT blurred away (radius 1 keeps the near-black and
+    // near-white halves) and must be neutral: any red tint there means the
+    // second call's uniforms leaked into the first call's passes.
+    let left_dark = sample(8, SIZE / 2);
+    assert!(
+        left_dark.0 < 40 && left_dark.1 < 40 && left_dark.2 < 40,
+        "left region lost its own params: {left_dark:?} (expected near-black, neutral)"
+    );
+    // The right half must be visibly red-tinted: the first call's neutral tint
+    // leaking here would show as grey.
+    let right = sample(40, SIZE / 2);
+    assert!(
+        right.0 > 60 && right.0 > right.1 + 20 && right.0 > right.2 + 20,
+        "right region lost its red tint: {right:?}"
+    );
+}

@@ -1128,39 +1128,38 @@ Design: `docs/design/menubar.md` (phases 1–2 landed).
   `MenuItemMinWidth`, `MenuAccelGap`. 46 unit tests; a `widget_gallery` row
   (strip + File's open column: accelerators, separator, check mark, submenu
   chevron, disabled row), seeded through the real input path.
-- [ ] **P0 — Two or more `UiRenderer` passes recorded into one submit corrupt
-  each other's geometry.** Any frame that calls `render`/`render_layers` more
-  than once before `Queue::submit` — the documented
-  `render scene → blur_backdrop → render panels` pattern, and the widget gallery
-  itself (blur scene, widget stack, PAUSED panel) — silently loses geometry from
-  every pass but the last.
-  Cause: `UiRenderer::prepare_frame` resets the per-frame bump cursors
-  (`color_vbo_offset`, `chrome_inst_offset`, `circle_inst_offset`,
-  `icon_inst_offset`, `nine_inst_offset`) on *every* call, while
-  `Queue::write_buffer` only lands when the queue is submitted ("enqueued
-  internally to happen at the start of the next `submit()`"). All passes
-  therefore write the same byte ranges, and because every recorded draw executes
-  *after* all of those writes, the last pass's data is what every earlier pass
-  reads. Minimal repro: three `ui.render(...)` calls into one encoder, each
-  drawing one `quad` at a different point — only the last quad appears (drawn
-  three times); the first two vanish. Soup geometry (line/circle) hides it,
-  because immediate primitives live in a different array that the later passes
-  happen not to overlap in small scenes.
-  Visible in the gallery as missing *base-layer* `quad`/`rounded_rect` fills —
-  the "Rounded rect" cell, the scroll view's row stripes, and the menubar's
-  open-menu Accent fill — while popup-layer chrome (the dropdown list, the menu
-  column) renders fine, because those share the `render_layers` call and its
-  single `prepare_frame`. Pre-existing: `git show HEAD:tests/widget_gallery.rs`
-  renders the same missing "Rounded rect" cell with no menubar involved, and the
-  GPU suites (`chrome_instancing`, `ordered_paint_stress`, `blur`) never caught
-  it because each renders exactly one pass.
-  Options for the fix (needs a decision): (a) an explicit frame boundary —
-  `UiRenderer::begin_frame` resets the cursors once per frame and
-  `prepare_frame` stops resetting, with examples/`UiContext`/tests updated (a
-  forgotten call shows up as the arena doubling every frame and the existing
-  pressure warning firing, not as silent corruption); (b) keep the per-call
-  reset and document/enforce "one UI pass per encoder" while making the gallery
-  submit per pass (cheapest, leaves the trap); (c) give each pass within a submit
-  its own buffer region (correct without an API change, at the cost of the
-  steady-state zero-allocation property the arena exists for).
+- [x] **P0 — Two or more `UiRenderer` passes recorded into one submit corrupt
+  each other's geometry.** FIXED. `UiRenderer::begin_frame` is the explicit frame
+  boundary: call it once per frame — before the first `render`/`render_layers`
+  whose passes reach the GPU through one `queue.submit` — and it resets every
+  per-frame arena (colour vbo/ibo, icon/chrome/circle/nine instance buffers, text
+  vbo, and the new uniform arenas) plus `RenderStats`, and runs the sustained-
+  pressure observation for the previous frame. `prepare_frame` became
+  `prepare_pass` and resets nothing.
+  Each pass also gets its **own ortho uniform slot** now, via
+  `src/render/uniform_arena.rs` (`UniformArena`: dynamic-offset slots at
+  `min_uniform_buffer_offset_alignment` strides over one growable
+  `UNIFORM|COPY_DST` buffer, bind group rebuilt on growth, replaced buffers
+  retained). This covers `UiRenderer`'s five pipelines, `TextRenderer` (whose
+  public `resize` grew `&Device`/`&Queue` and now reserves the pass's slot), and
+  `Blur` (whose two A/B buffers became an arena, so repeated `blur_backdrop`
+  calls in one submission keep their own radius/tint — verified by a new
+  `tests/blur.rs` case). A forgotten `begin_frame` is loud, not silent: arenas
+  grow, reallocations trip the pressure warning, and a one-shot warning fires the
+  first time one frame's arena crosses 64 MiB.
+  Permanent regression tests in `tests/multi_pass_render.rs` (two renders per
+  submission across every primitive family; `render_layers` + `render`; a second
+  pass with a *different viewport* drawing with its own projection; a second
+  identical frame reallocating nothing), the two-`blur_backdrop` case in
+  `tests/blur.rs`, and three arena unit tests in `uniform_arena.rs`. All in-tree
+  callers (capture helpers, `hello_ui`, `benches/ui_stress`, every GPU test, the
+  gallery's two submission groups) declare the boundary. The gallery PNG now
+  shows the previously-missing base-layer fills (Rounded-rect cell, scroll-view
+  row stripes, the menubar's open-label Accent fill).
+  (Diagnosis kept for the record: `prepare_frame` reset the cursors on every call
+  while `Queue::write_buffer` only landed at `submit`, so all passes wrote the
+  same byte ranges and every recorded draw read the last write. It was visible in
+  the gallery as missing *base-layer* `quad`/`rounded_rect` fills while
+  popup-layer chrome rendered fine, and pre-existing at HEAD; the GPU suites
+  never caught it because each rendered exactly one pass.)
 

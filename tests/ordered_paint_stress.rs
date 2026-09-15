@@ -71,6 +71,8 @@ fn many_alternating_runs_do_not_produce_screen_sized_triangle() {
         timestamp_writes: None,
         occlusion_query_set: None,
     });
+    // One submission = one frame (see `UiRenderer::begin_frame`).
+    renderer.begin_frame();
     renderer.render(&device, &queue, &mut encoder, &view, (W, H), 1.0, &list);
     encoder.copy_texture_to_buffer(
         target.as_image_copy(),

@@ -7,6 +7,10 @@
 //! * a nine-slice metadata table
 //! * a [`crate::TextRenderer`] for MSDF text (cosmic-text shaping + fdsm glyph atlas)
 //!
+//! Per-frame GPU scratch (vertex/index/instance buffers, uniform slots) is a bump
+//! arena owned by the frame, not by the pass: see [`uniform_arena`] for why passes
+//! in one submission must not share bytes.
+//!
 //! `UiRenderer::render` consumes a `DrawList` and emits four sub-render-passes
 //! in this order: nine-slices → colored quads → icons → text. This matches the
 //! reference implementation in citybuilder.
@@ -22,6 +26,7 @@ mod msdf_atlas;
 #[cfg(feature = "phosphor-icons")]
 mod phosphor;
 mod ui_renderer;
+mod uniform_arena;
 
 pub use glyph_msdf::{GlyphMetrics, GlyphMsdf, generate_glyph_msdf};
 pub use msdf_atlas::{DEFAULT_PX_RANGE, DEFAULT_REF_PX, GlyphTile, MsdfGlyphAtlas};
@@ -43,5 +48,6 @@ pub use capture::{CAPTURE_FORMAT, capture_draw_list, capture_layers, write_png};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub(crate) use ui_renderer::ortho_matrix;
 pub use ui_renderer::{NineSliceMeta, RenderStats, UiRenderer};
+pub(crate) use uniform_arena::UniformArena;
 
 pub use crate::widgets::NineSliceId;

@@ -262,13 +262,6 @@ fn render_widget_gallery() {
         // list to stage the chain, then for real with that geometry promoted. The
         // open menu comes from the real input path — an Alt tap plus Down — so the
         // PNG exercises arming and opening rather than a seam.
-        //
-        // Known false negative: the open menu's Accent label fill is one of the
-        // base layer's first instanced-chrome records, and those are clobbered by
-        // the multi-pass arena bug in `TODO.md`, so it is missing from this PNG.
-        // The strip, its labels and the whole column do render. Filled
-        // `rounded_rect` cells elsewhere in the gallery are missing for the same
-        // reason.
         flow.section(list, "Menubar");
         let menu_rect = flow.cell(list, "Menu bar (File open)", 220.0, 26.0);
         {
@@ -2240,6 +2233,9 @@ fn render_widget_gallery() {
         let mut scene_enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene encoder"),
         });
+        // This scene list is its own submission (submitted at `queue.submit` just
+        // below), so it is its own frame for the renderer's arenas.
+        ui.begin_frame();
         {
             scene_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene clear"),
@@ -2286,6 +2282,10 @@ fn render_widget_gallery() {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("encoder"),
     });
+    // Everything from here to the `queue.submit` at the bottom — the widget stack,
+    // the blurred backdrop and the PAUSED panel — is one submission, hence one
+    // frame (see `UiRenderer::begin_frame`).
+    ui.begin_frame();
     {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear"),

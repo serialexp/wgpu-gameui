@@ -123,6 +123,8 @@ fn render_focused_composing_text_input() {
             occlusion_query_set: None,
         });
     }
+    // One submission = one frame (see `UiRenderer::begin_frame`).
+    ui.begin_frame();
     ui.render(&device, &queue, &mut encoder, &view, (W, H), 1.0, &list);
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

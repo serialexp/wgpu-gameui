@@ -129,6 +129,8 @@ impl Harness {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        // One submission = one frame (see `UiRenderer::begin_frame`).
+        self.ui.begin_frame();
         // Clear pass so the attachment is initialized each frame.
         {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

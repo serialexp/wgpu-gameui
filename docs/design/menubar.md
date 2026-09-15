@@ -74,6 +74,11 @@ note) — there is no "implemented but not in the gallery" state.
       switched this frame, paint no column — the geometry is measured during the
       bar's own draw and painted from the next promotion (one blank frame, the
       same class of latency the dropdown accepts).
+      Rendering note: the menubar row is what surfaced the renderer's multi-pass
+      corruption bug (missing base-layer fills, including this row's Accent
+      label). Fixed by the `UiRenderer::begin_frame` frame boundary + per-pass
+      uniform slots (`src/render/uniform_arena.rs`); see the checked P0 in
+      `TODO.md`.
       Not in this phase: submenus render their chevron but do not open; hover
       intent/corridor, mnemonics, accelerator dispatch, item icons and wheel
       scrolling are later phases.

@@ -12,6 +12,7 @@ use crate::layout::Rect;
 use crate::render::atlas::{SpriteAtlas, SpriteId};
 use crate::render::blur::{Backdrop, Blur, BlurParams};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
+use crate::render::uniform_arena::UniformArena;
 use crate::text::FontSystemHandle;
 use crate::widgets::{
     ChromeInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, NineSliceId, PaintCmd,
@@ -34,6 +35,15 @@ pub struct NineSliceMeta {
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
 }
+
+/// Size of one ortho uniform, and therefore of one dynamic-offset slot.
+const UNIFORM_SIZE: u64 = std::mem::size_of::<Uniforms>() as u64;
+
+/// Per-pass GPU arena bytes one frame may consume before the renderer assumes the
+/// frame boundary was missed and says so (see [`UiRenderer::begin_frame`]). Only
+/// reachable if a caller never calls `begin_frame`, in which case the arenas grow
+/// without bound; the cap turns silent growth into a one-shot warning.
+const ARENA_SANITY_CAP: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct OrderedColorUpload {
@@ -313,9 +323,14 @@ pub struct UiRenderer {
     circle_pipeline: wgpu::RenderPipeline,
     nine_slice_pipeline: wgpu::RenderPipeline,
 
-    // Uniforms (shared by both pipelines via group(0))
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    // Uniforms (shared by both pipelines via group(0)). One arena slot per pass:
+    // the projection is per pass (two passes can target differently sized views),
+    // and passes sharing a slot would all read the last matrix written. Reset by
+    // `begin_frame`; see `render::uniform_arena`.
+    uniform: UniformArena,
+    /// The slot the pass being recorded binds. Set by `prepare_pass`.
+    pass_uniform_offset: u32,
+    warn_missed_frame: bool,
 
     // Atlas resources
     atlas: SpriteAtlas,
@@ -336,7 +351,7 @@ pub struct UiRenderer {
     // slice at the running `*_offset` and advances it, so the many draws issued
     // per submit (nine-slices + icons per layer, every layer) occupy disjoint
     // regions instead of all aliasing offset 0 and reading the last write at
-    // draw time. Offsets reset to 0 each frame in `prepare_frame`.
+    // draw time. Offsets reset to 0 each frame in `begin_frame`.
     color_vbo: wgpu::Buffer,
     color_ibo: wgpu::Buffer,
     color_vbo_capacity: u64,
@@ -349,13 +364,13 @@ pub struct UiRenderer {
     retired_buffers: Vec<wgpu::Buffer>,
 
     // Instanced icons: reuses the chrome unit-quad base mesh + a growing
-    // per-frame instance buffer (bump offset, reset in `prepare_frame`).
+    // per-frame instance buffer (bump offset, reset in `begin_frame`).
     icon_inst_buffer: wgpu::Buffer,
     icon_inst_capacity: u64,
     icon_inst_offset: u64,
 
     // Instanced chrome: a persistent unit-quad base mesh + a growing per-frame
-    // instance buffer (bump offset like the others, reset in `prepare_frame`).
+    // instance buffer (bump offset like the others, reset in `begin_frame`).
     chrome_base_vbo: wgpu::Buffer,
     chrome_base_ibo: wgpu::Buffer,
     chrome_inst_buffer: wgpu::Buffer,
@@ -363,13 +378,13 @@ pub struct UiRenderer {
     chrome_inst_offset: u64,
 
     // Instanced circles: reuses the chrome unit-quad base mesh + a growing
-    // per-frame instance buffer (bump offset, reset in `prepare_frame`).
+    // per-frame instance buffer (bump offset, reset in `begin_frame`).
     circle_inst_buffer: wgpu::Buffer,
     circle_inst_capacity: u64,
     circle_inst_offset: u64,
 
     // Instanced nine-slice: reuses the chrome unit-quad base mesh + a growing
-    // per-frame instance buffer (bump offset, reset in `prepare_frame`).
+    // per-frame instance buffer (bump offset, reset in `begin_frame`).
     nine_inst_buffer: wgpu::Buffer,
     nine_inst_capacity: u64,
     nine_inst_offset: u64,
@@ -409,37 +424,15 @@ impl UiRenderer {
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
 
-        // Uniforms (bind group 0)
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ui uniform buffer"),
-            contents: bytemuck::cast_slice(&[Uniforms {
-                view_proj: ortho_matrix(1.0, 1.0),
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        // Uniforms (bind group 0), one slot per pass — see `uniform_arena` for why.
+        let uniform = UniformArena::new(
+            device,
+            "ui uniform buffer",
+            UNIFORM_SIZE,
+            wgpu::ShaderStages::VERTEX,
+        );
 
-        let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("ui uniform bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ui uniform bg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let uniform_bgl = uniform.layout();
 
         // Atlas + texture
         let atlas = SpriteAtlas::new();
@@ -450,7 +443,7 @@ impl UiRenderer {
         let color_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ui color pipeline layout"),
-                bind_group_layouts: &[&uniform_bgl],
+                bind_group_layouts: &[uniform_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -489,7 +482,7 @@ impl UiRenderer {
         // chrome unit-quad base mesh + per-instance records.
         let icon_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ui icon pipeline layout"),
-            bind_group_layouts: &[&uniform_bgl, &texture_bgl],
+            bind_group_layouts: &[uniform_bgl, &texture_bgl],
             push_constant_ranges: &[],
         });
 
@@ -535,7 +528,7 @@ impl UiRenderer {
         let chrome_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ui chrome pipeline layout"),
-                bind_group_layouts: &[&uniform_bgl],
+                bind_group_layouts: &[uniform_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -622,7 +615,7 @@ impl UiRenderer {
         let nine_slice_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ui nine-slice pipeline layout"),
-                bind_group_layouts: &[&uniform_bgl, &texture_bgl],
+                bind_group_layouts: &[uniform_bgl, &texture_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -736,8 +729,9 @@ impl UiRenderer {
             chrome_pipeline,
             circle_pipeline,
             nine_slice_pipeline,
-            uniform_buffer,
-            uniform_bind_group,
+            uniform,
+            pass_uniform_offset: 0,
+            warn_missed_frame: false,
             atlas,
             texture,
             texture_bind_group_layout: texture_bgl,
@@ -960,8 +954,20 @@ impl UiRenderer {
 
     /// Notify the text sub-renderer of viewport changes. `scale_factor` is the
     /// logical → physical ratio (pass `1.0` when unknown).
-    pub fn resize(&mut self, _queue: &wgpu::Queue, width: u32, height: u32, scale_factor: f32) {
-        self.text_renderer.resize(width, height, scale_factor);
+    ///
+    /// This is the *public* resize hook for callers that change the viewport
+    /// outside a frame; the per-pass resize (which reserves the text pipeline's
+    /// uniform slot) happens inside `render`/`render_layers`.
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        scale_factor: f32,
+    ) {
+        self.text_renderer
+            .resize(device, queue, width, height, scale_factor);
     }
 
     /// Force-upload pending atlas changes to the GPU. Called automatically by
@@ -1039,6 +1045,52 @@ impl UiRenderer {
         );
     }
 
+    /// Open a frame: everything rendered until the next `begin_frame` is expected to
+    /// reach the GPU through a single `Queue::submit`.
+    ///
+    /// **Call this exactly once per frame**, before the first render call whose passes
+    /// are submitted together (the widget stack and a modal drawn into one encoder are
+    /// one frame; a second encoder submitted separately is another). It resets the
+    /// per-frame GPU bump arenas — colour, chrome, circle, icon, nine-slice, text and
+    /// uniform — and the frame's [`RenderStats`].
+    ///
+    /// The boundary is what keeps the passes from destroying each other.
+    /// `Queue::write_buffer` does not take effect when it is called: it is staged and
+    /// executed at the start of the next `submit`, *before* any recorded pass runs. Two
+    /// passes in one submission therefore read whichever bytes were written last — the
+    /// last pass's — unless each pass owns a distinct byte range. Those ranges only
+    /// exist within a frame, so a renderer that is not told where the frame starts
+    /// cannot separate the passes.
+    ///
+    /// Forgetting the call is not silent: the arenas keep growing, so the buffers
+    /// reallocate every frame, which trips the sustained-render-pressure warning, and a
+    /// single frame crossing [`ARENA_SANITY_CAP`] logs a dedicated message.
+    pub fn begin_frame(&mut self) {
+        // Judge the *previous* frame here rather than at the end of a render call: the
+        // counters describe a whole frame, and a frame can contain several calls.
+        let previous = self.frame_stats;
+        if self.pressure.observe(previous) {
+            log::warn!(
+                "wgpu-gameui: sustained render pressure for {}+ frames: {}. Inspect the returned RenderStats or attach it to DebugReport::with_render_stats().",
+                RenderPressureDetector::WARN_AFTER,
+                previous.warnings().join("; ")
+            );
+        }
+        self.frame_stats = RenderStats::default();
+        self.warn_missed_frame = false;
+        self.color_vbo_offset = 0;
+        self.color_ibo_offset = 0;
+        self.icon_inst_offset = 0;
+        self.chrome_inst_offset = 0;
+        self.circle_inst_offset = 0;
+        self.nine_inst_offset = 0;
+        self.uniform.reset();
+        self.text_renderer.begin_frame();
+        if let Some(blur) = self.blur.as_mut() {
+            blur.begin_frame();
+        }
+    }
+
     /// Render the entire DrawList in one call.
     /// Render a single `DrawList`.
     ///
@@ -1065,9 +1117,9 @@ impl UiRenderer {
         if self.stale_list.observe(draw_list.id()) {
             Self::warn_stale_list("render", "DrawList");
         }
-        self.prepare_frame(device, queue, viewport, scale_factor);
+        self.prepare_pass(device, queue, viewport, scale_factor);
         self.render_one(device, queue, encoder, view, draw_list);
-        self.finish_frame_stats()
+        self.frame_stats
     }
 
     /// Render a `LayerStack`: base list first, then each layer in push order.
@@ -1092,24 +1144,12 @@ impl UiRenderer {
         if self.stale_list.observe(layers.base_id()) {
             Self::warn_stale_list("render_layers", "LayerStack");
         }
-        self.prepare_frame(device, queue, viewport, scale_factor);
+        self.prepare_pass(device, queue, viewport, scale_factor);
         self.render_one(device, queue, encoder, view, layers.base());
         for layer in layers.layers() {
             self.render_one(device, queue, encoder, view, &layer.list);
         }
-        self.finish_frame_stats()
-    }
-
-    fn finish_frame_stats(&mut self) -> RenderStats {
-        let stats = self.frame_stats;
-        if self.pressure.observe(stats) {
-            log::warn!(
-                "wgpu-gameui: sustained render pressure for {}+ frames: {}. Inspect the returned RenderStats or attach it to DebugReport::with_render_stats().",
-                RenderPressureDetector::WARN_AFTER,
-                stats.warnings().join("; ")
-            );
-        }
-        stats
+        self.frame_stats
     }
 
     /// Emit the once-per-renderer warning that the caller is feeding a
@@ -1141,7 +1181,8 @@ impl UiRenderer {
     /// target's **physical** size and `scale_factor` the logical→physical ratio,
     /// matching [`render`](Self::render). A degenerate region is a no-op.
     ///
-    /// Typical frame: render scene → `blur_backdrop(region)` → `render(panels)`.
+    /// Typical frame: render scene → `blur_backdrop(region)` → `render(panels)`,
+    /// all into one encoder under one [`begin_frame`](Self::begin_frame).
     #[allow(clippy::too_many_arguments)]
     pub fn blur_backdrop(
         &mut self,
@@ -1185,7 +1226,13 @@ impl UiRenderer {
         );
     }
 
-    fn prepare_frame(
+    /// Per-pass setup: give this pass its own ortho slot, point the text renderer at
+    /// the pass's viewport, and upload any pending atlas change.
+    ///
+    /// Deliberately resets nothing — the arenas span the whole frame
+    /// ([`begin_frame`](Self::begin_frame)), which is what keeps the passes of one
+    /// submission from overwriting each other.
+    fn prepare_pass(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1193,7 +1240,7 @@ impl UiRenderer {
         scale_factor: f32,
     ) {
         #[cfg(feature = "tracy")]
-        let _span = tracing::info_span!("gameui_prepare_frame").entered();
+        let _span = tracing::info_span!("gameui_prepare_pass").entered();
         // The framebuffer is `viewport` physical pixels, but the UI is laid out
         // in logical pixels. Project logical → NDC by dividing the physical size
         // by the scale factor: a logical point still maps to the same NDC, while
@@ -1208,18 +1255,49 @@ impl UiRenderer {
         let uniforms = Uniforms {
             view_proj: ortho_matrix(logical_w, logical_h),
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-        self.text_renderer.resize(viewport.0, viewport.1, scale);
-        // Reset the per-frame bump cursors so this frame's draws start at 0.
-        self.frame_stats = RenderStats::default();
-        self.color_vbo_offset = 0;
-        self.color_ibo_offset = 0;
-        self.icon_inst_offset = 0;
-        self.chrome_inst_offset = 0;
-        self.circle_inst_offset = 0;
-        self.nine_inst_offset = 0;
-        self.text_renderer.begin_frame();
+        let (slot, grew) = self.uniform.allocate(device);
+        if grew {
+            self.frame_stats.buffer_reallocations += 1;
+        }
+        queue.write_buffer(
+            self.uniform.buffer(),
+            slot,
+            bytemuck::cast_slice(&[uniforms]),
+        );
+        self.frame_stats.buffer_write_calls += 1;
+        self.frame_stats.buffer_bytes_uploaded += UNIFORM_SIZE;
+        self.pass_uniform_offset = slot as u32;
+        self.text_renderer
+            .resize(device, queue, viewport.0, viewport.1, scale);
         self.flush_atlas(device, queue);
+        self.check_frame_arena();
+    }
+
+    /// Sum of every per-frame arena cursor — how many bytes of GPU scratch the
+    /// current frame (or, if [`begin_frame`](Self::begin_frame) was never called, a
+    /// growing pile of frames) is holding.
+    fn frame_arena_bytes(&self) -> u64 {
+        self.color_vbo_offset
+            + self.color_ibo_offset
+            + self.icon_inst_offset
+            + self.chrome_inst_offset
+            + self.circle_inst_offset
+            + self.nine_inst_offset
+            + self.uniform.bytes_used()
+            + self.text_renderer.frame_arena_bytes()
+    }
+
+    /// Warn once if one frame's arena grows past [`ARENA_SANITY_CAP`]: at that size
+    /// the frame boundary was almost certainly never declared, and the caller needs
+    /// to know before the arena eats the machine.
+    fn check_frame_arena(&mut self) {
+        if !self.warn_missed_frame && self.frame_arena_bytes() > ARENA_SANITY_CAP {
+            self.warn_missed_frame = true;
+            log::warn!(
+                "wgpu-gameui: one frame has bumped {} MiB through the renderer's per-frame arenas. `UiRenderer::begin_frame` is probably never being called: it is what resets those arenas between frames, and without it they grow without bound (and every pass in a submission keeps clobbering the previous one's buffers).",
+                ARENA_SANITY_CAP / (1024 * 1024)
+            );
+        }
     }
 
     fn render_one(
@@ -1507,7 +1585,7 @@ impl UiRenderer {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.color_pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
         // Index 0 maps to the first vertex of this pass's slice (base_vertex 0
         // + the sliced vertex buffer), so per-pass indices stay 0-based.
         pass.set_vertex_buffer(0, self.color_vbo.slice(v_off..));
@@ -1653,7 +1731,7 @@ impl UiRenderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
 
         // Draw a soup index sub-range with the color pipeline.
         let draw_soup = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
@@ -1718,7 +1796,7 @@ impl UiRenderer {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.icon_pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
         pass.set_bind_group(1, &self.texture_bind_group, &[]);
         pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
         pass.set_vertex_buffer(1, self.icon_inst_buffer.slice(off..));
@@ -1784,7 +1862,7 @@ impl UiRenderer {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.nine_slice_pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
         pass.set_bind_group(1, &self.texture_bind_group, &[]);
         pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
         pass.set_vertex_buffer(1, self.nine_inst_buffer.slice(off..));
@@ -2149,7 +2227,7 @@ mod tests {
 
     #[test]
     fn dpi_scale_is_logical_size_invariant() {
-        // prepare_frame builds ortho from (physical / scale). Two (physical,
+        // prepare_pass builds ortho from (physical / scale). Two (physical,
         // scale) pairs with the SAME logical size must project a logical point
         // identically — the scale factor only changes which framebuffer the
         // identical logical UI rasterizes onto.

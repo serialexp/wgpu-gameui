@@ -255,6 +255,7 @@ impl ApplicationHandler for App {
                 gpu.config.height = size.height.max(1);
                 gpu.surface.configure(&gpu.device, &gpu.config);
                 gpu.ui.resize(
+                    &gpu.device,
                     &gpu.queue,
                     gpu.config.width,
                     gpu.config.height,
@@ -861,6 +862,10 @@ impl ApplicationHandler for App {
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                             label: Some("hello_ui encoder"),
                         });
+
+                // One frame = one submission: declare the frame boundary before the
+                // first render call (see `UiRenderer::begin_frame`).
+                gpu.ui.begin_frame();
 
                 // Clear the frame manually (UiRenderer always loads).
                 {

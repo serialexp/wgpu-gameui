@@ -75,8 +75,11 @@ Frame::new(&mut ui_state, &mut input, &theme, &KeyboardNav)
         ui.text_input(0, &mut name, "name…", Some(200.0));
     });
 
-// Render the DrawList:
+// Render the DrawList. `begin_frame` opens the frame — one submission = one
+// frame; it resets the renderer's per-frame GPU scratch so multiple passes
+// rendered into one encoder can't overwrite each other's buffers.
 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+ui_renderer.begin_frame();
 ui_renderer.render(&device, &queue, &mut encoder, &view, (width, height), scale, &list);
 queue.submit(Some(encoder.finish()));
 
@@ -195,6 +198,14 @@ public payload vectors cannot record submission order; a wholly unrecorded list
 retains the legacy fixed-pass compatibility path. Prefer the drawing methods for
 new code. The renderer never samples its own framebuffer; `blur_backdrop` takes
 an app-provided scene texture for frosted-glass effects.
+
+One frame equals one submission: call `begin_frame()` before the first render
+call whose passes are submitted together. `Queue::write_buffer` only takes
+effect at the next `queue.submit` — before any recorded pass runs — so every
+pass in a submission must own its own buffer bytes; `begin_frame` is what makes
+those byte ranges reusable between frames. Forgetting it shows up as per-frame
+buffer reallocations (which trip the sustained-render-pressure warning), never
+as silently corrupted geometry.
 
 ### Image & atlas lifecycle
 

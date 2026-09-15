@@ -25,13 +25,13 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
 use crate::render::{DEFAULT_PX_RANGE, IconGlyph, PhosphorIcon, icon_font_snapshot};
-use crate::render::{GlyphTile, MsdfGlyphAtlas, ortho_matrix};
+use crate::render::{GlyphTile, MsdfGlyphAtlas, UniformArena, ortho_matrix};
 #[cfg(feature = "phosphor-icons")]
 use crate::widgets::IconMsdf;
 
 use cosmic_text::{
-    Align as CosmicAlign, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style, Weight,
-    Wrap, fontdb,
+    Align as CosmicAlign, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style,
+    Weight, Wrap, fontdb,
 };
 
 const MSDF_SHADER: &str = include_str!("render/ui_msdf.wgsl");
@@ -41,6 +41,9 @@ const MSDF_SHADER: &str = include_str!("render/ui_msdf.wgsl");
 /// for crisp scale-up headroom, at a modest atlas cost for the small curated set.
 #[cfg(feature = "phosphor-icons")]
 const ICON_REF_PX: f32 = 64.0;
+
+/// Size of the ortho uniform this renderer writes — one dynamic-offset arena slot.
+const UNIFORM_SIZE: u64 = std::mem::size_of::<[[f32; 4]; 4]>() as u64;
 
 /// Shared handle to a glyphon `FontSystem`.
 ///
@@ -293,9 +296,13 @@ pub struct TextRenderer {
     #[cfg(feature = "phosphor-icons")]
     icon_gpu: MsdfTextureGpu,
 
-    // Ortho projection (owned, sized from `resize`).
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    // Ortho projection (owned, sized from `resize`), one slot per pass: the
+    // projection is per pass and `Queue::write_buffer` lands at submit, so passes
+    // sharing a slot would all draw with the last pass's matrix. `begin_frame`
+    // resets the arena; see `render::uniform_arena`.
+    uniform: UniformArena,
+    /// The slot `resize` handed this pass. Bound as the dynamic offset.
+    uniform_offset: u64,
 
     pipeline: wgpu::RenderPipeline,
 
@@ -350,35 +357,16 @@ impl TextRenderer {
         let atlas = MsdfGlyphAtlas::new();
 
         // Uniform (group 0): ortho projection, matching the main UI pipelines.
-        let uniform_buffer = wgpu::util::DeviceExt::create_buffer_init(
+        // One arena slot per pass, for the same reason as the vertex buffer below:
+        // several passes share one submit, and a shared slot would let a later
+        // pass's matrix reach the GPU first.
+        let uniform = UniformArena::new(
             device,
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("msdf text uniform"),
-                contents: bytemuck::cast_slice(&[ortho_matrix(1.0, 1.0)]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            },
+            "msdf text uniform",
+            UNIFORM_SIZE,
+            wgpu::ShaderStages::VERTEX,
         );
-        let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("msdf uniform bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("msdf uniform bg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let uniform_bgl = uniform.layout();
 
         // Atlas texture (group 1): linear filtering, linear (non-sRGB) format.
         // The layout is shared by the text and icon atlas mirrors and the pipeline.
@@ -399,7 +387,7 @@ impl TextRenderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("msdf text pipeline layout"),
-            bind_group_layouts: &[&uniform_bgl, &atlas_bgl],
+            bind_group_layouts: &[uniform_bgl, &atlas_bgl],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -449,8 +437,8 @@ impl TextRenderer {
             icon_atlas,
             #[cfg(feature = "phosphor-icons")]
             icon_gpu,
-            uniform_buffer,
-            uniform_bind_group,
+            uniform,
+            uniform_offset: 0,
             pipeline,
             vbo,
             vbo_capacity,
@@ -473,14 +461,30 @@ impl TextRenderer {
         Arc::clone(&self.font_system)
     }
 
-    /// Update the viewport size used to build the ortho projection.
+    /// Update the viewport size used to build the ortho projection, and give this
+    /// pass its own uniform slot.
     ///
     /// `width`/`height` are the **physical** render-target pixels; `scale_factor`
     /// is the logical → physical ratio (e.g. 2.0 on Retina). The ortho matrix is
     /// built from the *logical* dimensions (`physical / scale`) so text lands at
     /// the same coordinates as the geometry pipeline, which also projects in
     /// logical space.
-    pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
+    ///
+    /// Call this once per pass, before that pass's [`render`](Self::render) /
+    /// [`render_icons`](Self::render_icons): the projection is per pass, because two
+    /// passes submitted together can target differently sized views and a shared
+    /// uniform slot would hand both of them the last matrix written (see
+    /// [`uniform_arena`](crate::render::uniform_arena)). `begin_frame` — called once
+    /// per frame by [`UiRenderer::begin_frame`](crate::UiRenderer::begin_frame) —
+    /// releases the slots for reuse.
+    pub fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        scale_factor: f32,
+    ) {
         let scale = if scale_factor > 0.0 {
             scale_factor
         } else {
@@ -489,13 +493,29 @@ impl TextRenderer {
         // Store the logical dimensions — ortho_matrix needs these, not physical.
         self.width = ((width as f32 / scale) as u32).max(1);
         self.height = ((height as f32 / scale) as u32).max(1);
+        let (slot, _grew) = self.uniform.allocate(device);
+        queue.write_buffer(
+            self.uniform.buffer(),
+            slot,
+            bytemuck::cast_slice(&[ortho_matrix(self.width as f32, self.height as f32)]),
+        );
+        self.uniform_offset = slot;
     }
 
-    /// Reset the per-frame vertex-buffer cursor. Call once at the start of each
-    /// frame (before any [`render`](Self::render) pass) so the bump offset that
-    /// keeps multiple text passes from aliasing starts fresh.
+    /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.
+    /// Called once per frame (from [`UiRenderer::begin_frame`](crate::UiRenderer::begin_frame)),
+    /// *not* once per pass: passes within one submission must keep their own regions,
+    /// and only the frame boundary makes those regions reusable.
     pub fn begin_frame(&mut self) {
         self.vbo_offset = 0;
+        self.uniform.reset();
+        self.uniform_offset = 0;
+    }
+
+    /// Bytes of per-frame GPU scratch this renderer is holding: vertex data plus
+    /// uniform slots. Part of `UiRenderer`'s frame-arena accounting.
+    pub(crate) fn frame_arena_bytes(&self) -> u64 {
+        self.vbo_offset + self.uniform.bytes_used()
     }
 
     /// Drop the cross-frame shaped-text cache, forcing every block to re-shape on
@@ -657,14 +677,6 @@ impl TextRenderer {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_icon_render").entered();
 
-        // Keep the ortho uniform in sync with the current viewport (text may not
-        // have run this frame, so don't rely on its write).
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[ortho_matrix(self.width as f32, self.height as f32)]),
-        );
-
         // One lock acquisition for the whole batch; the bytes are `'static`, so
         // MSDF generation below runs with the registry unlocked.
         let fonts = icon_font_snapshot();
@@ -719,7 +731,7 @@ impl TextRenderer {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.uniform.bind_group(), &[self.uniform_offset as u32]);
         pass.set_bind_group(1, &self.icon_gpu.bind_group, &[]);
         pass.set_vertex_buffer(0, self.vbo.slice(offset..));
         pass.draw(0..verts.len() as u32, 0..1);
@@ -1089,13 +1101,6 @@ impl TextRenderer {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_text_render").entered();
 
-        // Keep the ortho uniform in sync with the current viewport.
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[ortho_matrix(self.width as f32, self.height as f32)]),
-        );
-
         let verts = self.build_vertices(texts);
         // Glyph generation may have dirtied / grown the atlas — upload before drawing.
         self.upload_atlas(device, queue);
@@ -1127,7 +1132,7 @@ impl TextRenderer {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.uniform.bind_group(), &[self.uniform_offset as u32]);
         pass.set_bind_group(1, &self.glyph_gpu.bind_group, &[]);
         pass.set_vertex_buffer(0, self.vbo.slice(offset..));
         pass.draw(0..verts.len() as u32, 0..1);
