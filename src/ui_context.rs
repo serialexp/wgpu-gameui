@@ -29,7 +29,7 @@ use crate::widgets::{
 };
 #[cfg(feature = "phosphor-icons")]
 use crate::{Icon, PhosphorIcon};
-use glyphon::{Style, Weight};
+use cosmic_text::{Style, Weight};
 use std::collections::HashMap;
 
 /// Horizontal alignment relative to the current origin.
@@ -121,6 +121,8 @@ pub struct FontSpec {
     pub font: Option<FontHandle>,
     /// Font size in pixels.
     pub size: f32,
+    /// Additional spacing between glyphs in pixels.
+    pub letter_spacing: f32,
     /// Weight (e.g. `Weight::NORMAL` / `Weight::BOLD`).
     pub weight: Weight,
     /// Style (`Normal` / `Italic` / `Oblique`).
@@ -132,6 +134,7 @@ impl Default for FontSpec {
         Self {
             font: None,
             size: 16.0,
+            letter_spacing: 0.0,
             weight: Weight::NORMAL,
             style: Style::Normal,
         }
@@ -223,13 +226,22 @@ impl UiState {
         self.clipboard_set = Some(std::rc::Rc::new(std::cell::RefCell::new(set)));
     }
 
-    /// Per-frame setup: fill this frame's navigation intents via `nav`, arm focus
-    /// navigation for the resulting confirm/cancel/next/prev/directional edges,
-    /// seed the auto-advance gap from the theme, and advance the animation clock
-    /// by `dt` seconds. Call before building the frame's interactive verbs
-    /// (mirrors [`InputState::end_frame`] timing). Pass `0.0` for `dt` to freeze
-    /// animations (e.g. a paused frame or a static render); the eased verbs then
-    /// hold their current value.
+    /// Per-frame setup: fill this frame's navigation intents via `nav`, let each
+    /// consumer **claim** the intents it will act on, arm focus navigation for
+    /// whatever is left, seed the auto-advance gap from the theme, and advance the
+    /// animation clock by `dt` seconds. Call before building the frame's
+    /// interactive verbs (mirrors [`InputState::end_frame`] timing). Pass `0.0`
+    /// for `dt` to freeze animations (e.g. a paused frame or a static render); the
+    /// eased verbs then hold their current value.
+    ///
+    /// The consumer order is a **contract**, not an implementation detail. Each
+    /// consumer runs at frame-top and zeroes the `nav` intents it owns in the
+    /// shared `InputState`, so consumers later in the list — and the base layer,
+    /// which draws after all of them — never see an intent somebody else already
+    /// handled. The order is: nav map → dropdowns → tree → focus → interactions.
+    /// Dropdowns before focus is what stops a single Escape from both closing an
+    /// open list and blurring the focused field; the tree and focus both read
+    /// directional intents, so they must come after whichever popup claims them.
     ///
     /// `nav` is a [`NavMap`](crate::NavMap) — pass [`KeyboardNav`](crate::KeyboardNav)
     /// for the default keyboard binding, a closure that also folds in a
@@ -245,10 +257,10 @@ impl UiState {
         nav: &dyn crate::NavMap,
     ) {
         nav.apply(input);
-        self.interactions.begin_frame(input);
-        self.focus.begin_frame(input);
-        self.tree.begin_frame(input);
         self.dropdowns.begin_frame(input);
+        self.tree.begin_frame(input);
+        self.focus.begin_frame(input);
+        self.interactions.begin_frame(input);
         self.item_gap = theme.spacing;
         self.next_auto_id = 0;
         self.tree_focus_registered = false;
@@ -256,15 +268,21 @@ impl UiState {
     }
 
     /// Per-frame teardown: resolve tree arrow-navigation (gated on the tree
-    /// holding focus), then resolve focus/Tab navigation against the widgets
-    /// registered this frame. Call after building the frame's verbs.
+    /// holding focus), hand each popup's pointer claim to focus, then resolve
+    /// focus/Tab navigation against the widgets registered this frame. Call after
+    /// building the frame's verbs.
+    ///
+    /// Order matters here too: the dropdown reports its row claim to
+    /// [`FocusState`] **before** focus resolves click-elsewhere blur, so choosing
+    /// an option does not blur the widget the option acts on.
     pub fn end_frame(&mut self) {
         // Resolve tree nav before Tab moves focus, using this frame's focus owner.
         let tree_focused = self.focus.is_focused(TREE_FOCUS_ID);
         self.tree.end_frame(tree_focused);
+        // Dismiss the open dropdown on Escape or click-outside; a claimed row
+        // click is handed to focus first so it does not blur.
+        self.dropdowns.end_frame(&mut self.focus);
         self.focus.end_frame(None);
-        // Dismiss the open dropdown on Escape or click-outside.
-        self.dropdowns.end_frame();
         self.interactions.end_frame();
     }
 
@@ -606,6 +624,14 @@ impl<'a> UiContext<'a> {
         }
     }
 
+    /// Set additional spacing between glyphs in pixels. Scoped to the enclosing
+    /// [`push`](Self::push)/[`pop`](Self::pop) frame.
+    pub fn letter_spacing(&mut self, letter_spacing: f32) {
+        if let Some(top) = self.font_stack.last_mut() {
+            top.letter_spacing = letter_spacing;
+        }
+    }
+
     /// Set just the current font family, leaving size/weight/style intact.
     pub fn font_family(&mut self, font: FontHandle) {
         if let Some(top) = self.font_stack.last_mut() {
@@ -655,6 +681,7 @@ impl<'a> UiContext<'a> {
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
         let block = TextBlock::new(text, 0.0, 0.0)
             .with_size(spec.size)
+            .with_letter_spacing(spec.letter_spacing)
             .with_rgba(
                 to_u8(color[0]),
                 to_u8(color[1]),
@@ -723,6 +750,7 @@ impl<'a> UiContext<'a> {
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
         TextBlock::new(text, 0.0, 0.0)
             .with_size(spec.size)
+            .with_letter_spacing(spec.letter_spacing)
             .with_rgba(
                 to_u8(color[0]),
                 to_u8(color[1]),
@@ -3174,11 +3202,13 @@ mod tests {
         let mut list = DrawList::new();
         let mut ui = UiContext::new(&mut list);
         ui.font(FontHandle("Noto Sans".into()), 24.0);
+        ui.letter_spacing(2.5);
         ui.bold(true);
         ui.italic(true);
         let f = ui.current_font();
         assert_eq!(f.font, Some(FontHandle("Noto Sans".into())));
         assert_eq!(f.size, 24.0);
+        assert_eq!(f.letter_spacing, 2.5);
         assert_eq!(f.weight, Weight::BOLD);
         assert_eq!(f.style, Style::Italic);
         // Independent setters leave the rest intact.
@@ -3196,17 +3226,21 @@ mod tests {
         let mut list = DrawList::new();
         let mut ui = UiContext::new(&mut list);
         ui.font(FontHandle("Base".into()), 16.0);
+        ui.letter_spacing(1.0);
         ui.push();
         ui.font(FontHandle("Inner".into()), 32.0);
+        ui.letter_spacing(4.0);
         ui.bold(true);
         let inner = ui.current_font();
         assert_eq!(inner.font, Some(FontHandle("Inner".into())));
         assert_eq!(inner.size, 32.0);
+        assert_eq!(inner.letter_spacing, 4.0);
         assert_eq!(inner.weight, Weight::BOLD);
         ui.pop();
         let outer = ui.current_font();
         assert_eq!(outer.font, Some(FontHandle("Base".into())));
         assert_eq!(outer.size, 16.0);
+        assert_eq!(outer.letter_spacing, 1.0);
         assert_eq!(outer.weight, Weight::NORMAL);
     }
 
@@ -3216,6 +3250,7 @@ mod tests {
         {
             let mut ui = UiContext::new(&mut list);
             ui.font(FontHandle("Noto Sans".into()), 28.0);
+            ui.letter_spacing(3.0);
             ui.bold(true);
             ui.italic(true);
             ui.text_line("hi", [1.0, 0.0, 0.0, 1.0]);
@@ -3224,6 +3259,7 @@ mod tests {
         let block = &list.texts[0];
         assert_eq!(block.font, Some(FontHandle("Noto Sans".into())));
         assert_eq!(block.font_size, 28.0);
+        assert_eq!(block.letter_spacing, 3.0);
         assert_eq!(block.weight, Weight::BOLD);
         assert_eq!(block.style, Style::Italic);
     }
@@ -3526,6 +3562,17 @@ mod tests {
         let large = ui.text_line_size("Settings");
         assert!(large.0 > normal.0);
         assert!(large.1 > normal.1);
+    }
+
+    #[test]
+    fn text_line_size_propagates_letter_spacing() {
+        let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        let plain = ui.text_line_size("Settings");
+        ui.letter_spacing(3.0);
+        let spaced = ui.text_line_size("Settings");
+        assert!(spaced.0 > plain.0);
+        assert_eq!(spaced.1, plain.1);
     }
 
     #[test]
@@ -3936,5 +3983,76 @@ mod tests {
             }
         }
         assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn an_open_dropdown_escape_does_not_blur_the_focused_field() {
+        // Regression for a pre-existing bug: `FocusState` blurred on the Escape
+        // edge, and an open dropdown also closed on that same edge, so one press
+        // did both. `UiState::begin_frame` now runs the dropdown first so it
+        // claims the edge before focus reads it.
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        state.focus.focus(7);
+        state
+            .dropdowns
+            .open_for_test(1, Rect::new(10.0, 10.0, 120.0, 28.0), &["Red", "Green"], 0);
+
+        let mut input = InputState {
+            key_escape: true,
+            ..InputState::default()
+        };
+        crate::map_keyboard(&mut input);
+        assert!(input.nav.cancel, "Escape maps to the cancel intent");
+
+        state.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
+        assert!(
+            !input.nav.cancel,
+            "the open list claimed the cancel edge at frame-top, so focus never sees it"
+        );
+
+        state.end_frame();
+
+        assert!(!state.dropdowns.is_open(1), "Escape closes the open list");
+        assert!(
+            state.focus.is_focused(7),
+            "and the same Escape must not blur the focused field"
+        );
+    }
+
+    #[test]
+    fn an_open_dropdown_claims_directional_intents_from_the_base_layer() {
+        // The other half of the contract: intents the open list acts on must not
+        // also reach a focused list/tree behind the popup, and Tab is never
+        // claimed (the list is not a focus trap).
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        state
+            .dropdowns
+            .open_for_test(1, Rect::new(10.0, 10.0, 120.0, 28.0), &["Red", "Green"], 0);
+
+        let mut input = InputState {
+            key_up: true,
+            key_down: true,
+            enter_pressed: true,
+            key_escape: true,
+            key_tab: true,
+            ..InputState::default()
+        };
+        crate::map_keyboard(&mut input);
+        assert!(input.nav.up && input.nav.down && input.nav.confirm);
+        assert!(input.nav.next, "Tab maps to the next intent");
+
+        state.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
+
+        assert!(
+            !input.nav.up && !input.nav.down && !input.nav.confirm && !input.nav.cancel,
+            "an open list claims the intents it acts on"
+        );
+        assert!(
+            input.nav.next,
+            "but Tab is left alone for the focus ring (Shift+Tab follows `shift_pressed` \
+             and is never claimed either)"
+        );
     }
 }

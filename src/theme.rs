@@ -151,8 +151,8 @@ impl Default for Theme {
             spacing: 12.0,
             border_radius: 6.0,
             border_width: 1.0,
-            font_size: 16.0,
-            font_size_title: 28.0,
+            font_size: 14.0,
+            font_size_title: 24.0,
             button_height: 44.0,
             input_height: 40.0,
             animation_duration: 0.12,
@@ -172,6 +172,13 @@ mod tests {
         let theme = Theme::default();
         assert!(theme.text("hi", 0.0, 0.0).font.is_none());
         assert!(theme.title("hi", 0.0, 0.0).font.is_none());
+    }
+
+    #[test]
+    fn default_typography_leaves_room_for_application_content() {
+        let theme = Theme::default();
+        assert_eq!(theme.font_size, 14.0);
+        assert_eq!(theme.font_size_title, 24.0);
     }
 
     #[test]

@@ -29,8 +29,10 @@ use crate::render::{GlyphTile, MsdfGlyphAtlas, ortho_matrix};
 #[cfg(feature = "phosphor-icons")]
 use crate::widgets::IconMsdf;
 
-use glyphon::cosmic_text::{Align as CosmicAlign, Wrap, fontdb};
-use glyphon::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style, Weight};
+use cosmic_text::{
+    Align as CosmicAlign, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style, Weight,
+    Wrap, fontdb,
+};
 
 const MSDF_SHADER: &str = include_str!("render/ui_msdf.wgsl");
 
@@ -522,6 +524,7 @@ impl TextRenderer {
             Style::Normal,
             WrapMode::default(),
             false,
+            0.0,
         )
     }
 
@@ -540,7 +543,7 @@ impl TextRenderer {
         buffer.set_text(
             &mut fs,
             &ascii,
-            Attrs::new().family(Family::SansSerif),
+            &Attrs::new().family(Family::SansSerif),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut fs, false);
@@ -748,19 +751,7 @@ impl TextRenderer {
                 continue;
             }
 
-            let key: ShapeKey = (
-                block.font_size.to_bits(),
-                block.line_height.to_bits(),
-                block.max_width.to_bits(),
-                family_hash(block.font.as_ref()),
-                block.align,
-                block.ellipsize,
-                block.weight.0,
-                style_disc(block.style),
-                block.wrap,
-                block.direction,
-                block.vertical,
-            );
+            let key = shape_key(block);
 
             // Fast path: a cached layout for this exact key + content. No
             // FontSystem lock, no shaping — every cached glyph is already in the
@@ -809,6 +800,7 @@ impl TextRenderer {
                     family,
                     block.weight,
                     block.style,
+                    block.letter_spacing,
                 );
                 &truncated
             } else {
@@ -848,10 +840,11 @@ impl TextRenderer {
             buffer.set_text(
                 &mut fs,
                 &shaped_text,
-                Attrs::new()
+                &Attrs::new()
                     .family(family)
                     .weight(block.weight)
                     .style(block.style)
+                    .letter_spacing(block.letter_spacing)
                     .color(block.color),
                 Shaping::Advanced,
             );
@@ -1215,6 +1208,7 @@ type ShapeKey = (
     u32,
     u32,
     u32,
+    u32,
     u64,
     TextAlign,
     bool,
@@ -1224,6 +1218,23 @@ type ShapeKey = (
     TextDirection,
     bool,
 );
+
+fn shape_key(block: &TextBlock) -> ShapeKey {
+    (
+        block.font_size.to_bits(),
+        block.line_height.to_bits(),
+        block.max_width.to_bits(),
+        block.letter_spacing.to_bits(),
+        family_hash(block.font.as_ref()),
+        block.align,
+        block.ellipsize,
+        block.weight.0,
+        style_disc(block.style),
+        block.wrap,
+        block.direction,
+        block.vertical,
+    )
+}
 
 /// Lay a string out for **vertical (stacked) text** by putting each grapheme
 /// cluster on its own line, so cosmic-text — which has no writing-mode API and
@@ -1845,9 +1856,10 @@ pub fn has_lowercase(text: &str) -> bool {
 /// stale metrics.
 ///
 /// Cache key for [`TextMeasurer`]: quantized
-/// `(font_size_bits, max_width_bits, family_hash, weight, style_disc, wrap, vertical)`.
-/// `vertical` keeps the two orientations of the same string from colliding.
-type MeasureKey = (u32, Option<u32>, u64, u16, u8, WrapMode, bool);
+/// `(font_size_bits, max_width_bits, letter_spacing_bits, family_hash, weight,
+/// style_disc, wrap, vertical)`. `vertical` keeps the two orientations of the
+/// same string from colliding.
+type MeasureKey = (u32, Option<u32>, u32, u64, u16, u8, WrapMode, bool);
 
 /// Text measurement front-end: shapes through cosmic-text to report `(width,
 /// height)` for layout, caching results per metrics/font key and the optical
@@ -1996,7 +2008,36 @@ impl TextMeasurer {
         style: Style,
         wrap: WrapMode,
     ) -> (f32, f32) {
-        self.measure_keyed(text, font_size, max_width, font, weight, style, wrap, false)
+        self.measure_styled_with_letter_spacing(
+            text, font_size, max_width, font, weight, style, wrap, 0.0,
+        )
+    }
+
+    /// Like [`measure_styled`](Self::measure_styled), with additional spacing in
+    /// pixels applied by cosmic-text between shaped glyphs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn measure_styled_with_letter_spacing(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        font: Option<&FontHandle>,
+        weight: Weight,
+        style: Style,
+        wrap: WrapMode,
+        letter_spacing: f32,
+    ) -> (f32, f32) {
+        self.measure_keyed(
+            text,
+            font_size,
+            max_width,
+            font,
+            weight,
+            style,
+            wrap,
+            false,
+            letter_spacing,
+        )
     }
 
     /// Measure `text` laid out as **vertical (stacked) text** — one grapheme
@@ -2014,6 +2055,7 @@ impl TextMeasurer {
             Style::Normal,
             WrapMode::default(),
             true,
+            0.0,
         )
     }
 
@@ -2045,6 +2087,7 @@ impl TextMeasurer {
             block.style,
             block.wrap,
             block.vertical,
+            block.letter_spacing,
         )
     }
 
@@ -2072,6 +2115,7 @@ impl TextMeasurer {
         let key = (
             block.font_size.to_bits(),
             max_width.map(f32::to_bits),
+            block.letter_spacing.to_bits(),
             family_hash(block.font.as_ref()),
             block.weight.0,
             style_disc(block.style),
@@ -2097,6 +2141,7 @@ impl TextMeasurer {
                 block.style,
                 block.wrap,
                 block.vertical,
+                block.letter_spacing,
             )
         };
 
@@ -2126,10 +2171,12 @@ impl TextMeasurer {
         style: Style,
         wrap: WrapMode,
         vertical: bool,
+        letter_spacing: f32,
     ) -> (f32, f32) {
         let key = (
             font_size.to_bits(),
             max_width.map(f32::to_bits),
+            letter_spacing.to_bits(),
             family_hash(font),
             weight.0,
             style_disc(style),
@@ -2155,6 +2202,7 @@ impl TextMeasurer {
                 style,
                 wrap,
                 vertical,
+                letter_spacing,
             )
         };
 
@@ -2224,6 +2272,7 @@ fn shape_for_measure(
     style: Style,
     wrap: WrapMode,
     vertical: bool,
+    letter_spacing: f32,
 ) -> Buffer {
     let line_height = font_size * LINE_HEIGHT_RATIO;
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
@@ -2246,7 +2295,11 @@ fn shape_for_measure(
     buffer.set_text(
         font_system,
         shaped_text,
-        Attrs::new().family(family).weight(weight).style(style),
+        &Attrs::new()
+            .family(family)
+            .weight(weight)
+            .style(style)
+            .letter_spacing(letter_spacing),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
@@ -2280,6 +2333,7 @@ fn ink_band_with_font_system(
     style: Style,
     wrap: WrapMode,
     vertical: bool,
+    letter_spacing: f32,
 ) -> Option<(f32, f32)> {
     let buffer = shape_for_measure(
         font_system,
@@ -2291,6 +2345,7 @@ fn ink_band_with_font_system(
         style,
         wrap,
         vertical,
+        letter_spacing,
     );
 
     // Group by face first: parsing a face is far more expensive than reading a
@@ -2344,6 +2399,7 @@ fn measure_with_font_system(
     style: Style,
     wrap: WrapMode,
     vertical: bool,
+    letter_spacing: f32,
 ) -> (f32, f32) {
     let line_height = font_size * LINE_HEIGHT_RATIO;
     let buffer = shape_for_measure(
@@ -2356,6 +2412,7 @@ fn measure_with_font_system(
         style,
         wrap,
         vertical,
+        letter_spacing,
     );
 
     let mut width = 0.0f32;
@@ -2393,7 +2450,7 @@ fn resolve_vmetrics(
     buffer.set_text(
         font_system,
         "H",
-        Attrs::new().family(family).weight(weight).style(style),
+        &Attrs::new().family(family).weight(weight).style(style),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
@@ -2431,7 +2488,7 @@ fn resolve_vmetrics(
     cjk_buffer.set_text(
         font_system,
         CJK_PROBE,
-        Attrs::new().family(family).weight(weight).style(style),
+        &Attrs::new().family(family).weight(weight).style(style),
         Shaping::Advanced,
     );
     cjk_buffer.shape_until_scroll(font_system, false);
@@ -2549,7 +2606,7 @@ pub fn text_cursor_positions(
     buffer.set_text(
         font_system,
         text,
-        Attrs::new().family(family),
+        &Attrs::new().family(family),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
@@ -2685,7 +2742,7 @@ pub fn text_caret_layout(
     buffer.set_text(
         font_system,
         &shaped,
-        Attrs::new().family(family),
+        &Attrs::new().family(family),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
@@ -2939,7 +2996,7 @@ pub fn text_visual_layout(
     buffer.set_text(
         font_system,
         &shaped,
-        Attrs::new().family(family),
+        &Attrs::new().family(family),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
@@ -3196,18 +3253,25 @@ fn ellipsize_to_width(
     family: Family,
     weight: Weight,
     style: Style,
+    letter_spacing: f32,
 ) -> String {
     if content.is_empty() || !max_width.is_finite() || max_width <= 0.0 {
         return content.to_string();
     }
     let metrics = Metrics::new(font_size, line_height);
-    let attrs = || Attrs::new().family(family).weight(weight).style(style);
+    let attrs = || {
+        Attrs::new()
+            .family(family)
+            .weight(weight)
+            .style(style)
+            .letter_spacing(letter_spacing)
+    };
 
     // Shape the full content on a single line.
     let mut buffer = Buffer::new(fs, metrics);
     buffer.set_wrap(fs, Wrap::None);
     buffer.set_size(fs, None, None);
-    buffer.set_text(fs, content, attrs(), Shaping::Advanced);
+    buffer.set_text(fs, content, &attrs(), Shaping::Advanced);
     buffer.shape_until_scroll(fs, false);
 
     let full_w = buffer
@@ -3222,7 +3286,7 @@ fn ellipsize_to_width(
     let mut ell = Buffer::new(fs, metrics);
     ell.set_wrap(fs, Wrap::None);
     ell.set_size(fs, None, None);
-    ell.set_text(fs, "…", attrs(), Shaping::Advanced);
+    ell.set_text(fs, "…", &attrs(), Shaping::Advanced);
     ell.shape_until_scroll(fs, false);
     let ellipsis_w = ell.layout_runs().map(|r| r.line_w).fold(0.0_f32, f32::max);
 
@@ -3373,6 +3437,8 @@ pub struct TextBlock {
     pub line_height: f32,
     /// Layout box width in pixels; wrapping and alignment are relative to this.
     pub max_width: f32,
+    /// Additional spacing between glyphs in pixels (default `0.0`).
+    pub letter_spacing: f32,
     /// Global fill colour (overridden per-run by coloured [`spans`](Self::spans)).
     pub color: Color,
     /// Optional clip rectangle; glyphs outside it are not drawn.
@@ -3441,6 +3507,7 @@ impl TextBlock {
             font_size: 16.0,
             line_height: 20.0,
             max_width: 800.0,
+            letter_spacing: 0.0,
             color: Color::rgb(255, 255, 255),
             clip: None,
             outline: None,
@@ -3471,6 +3538,12 @@ impl TextBlock {
     /// Set the layout box width (px) that wrapping and alignment are relative to.
     pub fn with_max_width(mut self, width: f32) -> Self {
         self.max_width = width;
+        self
+    }
+
+    /// Set additional spacing between glyphs in pixels.
+    pub fn with_letter_spacing(mut self, letter_spacing: f32) -> Self {
+        self.letter_spacing = letter_spacing;
         self
     }
 
@@ -3657,11 +3730,11 @@ mod tests {
         TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, Underline, VisualGlyph,
         WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
         cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
-        load_font_bytes, measure_with_font_system, resolve_range_color, resolve_span_color,
+        load_font_bytes, measure_with_font_system, resolve_range_color, resolve_span_color, shape_key,
         selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
         text_visual_layout, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
-    use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
+    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
 
     // ---- TextSpan / resolve_span_color ----
 
@@ -4195,6 +4268,27 @@ mod tests {
     }
 
     #[test]
+    fn positive_letter_spacing_changes_width_and_uses_distinct_cache_entry() {
+        let mut measurer = TextMeasurer::new();
+        let plain = TextBlock::new("Spacing", 0.0, 0.0).with_size(20.0);
+        let spaced = plain.clone().with_letter_spacing(3.0);
+        assert_ne!(shape_key(&plain), shape_key(&spaced));
+
+        let plain_size = measurer.measure_block(&plain);
+        assert_eq!(measurer.cache_entries, 1);
+        let spaced_size = measurer.measure_block(&spaced);
+        assert_eq!(measurer.cache_entries, 2, "spacing must distinguish cache keys");
+        assert!(
+            spaced_size.0 > plain_size.0,
+            "positive spacing should widen text: plain={}, spaced={}",
+            plain_size.0,
+            spaced_size.0
+        );
+        assert_eq!(measurer.measure_block(&plain), plain_size);
+        assert_eq!(measurer.cache_entries, 2, "repeat should hit plain cache entry");
+    }
+
+    #[test]
     fn clear_cache_forces_remeasure_without_changing_result() {
         let mut measurer = TextMeasurer::new();
         let before = measurer.measure("Persistent", 18.0, None);
@@ -4232,7 +4326,7 @@ mod tests {
         buffer.set_text(
             &mut guard,
             "Ag",
-            Attrs::new().family(Family::Name(handle.family())),
+            &Attrs::new().family(Family::Name(handle.family())),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut guard, false);
@@ -4286,7 +4380,7 @@ mod tests {
 
     #[test]
     fn cosmic_align_maps_logical_and_absolute_variants() {
-        use glyphon::cosmic_text::Align as CA;
+        use cosmic_text::Align as CA;
         // Start is cosmic-text's direction-relative default → no override.
         assert!(cosmic_align(TextAlign::Start).is_none());
         assert!(matches!(cosmic_align(TextAlign::Center), Some(CA::Center)));
@@ -4324,13 +4418,13 @@ mod tests {
         // prefix mechanism without a GPU.
         let fs = shared_font_system();
         let mut guard = fs.lock().unwrap();
-        let leftmost = |guard: &mut glyphon::FontSystem, prefix: &str| -> f32 {
+        let leftmost = |guard: &mut cosmic_text::FontSystem, prefix: &str| -> f32 {
             let mut buffer = Buffer::new(guard, Metrics::new(16.0, 20.0));
             buffer.set_size(guard, Some(400.0), None);
             buffer.set_text(
                 guard,
                 &format!("{prefix}short"),
-                Attrs::new().family(Family::SansSerif),
+                &Attrs::new().family(Family::SansSerif),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(guard, false);
@@ -4521,7 +4615,7 @@ mod tests {
             buffer.set_text(
                 &mut guard,
                 "short",
-                Attrs::new().family(Family::SansSerif),
+                &Attrs::new().family(Family::SansSerif),
                 Shaping::Advanced,
             );
             if let Some(a) = cosmic_align(align) {
@@ -4646,7 +4740,7 @@ mod tests {
         buffer.set_text(
             &mut guard,
             "Ag",
-            Attrs::new().family(Family::SansSerif),
+            &Attrs::new().family(Family::SansSerif),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut guard, false);
@@ -4666,7 +4760,7 @@ mod tests {
         bold.set_text(
             &mut guard,
             "Ag",
-            Attrs::new().family(Family::SansSerif).weight(Weight::BOLD),
+            &Attrs::new().family(Family::SansSerif).weight(Weight::BOLD),
             Shaping::Advanced,
         );
         bold.shape_until_scroll(&mut guard, false);
@@ -4692,6 +4786,7 @@ mod tests {
             Family::SansSerif,
             Weight::NORMAL,
             Style::Normal,
+            0.0,
         );
         assert_eq!(out, "short");
     }
@@ -4711,6 +4806,7 @@ mod tests {
             Family::SansSerif,
             Weight::NORMAL,
             Style::Normal,
+            0.0,
         );
         assert_ne!(out, long, "overflowing text should be truncated");
         assert!(
@@ -4729,6 +4825,7 @@ mod tests {
             Style::Normal,
             WrapMode::default(),
             false,
+            0.0,
         );
         assert!(w <= max_width, "ellipsized width {w} must fit {max_width}");
     }
@@ -4747,6 +4844,7 @@ mod tests {
             Family::SansSerif,
             Weight::NORMAL,
             Style::Normal,
+            0.0,
         );
         assert_eq!(out, "…");
     }
@@ -4826,6 +4924,7 @@ mod tests {
             Style::Normal,
             WrapMode::default(),
             false,
+            0.0,
         );
         let final_x = pos.last().map(|(_, x)| *x).unwrap_or(0.0);
         // The final x-position should approximate the measured width.

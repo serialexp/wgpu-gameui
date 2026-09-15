@@ -971,7 +971,7 @@ mod tests {
 
     #[test]
     fn label_color_overrides_default_text_color() {
-        use glyphon::Color;
+        use cosmic_text::Color;
 
         // Default path: the label takes the theme text colour.
         let mut s = TreeState::new();

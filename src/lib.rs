@@ -79,7 +79,7 @@ pub use text::{
 
 /// Font weight and style selectors (re-exported from `glyphon`/`cosmic-text`)
 /// for `TextBlock::with_weight`/`with_style` and the `UiContext` font stack.
-pub use glyphon::{Style, Weight};
+pub use cosmic_text::{Style, Weight};
 
 pub mod affine;
 mod animation;
@@ -256,6 +256,23 @@ pub struct InputState {
     pub shift_pressed: bool,
     /// Ctrl (or Cmd on macOS) key is currently held.
     pub ctrl_pressed: bool,
+    /// Alt (or Option on macOS) is currently held. Held state, like
+    /// [`shift_pressed`](Self::shift_pressed)/[`ctrl_pressed`](Self::ctrl_pressed);
+    /// cleared by the windowing layer on key-up, not by [`end_frame`](Self::end_frame).
+    pub alt_down: bool,
+    /// Alt went down this frame (press edge).
+    ///
+    /// Alt is the one modifier with an *edge* pair as well as a held flag,
+    /// because a bare Alt tap is a gesture in its own right (arming a menu bar):
+    /// a press and release that both land between two rendered frames would be
+    /// invisible to held-only state. Mirroring the mouse's
+    /// `mouse_down`/`mouse_clicked`/`mouse_released` triple is deliberate.
+    /// Per-frame; cleared by [`end_frame`](Self::end_frame).
+    pub alt_pressed: bool,
+    /// Every Alt key came up this frame (release edge). See
+    /// [`alt_pressed`](Self::alt_pressed). Per-frame; cleared by
+    /// [`end_frame`](Self::end_frame).
+    pub alt_released: bool,
     /// Device-agnostic navigation intents for this frame (directional, confirm,
     /// cancel, focus next/prev). Filled by a [`NavMap`] — passed to
     /// [`UiState::begin_frame`](crate::UiState::begin_frame) / [`Frame::new`] —
@@ -315,6 +332,10 @@ impl InputState {
         self.key_space = false;
         self.key_up = false;
         self.key_down = false;
+        // Alt's edges are per-frame events; `alt_down` is held state owned by the
+        // windowing layer, so it is deliberately not cleared here.
+        self.alt_pressed = false;
+        self.alt_released = false;
         // Navigation intents are per-frame edges (like the key events they're
         // mapped from), so clear them too. The next frame's `NavMap` repopulates.
         self.nav = NavInput::default();
@@ -372,7 +393,11 @@ impl InputState {
             key_down: false,
             // A layer under a modal/popup must not navigate either.
             nav: NavInput::default(),
-            // shift/ctrl are modifier state, not events — preserve them
+            // Alt's edges are events, not modifier state; `alt_down` is
+            // preserved by the `..self.clone()` below.
+            alt_pressed: false,
+            alt_released: false,
+            // shift/ctrl/alt are modifier state, not events — preserve them
             // so modals that have text inputs still see modifier keys.
             ..self.clone()
         }
@@ -478,5 +503,69 @@ mod input_state_tests {
         let c = i.consumed();
         assert!(c.preedit.is_empty(), "consumed must clear preedit");
         assert_eq!(c.preedit_cursor, None);
+    }
+
+    // ---- Alt: held state plus edges ----
+
+    #[test]
+    fn alt_edges_cleared_by_end_frame_but_held_state_persists() {
+        let mut i = InputState {
+            alt_down: true,
+            alt_pressed: true,
+            alt_released: false,
+            ..InputState::default()
+        };
+        i.end_frame();
+        assert!(!i.alt_pressed, "press edge is a per-frame event");
+        assert!(!i.alt_released);
+        assert!(i.alt_down, "alt_down is held state, not a per-frame event");
+    }
+
+    #[test]
+    fn alt_release_edge_cleared_by_end_frame() {
+        let mut i = InputState {
+            alt_released: true,
+            ..InputState::default()
+        };
+        i.end_frame();
+        assert!(!i.alt_released);
+    }
+
+    #[test]
+    fn consumed_zeros_alt_edges_but_preserves_alt_down() {
+        // A layer under a modal must not see Alt as a gesture, but a text field
+        // there still needs to know the modifier is held.
+        let i = InputState {
+            alt_down: true,
+            alt_pressed: true,
+            alt_released: true,
+            ..InputState::default()
+        };
+        let c = i.consumed();
+        assert!(!c.alt_pressed, "consumed must zero the Alt press edge");
+        assert!(!c.alt_released, "consumed must zero the Alt release edge");
+        assert!(c.alt_down, "consumed preserves held modifier state");
+    }
+
+    #[test]
+    fn a_bare_alt_tap_is_observable_for_exactly_one_frame() {
+        // The reason Alt carries edges as well as held state: a press and release
+        // that both arrive between two rendered frames would otherwise be
+        // invisible. The tap is observable for exactly the frame it lands in.
+        let mut i = InputState {
+            alt_down: false, // already up again by the time the frame renders
+            alt_pressed: true,
+            alt_released: true,
+            ..InputState::default()
+        };
+        assert!(
+            i.alt_pressed && i.alt_released,
+            "the tap is visible on the frame it lands in"
+        );
+        i.end_frame();
+        assert!(
+            !i.alt_pressed && !i.alt_released,
+            "and gone the next, so one tap cannot arm the bar twice"
+        );
     }
 }

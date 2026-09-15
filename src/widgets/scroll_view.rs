@@ -80,6 +80,38 @@ impl ScrollState {
         self.offset[1] = self.offset[1].clamp(0.0, self.max_offset(1, viewport[1]));
     }
 
+    /// Move one axis by the minimum amount needed to reveal `[start, end]`.
+    ///
+    /// Oversized ranges align their leading edge. Non-finite coordinates,
+    /// invalid axes, and non-positive/non-finite viewport sizes are ignored.
+    pub fn scroll_range_into_view(
+        &mut self,
+        axis: usize,
+        start: f32,
+        end: f32,
+        viewport_size: f32,
+    ) {
+        if axis > 1
+            || !start.is_finite()
+            || !end.is_finite()
+            || !viewport_size.is_finite()
+            || viewport_size <= 0.0
+        {
+            return;
+        }
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        if end - start > viewport_size || start < self.offset[axis] {
+            self.offset[axis] = start;
+        } else if end > self.offset[axis] + viewport_size {
+            self.offset[axis] = end - viewport_size;
+        }
+        self.offset[axis] = self.offset[axis].clamp(0.0, self.max_offset(axis, viewport_size));
+    }
+
     /// Reset offset to (0, 0).
     pub fn reset(&mut self) {
         self.offset = [0.0, 0.0];
@@ -465,6 +497,42 @@ mod tests {
         };
         assert!(!s.overflows(0, 100.0));
         assert!(!s.overflows(1, 100.0));
+    }
+
+    #[test]
+    fn scroll_range_into_view_moves_only_when_needed() {
+        let mut s = ScrollState {
+            offset: [0.0, 100.0],
+            content_size: [100.0, 500.0],
+            ..ScrollState::default()
+        };
+
+        s.scroll_range_into_view(1, 120.0, 140.0, 100.0);
+        assert_eq!(s.offset[1], 100.0, "an already-visible range must not move");
+
+        s.scroll_range_into_view(1, 40.0, 60.0, 100.0);
+        assert_eq!(s.offset[1], 40.0, "a range above aligns its leading edge");
+
+        s.scroll_range_into_view(1, 180.0, 200.0, 100.0);
+        assert_eq!(s.offset[1], 100.0, "a range below moves by the minimum amount");
+    }
+
+    #[test]
+    fn scroll_range_into_view_clamps_and_handles_oversized_ranges() {
+        let mut s = ScrollState {
+            offset: [0.0, 300.0],
+            content_size: [100.0, 500.0],
+            ..ScrollState::default()
+        };
+
+        s.scroll_range_into_view(1, -20.0, 10.0, 100.0);
+        assert_eq!(s.offset[1], 0.0);
+
+        s.scroll_range_into_view(1, 480.0, 500.0, 100.0);
+        assert_eq!(s.offset[1], 400.0);
+
+        s.scroll_range_into_view(1, 150.0, 300.0, 100.0);
+        assert_eq!(s.offset[1], 150.0, "oversized ranges align their leading edge");
     }
 
     #[test]

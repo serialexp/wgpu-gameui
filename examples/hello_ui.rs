@@ -345,6 +345,18 @@ impl ApplicationHandler for App {
                         KeyCode::ControlLeft | KeyCode::ControlRight => {
                             self.input.ctrl_pressed = pressed;
                         }
+                        KeyCode::AltLeft | KeyCode::AltRight => {
+                            // `alt_down` is held state; Alt additionally carries
+                            // press/release edges because a bare tap between two
+                            // frames is a gesture in its own right (arming a menu
+                            // bar), and held-only state would miss it entirely.
+                            self.input.alt_down = pressed;
+                            if pressed {
+                                self.input.alt_pressed = true;
+                            } else {
+                                self.input.alt_released = true;
+                            }
+                        }
                         KeyCode::Enter if pressed => {
                             self.input.enter_pressed = true;
                         }
@@ -413,8 +425,10 @@ impl ApplicationHandler for App {
 
                 // Establish the open dropdown's popup layer at frame-top (from
                 // last frame's geometry) so `input_for_base` blocks clicks to
-                // widgets under the open list — same as the modal above.
-                self.state.dropdowns.begin_frame(&self.input);
+                // widgets under the open list — same as the modal above. The
+                // `&mut` is deliberate: an open list claims this frame's Escape
+                // and arrow intents so `focus` (below) never sees them.
+                self.state.dropdowns.begin_frame(&mut self.input);
                 let dropdown_popup = self.state.dropdowns.push_open_layer(&mut layers);
 
                 // Resolve input for the base layer. When a modal is open this
@@ -752,7 +766,7 @@ impl ApplicationHandler for App {
                 {
                     self.state.dropdown_sel = idx;
                 }
-                self.state.dropdowns.end_frame();
+                self.state.dropdowns.end_frame(&mut self.state.focus);
 
                 // Bonus: rotated badge from the original demo, on the base layer
                 // (built via UiContext::with_layers so it stays clipped to the

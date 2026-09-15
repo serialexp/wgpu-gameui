@@ -9,7 +9,7 @@ repository = "https://github.com/serialexp/wgpu-gameui"
 [dependencies]
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
-glyphon = "0.8"
+cosmic-text = "0.14"
 log = "0.4"
 # Grapheme-cluster segmentation for vertical (stacked) text layout — splitting a
 # label into one cluster per line. Already in the tree transitively via cosmic-text.

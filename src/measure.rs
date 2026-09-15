@@ -287,6 +287,7 @@ impl<'a> MeasureContext<'a> {
         block.font_size = self.font.size;
         block.line_height = self.font.size * 1.25;
         block.font = self.font.font.clone();
+        block.letter_spacing = self.font.letter_spacing;
         block.weight = self.font.weight;
         block.style = self.font.style;
         block.wrap = self.wrap;
@@ -308,7 +309,7 @@ impl<'a> MeasureContext<'a> {
     ) -> MeasuredText {
         let constraints = constraints.normalized();
         block.wrap = self.wrap;
-        let natural = self.text.measure_styled(
+        let natural = self.text.measure_styled_with_letter_spacing(
             &block.content,
             block.font_size,
             None,
@@ -316,6 +317,7 @@ impl<'a> MeasureContext<'a> {
             block.weight,
             block.style,
             WrapMode::None,
+            block.letter_spacing,
         );
         let constrained_width = constraints.max_width;
         block.max_width = constrained_width.unwrap_or(f32::MAX / 4.0);

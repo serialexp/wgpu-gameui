@@ -548,7 +548,7 @@ impl DrawList {
     /// callers want [`Self::vcentered_text_y`].
     pub fn font_vmetrics(&mut self, font: Option<&FontHandle>) -> FontVMetrics {
         self.text_measurer
-            .vmetrics(font, glyphon::Weight::NORMAL, glyphon::Style::Normal)
+            .vmetrics(font, cosmic_text::Weight::NORMAL, cosmic_text::Style::Normal)
     }
 
     /// Top `y` for a single-line text block of `font_size` so the label `text` is
@@ -1742,7 +1742,7 @@ impl DrawList {
         // early lets the underline quads below use the already-tinted colour).
         let tint = self.current_tint();
         if tint != [1.0, 1.0, 1.0, 1.0] {
-            // glyphon::Color is RGBA8; multiply per-channel via the public accessors.
+            // cosmic_text::Color is RGBA8; multiply per-channel via the public accessors.
             let r = block.color.r() as f32 / 255.0;
             let g = block.color.g() as f32 / 255.0;
             let b = block.color.b() as f32 / 255.0;
@@ -1751,7 +1751,7 @@ impl DrawList {
             let ng = (g * tint[1]).clamp(0.0, 1.0);
             let nb = (b * tint[2]).clamp(0.0, 1.0);
             let na = (a * tint[3]).clamp(0.0, 1.0);
-            block.color = glyphon::Color::rgba(
+            block.color = cosmic_text::Color::rgba(
                 (nr * 255.0).round() as u8,
                 (ng * 255.0).round() as u8,
                 (nb * 255.0).round() as u8,
