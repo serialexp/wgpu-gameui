@@ -75,6 +75,10 @@ pub enum StyleKey {
     // --- Colors ---
     /// Window/screen backdrop fill.
     Background,
+    /// Fullscreen dim drawn behind a modal, menu screen, or pause overlay —
+    /// the translucent darkening layer that pushes the scene back. Read by
+    /// [`draw_scrim`](crate::draw_scrim); a good value is black at ~0.5 alpha.
+    Scrim,
     /// Panel/container surface fill.
     Panel,
     /// Border stroke around panels/containers.
@@ -478,6 +482,7 @@ impl<'a> StyleResolver<'a> {
 #[cfg(test)]
 pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::Background,
+    StyleKey::Scrim,
     StyleKey::Panel,
     StyleKey::PanelBorder,
     StyleKey::Button,

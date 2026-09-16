@@ -9,6 +9,11 @@ pub struct Theme {
     // Colors
     /// Window/screen backdrop fill behind all UI.
     pub background: [f32; 4],
+    /// Fullscreen dim behind a modal/menu/pause overlay (see
+    /// [`StyleKey::Scrim`](crate::StyleKey::Scrim)). Drawn over the scene (or
+    /// the game world showing through a `LayerStack` base) and under the
+    /// overlay's contents by [`draw_scrim`](crate::draw_scrim).
+    pub scrim: [f32; 4],
     /// Panel/container surface fill.
     pub panel: [f32; 4],
     /// Border stroke around panels/containers.
@@ -216,6 +221,9 @@ impl Default for Theme {
             // Backdrop gradient stop from the design body (#10171c→#060809);
             // apps wanting the exact ramp blend these behind the UI.
             background: [0.0627, 0.0902, 0.1098, 1.0], // #10171c
+            // Pause/menu screens dim the world by half. Black keeps the dim
+            // neutral; apps wanting a color cast retune it per theme.
+            scrim: [0.0, 0.0, 0.0, 0.55],
             // Raised surface = the design's rgba(16,19,22,0.72) sheet over the
             // backdrop.
             panel: [0.0863, 0.098, 0.1137, 0.95], // #16191d
@@ -444,6 +452,7 @@ impl Theme {
         let v = match key {
             // Colors
             Background => StyleValue::Color(self.background),
+            Scrim => StyleValue::Color(self.scrim),
             Panel => StyleValue::Color(self.panel),
             PanelBorder => StyleValue::Color(self.panel_border),
             Button => StyleValue::Color(self.button),
@@ -535,6 +544,7 @@ impl Theme {
         }
         match (key, value) {
             (Background, StyleValue::Color(c)) => self.background = c,
+            (Scrim, StyleValue::Color(c)) => self.scrim = c,
             (Panel, StyleValue::Color(c)) => self.panel = c,
             (PanelBorder, StyleValue::Color(c)) => self.panel_border = c,
             (Button, StyleValue::Color(c)) => self.button = c,

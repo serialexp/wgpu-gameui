@@ -1345,3 +1345,60 @@ new systems designed to compose with it and the existing widgets.
 `DockSplitterWidth` (6) — all with `Theme` fields, `get`/`set` arms, and
 defaults. No new color keys (reuses existing palette: Panel, PanelBorder,
 TabActive, TabInactive, Accent, Text, TextDim, etc.).
+
+## 2026-09-16 — Menu-screen primitives (scrim, MenuList, arrow focus, tile fit)
+
+From the "easy primitives for a main menu" request: thin composition over the
+existing Button/Panel/Image/Anchor pieces rather than a monolithic menu
+widget — a MenuScreen façade stays deferred until a real consumer wants one.
+
+### New pieces
+
+- [x] **Fullscreen scrim** (`draw_scrim` in `src/widgets/menu_screens.rs`) —
+      one quad filled with the new `StyleKey::Scrim` color (theme default
+      black @ 0.55), drawn between the game world/backdrop and the menu
+      contents to push the scene back. Works on any layer; pair with
+      `UiRenderer::blur_backdrop` for frosted glass. API:
+      `draw_scrim(rect, &mut DrawList, &StyleResolver)`.
+- [x] **MenuList** (`src/widgets/menu_screens.rs`) — a column of equal-width
+      menu buttons, vertically centered as a block; row width derives from the
+      widest label (≥3× label width, clamped to the rect). Caller owns
+      `selected: &mut usize` (written in place, clamped); nav up/down wraps via
+      `rem_euclid`, hover promotes the selection, and confirm activates it —
+      but never on the same frame the selection moved, and never for a
+      disabled row. Hover is resolved in a pre-pass before any row paints so
+      every row's chrome reflects the same selection (a mid-loop mutation
+      painted stale selection above the pointer for a frame). API:
+      `MenuList::new(&[&str]).row_height(px).gap(px).enabled(&[bool])
+      .focusable(base_id).draw(rect, selected, &mut DrawContext) ->
+      MenuListOutput { activated: Option<usize>, hovered: Option<usize>,
+      selected_changed: bool, intrinsic_width: f32 }`. 13 unit tests.
+- [x] **Arrow focus nav** (`ArrowFocusNav` in `src/nav.rs`) — opt-in wrapper
+      over any `NavMap` that turns the directional intents (arrows, d-pad,
+      stick) into Tab-ring next/prev (up/left = prev, down/right = next) and
+      consumes them, so a menu needs no extra wiring for gamepad/keyboard
+      selection; `confirm`/`cancel` pass through. Off by default: sliders and
+      text carets still own the arrows wherever the wrapper isn't applied.
+      API: `ArrowFocusNav::over(inner_map)`. 4 unit tests.
+- [x] **`ImageFit::Tile`** (`src/widgets/image.rs`, `DrawList::image_tiled`,
+      shader wrap in `src/render/ui.wgsl`) — repeat an image at natural pixel
+      size edge-to-edge across any box (tiled menu backdrop), partial tiles
+      cropped at the right/bottom. Repetition is a fragment-shader
+      region-relative `fract`, so a fullscreen backdrop costs **one** icon
+      instance — no per-tile instance explosion. `IconInstance.flags` gained
+      `[tile_wrap, tile_span_u, tile_span_v]` (the one-tile UV span, computed
+      from the atlas region since `apply_crop_uv` already maps the full
+      multi-tile span into atlas space). Requires a `SpriteId` source +
+      `natural_size` (key sources fall back to Stretch); keep an opaque margin
+      in the art for seamless tiling (atlas neighbors are never sampled, but
+      the region's own halo edge is). 3 unit tests + `menu_gallery` eyeball.
+- [x] **`tests/menu_gallery.rs`** — GPU render test (separate page, keeping
+      `widget_gallery.rs` from growing) showing tiled backdrop, scrim +
+      MenuList with pointer/selection, `Anchor::BottomRight` composition, and
+      a centered title + menu column. Render with
+      `DISPLAY=:0 cargo test --test menu_gallery -- --ignored --nocapture`.
+
+### New `StyleKey` colors
+
+`Scrim` — `Theme.scrim`, default `[0.0, 0.0, 0.0, 0.55]`, with `get`/`set`
+arms and a `COLOR_KEYS` entry.

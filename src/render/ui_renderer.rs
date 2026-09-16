@@ -78,7 +78,11 @@ struct IconInstance {
     tint: [f32; 4],
     /// Clip rect `[x, y, w, h]` (ignored unless `flags[0] > 0.5`).
     clip: [f32; 4],
-    /// `[clip_enabled, _pad, _pad, _pad]`.
+    /// `[clip_enabled, tile_wrap, tile_span_u, tile_span_v]`: `flags[1] > 0.5`
+    /// makes the fragment shader repeat the source region modulo **one tile**
+    /// (`flags[2..]` = the single-tile UV span in atlas units — the instance's
+    /// `uv_rect` spans `tile_count` tiles after `apply_crop_uv`, so its own
+    /// size can't serve as the wrap modulus). See [`DrawList::image_tiled`].
     flags: [f32; 4],
 }
 
@@ -1476,7 +1480,26 @@ impl UiRenderer {
             let uv = apply_crop_uv(region.uv(aw, ah), icon.src);
             let clip = icon.clip.map(|c| [c.x, c.y, c.width, c.height]);
 
-            out.push(build_icon_instance(icon.corners, uv, icon.tint, clip));
+            // One-tile UV span for the tile path: the sprite's own atlas span
+            // divided by the tile count requested along each axis (`icon.src`
+            // u1/v1 are those counts). Computed from the *region* — not the
+            // mapped `uv`, which spans tile_count tiles after apply_crop_uv.
+            let tile_span = match (icon.wrap, icon.src) {
+                (true, Some([_, _, tu, tv])) if tu > 0.0 && tv > 0.0 => {
+                    let full = region.uv(aw, ah);
+                    [(full[2] - full[0]) / tu, (full[3] - full[1]) / tv]
+                }
+                _ => [0.0, 0.0],
+            };
+
+            out.push(build_icon_instance(
+                icon.corners,
+                uv,
+                icon.tint,
+                clip,
+                icon.wrap,
+                tile_span,
+            ));
         }
 
         out
@@ -2015,6 +2038,8 @@ fn build_icon_instance(
     uv: [f32; 4], // u0, v0, u1, v1
     tint: [f32; 4],
     clip: Option<[f32; 4]>,
+    wrap: bool,
+    tile_span: [f32; 2], // one-tile UV span (atlas units); [0,0] unless wrapping
 ) -> IconInstance {
     let (clip_rect, clip_enabled) = match clip {
         Some(r) => (r, 1.0),
@@ -2030,7 +2055,9 @@ fn build_icon_instance(
         uv_rect: uv,
         tint,
         clip: clip_rect,
-        flags: [clip_enabled, 0.0, 0.0, 0.0],
+        // flags[1] = tile-wrap: the fragment shader folds `uv` modulo the
+        // one-tile span in flags[2..4] so one instance tiles any dest.
+        flags: [clip_enabled, u8::from(wrap) as f32, tile_span[0], tile_span[1]],
     }
 }
 
@@ -2301,6 +2328,8 @@ mod tests {
             [0.1, 0.2, 0.3, 0.4],
             [1.0, 0.5, 0.25, 1.0],
             Some([1.0, 2.0, 3.0, 4.0]),
+            false,
+            [0.0, 0.0],
         );
         assert_eq!(inst.c_tl_tr, [10.0, 20.0, 110.0, 20.0]);
         assert_eq!(inst.c_br_bl, [110.0, 70.0, 10.0, 70.0]);
@@ -2313,7 +2342,7 @@ mod tests {
     #[test]
     fn icon_instance_clip_none_disables() {
         let corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        let inst = build_icon_instance(corners, [0.0, 0.0, 1.0, 1.0], [1.0; 4], None);
+        let inst = build_icon_instance(corners, [0.0, 0.0, 1.0, 1.0], [1.0; 4], None, false, [0.0, 0.0]);
         assert_eq!(inst.flags[0], 0.0); // clip disabled
         assert_eq!(inst.clip, [0.0; 4]);
     }

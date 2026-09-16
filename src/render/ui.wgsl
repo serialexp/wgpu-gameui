@@ -239,6 +239,14 @@ fn fs_circle(in: CircleVsOut) -> @location(0) vec4<f32> {
 // rotation/scale/shear for free, no fallback. UV is a linear lerp of the
 // instance's source rect. Replaces re-tessellating 6 verts/icon into the
 // textured soup + re-uploading it every frame.
+//
+// `flags.y` = tile-wrap: the instance's uv_rect is a span in *tile units*
+// (u1/v1 may exceed 1); the fragment shader maps it back into the source
+// region modulo its own size, so a single instance repeats the sprite across
+// the whole quad (ImageFit::Tile). Nearest-edge texels of the source art are
+// sampled at the seams — keep a fully-opaque margin in the art for seamless
+// tiling, since atlas neighbors are never sampled (the fract stays inside the
+// region's own rect).
 
 struct IconVsIn {
     // Base mesh: unit-quad corner in [0,1]^2.
@@ -249,7 +257,7 @@ struct IconVsIn {
     @location(3) uv_rect: vec4<f32>,  // u0, v0, u1, v1
     @location(4) tint: vec4<f32>,
     @location(5) clip: vec4<f32>,     // x, y, w, h
-    @location(6) flags: vec4<f32>,    // clip_enabled, _pad, _pad, _pad
+    @location(6) flags: vec4<f32>,    // clip_enabled, tile_wrap, tile_span.u, tile_span.v
 };
 
 struct IconVsOut {
@@ -259,6 +267,8 @@ struct IconVsOut {
     @location(2) clip: vec4<f32>,
     @location(3) clip_enabled: f32,
     @location(4) frag_pos: vec2<f32>,
+    @location(5) uv_rect: vec4<f32>,     // copied through for the tile path
+    @location(6) flags: vec4<f32>,   // x = tile_wrap, yz = one-tile UV span
 };
 
 @vertex
@@ -280,6 +290,8 @@ fn vs_icon(in: IconVsIn) -> IconVsOut {
     out.clip = in.clip;
     out.clip_enabled = in.flags.x;
     out.frag_pos = world;
+    out.uv_rect = in.uv_rect;
+    out.flags = vec4<f32>(in.flags.y, in.flags.z, in.flags.w, 0.0);
     return out;
 }
 
@@ -292,7 +304,17 @@ fn fs_icon(in: IconVsOut) -> @location(0) vec4<f32> {
             discard;
         }
     }
-    let sampled = textureSample(atlas_tex, atlas_sampler, in.uv);
+    var uv = in.uv;
+    if (in.flags.x > 0.5) {
+        // Tile: fold the interpolated UV back into the source region modulo
+        // ONE tile (flags.yz = the single-tile UV span in atlas units, from
+        // the instance builder). Sampling never leaves the region's rect and
+        // the sprite repeats across the whole quad (ImageFit::Tile).
+        let span = in.flags.yz;
+        let rel = (in.uv - in.uv_rect.xy) / span;
+        uv = in.uv_rect.xy + fract(rel) * span;
+    }
+    let sampled = textureSample(atlas_tex, atlas_sampler, uv);
     return sampled * in.tint;
 }
 

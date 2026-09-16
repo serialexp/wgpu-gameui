@@ -81,6 +81,11 @@ pub struct IconDraw {
     /// sprite) for cropped draws. `None` draws the whole sprite. Resolved
     /// against the atlas region at render time.
     pub src: Option<[f32; 4]>,
+    /// Tile-wrap flag: when `true`, `src` is a UV span in *tile units*
+    /// (u1/v1 may exceed 1) and the fragment shader repeats the source
+    /// region modulo its size, cropping at the draw's edges. Written only by
+    /// [`DrawList::image_tiled`].
+    pub wrap: bool,
 }
 
 /// A single instanced "chrome" rect (button background + border) for the SDF
@@ -2077,6 +2082,7 @@ impl DrawList {
             tint: self.current_tint(),
             clip: self.current_clip(),
             src: None,
+            wrap: false,
         });
         self.push_paint_cmd(PaintCmd::Icon {
             draws: start..start + 1,
@@ -2106,6 +2112,7 @@ impl DrawList {
             tint: self.apply_tint(tint),
             clip: self.current_clip(),
             src: None,
+            wrap: false,
         });
         self.push_paint_cmd(PaintCmd::Icon {
             draws: start..start + 1,
@@ -2132,6 +2139,36 @@ impl DrawList {
         self.push_image(sprite, dest, Some(src_uv), tint);
     }
 
+    /// Draw a loaded image sprite **tiled** across `dest` at its natural size:
+    /// the source repeats edge-to-edge (u1/v1 of `src_uv` are the tile count
+    /// along each axis, may exceed 1) and a partial tile at the right/bottom
+    /// edge is cropped to the draw. Repetition happens in the fragment shader
+    /// (region-relative `fract`), so one instance covers any destination — a
+    /// fullscreen backdrop costs one instance, not one per tile.
+    pub fn image_tiled(
+        &mut self,
+        sprite: SpriteId,
+        dest: Rect,
+        tile_span_uv: [f32; 4],
+        tint: [f32; 4],
+    ) {
+        let corners = self.current_transform().transform_rect_corners(dest);
+        self.flush_soup();
+        let start = self.icons.len() as u32;
+        self.icons.push(IconDraw {
+            corners,
+            sprite: Some(sprite),
+            icon_key: String::new(),
+            tint: self.apply_tint(tint),
+            clip: self.current_clip(),
+            src: Some(tile_span_uv),
+            wrap: true,
+        });
+        self.push_paint_cmd(PaintCmd::Icon {
+            draws: start..start + 1,
+        });
+    }
+
     fn push_image(&mut self, sprite: SpriteId, dest: Rect, src: Option<[f32; 4]>, tint: [f32; 4]) {
         let corners = self.current_transform().transform_rect_corners(dest);
         self.flush_soup();
@@ -2143,6 +2180,7 @@ impl DrawList {
             tint: self.apply_tint(tint),
             clip: self.current_clip(),
             src,
+            wrap: false,
         });
         self.push_paint_cmd(PaintCmd::Icon {
             draws: start..start + 1,

@@ -118,7 +118,9 @@ pub use measure::{
     ArrangeError, MeasureBuffer, MeasureConstraints, MeasureContext, MeasuredChild, MeasuredText,
     Measurement, TextMetrics,
 };
-pub use nav::{GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard};
+pub use nav::{
+    ArrowFocusNav, GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard,
+};
 pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
