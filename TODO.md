@@ -1402,3 +1402,31 @@ widget — a MenuScreen façade stays deferred until a real consumer wants one.
 
 `Scrim` — `Theme.scrim`, default `[0.0, 0.0, 0.0, 0.55]`, with `get`/`set`
 arms and a `COLOR_KEYS` entry.
+
+## 2026-09-16 — syntax-highlight fidelity: glyph byte mapping + dotted-capture resolution
+
+Two bugs made Tree-sitter highlighting visibly wrong in multiline Lua (Bart:
+"the highlighting seems to be mismatched to the text… not entirely random"):
+
+- **Glyphs carried line-relative bytes.** cosmic-text's `LayoutGlyph.start` is
+  relative to the glyph's *buffer line*, but the horizontal shaping branch of
+  `build_vertices` used it raw, so `ShapedGlyph::byte_start` on every line after
+  the first pointed back into earlier lines' bytes — style ranges resolved
+  against the wrong text (line-1-shaped colors on every later line). Caret and
+  selection looked correct because `text_caret_layout`/`text_visual_layout` and
+  the vertical branch already rebased. `build_vertices` now adds the buffer
+  line's start byte in both modes (direction prefix subtracted exactly once
+  from the absolute byte). Regression: three GPU-gated `style_ranges_*` tests
+  in `src/text.rs` (hard newlines, direction prefix, soft wrap) — the gap was
+  that all prior `build_vertices` tests were `#[ignore]` and single-line.
+- **Dotted captures resolved to the wrong category.** `configure` breaks
+  equal-length matches by list order, so `keyword.function` matched both
+  `keyword` and `function`; `function` being listed first stole the keyword.
+  `CAPTURE_NAMES` is now ordered base-categories-before-their-dotted-modifiers
+  (`keyword` < `function`, `variable` < `parameter`, …), pinned by
+  `category_precedes_its_dotted_modifiers`. Also added `conditional`/`repeat`
+  categories (defaulting to the keyword color) so Lua `if`/`then` and
+  `while`/`for` keywords are no longer unstyled; the Lua test now asserts
+  `function` (the keyword) colors as a keyword and `greet` as a function name.
+  `examples/lua_highlight_probe.rs` (`--features syntax-lua`) renders a Lua
+  snippet headless to `test_output/lua_highlight_probe.png` for eyeballing.

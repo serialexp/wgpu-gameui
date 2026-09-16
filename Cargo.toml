@@ -71,6 +71,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "hello_ui"
 path = "examples/hello_ui.rs"
 
+[[example]]
+name = "lua_highlight_probe"
+path = "examples/lua_highlight_probe.rs"
+required-features = ["syntax-lua"]
+
 [[bench]]
 name = "ui_stress"
 harness = false

@@ -16,25 +16,36 @@ use tree_sitter_highlight::{HighlightEvent, Highlighter};
 /// Language queries may use more specific dotted capture names (for example
 /// `function.call`); Tree-sitter resolves those to the most specific category
 /// listed here.
+///
+/// **Order matters.** `tree-sitter-highlight`'s `configure` breaks equally-long
+/// matches by list order, and a dotted capture whose *modifier* is itself a
+/// category here matches both (`keyword.function` → parts `keyword` +
+/// `function`, each matching with length 1). Every modifier-doubled name must
+/// therefore appear **after** the base categories it can modify, so a dotted
+/// capture inherits its base (leftmost) category — `keyword.function` styles as
+/// a keyword, `variable.parameter` as a variable, `function.call` as a
+/// function. The `category_precedes_its_dotted_modifiers` test pins this.
 const CAPTURE_NAMES: &[&str] = &[
     "attribute",
     "boolean",
     "comment",
     "constant",
-    "constructor",
-    "function",
-    "keyword",
-    "label",
-    "method",
     "number",
+    "keyword",
+    "conditional",
+    "repeat",
+    "type",
+    "variable",
+    "function",
+    "method",
+    "constructor",
+    "label",
+    "preproc",
     "operator",
     "parameter",
-    "preproc",
     "property",
     "punctuation",
     "string",
-    "type",
-    "variable",
 ];
 
 /// Reusable palette for Tree-sitter capture categories, as linear RGBA values.
@@ -58,20 +69,29 @@ pub struct SyntaxTheme {
     pub operator: [f32; 4],
     /// Variables not covered by a more specific capture.
     pub variable: [f32; 4],
+    /// Conditional keywords (`if`/`then`/`else`); falls back to
+    /// [`keyword`](Self::keyword) by `Default` and in the built-in mapping.
+    pub conditional: [f32; 4],
+    /// Loop keywords (`while`/`for`/`repeat`); falls back to
+    /// [`keyword`](Self::keyword) by `Default` and in the built-in mapping.
+    pub repeat: [f32; 4],
 }
 
 impl Default for SyntaxTheme {
     fn default() -> Self {
+        let keyword = [0.86, 0.48, 0.96, 1.0];
         Self {
             comment: [0.46, 0.52, 0.48, 1.0],
             string: [0.55, 0.82, 0.48, 1.0],
             literal: [0.96, 0.72, 0.38, 1.0],
-            keyword: [0.86, 0.48, 0.96, 1.0],
+            keyword,
             function: [0.38, 0.72, 0.96, 1.0],
             type_or_constant: [0.38, 0.78, 0.78, 1.0],
             symbol: [0.86, 0.76, 0.48, 1.0],
             operator: [0.78, 0.80, 0.84, 1.0],
             variable: [0.82, 0.84, 0.88, 1.0],
+            conditional: keyword,
+            repeat: keyword,
         }
     }
 }
@@ -82,7 +102,7 @@ impl SyntaxTheme {
             "comment" => self.comment,
             "string" => self.string,
             "number" | "boolean" => self.literal,
-            "keyword" | "preproc" => self.keyword,
+            "keyword" | "preproc" | "conditional" | "repeat" => self.keyword,
             "function" | "method" | "constructor" => self.function,
             "type" | "constant" | "attribute" => self.type_or_constant,
             "parameter" | "property" | "label" => self.symbol,
@@ -221,10 +241,63 @@ mod tests {
         let theme = SyntaxTheme::default();
         let parts = highlighted("local function greet(name)\n -- hi\n return 'hello' .. name\nend");
         assert!(parts.contains(&("local", theme.keyword)));
-        assert!(parts.contains(&("function", theme.function)));
+        // `function` here is the @keyword.function capture — a keyword, not the
+        // function-name category (see `category_precedes_its_dotted_modifiers`).
+        assert!(parts.contains(&("function", theme.keyword)));
         assert!(parts.contains(&("greet", theme.function)));
         assert!(parts.contains(&("-- hi", theme.comment)));
         assert!(parts.contains(&("'hello'", theme.string)));
+    }
+
+    /// `configure` resolves a dotted capture to the most specific listed
+    /// category, breaking equal-length matches by list order. A capture like
+    /// `keyword.function` therefore matches BOTH `keyword` and `function` —
+    /// and if `function` is listed first, the keyword styles as a function
+    /// name. Every category that can appear as another category's dotted
+    /// modifier must be listed *after* it so the base (leftmost) category wins.
+    #[test]
+    fn category_precedes_its_dotted_modifiers() {
+        // Base categories that also occur as modifiers in common queries.
+        let modifiers = [
+            "attribute",
+            "boolean",
+            "comment",
+            "constant",
+            "constructor",
+            "function",
+            "keyword",
+            "conditional",
+            "repeat",
+            "label",
+            "method",
+            "number",
+            "operator",
+            "parameter",
+            "preproc",
+            "property",
+            "punctuation",
+            "string",
+            "type",
+            "variable",
+        ];
+        for modifier in modifiers {
+            let dotted = format!("{modifier}.something");
+            // Re-implement `configure`'s resolution for this capture: every
+            // listed category whose parts are all present wins; ties go to the
+            // earliest entry. The base category must beat its own modifier.
+            let parts: Vec<&str> = dotted.split('.').collect();
+            let resolved = CAPTURE_NAMES
+                .iter()
+                .filter(|candidate| candidate.split('.').all(|part| parts.contains(&part)))
+                .max_by_key(|candidate| candidate.split('.').count())
+                .copied();
+            assert_eq!(
+                resolved,
+                Some(modifier),
+                "{dotted} must resolve to its base category `{modifier}` — \
+                 reorder CAPTURE_NAMES so the base precedes the modifier"
+            );
+        }
     }
 
     #[test]

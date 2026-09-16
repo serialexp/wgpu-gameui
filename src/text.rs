@@ -906,7 +906,10 @@ impl TextRenderer {
             // line's start byte in the *shaped* (newline-joined) string by scanning
             // for `\n` — mirroring `text_visual_layout`. Subtracting `line_i` below
             // removes the inserted separators to recover the caller's content byte.
-            let line_starts: Vec<usize> = if block.vertical {
+            // Horizontal needs the same table: cosmic-text's `glyph.start` is
+            // relative to the glyph's buffer line there too, and style ranges
+            // address the whole block content.
+            let line_starts: Vec<usize> = {
                 let mut starts = vec![0usize];
                 for (i, b) in shaped_text.bytes().enumerate() {
                     if b == b'\n' {
@@ -914,8 +917,6 @@ impl TextRenderer {
                     }
                 }
                 starts
-            } else {
-                Vec::new()
             };
 
             // Collect the relative layout. Whitespace / outline-less glyphs yield
@@ -949,14 +950,17 @@ impl TextRenderer {
                         continue; // whitespace / outline-less
                     }
                     // Map the per-buffer-line glyph offset back to the caller's
-                    // content. Horizontal: undo the direction-prefix shift.
-                    // Vertical: add the shaped line's start byte, then subtract the
-                    // `line_i` inserted `'\n'` separators that precede this cluster.
+                    // content. cosmic-text reports `glyph.start` relative to the
+                    // glyph's own buffer line (see `text_caret_layout`), so the
+                    // shaped line's start byte must be re-added in *both* modes.
+                    // The direction prefix sits once at the head of the shaped
+                    // string (never inside later lines), so it is removed exactly
+                    // once from the absolute byte — not from the line base.
+                    let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
                     let byte_start = if block.vertical {
-                        let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
                         (line_base + glyph.start).saturating_sub(run.line_i)
                     } else {
-                        glyph.start.saturating_sub(prefix_len)
+                        (line_base + glyph.start).saturating_sub(prefix_len)
                     };
                     shaped.push(ShapedGlyph {
                         font_id: glyph.font_id,
@@ -3732,8 +3736,8 @@ impl TextBlock {
 mod tests {
     use super::{
         CaretPos, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, MsdfVertex, SelRect, TextAlign,
-        TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, Underline, VisualGlyph,
-        WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
+        TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, TextStyleRange, Underline,
+        VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
         cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
         load_font_bytes, measure_with_font_system, resolve_range_color, resolve_span_color,
         selection_rects, shape_key, shared_font_system, text_caret_layout, text_cursor_positions,
@@ -5213,6 +5217,129 @@ mod tests {
         let after = r.build_vertices(&blocks);
         assert_eq!(cache_total(&r), 1, "re-shaped and re-cached");
         assert_eq!(vbytes(&before), vbytes(&after), "re-shape is identical");
+    }
+
+    // ---- per-glyph byte mapping (style ranges / syntax highlighting) ----
+
+    /// A glyph's `byte_start` must address the **whole block content**, not its
+    /// buffer line. cosmic-text reports `glyph.start` relative to the original
+    /// text *line*, so the horizontal shaping path must rebase it by the line's
+    /// starting byte — exactly what `text_caret_layout`, `text_visual_layout`,
+    /// and the vertical shaping branch already do. Without the rebase, every
+    /// line after the first resolves style ranges against earlier lines' bytes
+    /// and syntax highlighting drifts off the text it describes.
+    #[test]
+    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+    fn style_ranges_map_to_the_correct_glyphs_across_lines() {
+        let Some((_d, _q, mut r, font)) = headless_renderer() else {
+            return;
+        };
+        // Two lines; the second starts at byte 4 ("RED\n"). Only the first
+        // line's bytes carry a style range, so only "RED" may render red. The
+        // block colour is white — any red on line 2 is the bug.
+        let content = "RED\nBLUE";
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let block = label(content, &font)
+            .with_wrap(WrapMode::None)
+            .with_style_ranges(vec![TextStyleRange {
+                range: 0..3,
+                color: Some(red),
+                underline: Underline::None,
+            }]);
+        let verts = r.build_vertices(&[block]);
+
+        // Fills are the last back-to-front sweep, one 6-vert quad per glyph.
+        // With the line-rebase fix exactly "RED" (3 glyphs) is red; the bug
+        // mapped "BLUE"'s line-relative bytes (0..3) into the same range and
+        // turned B/L/U red too (6 red quads).
+        let red_quads: Vec<_> = verts.chunks_exact(6).filter(|q| q[0].fill == red).collect();
+        assert_eq!(
+            red_quads.len(),
+            3,
+            "only the 3 glyphs of the styled range may resolve to the range colour"
+        );
+        let first_line_bottom = 40.0 + 18.0 * super::LINE_HEIGHT_RATIO; // block.y + one line box
+        for quad in &red_quads {
+            let y = quad[0].position[1];
+            assert!(
+                y < first_line_bottom,
+                "red glyph quad at y={y} is below the first line — \
+                 style bytes leaked across lines"
+            );
+        }
+    }
+
+    /// Same mapping with an explicit base direction: the 3-byte zero-width LRM
+    /// sits once at the head of the shaped string. Line bases are computed over
+    /// the *shaped* text (mark included), and the prefix is subtracted once from
+    /// the absolute byte — so line 2's glyphs must land on caller bytes 8.. and
+    /// stay white; the styled range still colours only line 1's "RED".
+    #[test]
+    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+    fn style_ranges_stay_aligned_with_a_direction_prefix() {
+        let Some((_d, _q, mut r, font)) = headless_renderer() else {
+            return;
+        };
+        let content = "RED\nBLUE";
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let block = label(content, &font)
+            .with_wrap(WrapMode::None)
+            .with_direction(TextDirection::Ltr)
+            .with_style_ranges(vec![TextStyleRange {
+                range: 0..3,
+                color: Some(red),
+                underline: Underline::None,
+            }]);
+        let verts = r.build_vertices(&[block]);
+        assert_eq!(
+            verts.chunks_exact(6).filter(|q| q[0].fill == red).count(),
+            3
+        );
+    }
+
+    /// Soft-wrap mapping: a narrow `max_width` splits "REDBLUE" into several
+    /// visual rows of the *same* buffer line. Every row's glyphs must keep
+    /// addressing their true content bytes — the styled "RED" prefix stays red
+    /// and the rest falls back to the block colour, never the reverse.
+    #[test]
+    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+    fn style_ranges_survive_soft_wrapping() {
+        let Some((_d, _q, mut r, font)) = headless_renderer() else {
+            return;
+        };
+        // Wide-ish glyphs at 18px: force a wrap after ~3 glyphs.
+        let content = "REDBLUE";
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let block = label(content, &font)
+            .with_max_width(40.0)
+            .with_style_ranges(vec![TextStyleRange {
+                range: 0..3,
+                color: Some(red),
+                underline: Underline::None,
+            }]);
+        let verts = r.build_vertices(&[block]);
+        let quads: Vec<_> = verts.chunks_exact(6).collect();
+        assert!(quads.len() >= 7, "every letter produced a quad");
+        // The red ones are exactly the 3 "R E D" glyphs, and they sit on the
+        // top row (smallest y).
+        let mut reds: Vec<[f32; 2]> = quads
+            .iter()
+            .filter(|q| q[0].fill == red)
+            .map(|q| q[0].position)
+            .collect();
+        reds.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0])));
+        assert_eq!(reds.len(), 3);
+        let top_y = quads
+            .iter()
+            .map(|q| q[0].position[1])
+            .fold(f32::MAX, f32::min);
+        for p in &reds {
+            assert!(
+                (p[1] - top_y).abs() < 1.0,
+                "red quad at {:?} left the top row — wrap rows mis-resolve ranges",
+                p
+            );
+        }
     }
 
     // ---- optical vertical centring metrics ----
