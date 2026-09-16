@@ -563,20 +563,24 @@ impl<'spec> SettingsForm<'spec> {
     ///    `DrawContext` with this input.
     /// 4. Draw the form (and everything else on the base layer).
     /// 5. `if let Some(i) = form.draw_open_layer(&mut state, popup,
-    ///    &mut values, &mut layers, &theme, &input) { … }`
+    ///    &mut values, &mut layers, &styles, &input) { … }`
     /// 6. `state.dropdowns.end_frame(&mut focus);` then
     ///    `focus.end_frame(…)`.
+    ///
+    /// `styles` is the resolver the base pass drew with — build it the same
+    /// way (`StyleResolver::with_overlay_opt(theme, overlay)`, or just
+    /// `ctx.styles()` while the `DrawContext` is at hand) so the popup list
+    /// matches the form's theme, including per-screen overrides.
     pub fn draw_open_layer(
         &self,
         state: &mut SettingsFormState,
         popup: Option<usize>,
         values: &mut [SettingValue],
         layers: &mut crate::LayerStack,
-        theme: &crate::Theme,
+        styles: &crate::StyleResolver,
         input: &crate::InputState,
     ) -> Option<usize> {
-        let s = crate::StyleResolver::new(theme);
-        let (id, idx) = state.dropdowns.draw_open_layer(layers, popup, &s, input)?;
+        let (id, idx) = state.dropdowns.draw_open_layer(layers, popup, styles, input)?;
         // Map the dropdown id back to its field: field i ⇔ id_base + i + 1.
         let field = (id.wrapping_sub(state.id_base).checked_sub(1)?) as usize;
         match self.spec.fields.get(field) {
@@ -1076,6 +1080,66 @@ mod tests {
     }
 
     #[test]
+    fn theme_override_resizes_rows() {
+        // Theming contract: every metric the form reads goes through the
+        // context's style resolution, so a menu-look overlay (bigger rows,
+        // bigger gaps) changes the drawn form without touching the spec or
+        // the widget.
+        let mut overlay = StyleOverlay::new();
+        overlay.set_scalar(StyleKey::InputHeight, 48.0);
+        overlay.set_scalar(StyleKey::Spacing, 12.0);
+
+        let mut values = fresh_values();
+        let mut state = SettingsFormState::new();
+        let spec = spec();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let theme = crate::Theme::default();
+        let input = InputState::default();
+        let mut ctx = crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
+            .with_style(&overlay);
+        let out = SettingsForm::new(&spec).draw(
+            &mut values,
+            Rect::new(0.0, 0.0, 400.0, 600.0),
+            &mut state,
+            &mut ctx,
+        );
+        assert!(out.changed.is_empty());
+        // The first label sits vertically centered in a 48px row: its baseline
+        // is far lower than the default-theme draw's (rows were 24px).
+        let vsync_y = list.texts.iter().find(|t| t.content == "VSync").expect("label").y;
+        let mut default_list = DrawList::new();
+        let mut default_focus = FocusState::new();
+        let default_input = InputState::default();
+        let mut default_ctx = crate::DrawContext::new(
+            &mut default_list,
+            &mut default_focus,
+            &theme,
+            &default_input,
+            800.0,
+            600.0,
+        );
+        let _ = SettingsForm::new(&spec).draw(
+            &mut values,
+            Rect::new(0.0, 0.0, 400.0, 600.0),
+            &mut SettingsFormState::new(),
+            &mut default_ctx,
+        );
+        let default_y = default_list
+            .texts
+            .iter()
+            .find(|t| t.content == "VSync")
+            .expect("default label")
+            .y;
+        assert!(
+            vsync_y > default_y + 6.0,
+            "overlay rows (label y {}) should be taller than default ({} )",
+            vsync_y,
+            default_y
+        );
+    }
+
+    #[test]
     fn values_shorter_than_the_spec_do_not_panic() {
         let mut values = vec![SettingValue::Bool(true)];
         let mut state = SettingsFormState::new();
@@ -1095,6 +1159,7 @@ mod tests {
             .open_for_test(state.id_base + 3, Rect::new(78.0, 85.0, 318.0, 24.0), OPTIONS, 1);
         let mut layers = crate::LayerStack::new();
         let theme = crate::Theme::default();
+        let styles = crate::StyleResolver::new(&theme);
 
         // A row click on option 1 (list opens below the button; rows are 28px).
         let mut input = InputState {
@@ -1109,7 +1174,7 @@ mod tests {
             None,
             &mut values,
             &mut layers,
-            &theme,
+            &styles,
             &input,
         );
         assert_eq!(changed, Some(2), "field 2's choice changed");
@@ -1121,7 +1186,7 @@ mod tests {
             None,
             &mut values,
             &mut layers,
-            &theme,
+            &styles,
             &input,
         );
         assert_eq!(changed, None);
