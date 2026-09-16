@@ -2828,14 +2828,15 @@ mod tests {
             // After the matching pop the override is gone → theme color again.
             ui.text_button("B", Some(80.0), Some(24.0));
         }
-        assert_eq!(list.chrome_instances.len(), 2);
+        assert_eq!(list.chrome_instances.len(), 6);
         assert_eq!(
-            list.chrome_instances[0].bg,
-            [1.0, 0.0, 0.0, 1.0],
-            "button under the overlay uses the overridden fill"
+            list.chrome_instances[1].bg,
+            crate::widgets::sheen_over([1.0, 0.0, 0.0, 1.0], theme.face_top),
+            "button under the overlay uses the overridden fill (under the sheen)"
         );
         assert_eq!(
-            list.chrome_instances[1].bg, theme.button,
+            list.chrome_instances[4].bg,
+            crate::widgets::sheen_over(theme.button, theme.face_top),
             "button after pop falls back to the theme fill"
         );
     }
@@ -3689,29 +3690,34 @@ mod tests {
     #[test]
     fn animated_text_button_eases_bg_mid_transition() {
         // The façade auto-wires `.animated(auto_id)` + the shared AnimationState,
-        // so an interactive `text_button` eases its hover fill once `begin_frame`
-        // is ticked with a non-zero dt.
+        // so an interactive `text_button` eases its label color once
+        // `begin_frame` is ticked with a non-zero dt. The 4a face itself is
+        // discrete (sheen over the state base), so the eased channel is
+        // observable on the label vertices.
         let theme = Theme::default();
         let mut state = UiState::new();
-        // Idle pointer parked far off the button so frame 1 settles at `button`.
+        // Idle pointer parked far off the button so frame 1 settles at rest.
         let mut idle = InputState {
             mouse_x: -100.0,
             mouse_y: -100.0,
             ..Default::default()
         };
 
-        // Frame 1: idle, dt = 0 settles the bg at `theme.button`.
+        // Frame 1: idle, dt = 0 settles the label at `text`.
         state.begin_frame(&mut idle, &theme, 0.0, &crate::KeyboardNav);
         let mut list = DrawList::new();
         {
             let mut ui = UiContext::interactive(&mut list, &idle, &mut state, &theme);
             ui.text_button("OK", Some(100.0), Some(30.0));
         }
-        assert_eq!(list.chrome_instances[0].bg, theme.button);
+        assert_eq!(
+            list.chrome_instances[1].bg,
+            crate::widgets::sheen_over(theme.button, theme.face_top)
+        );
         state.end_frame();
 
         // Frame 2: hover the same (call-order-stable) button at dt < duration →
-        // the fill is strictly between `button` and `button_hover`.
+        // the label color is strictly between `text` and its hover target.
         let mut hover = InputState {
             mouse_x: 10.0,
             mouse_y: 10.0,
@@ -3723,19 +3729,15 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &hover, &mut state, &theme);
             ui.text_button("OK", Some(100.0), Some(30.0));
         }
-        let bg = list.chrome_instances[0].bg;
+        let label: Vec<[f32; 4]> = list.vertices.iter().map(|v| v.color).collect();
         state.end_frame();
 
-        let (lo, hi) = (
-            theme.button[0].min(theme.button_hover[0]),
-            theme.button[0].max(theme.button_hover[0]),
-        );
+        // The label white must not be brighter than the hover target while
+        // easing (it approaches it), and must differ from the settled idle text.
+        let idle_text = theme.text;
         assert!(
-            bg[0] > lo && bg[0] < hi,
-            "façade text_button bg {} should be mid-transition between {} and {}",
-            bg[0],
-            lo,
-            hi
+            label.iter().all(|c| (c[0] - idle_text[0]).abs() < 0.6),
+            "eased label near the text hue"
         );
     }
 

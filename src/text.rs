@@ -3735,8 +3735,8 @@ mod tests {
         TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, Underline, VisualGlyph,
         WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
         cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
-        load_font_bytes, measure_with_font_system, resolve_range_color, resolve_span_color, shape_key,
-        selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
+        load_font_bytes, measure_with_font_system, resolve_range_color, resolve_span_color,
+        selection_rects, shape_key, shared_font_system, text_caret_layout, text_cursor_positions,
         text_visual_layout, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
@@ -4282,7 +4282,10 @@ mod tests {
         let plain_size = measurer.measure_block(&plain);
         assert_eq!(measurer.cache_entries, 1);
         let spaced_size = measurer.measure_block(&spaced);
-        assert_eq!(measurer.cache_entries, 2, "spacing must distinguish cache keys");
+        assert_eq!(
+            measurer.cache_entries, 2,
+            "spacing must distinguish cache keys"
+        );
         assert!(
             spaced_size.0 > plain_size.0,
             "positive spacing should widen text: plain={}, spaced={}",
@@ -4290,7 +4293,10 @@ mod tests {
             spaced_size.0
         );
         assert_eq!(measurer.measure_block(&plain), plain_size);
-        assert_eq!(measurer.cache_entries, 2, "repeat should hit plain cache entry");
+        assert_eq!(
+            measurer.cache_entries, 2,
+            "repeat should hit plain cache entry"
+        );
     }
 
     #[test]

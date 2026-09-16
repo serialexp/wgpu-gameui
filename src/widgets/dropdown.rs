@@ -51,6 +51,8 @@
 //! This is the same one-frame latency the focus model's Tab navigation has and
 //! is imperceptible in practice. Selecting an item and closing are same-frame.
 
+#[cfg(feature = "phosphor-icons")]
+use crate::PhosphorIcon;
 use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{InputState, LayerStack, StyleKey, StyleResolver};
@@ -68,8 +70,11 @@ const ITEM_HEIGHT: f32 = 28.0;
 const DEFAULT_MAX_VISIBLE: usize = 8;
 /// Vertical gap between the button and the floating list.
 const GAP_BELOW_BUTTON: f32 = 2.0;
-/// Half-width / half-height of the chevron glyph drawn at the button's right.
+/// Half-width / half-height of the chevron glyph drawn in the trigger.
 const CHEVRON: f32 = 4.0;
+/// Extra gap between the chevron's stroke and the field border, in addition to
+/// the theme's ordinary field padding.
+const CHEVRON_EDGE_GAP: f32 = 2.0;
 
 fn rgb(c: [f32; 4]) -> (u8, u8, u8) {
     (
@@ -305,17 +310,38 @@ impl DropdownState {
             let l = &mut layers.layers_mut()[idx].list;
             // Scoped inside this block so the pop precedes every `return` path
             // in the click resolution below.
-            l.push_debug_scope_rect("Dropdown popup", list_rect);
-            // List background + border.
+            l.push_debug_scope_rect(
+                "Dropdown popup",
+                Rect::new(
+                    list_rect.x - 13.0,
+                    list_rect.y - 13.0,
+                    list_rect.width + 26.0,
+                    list_rect.height + 13.0 + 23.0, // shadow: 13px side/top skirt + 10px offset
+                ),
+            );
+            // Drop shadow: the design floats the option list on `0 10px 26px`
+            // black (falloff margin = half the CSS blur ≈ 13px).
+            l.drop_shadow(
+                list_rect,
+                10.0,
+                13.0,
+                style.scalar(StyleKey::BorderRadius),
+                [0.0, 0.0, 0.0, 0.6],
+            );
+            // List background + border — the raised sheet (near-black panel,
+            // 1px black edge).
             l.chrome_rect(
                 list_rect,
                 style.scalar(StyleKey::BorderRadius),
                 style.scalar(StyleKey::BorderWidth),
                 style.color(StyleKey::Panel),
-                style.color(StyleKey::PanelBorder),
+                [0.0, 0.0, 0.0, 0.7],
             );
-            // Scrollable option list — content outside it is expected.
-            l.push_clip_viewport(list_rect);
+            // Rows are clipped to the panel's interior so highlights cannot
+            // overpaint the sheet edge on the first or last visible option.
+            let border = style.scalar(StyleKey::BorderWidth).max(1.0);
+            let content_rect = list_rect.inset(border);
+            l.push_clip_viewport(content_rect);
             for (i, item) in geom.items.iter().enumerate() {
                 let iy = list_rect.y + i as f32 * geom.item_h - scroll;
                 // Cull rows fully outside the viewport.
@@ -475,7 +501,7 @@ impl<'a> Dropdown<'a> {
             .fold(0.0, f32::max);
         let padding = styles.scalar(StyleKey::Padding);
         (
-            widest + padding * 2.0 + CHEVRON * 3.0,
+            widest + padding * 2.0 + CHEVRON * 3.0 + CHEVRON_EDGE_GAP,
             styles.scalar(StyleKey::InputHeight),
         )
     }
@@ -570,21 +596,9 @@ impl<'a> Dropdown<'a> {
         }
         let open = state.is_open(id);
 
-        // Button chrome: focus-style border when open, accent on hover.
-        let border = if open {
-            s.color(StyleKey::InputFocusBorder)
-        } else if hovered {
-            s.color(StyleKey::Accent)
-        } else {
-            s.color(StyleKey::InputBorder)
-        };
-        list.chrome_rect(
-            rect,
-            s.scalar(StyleKey::BorderRadius),
-            s.scalar(StyleKey::BorderWidth),
-            s.color(StyleKey::InputBackground),
-            border,
-        );
+        // Trigger: the input well — sunken field, accent border + focus ring
+        // when open (the design marks an open dropdown like a focused field).
+        super::material::draw_well_simple(list, &s, rect, open, false);
 
         // Selected label.
         let label = self.items.get(self.selected).copied().unwrap_or("");
@@ -606,7 +620,9 @@ impl<'a> Dropdown<'a> {
             TextBlock::new(label, rect.x + pad, text_y)
                 .with_size(font_size)
                 .with_color(r, g, b)
-                .with_max_width((rect.width - pad * 2.0 - CHEVRON * 3.0).max(0.0))
+                .with_max_width(
+                    (rect.width - pad * 2.0 - CHEVRON * 3.0 - CHEVRON_EDGE_GAP).max(0.0),
+                )
                 .with_ellipsis()
                 .with_font_opt(s.theme().font.clone()),
         );
@@ -635,13 +651,32 @@ impl<'a> Dropdown<'a> {
 
 /// Draw a small chevron (▼ closed / ▲ open) at the button's right edge.
 fn draw_chevron(list: &mut DrawList, rect: Rect, s: &StyleResolver, open: bool) {
-    let cx = rect.x + rect.width - s.scalar(StyleKey::Padding) - CHEVRON;
-    let cy = rect.y + rect.height / 2.0;
-    let dy = if open { -CHEVRON * 0.5 } else { CHEVRON * 0.5 };
+    let size = CHEVRON * 2.0;
+    let x = rect.right() - s.scalar(StyleKey::Padding) - CHEVRON_EDGE_GAP - size;
+    let y = rect.y + (rect.height - size) * 0.5;
     let color = s.color(StyleKey::TextDim);
-    // Two strokes meeting at the point.
-    list.line([cx - CHEVRON, cy - dy], [cx, cy + dy], 1.5, color);
-    list.line([cx + CHEVRON, cy - dy], [cx, cy + dy], 1.5, color);
+
+    // Carets are a reusable UI-icon concern, not a pair of aliased soup lines.
+    // MSDF provides scale-independent edge smoothing while the fallback retains
+    // the no-optional-font configuration.
+    #[cfg(feature = "phosphor-icons")]
+    list.phosphor_icon(
+        Rect::new(x, y, size, size),
+        if open {
+            PhosphorIcon::CaretUp
+        } else {
+            PhosphorIcon::CaretDown
+        },
+        color,
+    );
+    #[cfg(not(feature = "phosphor-icons"))]
+    {
+        let cx = x + size * 0.5;
+        let cy = y + size * 0.5;
+        let dy = if open { -CHEVRON * 0.5 } else { CHEVRON * 0.5 };
+        list.line([cx - CHEVRON, cy - dy], [cx, cy + dy], 1.5, color);
+        list.line([cx + CHEVRON, cy - dy], [cx, cy + dy], 1.5, color);
+    }
 }
 
 #[cfg(test)]
@@ -720,6 +755,44 @@ mod tests {
     }
 
     #[test]
+    fn chevron_leaves_theme_padding_plus_an_edge_gap() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let rect = Rect::new(10.0, 10.0, 120.0, 28.0);
+        let mut list = DrawList::new();
+        draw_chevron(&mut list, rect, &s, false);
+
+        #[cfg(feature = "phosphor-icons")]
+        {
+            let expected_x = rect.right() - theme.padding - CHEVRON_EDGE_GAP - CHEVRON * 2.0;
+            assert_eq!(
+                list.icons_msdf.len(),
+                1,
+                "chevron uses the smooth MSDF icon path"
+            );
+            assert!((list.icons_msdf[0].local.x - expected_x).abs() < 0.001);
+            assert!(
+                list.vertices.is_empty(),
+                "MSDF chevron emits no aliased line soup"
+            );
+        }
+        #[cfg(not(feature = "phosphor-icons"))]
+        {
+            let rightmost = list
+                .vertices
+                .iter()
+                .map(|vertex| vertex.position[0])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let right_inset = rect.right() - rightmost;
+            let minimum_visible_inset = theme.padding + CHEVRON_EDGE_GAP - 0.75;
+            assert!(
+                right_inset >= minimum_visible_inset,
+                "fallback chevron's visible geometry must keep the requested right padding"
+            );
+        }
+    }
+
+    #[test]
     fn narrow_selected_label_is_single_line_and_ellipsized() {
         const LONG: [&str; 1] = ["A selected option that cannot fit"];
         let theme = Theme::default();
@@ -745,6 +818,32 @@ mod tests {
         assert!(
             list.measure_block(&label).1 <= rect.height,
             "selected label must remain inside the dropdown chrome",
+        );
+    }
+
+    #[test]
+    fn popup_row_highlights_are_clipped_inside_the_panel_border() {
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut input = InputState::default();
+        let mut state = DropdownState::new();
+        let mut layers = LayerStack::new();
+        let button = rect_a();
+        state.open_for_test(1, button, &ITEMS, 0);
+
+        state.begin_frame(&mut input);
+        let popup = state
+            .push_open_layer(&mut layers)
+            .expect("open dropdown has a popup");
+        state.draw_open_layer(&mut layers, Some(popup), &styles, &input);
+
+        let list = &layers.layers_mut()[popup].list;
+        let panel = Dropdown::new(&ITEMS, 0).open_list_rect(button);
+        assert!(
+            list.viewport_clips()
+                .iter()
+                .any(|clip| *clip == panel.inset(theme.border_width.max(1.0))),
+            "row paints are clipped to the panel interior and preserve its border"
         );
     }
 

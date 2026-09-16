@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #07090b; }
+  a { color: #7fd1d8; }
+  a:hover { color: #a8e4e9; }
+  /* Native bars are hidden everywhere — scrollbars are drawn by the component,
+     exactly as the renderer will have to draw them. */
+  .gal .scroller { scrollbar-width: none; -ms-overflow-style: none; }
+  .gal .scroller::-webkit-scrollbar { width: 0; height: 0; display: none; }
+</style>
+</helmet>
+
+<div class="gal" style="min-height: 100vh; padding: 36px 36px 80px; box-sizing: border-box; font-family: 'IBM Plex Sans', Helvetica, sans-serif; color: #e6e9ec; background: linear-gradient(160deg, #10171c 0%, #060809 55%, #0a0d0f 100%);">
+
+  <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 30px; max-width: 720px;">
+    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #6f7780;">wgpu-gameui · 4a tokens · dark</div>
+    <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em;">Widget gallery</h1>
+    <p style="margin: 0; font-size: 12.5px; line-height: 1.6; color: #8d959d; text-wrap: pretty;">Every control on the face-plate-over-plinth model: raised things carry a 1px black edge, a white inner top edge and a {{ travelLabel }} plinth; sunken things carry a 2px inner shadow and a 1px light line beneath. Radius {{ radiusLabel }}, accent used only for state. Press anything.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; align-items: start;">
+
+    <!-- BUTTON -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Button</span>
+      <div style="display: flex; gap: 6px;">
+        <span style="{{ bPrimary.plinth }}" onClick="{{ bPrimary.onClick }}" onMouseDown="{{ bPrimary.onMouseDown }}" onMouseUp="{{ bPrimary.onMouseUp }}" onMouseEnter="{{ bPrimary.onMouseEnter }}" onMouseLeave="{{ bPrimary.onMouseLeave }}"><span style="{{ bPrimary.face }}">Primary</span></span>
+        <span style="{{ bDefault.plinth }}" onClick="{{ bDefault.onClick }}" onMouseDown="{{ bDefault.onMouseDown }}" onMouseUp="{{ bDefault.onMouseUp }}" onMouseEnter="{{ bDefault.onMouseEnter }}" onMouseLeave="{{ bDefault.onMouseLeave }}"><span style="{{ bDefault.face }}">Default</span></span>
+        <span style="{{ bDanger.plinth }}" onClick="{{ bDanger.onClick }}" onMouseDown="{{ bDanger.onMouseDown }}" onMouseUp="{{ bDanger.onMouseUp }}" onMouseEnter="{{ bDanger.onMouseEnter }}" onMouseLeave="{{ bDanger.onMouseLeave }}"><span style="{{ bDanger.face }}">Delete</span></span>
+      </div>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <span style="{{ bDisabled.plinth }}"><span style="{{ bDisabled.face }}">Disabled</span></span>
+        <span style="{{ bGhost.plinth }}" onClick="{{ bGhost.onClick }}" onMouseDown="{{ bGhost.onMouseDown }}" onMouseUp="{{ bGhost.onMouseUp }}" onMouseEnter="{{ bGhost.onMouseEnter }}" onMouseLeave="{{ bGhost.onMouseLeave }}"><span style="{{ bGhost.face }}">Ghost</span></span>
+      </div>
+    </div>
+
+    <!-- IMAGE BUTTON / TOOLBAR -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Image button · toolbar</span>
+      <div style="display: flex; gap: 3px; padding: 3px; border-radius: 2px; background: rgba(0,0,0,0.42); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.06);">
+        <sc-for list="{{ tools }}" as="tool" hint-placeholder-count="6">
+          <span style="{{ tool.plinth }}" onClick="{{ tool.onClick }}" onMouseDown="{{ tool.onMouseDown }}" onMouseUp="{{ tool.onMouseUp }}" onMouseEnter="{{ tool.onMouseEnter }}" onMouseLeave="{{ tool.onMouseLeave }}"><span style="{{ tool.face }}">{{ tool.glyph }}</span></span>
+        </sc-for>
+      </div>
+      <div style="display: flex; gap: 6px;">
+        <span style="{{ iconOnly.plinth }}" onClick="{{ iconOnly.onClick }}" onMouseDown="{{ iconOnly.onMouseDown }}" onMouseUp="{{ iconOnly.onMouseUp }}" onMouseEnter="{{ iconOnly.onMouseEnter }}" onMouseLeave="{{ iconOnly.onMouseLeave }}"><span style="{{ iconOnly.face }}">⌗</span></span>
+        <span style="{{ iconLabel.plinth }}" onClick="{{ iconLabel.onClick }}" onMouseDown="{{ iconLabel.onMouseDown }}" onMouseUp="{{ iconLabel.onMouseUp }}" onMouseEnter="{{ iconLabel.onMouseEnter }}" onMouseLeave="{{ iconLabel.onMouseLeave }}"><span style="{{ iconLabel.face }}">⎘  Duplicate</span></span>
+      </div>
+    </div>
+
+    <!-- CHECKBOX + RADIO -->
+    <div style="display: flex; flex-direction: column; gap: 11px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Checkbox · radio</span>
+      <sc-for list="{{ checks }}" as="c" hint-placeholder-count="3">
+        <div style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;" onClick="{{ c.onClick }}" onMouseDown="{{ c.onMouseDown }}" onMouseUp="{{ c.onMouseUp }}" onMouseEnter="{{ c.onMouseEnter }}" onMouseLeave="{{ c.onMouseLeave }}">
+          <span style="{{ c.plinth }}"><span style="{{ c.face }}">{{ c.mark }}</span></span>
+          <span style="{{ c.label }}">{{ c.text }}</span>
+        </div>
+      </sc-for>
+      <div style="height: 1px; background: rgba(0,0,0,0.6); box-shadow: 0 1px 0 rgba(255,255,255,0.06); margin: 1px 0 2px;"></div>
+      <sc-for list="{{ radios }}" as="r" hint-placeholder-count="3">
+        <div style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;" onClick="{{ r.onClick }}" onMouseDown="{{ r.onMouseDown }}" onMouseUp="{{ r.onMouseUp }}" onMouseEnter="{{ r.onMouseEnter }}" onMouseLeave="{{ r.onMouseLeave }}">
+          <span style="{{ r.plinth }}"><span style="{{ r.face }}"><span style="{{ r.dot }}"></span></span></span>
+          <span style="{{ r.label }}">{{ r.text }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- TEXT INPUT + NUMBER + TEXTAREA -->
+    <div style="display: flex; flex-direction: column; gap: 11px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Input · number · text area</span>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #737c85;">Name</span>
+        <input type="text" value="{{ nameValue }}" onChange="{{ onName }}" onFocus="{{ onFocusName }}" onBlur="{{ onBlur }}" style="{{ inputName }}">
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #737c85;">Placeholder · invalid</span>
+        <input type="text" placeholder="untitled_entity" style="{{ inputEmpty }}">
+        <input type="text" value="{{ badValue }}" onChange="{{ onBad }}" style="{{ inputBad }}">
+        <span style="font-size: 10.5px; color: oklch(0.7 0.15 25);">Name must be unique in scene</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #737c85;">Scale</span>
+        <div style="display: flex; align-items: stretch; border-radius: 1px; overflow: hidden; border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); background: rgba(0,0,0,0.42);">
+          <span style="flex: 1; display: flex; align-items: center; padding: 0 7px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #eef2f5;">{{ numValue }}</span>
+          <span style="display: flex; flex-direction: column; width: 17px; border-left: 1px solid rgba(0,0,0,0.6);">
+            <span style="{{ stepUp.plinth }}" onClick="{{ stepUp.onClick }}" onMouseDown="{{ stepUp.onMouseDown }}" onMouseUp="{{ stepUp.onMouseUp }}" onMouseEnter="{{ stepUp.onMouseEnter }}" onMouseLeave="{{ stepUp.onMouseLeave }}"><span style="{{ stepUp.face }}">▴</span></span>
+            <span style="{{ stepDown.plinth }}" onClick="{{ stepDown.onClick }}" onMouseDown="{{ stepDown.onMouseDown }}" onMouseUp="{{ stepDown.onMouseUp }}" onMouseEnter="{{ stepDown.onMouseEnter }}" onMouseLeave="{{ stepDown.onMouseLeave }}"><span style="{{ stepDown.face }}">▾</span></span>
+          </span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #737c85;">Notes</span>
+        <textarea rows="3" value="{{ notesValue }}" onChange="{{ onNotes }}" onFocus="{{ onFocusNotes }}" onBlur="{{ onBlur }}" style="{{ areaNotes }}"></textarea>
+      </div>
+    </div>
+
+    <!-- DROPDOWN -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055); position: relative;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Dropdown</span>
+      <div style="position: relative;">
+        <div style="{{ ddTrigger }}" onClick="{{ onToggleDropdown }}">
+          <span style="font-size: 12px; color: #e8edf1;">{{ ddValue }}</span>
+          <span style="font-size: 8px; color: #8b939b;">▾</span>
+        </div>
+        <sc-if value="{{ ddOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="position: absolute; top: calc(100% + 3px); left: 0; right: 0; z-index: 20; padding: 2px; border-radius: 1px; background: rgba(22,26,30,0.94); backdrop-filter: blur(20px); border: 1px solid rgba(0,0,0,0.7); box-shadow: 0 10px 26px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.1);">
+            <sc-for list="{{ ddItems }}" as="item" hint-placeholder-count="4">
+              <div style="{{ item.style }}" onClick="{{ item.onClick }}" onMouseEnter="{{ item.onMouseEnter }}" onMouseLeave="{{ item.onMouseLeave }}">
+                <span style="{{ item.tick }}">✓</span><span>{{ item.label }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <span style="font-size: 11px; color: #7d858e;">Closed trigger is a well; the menu is a raised sheet with blur.</span>
+    </div>
+
+    <!-- SLIDER + PROGRESS -->
+    <div style="display: flex; flex-direction: column; gap: 13px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Slider · progress</span>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #737c85;"><span>Roughness</span><span style="color: #bcc4cc;">{{ sliderLabel }}</span></div>
+        <div style="position: relative; height: 5px; border-radius: 3px; background: rgba(0,0,0,0.55); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 1px 3px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.06); cursor: pointer;" onMouseDown="{{ onTrackDown }}">
+          <div style="{{ sliderFill }}"></div>
+          <div style="{{ sliderKnob }}"></div>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #737c85;"><span>Baking lightmap</span><span style="color: #bcc4cc;">{{ progressLabel }}</span></div>
+        <div style="position: relative; height: 7px; border-radius: 1px; background: rgba(0,0,0,0.55); border: 1px solid rgba(0,0,0,0.65); box-shadow: inset 0 2px 4px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.06); overflow: hidden;">
+          <div style="{{ progressFill }}"></div>
+        </div>
+        <div style="position: relative; height: 7px; border-radius: 1px; background: rgba(0,0,0,0.55); border: 1px solid rgba(0,0,0,0.65); box-shadow: inset 0 2px 4px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.06); overflow: hidden;">
+          <div style="{{ indeterminate }}"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- COLOR PICKER -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Color picker</span>
+      <div style="{{ svPlane }}" onMouseDown="{{ onSvDown }}">
+        <div style="{{ svHandle }}"></div>
+      </div>
+      <div style="position: relative; height: 11px; border-radius: 1px; border: 1px solid rgba(0,0,0,0.7); box-shadow: inset 0 1px 3px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.07); background: linear-gradient(90deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000); cursor: pointer;" onMouseDown="{{ onHueDown }}">
+        <div style="{{ hueHandle }}"></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 7px;">
+        <span style="{{ swatch }}"></span>
+        <span style="flex: 1; display: flex; align-items: center; padding: 5px 7px; border-radius: 1px; background: rgba(0,0,0,0.42); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #eef2f5;">{{ hexValue }}</span>
+      </div>
+    </div>
+
+    <!-- TABS + GROUP -->
+    <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Tabs · group</span>
+      <div style="display: flex; padding: 2px; border-radius: 2px; background: rgba(0,0,0,0.5); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.06); gap: 3px;">
+        <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="3">
+          <span style="{{ t.plinth }}" onClick="{{ t.onClick }}" onMouseDown="{{ t.onMouseDown }}" onMouseUp="{{ t.onMouseUp }}" onMouseEnter="{{ t.onMouseEnter }}" onMouseLeave="{{ t.onMouseLeave }}"><span style="{{ t.face }}">{{ t.label }}</span></span>
+        </sc-for>
+      </div>
+      <div style="border-radius: 2px; border: 1px solid rgba(0,0,0,0.6); background: rgba(0,0,0,0.22); box-shadow: inset 0 1px 3px rgba(0,0,0,0.4), 0 1px 0 rgba(255,255,255,0.055);">
+        <div style="display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-bottom: 1px solid rgba(0,0,0,0.5); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.045); cursor: pointer; user-select: none;" onClick="{{ onToggleGroup }}">
+          <span style="{{ groupCaret }}">▸</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #9aa3ac;">Physics</span>
+          <span style="margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #626b73;">3</span>
+        </div>
+        <sc-if value="{{ groupOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column; gap: 8px; padding: 9px;">
+            <div style="display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 8px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #737c85;">Mass</span><span style="display: flex; padding: 4px 6px; border-radius: 1px; background: rgba(0,0,0,0.42); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #eef2f5;">72.0</span></div>
+            <div style="display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 8px;"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #737c85;">Friction</span><span style="display: flex; padding: 4px 6px; border-radius: 1px; background: rgba(0,0,0,0.42); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #eef2f5;">0.40</span></div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <!-- TREE + SCROLL -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Tree · scroll</span>
+      <div style="display: grid; grid-template-columns: minmax(0, 1fr) 13px; height: 176px; border-radius: 1px; background: rgba(0,0,0,0.4); border: 1px solid rgba(0,0,0,0.65); box-shadow: inset 0 2px 5px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); overflow: hidden;">
+        <div class="scroller" ref="{{ treeRef }}" onScroll="{{ onTreeScroll }}" style="overflow-y: auto;">
+          <sc-for list="{{ tree }}" as="node" hint-placeholder-count="9">
+            <div style="{{ node.row }}" onClick="{{ node.onClick }}" onMouseEnter="{{ node.onMouseEnter }}" onMouseLeave="{{ node.onMouseLeave }}">
+              <span style="{{ node.indent }}"></span>
+              <span style="{{ node.caret }}">{{ node.caretGlyph }}</span>
+              <span style="{{ node.glyphStyle }}">{{ node.glyph }}</span>
+              <span style="{{ node.labelStyle }}">{{ node.label }}</span>
+              <span style="{{ node.eye }}">◉</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="{{ treeV.bar }}">
+          <span style="{{ treeV.up.plinth }}" onMouseDown="{{ treeV.up.onMouseDown }}" onMouseUp="{{ treeV.up.onMouseUp }}" onMouseEnter="{{ treeV.up.onMouseEnter }}" onMouseLeave="{{ treeV.up.onMouseLeave }}" onClick="{{ treeV.up.onClick }}"><span style="{{ treeV.up.face }}">▲</span></span>
+          <span style="{{ treeV.track }}" onMouseDown="{{ treeV.onTrackDown }}">
+            <span style="{{ treeV.thumb }}" onMouseDown="{{ treeV.onThumbDown }}" onMouseEnter="{{ treeV.onThumbEnter }}" onMouseLeave="{{ treeV.onThumbLeave }}"></span>
+          </span>
+          <span style="{{ treeV.down.plinth }}" onMouseDown="{{ treeV.down.onMouseDown }}" onMouseUp="{{ treeV.down.onMouseUp }}" onMouseEnter="{{ treeV.down.onMouseEnter }}" onMouseLeave="{{ treeV.down.onMouseLeave }}" onClick="{{ treeV.down.onClick }}"><span style="{{ treeV.down.face }}">▼</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCROLLBAR -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Scrollbar</span>
+      <div style="display: flex; gap: 10px;">
+        <div style="flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 13px; grid-template-rows: 136px 13px; border-radius: 1px; border: 1px solid rgba(0,0,0,0.65); background: rgba(0,0,0,0.4); box-shadow: inset 0 2px 5px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); overflow: hidden;">
+          <div class="scroller" ref="{{ logRef }}" onScroll="{{ onLogScroll }}" style="overflow: auto;">
+            <div style="width: 360px; padding: 7px 9px; display: flex; flex-direction: column; gap: 5px;">
+              <sc-for list="{{ logLines }}" as="line" hint-placeholder-count="9">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; white-space: nowrap; color: #9aa2aa;">{{ line }}</span>
+              </sc-for>
+            </div>
+          </div>
+          <div style="{{ logV.bar }}">
+            <span style="{{ logV.up.plinth }}" onMouseDown="{{ logV.up.onMouseDown }}" onMouseUp="{{ logV.up.onMouseUp }}" onMouseEnter="{{ logV.up.onMouseEnter }}" onMouseLeave="{{ logV.up.onMouseLeave }}" onClick="{{ logV.up.onClick }}"><span style="{{ logV.up.face }}">▲</span></span>
+            <span style="{{ logV.track }}" onMouseDown="{{ logV.onTrackDown }}">
+              <span style="{{ logV.thumb }}" onMouseDown="{{ logV.onThumbDown }}" onMouseEnter="{{ logV.onThumbEnter }}" onMouseLeave="{{ logV.onThumbLeave }}"></span>
+            </span>
+            <span style="{{ logV.down.plinth }}" onMouseDown="{{ logV.down.onMouseDown }}" onMouseUp="{{ logV.down.onMouseUp }}" onMouseEnter="{{ logV.down.onMouseEnter }}" onMouseLeave="{{ logV.down.onMouseLeave }}" onClick="{{ logV.down.onClick }}"><span style="{{ logV.down.face }}">▼</span></span>
+          </div>
+          <div style="{{ logH.bar }}">
+            <span style="{{ logH.up.plinth }}" onMouseDown="{{ logH.up.onMouseDown }}" onMouseUp="{{ logH.up.onMouseUp }}" onMouseEnter="{{ logH.up.onMouseEnter }}" onMouseLeave="{{ logH.up.onMouseLeave }}" onClick="{{ logH.up.onClick }}"><span style="{{ logH.up.face }}">◀</span></span>
+            <span style="{{ logH.track }}" onMouseDown="{{ logH.onTrackDown }}">
+              <span style="{{ logH.thumb }}" onMouseDown="{{ logH.onThumbDown }}" onMouseEnter="{{ logH.onThumbEnter }}" onMouseLeave="{{ logH.onThumbLeave }}"></span>
+            </span>
+            <span style="{{ logH.down.plinth }}" onMouseDown="{{ logH.down.onMouseDown }}" onMouseUp="{{ logH.down.onMouseUp }}" onMouseEnter="{{ logH.down.onMouseEnter }}" onMouseLeave="{{ logH.down.onMouseLeave }}" onClick="{{ logH.down.onClick }}"><span style="{{ logH.down.face }}">▶</span></span>
+          </div>
+          <span style="background: rgba(0,0,0,0.46); box-shadow: inset 1px 1px 0 rgba(0,0,0,0.6);"></span>
+        </div>
+        <div style="position: relative; width: 116px; height: 149px; border-radius: 1px; overflow: hidden; background: repeating-linear-gradient(45deg, #1d3a44 0 14px, #16303a 14px 28px);">
+          <div class="scroller" ref="{{ overlayRef }}" onScroll="{{ onOverlayScroll }}" style="position: absolute; inset: 0; overflow-y: auto;">
+            <div style="padding: 7px; display: flex; flex-direction: column; gap: 6px;">
+              <sc-for list="{{ overlayCards }}" as="c" hint-placeholder-count="6">
+                <span style="display: block; padding: 6px 7px; border-radius: 1px; background: rgba(18,22,26,0.7); backdrop-filter: blur(10px); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.09); font-size: 10.5px; color: #d3dae0;">{{ c }}</span>
+              </sc-for>
+            </div>
+          </div>
+          <span style="{{ overlayV.track }}" onMouseDown="{{ overlayV.onTrackDown }}">
+            <span style="{{ overlayV.thumb }}" onMouseDown="{{ overlayV.onThumbDown }}" onMouseEnter="{{ overlayV.onThumbEnter }}" onMouseLeave="{{ overlayV.onThumbLeave }}"></span>
+          </span>
+        </div>
+      </div>
+      <span style="font-size: 11px; line-height: 1.5; color: #7d858e; text-wrap: pretty;">Left: docked bar on both axes — sunken channel, face-plate thumb that sinks while dragged, stepper keys on the same plinth model. Right: overlay variant for scrolling over the viewport — thumb only, no channel or steppers. Native bars are hidden; these are drawn, so they match in every browser.</span>
+    </div>
+
+    <!-- TABLE -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055); grid-column: span 2;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Table</span>
+      <div style="border-radius: 1px; overflow: hidden; border: 1px solid rgba(0,0,0,0.65); box-shadow: inset 0 1px 3px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.06); background: rgba(0,0,0,0.3);">
+        <div style="display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)) 64px; background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.025)); border-bottom: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 1px 0 rgba(255,255,255,0.14);">
+          <sc-for list="{{ columns }}" as="col" hint-placeholder-count="5">
+            <span style="{{ col.style }}" onClick="{{ col.onClick }}">{{ col.label }}{{ col.arrow }}</span>
+          </sc-for>
+        </div>
+        <sc-for list="{{ rows }}" as="row" hint-placeholder-count="5">
+          <div style="{{ row.style }}" onClick="{{ row.onClick }}" onMouseEnter="{{ row.onMouseEnter }}" onMouseLeave="{{ row.onMouseLeave }}">
+            <span style="{{ row.nameStyle }}">{{ row.name }}</span>
+            <span style="{{ row.cell }}">{{ row.type }}</span>
+            <span style="{{ row.cell }}">{{ row.tris }}</span>
+            <span style="{{ row.cell }}">{{ row.lod }}</span>
+            <span style="{{ row.badge }}">{{ row.state }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- BANNER -->
+    <div style="display: flex; flex-direction: column; gap: 9px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Banner</span>
+      <div style="display: flex; gap: 9px; padding: 9px 10px; border-radius: 1px; background: rgba(0,0,0,0.35); border: 1px solid rgba(0,0,0,0.6); border-left: 2px solid oklch(0.74 0.11 200); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);">
+        <span style="font-size: 12px; color: oklch(0.78 0.1 200); line-height: 1.3;">i</span>
+        <span style="font-size: 11.5px; line-height: 1.5; color: #cdd5dc; text-wrap: pretty;">Lightmaps are stale. Rebake before exporting this level.</span>
+      </div>
+      <div style="display: flex; gap: 9px; padding: 9px 10px; border-radius: 1px; background: rgba(60,40,10,0.28); border: 1px solid rgba(0,0,0,0.6); border-left: 2px solid oklch(0.78 0.14 75); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);">
+        <span style="font-size: 12px; color: oklch(0.82 0.13 75); line-height: 1.3;">!</span>
+        <span style="font-size: 11.5px; line-height: 1.5; color: #e0d6c4; text-wrap: pretty;">4 meshes exceed the 64k triangle budget.</span>
+      </div>
+      <div style="display: flex; gap: 9px; padding: 9px 10px; border-radius: 1px; background: rgba(70,15,15,0.3); border: 1px solid rgba(0,0,0,0.6); border-left: 2px solid oklch(0.62 0.18 25); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);">
+        <span style="font-size: 12px; color: oklch(0.72 0.16 25); line-height: 1.3;">×</span>
+        <span style="font-size: 11.5px; line-height: 1.5; color: #f0d2d2; text-wrap: pretty;">Shader compile failed: <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;">water_caustics.wgsl:41</span></span>
+      </div>
+    </div>
+
+    <!-- SEPARATOR -->
+    <div style="display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Separator</span>
+      <div style="height: 1px; background: rgba(0,0,0,0.6); box-shadow: 0 1px 0 rgba(255,255,255,0.06);"></div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="flex: 1; height: 1px; background: rgba(0,0,0,0.6); box-shadow: 0 1px 0 rgba(255,255,255,0.06);"></span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #6a737b;">Advanced</span>
+        <span style="flex: 1; height: 1px; background: rgba(0,0,0,0.6); box-shadow: 0 1px 0 rgba(255,255,255,0.06);"></span>
+      </div>
+      <div style="display: flex; align-items: stretch; gap: 10px; height: 34px;">
+        <span style="flex: 1; display: flex; align-items: center; font-size: 11.5px; color: #98a0a8;">Left</span>
+        <span style="width: 1px; background: rgba(0,0,0,0.6); box-shadow: 1px 0 0 rgba(255,255,255,0.06);"></span>
+        <span style="flex: 1; display: flex; align-items: center; font-size: 11.5px; color: #98a0a8;">Right</span>
+      </div>
+      <div style="height: 3px; border-radius: 1px; background: rgba(0,0,0,0.42); border-top: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 1px 2px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.06);"></div>
+    </div>
+
+    <!-- TOOLTIP -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Tooltip</span>
+      <div style="display: flex; gap: 8px; align-items: flex-start; padding: 22px 0 8px;">
+        <span style="position: relative;" onMouseEnter="{{ onTipEnter }}" onMouseLeave="{{ onTipLeave }}">
+          <span style="{{ tipTarget.plinth }}"><span style="{{ tipTarget.face }}">Hover me</span></span>
+          <sc-if value="{{ tipShown }}" hint-placeholder-val="{{ false }}">
+            <span style="position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%); white-space: nowrap; padding: 4px 7px; border-radius: 1px; background: rgba(28,33,38,0.96); backdrop-filter: blur(14px); border: 1px solid rgba(0,0,0,0.7); box-shadow: 0 6px 18px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.11); font-size: 11px; color: #e4e9ee;">Snap vertices to grid <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #8d959d; margin-left: 5px;">⇧G</span></span>
+          </sc-if>
+        </span>
+        <span style="position: relative;">
+          <span style="display: block; padding: 5px 9px; border-radius: 1px; background: rgba(0,0,0,0.42); border: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07); font-size: 11px; color: #9aa2aa;">always on</span>
+          <span style="position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%); white-space: nowrap; padding: 4px 7px; border-radius: 1px; background: rgba(28,33,38,0.96); backdrop-filter: blur(14px); border: 1px solid rgba(0,0,0,0.7); box-shadow: 0 6px 18px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.11); font-size: 11px; color: #e4e9ee;">Pinned example</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- TOASTS -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Toast</span>
+      <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="2">
+        <div style="{{ t.style }}">
+          <span style="{{ t.pip }}"></span>
+          <span style="display: flex; flex-direction: column; gap: 2px; flex: 1;">
+            <span style="font-size: 11.5px; font-weight: 500; color: #eaeff4;">{{ t.title }}</span>
+            <span style="font-size: 11px; line-height: 1.45; color: #9aa2aa;">{{ t.body }}</span>
+          </span>
+          <span style="{{ t.close.plinth }}" onClick="{{ t.close.onClick }}" onMouseDown="{{ t.close.onMouseDown }}" onMouseUp="{{ t.close.onMouseUp }}" onMouseEnter="{{ t.close.onMouseEnter }}" onMouseLeave="{{ t.close.onMouseLeave }}"><span style="{{ t.close.face }}">×</span></span>
+        </div>
+      </sc-for>
+      <span style="{{ toastReset.plinth }}" onClick="{{ toastReset.onClick }}" onMouseDown="{{ toastReset.onMouseDown }}" onMouseUp="{{ toastReset.onMouseUp }}" onMouseEnter="{{ toastReset.onMouseEnter }}" onMouseLeave="{{ toastReset.onMouseLeave }}"><span style="{{ toastReset.face }}">Restore toasts</span></span>
+    </div>
+
+    <!-- PANEL + BACKDROP BLUR -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 2px; background: rgba(16,19,22,0.72); border: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 1px 0 rgba(255,255,255,0.055); grid-column: span 2;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #6a737b;">Panel · backdrop blur · modal</span>
+      <div style="position: relative; height: 230px; border-radius: 2px; overflow: hidden; border: 1px solid rgba(0,0,0,0.7); box-shadow: inset 0 2px 6px rgba(0,0,0,0.5);">
+        <div style="position: absolute; inset: 0; background: repeating-linear-gradient(45deg, #1d3a44 0 18px, #16303a 18px 36px), radial-gradient(circle at 30% 30%, #2d5c68, #0d1e26);"></div>
+        <div style="position: absolute; inset: 0; background: radial-gradient(circle at 68% 62%, oklch(0.62 0.11 200 / 0.55), transparent 55%);"></div>
+        <div style="position: absolute; top: 12px; left: 12px; width: 190px; border-radius: 2px; background: rgba(21,25,29,0.72); backdrop-filter: blur(18px); border: 1px solid rgba(0,0,0,0.6); box-shadow: 0 14px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.1); overflow: hidden;">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 7px 10px; background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01)); border-bottom: 1px solid rgba(0,0,0,0.5); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.05);">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #9aa3ac;">Outliner</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #626b73;">12</span>
+          </div>
+          <div style="display: flex; flex-direction: column; padding: 5px 0;">
+            <span style="padding: 3px 10px; font-size: 11px; color: #cdd5dc;">◧ Terrain</span>
+            <span style="padding: 3px 10px; font-size: 11px; color: #041418; background: oklch(0.74 0.11 200); box-shadow: inset 0 1px 0 rgba(255,255,255,0.3);">◧ Bridge_A</span>
+            <span style="padding: 3px 10px; font-size: 11px; color: #cdd5dc;">◧ Lamp_01</span>
+            <span style="padding: 3px 10px; font-size: 11px; color: #cdd5dc;">◧ Water_Volume</span>
+          </div>
+        </div>
+        <div style="position: absolute; inset: 0; background: rgba(4,6,8,0.45); backdrop-filter: blur(4px);"></div>
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 244px; border-radius: 2px; background: linear-gradient(180deg, rgba(27,31,36,0.93), rgba(16,19,22,0.95)); backdrop-filter: blur(24px); border: 1px solid rgba(0,0,0,0.75); box-shadow: 0 24px 60px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.6); overflow: hidden;">
+          <div style="padding: 8px 11px; background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.015)); border-bottom: 1px solid rgba(0,0,0,0.55); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.05);">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #9aa3ac;">Discard changes</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 11px; padding: 12px 11px;">
+            <span style="font-size: 11.5px; line-height: 1.5; color: #b8c0c8; text-wrap: pretty;">Bridge_A has unsaved geometry edits. Discarding cannot be undone.</span>
+            <div style="display: flex; gap: 6px;">
+              <span style="{{ modalDiscard.plinth }}" onClick="{{ modalDiscard.onClick }}" onMouseDown="{{ modalDiscard.onMouseDown }}" onMouseUp="{{ modalDiscard.onMouseUp }}" onMouseEnter="{{ modalDiscard.onMouseEnter }}" onMouseLeave="{{ modalDiscard.onMouseLeave }}"><span style="{{ modalDiscard.face }}">Discard</span></span>
+              <span style="{{ modalKeep.plinth }}" onClick="{{ modalKeep.onClick }}" onMouseDown="{{ modalKeep.onMouseDown }}" onMouseUp="{{ modalKeep.onMouseUp }}" onMouseEnter="{{ modalKeep.onMouseEnter }}" onMouseLeave="{{ modalKeep.onMouseLeave }}"><span style="{{ modalKeep.face }}">Keep editing</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 10px; margin-top: 18px; padding: 8px 11px; border-radius: 2px; background: #0e1114; border: 1px solid #1b1f23; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #7d858e;">
+    <span>last:</span><span style="color: #cfd6dd;">{{ log }}</span><span style="margin-left: auto;">actions {{ count }}</span>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;travel&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:2,&quot;min&quot;:0,&quot;max&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;},&quot;radius&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1,&quot;min&quot;:0,&quot;max&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:200,&quot;min&quot;:0,&quot;max&quot;:360,&quot;unit&quot;:&quot;°&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;}}">
+class Component extends DCLogic {
+  state = {
+    pressed: null, hover: null, focus: null, metrics: {}, sbHover: null,
+    checks: { shadows: true, occlusion: false, partial: "mixed" },
+    radio: "world",
+    tab: "mesh",
+    tool: "select",
+    name: "Bridge_A", bad: "Terrain", notes: "Collision mesh is hand-authored; regenerate with care.",
+    num: 1.25,
+    ddOpen: false, dd: "Standard Lit", ddHover: null,
+    slider: 0.42, dragging: null,
+    progress: 0.68, tick: 0,
+    hue: 196, sat: 0.72, val: 0.78,
+    groupOpen: true,
+    treeSel: "bridge", treeHover: null, treeOpen: { level: true, props: true },
+    sort: "tris", tableSel: "Bridge_A", tableHover: null,
+    toasts: ["saved", "export"],
+    tip: false,
+    log: "—", count: 0,
+  };
+
+  t() { return this.props.travel ?? 2; }
+  r() { return this.props.radius ?? 1; }
+  accentHue() { return this.props.accent ?? 200; }
+
+  componentDidMount() {
+    this._els = this._els || {};
+    this._move = (e) => {
+      if (this._sb) this._dragScroll(e);
+      else if (this.state.dragging === "slider") this._fromX(e.clientX, "slider");
+      else if (this.state.dragging === "hue") this._fromX(e.clientX, "hue");
+      else if (this.state.dragging === "sv") this._fromSv(e.clientX, e.clientY);
+    };
+    this._up = () => { this._sb = null; if (this.state.dragging) this.setState({ dragging: null }); };
+    this._measureAll();
+    window.addEventListener("mousemove", this._move);
+    window.addEventListener("mouseup", this._up);
+    this._timer = setInterval(() => this.setState(s => ({ tick: s.tick + 1, progress: (s.progress + 0.013) % 1 })), 120);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener("mousemove", this._move);
+    window.removeEventListener("mouseup", this._up);
+    clearInterval(this._timer);
+  }
+
+  componentDidUpdate() { this._measureAll(); }
+
+  _measureAll() {
+    const els = this._els || {};
+    const next = {};
+    let changed = false;
+    Object.keys(els).forEach(id => {
+      const el = els[id];
+      if (!el) return;
+      const m = { top: el.scrollTop, left: el.scrollLeft, ch: el.clientHeight, sh: el.scrollHeight, cw: el.clientWidth, sw: el.scrollWidth };
+      next[id] = m;
+      const p = (this.state.metrics || {})[id];
+      if (!p || p.top !== m.top || p.left !== m.left || p.ch !== m.ch || p.sh !== m.sh || p.cw !== m.cw || p.sw !== m.sw) changed = true;
+    });
+    if (changed) this.setState({ metrics: Object.assign({}, this.state.metrics, next) });
+  }
+
+  _scrollRef(id) {
+    return (el) => {
+      this._els = this._els || {};
+      if (el && this._els[id] !== el) { this._els[id] = el; requestAnimationFrame(() => this._measureAll()); }
+    };
+  }
+
+  _dragScroll(e) {
+    const d = this._sb;
+    const el = (this._els || {})[d.id];
+    if (!el) return;
+    const delta = (d.axis === "y" ? e.clientY : e.clientX) - d.start;
+    const range = d.trackPx - d.thumbPx;
+    if (range <= 0) return;
+    const frac = Math.min(1, Math.max(0, (d.startThumb + delta) / range));
+    if (d.axis === "y") el.scrollTop = frac * (el.scrollHeight - el.clientHeight);
+    else el.scrollLeft = frac * (el.scrollWidth - el.clientWidth);
+    this._measureAll();
+  }
+
+  // Drawn scrollbar: sunken channel + face-plate thumb (+ stepper keys when docked)
+  scrollbar(id, axis, opts) {
+    const o = opts || {};
+    const m = (this.state.metrics || {})[id] || { top: 0, left: 0, ch: 1, sh: 1, cw: 1, sw: 1 };
+    const vert = axis === "y";
+    const client = vert ? m.ch : m.cw;
+    const scroll = vert ? m.sh : m.sw;
+    const pos = vert ? m.top : m.left;
+    const overlay = !!o.overlay;
+    const thickness = overlay ? 9 : 13;
+    const stepPx = overlay ? 0 : thickness;
+    const trackPx = Math.max(0, client - stepPx * 2);
+    const ratio = scroll > 0 ? client / scroll : 1;
+    const scrollable = scroll - client > 1;
+    const thumbPx = Math.max(22, Math.round(trackPx * Math.min(1, ratio)));
+    const maxScroll = Math.max(1, scroll - client);
+    const thumbOff = Math.round((trackPx - thumbPx) * Math.min(1, pos / maxScroll));
+    const dragging = this.state.dragging === "sb:" + id + axis;
+    const hovered = this.state.sbHover === id + axis;
+    const r = this.r();
+
+    const bar = {
+      display: "flex",
+      flexDirection: vert ? "column" : "row",
+      background: "rgba(0,0,0,0.46)",
+      boxShadow: vert
+        ? "inset 1px 0 0 rgba(0,0,0,0.6), inset -1px 0 0 rgba(255,255,255,0.05)"
+        : "inset 0 1px 0 rgba(0,0,0,0.6), inset 0 -1px 0 rgba(255,255,255,0.05)",
+    };
+    const track = overlay
+      ? {
+          position: "absolute", top: "2px", bottom: "2px", right: "2px", width: thickness + "px",
+          display: scrollable ? "block" : "none",
+        }
+      : {
+          position: "relative", flex: 1,
+          boxShadow: vert ? "inset 0 1px 3px rgba(0,0,0,0.5)" : "inset 1px 0 3px rgba(0,0,0,0.5)",
+          cursor: "default",
+        };
+    const thumbBase = {
+      position: "absolute",
+      borderRadius: r + "px",
+      border: "1px solid rgba(0,0,0,0.55)",
+      boxSizing: "border-box",
+      cursor: "default",
+      display: scrollable ? "block" : "none",
+    };
+    const face = dragging
+      ? { background: "linear-gradient(180deg, rgba(255,255,255,0.1), rgba(255,255,255,0.04))", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.07), inset 0 2px 4px rgba(0,0,0,0.45)" }
+      : hovered
+      ? { background: "linear-gradient(180deg, rgba(255,255,255,0.25), rgba(255,255,255,0.11))", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(0,0,0,0.3)" }
+      : { background: "linear-gradient(180deg, rgba(255,255,255,0.19), rgba(255,255,255,0.07))", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.22), inset 0 -1px 0 rgba(0,0,0,0.3)" };
+    const thumb = Object.assign({}, thumbBase, face, vert
+      ? { left: overlay ? 0 : "2px", right: overlay ? 0 : "2px", top: thumbOff + "px", height: thumbPx + "px" }
+      : { top: "2px", bottom: "2px", left: thumbOff + "px", width: thumbPx + "px" });
+
+    const startDrag = (e) => {
+      e.preventDefault();
+      this._sb = { id: id, axis: axis, start: vert ? e.clientY : e.clientX, startThumb: thumbOff, trackPx: trackPx, thumbPx: thumbPx };
+      this.setState({ dragging: "sb:" + id + axis });
+    };
+
+    const step = (dir) => () => {
+      const el = (this._els || {})[id];
+      if (!el) return;
+      if (vert) el.scrollTop += dir * 34; else el.scrollLeft += dir * 34;
+      this._measureAll();
+    };
+
+    const stepKey = (which, dir) => {
+      const k = this.key("sb-" + id + axis + which, { travel: 1, hollow: true, pad: "0", fontSize: 6, size: thickness });
+      k.face.width = thickness + "px";
+      k.face.height = thickness + "px";
+      k.face.color = "#aeb6be";
+      k.plinth.width = thickness + "px";
+      k.plinth.height = thickness + "px";
+      Object.assign(k, this.bind("sb-" + id + axis + which, step(dir)));
+      return k;
+    };
+
+    return {
+      bar: bar, track: track, thumb: thumb,
+      up: stepKey("u", -1), down: stepKey("d", 1),
+      onThumbDown: startDrag,
+      onThumbEnter: () => this.setState({ sbHover: id + axis }),
+      onThumbLeave: () => this.setState({ sbHover: null }),
+      onTrackDown: (e) => {
+        const el = (this._els || {})[id];
+        if (!el || e.target !== e.currentTarget) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const at = vert ? e.clientY - rect.top : e.clientX - rect.left;
+        const page = vert ? el.clientHeight : el.clientWidth;
+        const dir = at > thumbOff + thumbPx / 2 ? 1 : -1;
+        if (vert) el.scrollTop += dir * page * 0.9; else el.scrollLeft += dir * page * 0.9;
+        this._measureAll();
+      },
+    };
+  }
+
+  _fromX(x, which) {
+    if (!this._rect) return;
+    const v = Math.min(1, Math.max(0, (x - this._rect.left) / this._rect.width));
+    if (which === "slider") this.setState({ slider: v, log: "roughness " + v.toFixed(2) });
+    else this.setState({ hue: v * 360, log: "hue " + Math.round(v * 360) });
+  }
+
+  _fromSv(x, y) {
+    if (!this._svRect) return;
+    const s = Math.min(1, Math.max(0, (x - this._svRect.left) / this._svRect.width));
+    const v = 1 - Math.min(1, Math.max(0, (y - this._svRect.top) / this._svRect.height));
+    this.setState({ sat: s, val: v });
+  }
+
+  act(name) { this.setState(s => ({ log: name, count: s.count + 1 })); }
+
+  bind(name, onClick) {
+    return {
+      onMouseDown: () => this.setState({ pressed: name }),
+      onMouseUp: () => this.setState({ pressed: null }),
+      onMouseEnter: () => this.setState({ hover: name }),
+      onMouseLeave: () => this.setState({ pressed: null, hover: null }),
+      onClick: onClick,
+    };
+  }
+
+  accent(l, c) { return "oklch(" + l + " " + c + " " + this.accentHue() + ")"; }
+
+  // face plate resting on a plinth
+  key(name, opts) {
+    const o = opts || {};
+    const t = o.travel != null ? o.travel : this.t();
+    const r = o.radius != null ? o.radius : this.r();
+    const held = o.held || false;
+    const disabled = o.disabled || false;
+    const pressed = !disabled && (this.state.pressed === name || held);
+    const hover = !disabled && !held && this.state.hover === name;
+    const plinth = {
+      display: o.inlineBlock ? "inline-block" : "block",
+      flex: o.flex ? 1 : undefined,
+      width: o.width,
+      borderRadius: r + "px",
+      background: o.hollow ? "transparent" : "rgba(0,0,0,0.6)",
+      paddingTop: pressed ? t + "px" : 0,
+      paddingBottom: pressed ? 0 : t + "px",
+      cursor: disabled ? "default" : "pointer",
+      userSelect: "none",
+      boxSizing: "border-box",
+      opacity: disabled ? 0.45 : 1,
+    };
+    let bg, border, inset, color, textShadow = "0 -1px 0 rgba(0,0,0,0.5)";
+    if (o.tone === "accent") {
+      bg = pressed ? "linear-gradient(180deg, " + this.accent(0.7, 0.1) + ", " + this.accent(0.6, 0.11) + ")"
+        : hover ? "linear-gradient(180deg, " + this.accent(0.86, 0.09) + ", " + this.accent(0.72, 0.12) + ")"
+        : "linear-gradient(180deg, " + this.accent(0.82, 0.1) + ", " + this.accent(0.68, 0.12) + ")";
+      border = "1px solid rgba(0,0,0,0.5)";
+      inset = pressed ? "inset 0 1px 0 rgba(255,255,255,0.18), inset 0 2px 3px rgba(0,0,0,0.3)" : "inset 0 1px 0 rgba(255,255,255,0.5)";
+      color = "#04171d";
+      textShadow = "0 1px 0 rgba(255,255,255,0.25)";
+    } else if (o.tone === "danger") {
+      bg = pressed ? "linear-gradient(180deg, oklch(0.5 0.14 25), oklch(0.44 0.14 25))"
+        : hover ? "linear-gradient(180deg, oklch(0.62 0.18 25), oklch(0.52 0.18 25))"
+        : "linear-gradient(180deg, oklch(0.57 0.17 25), oklch(0.48 0.17 25))";
+      border = "1px solid rgba(0,0,0,0.55)";
+      inset = pressed ? "inset 0 1px 0 rgba(255,255,255,0.12), inset 0 2px 3px rgba(0,0,0,0.35)" : "inset 0 1px 0 rgba(255,255,255,0.3)";
+      color = "#fdeaea";
+    } else if (o.tone === "ghost") {
+      bg = pressed ? "rgba(255,255,255,0.04)" : hover ? "rgba(255,255,255,0.08)" : "transparent";
+      border = "1px solid rgba(0,0,0," + (hover || pressed ? 0.4 : 0.25) + ")";
+      inset = pressed ? "inset 0 1px 2px rgba(0,0,0,0.3)" : hover ? "inset 0 1px 0 rgba(255,255,255,0.1)" : "none";
+      color = pressed ? "#9aa2aa" : "#c3cbd2";
+    } else if (o.tone === "sunken") {
+      bg = "rgba(0,0,0,0.45)";
+      border = "1px solid rgba(0,0,0,0.6)";
+      inset = "inset 0 1px 3px rgba(0,0,0,0.7)";
+      color = "#7b838b";
+    } else {
+      const a = pressed ? 0.09 : hover ? 0.22 : 0.16;
+      const b = pressed ? 0.035 : hover ? 0.1 : 0.06;
+      bg = "linear-gradient(180deg, rgba(255,255,255," + a + "), rgba(255,255,255," + b + "))";
+      border = "1px solid rgba(0,0,0," + (pressed ? 0.55 : 0.5) + ")";
+      inset = pressed ? "inset 0 1px 0 rgba(255,255,255,0.07), inset 0 2px 3px rgba(0,0,0,0.4)"
+        : "inset 0 1px 0 rgba(255,255,255," + (hover ? 0.26 : 0.18) + ")";
+      color = pressed ? "#bdc5cc" : hover ? "#f1f5f9" : "#e2e8ee";
+    }
+    const face = {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      textAlign: "center",
+      fontSize: (o.fontSize || 11) + "px",
+      fontWeight: o.tone === "accent" ? 600 : 500,
+      lineHeight: 1.2,
+      padding: o.pad || "6px 10px",
+      height: o.size ? o.size + "px" : undefined,
+      width: o.size ? o.size + "px" : undefined,
+      boxSizing: "border-box",
+      borderRadius: r + "px",
+      background: bg,
+      border: border,
+      boxShadow: inset,
+      color: o.color || color,
+      textShadow: textShadow,
+      fontFamily: o.mono ? "'IBM Plex Mono', monospace" : undefined,
+    };
+    return { plinth: plinth, face: face };
+  }
+
+  well(name, opts) {
+    const o = opts || {};
+    const focused = this.state.focus === name;
+    const bad = o.invalid;
+    const ring = bad ? "oklch(0.6 0.18 25)" : this.accent(0.74, 0.11);
+    return {
+      width: "100%",
+      boxSizing: "border-box",
+      padding: o.pad || "5px 7px",
+      borderRadius: this.r() + "px",
+      background: focused ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.42)",
+      border: "1px solid " + (focused || bad ? ring : "rgba(0,0,0,0.6)"),
+      boxShadow: focused || bad
+        ? "inset 0 2px 4px rgba(0,0,0,0.6), 0 0 0 2px " + (bad ? "oklch(0.6 0.18 25 / 0.18)" : this.accent(0.74, 0.11).replace(")", " / 0.16)"))
+        : "inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07)",
+      font: "inherit",
+      fontSize: "12px",
+      color: "#eef2f5",
+      outline: "none",
+      resize: o.resize || "none",
+      lineHeight: o.resize ? 1.5 : undefined,
+    };
+  }
+
+  checkbox(name, on, text, tri) {
+    const opts = on || tri ? { tone: tri ? "default" : "accent", size: 13, pad: "0", fontSize: 10 } : { tone: "sunken", size: 13, pad: "0", fontSize: 10 };
+    const k = this.key(name, opts);
+    k.face.fontWeight = 700;
+    k.mark = tri ? "–" : on ? "✓" : "";
+    k.text = text;
+    k.label = { fontSize: "12px", color: on || tri ? "#dfe4e9" : "#a9b1b9" };
+    Object.assign(k, this.bind(name, () => {
+      this.setState(s => ({ checks: Object.assign({}, s.checks, { [name]: !s.checks[name] }) }));
+      this.act(text);
+    }));
+    return k;
+  }
+
+  radioItem(id, text) {
+    const on = this.state.radio === id;
+    const k = this.key("radio-" + id, { tone: on ? "accent" : "sunken", size: 13, pad: "0", radius: 7 });
+    k.face.borderRadius = "7px";
+    k.plinth.borderRadius = "7px";
+    k.dot = { display: "block", width: "5px", height: "5px", borderRadius: "3px", background: on ? "#04171d" : "transparent" };
+    k.text = text;
+    k.label = { fontSize: "12px", color: on ? "#dfe4e9" : "#a9b1b9" };
+    Object.assign(k, this.bind("radio-" + id, () => { this.setState({ radio: id }); this.act(text); }));
+    return k;
+  }
+
+  latch(name, id, current, label, extra) {
+    const o = Object.assign({ flex: true, hollow: true, held: current === id }, extra || {});
+    const k = this.key(name, o);
+    if (current === id) { k.face.color = o.tone === "accent" ? "#04171d" : "#f4f7fa"; }
+    k.label = label;
+    Object.assign(k, this.bind(name, () => this.act(label)));
+    return k;
+  }
+
+  renderVals() {
+    const s = this.state, r = this.r();
+    const hexFromHsv = (h, sa, v) => {
+      const f = (n) => {
+        const k = (n + h / 60) % 6;
+        const x = v - v * sa * Math.max(0, Math.min(k, 4 - k, 1));
+        return Math.round(x * 255).toString(16).padStart(2, "0");
+      };
+      return "#" + f(5) + f(3) + f(1);
+    };
+    const hex = hexFromHsv(s.hue, s.sat, s.val).toUpperCase();
+
+    const tools = [
+      { id: "select", glyph: "⌖" }, { id: "move", glyph: "✥" }, { id: "rotate", glyph: "⟳" },
+      { id: "scale", glyph: "⤢" }, { id: "paint", glyph: "✎" }, { id: "erase", glyph: "⌫" },
+    ].map(t => {
+      const k = this.key("tool-" + t.id, { held: s.tool === t.id, hollow: true, size: 24, pad: "0", fontSize: 12 });
+      k.glyph = t.glyph;
+      k.face.color = s.tool === t.id ? "#f4f7fa" : k.face.color;
+      Object.assign(k, this.bind("tool-" + t.id, () => { this.setState({ tool: t.id }); this.act("tool " + t.id); }));
+      return k;
+    });
+
+    const tabs = [
+      { id: "mesh", label: "Mesh" }, { id: "material", label: "Material" }, { id: "physics", label: "Physics" },
+    ].map(t => {
+      const k = this.key("tab-" + t.id, { held: s.tab === t.id, flex: true, hollow: true, pad: "5px 0" });
+      k.label = t.label;
+      if (s.tab === t.id) k.face.color = "#f4f7fa";
+      Object.assign(k, this.bind("tab-" + t.id, () => { this.setState({ tab: t.id }); this.act(t.label); }));
+      return k;
+    });
+
+    const ddItems = ["Standard Lit", "Unlit", "Subsurface", "Decal"].map(label => ({
+      label: label,
+      style: {
+        display: "flex", alignItems: "center", gap: "6px", padding: "4px 7px", borderRadius: r + "px",
+        fontSize: "11.5px", cursor: "pointer",
+        background: s.ddHover === label ? this.accent(0.74, 0.11).replace(")", " / 0.2)") : "transparent",
+        color: s.dd === label ? "#ffffff" : "#c9d1d8",
+      },
+      tick: { width: "9px", fontSize: "9px", color: s.dd === label ? this.accent(0.8, 0.1) : "transparent" },
+      onClick: () => { this.setState({ dd: label, ddOpen: false }); this.act(label); },
+      onMouseEnter: () => this.setState({ ddHover: label }),
+      onMouseLeave: () => this.setState({ ddHover: null }),
+    }));
+
+    const treeData = [
+      { id: "level", label: "Level_01", glyph: "▣", depth: 0, group: true },
+      { id: "terrain", label: "Terrain", glyph: "◧", depth: 1 },
+      { id: "bridge", label: "Bridge_A", glyph: "◧", depth: 1 },
+      { id: "props", label: "Props", glyph: "▣", depth: 1, group: true },
+      { id: "lamp1", label: "Lamp_01", glyph: "◧", depth: 2 },
+      { id: "lamp2", label: "Lamp_02", glyph: "◧", depth: 2 },
+      { id: "crate", label: "Crate_Stack", glyph: "◧", depth: 2 },
+      { id: "water", label: "Water_Volume", glyph: "◈", depth: 1 },
+      { id: "spawn", label: "PlayerSpawn", glyph: "✦", depth: 1 },
+      { id: "light", label: "Sun", glyph: "☀", depth: 1 },
+    ];
+    const tree = treeData.filter(n => {
+      if (n.depth === 2 && !s.treeOpen.props) return false;
+      if (n.depth >= 1 && !s.treeOpen.level) return false;
+      return true;
+    }).map(n => {
+      const sel = s.treeSel === n.id;
+      const hov = s.treeHover === n.id;
+      const open = n.id === "level" ? s.treeOpen.level : n.id === "props" ? s.treeOpen.props : false;
+      return {
+        label: n.label, glyph: n.glyph,
+        caretGlyph: n.group ? (open ? "▾" : "▸") : "",
+        row: {
+          display: "flex", alignItems: "center", gap: "5px", height: "22px", padding: "0 8px 0 4px",
+          cursor: "pointer", userSelect: "none",
+          background: sel ? this.accent(0.74, 0.11) : hov ? "rgba(255,255,255,0.055)" : "transparent",
+          boxShadow: sel ? "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 0 rgba(0,0,0,0.25)" : "none",
+        },
+        indent: { display: "block", width: n.depth * 11 + "px" },
+        caret: { width: "9px", fontSize: "7px", color: sel ? "rgba(4,20,24,0.75)" : "#6c757d" },
+        glyphStyle: { fontSize: "10px", color: sel ? "#041418" : "#7f878f" },
+        labelStyle: { fontSize: "11.5px", color: sel ? "#041418" : "#d3dae0", fontWeight: sel ? 500 : 400 },
+        eye: { marginLeft: "auto", fontSize: "8px", color: sel ? "rgba(4,20,24,0.6)" : hov ? "#7f878f" : "#3f474e" },
+        onClick: () => {
+          if (n.group) this.setState(st => ({ treeOpen: Object.assign({}, st.treeOpen, { [n.id]: !st.treeOpen[n.id] }), treeSel: n.id }));
+          else this.setState({ treeSel: n.id });
+          this.act(n.label);
+        },
+        onMouseEnter: () => this.setState({ treeHover: n.id }),
+        onMouseLeave: () => this.setState({ treeHover: null }),
+      };
+    });
+
+    const colDefs = [{ id: "name", label: "Asset" }, { id: "type", label: "Type" }, { id: "tris", label: "Tris" }, { id: "lod", label: "LOD" }, { id: "state", label: "State" }];
+    const columns = colDefs.map((c, i) => ({
+      label: c.label,
+      arrow: s.sort === c.id ? " ▾" : "",
+      style: {
+        padding: "5px 9px", fontFamily: "'IBM Plex Mono', monospace", fontSize: "9px",
+        letterSpacing: "0.12em", textTransform: "uppercase",
+        color: s.sort === c.id ? "#dbe2e8" : "#8b939b", cursor: "pointer",
+        textAlign: i === 0 ? "left" : i === 4 ? "center" : "right",
+        textShadow: "0 -1px 0 rgba(0,0,0,0.6)",
+      },
+      onClick: () => { this.setState({ sort: c.id }); this.act("sort " + c.id); },
+    }));
+
+    const rowData = [
+      { name: "Bridge_A", type: "Mesh", tris: "18,204", lod: "3", state: "ok" },
+      { name: "Terrain", type: "Heightmap", tris: "96,512", lod: "5", state: "over" },
+      { name: "Water_Volume", type: "Volume", tris: "1,024", lod: "1", state: "ok" },
+      { name: "Lamp_01", type: "Mesh", tris: "2,880", lod: "2", state: "ok" },
+      { name: "Crate_Stack", type: "Instanced", tris: "7,360", lod: "2", state: "stale" },
+    ];
+    const rows = rowData.map((d, i) => {
+      const sel = s.tableSel === d.name;
+      const hov = s.tableHover === d.name;
+      const cell = { padding: "5px 9px", fontFamily: "'IBM Plex Mono', monospace", fontSize: "10.5px", textAlign: "right", color: sel ? "#041418" : "#aeb6be" };
+      const badgeTone = d.state === "ok" ? { bg: "rgba(255,255,255,0.07)", fg: "#9aa2aa" }
+        : d.state === "over" ? { bg: "oklch(0.62 0.18 25 / 0.22)", fg: "oklch(0.78 0.14 25)" }
+        : { bg: "oklch(0.78 0.14 75 / 0.2)", fg: "oklch(0.85 0.12 75)" };
+      return {
+        name: d.name, type: d.type, tris: d.tris, lod: d.lod, state: d.state,
+        style: {
+          display: "grid", gridTemplateColumns: "minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)) 64px",
+          alignItems: "center", cursor: "pointer", userSelect: "none",
+          background: sel ? this.accent(0.74, 0.11) : hov ? "rgba(255,255,255,0.05)" : i % 2 ? "rgba(255,255,255,0.018)" : "transparent",
+          borderTop: "1px solid rgba(0,0,0,0.35)",
+          boxShadow: sel ? "inset 0 1px 0 rgba(255,255,255,0.28)" : "none",
+        },
+        nameStyle: { padding: "5px 9px", fontSize: "11.5px", color: sel ? "#041418" : "#d3dae0", fontWeight: sel ? 500 : 400 },
+        cell: cell,
+        badge: {
+          justifySelf: "center", padding: "1px 6px", borderRadius: r + "px", fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: "9px", letterSpacing: "0.08em", textTransform: "uppercase",
+          background: sel ? "rgba(4,20,24,0.18)" : badgeTone.bg, color: sel ? "#041418" : badgeTone.fg,
+        },
+        onClick: () => { this.setState({ tableSel: d.name }); this.act(d.name); },
+        onMouseEnter: () => this.setState({ tableHover: d.name }),
+        onMouseLeave: () => this.setState({ tableHover: null }),
+      };
+    });
+
+    const toastDefs = {
+      saved: { title: "Level saved", body: "Level_01.scene · 2.4 MB", tone: this.accent(0.74, 0.11) },
+      export: { title: "Export finished", body: "12 meshes, 3 lightmaps written to /build", tone: "oklch(0.7 0.14 145)" },
+    };
+    const toasts = s.toasts.map(id => {
+      const d = toastDefs[id];
+      const close = this.key("toast-" + id, { tone: "ghost", size: 17, pad: "0", fontSize: 11 });
+      Object.assign(close, this.bind("toast-" + id, () => {
+        this.setState(st => ({ toasts: st.toasts.filter(x => x !== id) }));
+        this.act("dismiss " + id);
+      }));
+      return {
+        title: d.title, body: d.body, close: close,
+        style: {
+          display: "flex", alignItems: "flex-start", gap: "9px", padding: "9px 10px", borderRadius: r + "px",
+          background: "linear-gradient(180deg, rgba(31,36,41,0.92), rgba(19,23,27,0.94))",
+          backdropFilter: "blur(18px)",
+          border: "1px solid rgba(0,0,0,0.7)",
+          boxShadow: "0 10px 26px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.11)",
+        },
+        pip: { width: "3px", alignSelf: "stretch", borderRadius: "1px", background: d.tone, marginTop: "1px" },
+      };
+    });
+
+    return {
+      travelLabel: this.t() + "px",
+      radiusLabel: this.r() + "px",
+
+      bPrimary: Object.assign(this.key("primary", { tone: "accent", flex: true }), this.bind("primary", () => this.act("Primary"))),
+      bDefault: Object.assign(this.key("default", { flex: true }), this.bind("default", () => this.act("Default"))),
+      bDanger: Object.assign(this.key("danger", { tone: "danger", flex: true }), this.bind("danger", () => this.act("Delete"))),
+      bDisabled: this.key("disabled", { disabled: true }),
+      bGhost: Object.assign(this.key("ghost", { tone: "ghost" }), this.bind("ghost", () => this.act("Ghost"))),
+
+      tools: tools,
+      iconOnly: Object.assign(this.key("grid", { size: 26, pad: "0", fontSize: 13 }), this.bind("grid", () => this.act("grid"))),
+      iconLabel: Object.assign(this.key("dup", {}), this.bind("dup", () => this.act("Duplicate"))),
+
+      checks: [
+        this.checkbox("shadows", s.checks.shadows, "Cast shadows", false),
+        this.checkbox("occlusion", s.checks.occlusion, "Occlusion culling", false),
+        this.checkbox("partial", false, "Children (mixed)", true),
+      ],
+      radios: [this.radioItem("world", "World space"), this.radioItem("local", "Local space"), this.radioItem("parent", "Parent space")],
+
+      nameValue: s.name,
+      onName: (e) => this.setState({ name: e.target.value }),
+      onFocusName: () => this.setState({ focus: "name" }),
+      onFocusNotes: () => this.setState({ focus: "notes" }),
+      onBlur: () => this.setState({ focus: null }),
+      inputName: this.well("name"),
+      inputEmpty: this.well("empty"),
+      inputBad: this.well("bad", { invalid: true }),
+      badValue: s.bad,
+      onBad: (e) => this.setState({ bad: e.target.value }),
+      notesValue: s.notes,
+      onNotes: (e) => this.setState({ notes: e.target.value }),
+      areaNotes: this.well("notes", { resize: "vertical", pad: "6px 7px" }),
+      numValue: s.num.toFixed(2),
+      stepUp: Object.assign(this.key("up", { travel: 1, pad: "0", fontSize: 8, hollow: true }), this.bind("up", () => { this.setState(st => ({ num: st.num + 0.25 })); this.act("scale +"); })),
+      stepDown: Object.assign(this.key("down", { travel: 1, pad: "0", fontSize: 8, hollow: true }), this.bind("down", () => { this.setState(st => ({ num: Math.max(0, st.num - 0.25) })); this.act("scale −"); })),
+
+      ddOpen: s.ddOpen,
+      ddValue: s.dd,
+      ddItems: ddItems,
+      ddTrigger: Object.assign(this.well("dd"), {
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        cursor: "pointer", userSelect: "none",
+        border: "1px solid " + (s.ddOpen ? this.accent(0.74, 0.11) : "rgba(0,0,0,0.6)"),
+        boxShadow: s.ddOpen
+          ? "inset 0 2px 4px rgba(0,0,0,0.6), 0 0 0 2px " + this.accent(0.74, 0.11).replace(")", " / 0.16)")
+          : "inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07)",
+      }),
+      onToggleDropdown: () => { this.setState(st => ({ ddOpen: !st.ddOpen })); this.act("dropdown"); },
+
+      sliderLabel: s.slider.toFixed(2),
+      sliderFill: { position: "absolute", left: 0, top: 0, bottom: 0, right: (100 - s.slider * 100) + "%", borderRadius: "2px", background: s.dragging === "slider" ? "linear-gradient(180deg, " + this.accent(0.86, 0.09) + ", " + this.accent(0.7, 0.11) + ")" : "linear-gradient(180deg, " + this.accent(0.8, 0.1) + ", " + this.accent(0.66, 0.11) + ")" },
+      sliderKnob: s.dragging === "slider"
+        ? { position: "absolute", top: "-4px", left: s.slider * 100 + "%", width: "11px", height: "13px", marginLeft: "-5px", borderRadius: r + "px", background: "linear-gradient(180deg, #cfd7de, #eef3f7)", border: "1px solid rgba(0,0,0,0.65)", boxShadow: "inset 0 1px 2px rgba(0,0,0,0.35), 0 0 0 2px " + this.accent(0.74, 0.11).replace(")", " / 0.28)") }
+        : { position: "absolute", top: "-5px", left: s.slider * 100 + "%", width: "11px", height: "14px", marginLeft: "-5px", borderRadius: r + "px", background: "linear-gradient(180deg, #f2f6f9, #c3ccd4)", border: "1px solid rgba(0,0,0,0.55)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 3px rgba(0,0,0,0.6)" },
+      onTrackDown: (e) => { this._rect = e.currentTarget.getBoundingClientRect(); this.setState({ dragging: "slider" }); this._fromX(e.clientX, "slider"); },
+
+      progressLabel: Math.round(s.progress * 100) + "%",
+      progressFill: { position: "absolute", left: 0, top: 0, bottom: 0, width: s.progress * 100 + "%", background: "linear-gradient(180deg, " + this.accent(0.82, 0.1) + ", " + this.accent(0.64 ,0.11) + ")", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35)" },
+      indeterminate: { position: "absolute", top: 0, bottom: 0, width: "34%", left: (((s.tick * 3) % 134) - 34) + "%", background: "linear-gradient(90deg, transparent, " + this.accent(0.78, 0.1) + ", transparent)", opacity: 0.85 },
+
+      svPlane: {
+        position: "relative", height: "92px", borderRadius: r + "px", cursor: "crosshair",
+        border: "1px solid rgba(0,0,0,0.7)",
+        boxShadow: "inset 0 1px 4px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.07)",
+        background: "linear-gradient(180deg, rgba(0,0,0,0) 0%, #000 100%), linear-gradient(90deg, #fff 0%, hsl(" + s.hue + ", 100%, 50%) 100%)",
+      },
+      svHandle: {
+        position: "absolute", left: s.sat * 100 + "%", top: (1 - s.val) * 100 + "%",
+        width: s.dragging === "sv" ? "13px" : "11px", height: s.dragging === "sv" ? "13px" : "11px",
+        marginLeft: s.dragging === "sv" ? "-7px" : "-6px", marginTop: s.dragging === "sv" ? "-7px" : "-6px",
+        borderRadius: "50%", background: hex,
+        border: "2px solid #eef3f7",
+        boxShadow: s.dragging === "sv" ? "0 0 0 2px rgba(0,0,0,0.6), 0 2px 6px rgba(0,0,0,0.7)" : "0 0 0 1px rgba(0,0,0,0.6), 0 1px 3px rgba(0,0,0,0.6)",
+      },
+      onSvDown: (e) => { this._svRect = e.currentTarget.getBoundingClientRect(); this.setState({ dragging: "sv" }); this._fromSv(e.clientX, e.clientY); },
+      hueHandle: {
+        position: "absolute", top: "-2px", bottom: "-2px", left: (s.hue / 360) * 100 + "%",
+        width: "7px", marginLeft: "-3px", borderRadius: r + "px",
+        background: "linear-gradient(180deg, #f6f9fb, #c3ccd4)",
+        border: "1px solid rgba(0,0,0,0.65)",
+        boxShadow: s.dragging === "hue" ? "inset 0 1px 2px rgba(0,0,0,0.4), 0 0 0 2px " + this.accent(0.74, 0.11).replace(")", " / 0.3)") : "inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 3px rgba(0,0,0,0.6)",
+      },
+      onHueDown: (e) => { this._rect = e.currentTarget.getBoundingClientRect(); this.setState({ dragging: "hue" }); this._fromX(e.clientX, "hue"); },
+      swatch: { display: "block", width: "26px", height: "26px", borderRadius: r + "px", background: hex, border: "1px solid rgba(0,0,0,0.65)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 3px rgba(0,0,0,0.5)" },
+      hexValue: hex,
+
+      tabs: tabs,
+      groupOpen: s.groupOpen,
+      groupCaret: { fontSize: "7px", color: "#8b939b", transform: s.groupOpen ? "rotate(90deg)" : "none", display: "inline-block" },
+      onToggleGroup: () => { this.setState(st => ({ groupOpen: !st.groupOpen })); this.act("group"); },
+
+      logLines: [
+        "12:04:01  loaded Level_01.scene (2.4 MB)",
+        "12:04:01  resolved 128 material references",
+        "12:04:02  baking lightmaps · pass 1 of 3",
+        "12:04:09  warn  Terrain exceeds triangle budget",
+        "12:04:11  baking lightmaps · pass 2 of 3",
+        "12:04:18  compiled water_caustics.wgsl",
+        "12:04:19  instanced Crate_Stack ×64",
+        "12:04:22  baking lightmaps · pass 3 of 3",
+        "12:04:30  wrote /build/level_01.pak",
+      ],
+      overlayCards: ["Bridge_A", "Terrain", "Water_Volume", "Lamp_01", "Lamp_02", "Crate_Stack", "PlayerSpawn", "Sun"],
+      treeRef: this._scrollRef("tree"),
+      onTreeScroll: () => this._measureAll(),
+      treeV: this.scrollbar("tree", "y"),
+      logRef: this._scrollRef("log"),
+      onLogScroll: () => this._measureAll(),
+      logV: this.scrollbar("log", "y"),
+      logH: this.scrollbar("log", "x"),
+      overlayRef: this._scrollRef("overlay"),
+      onOverlayScroll: () => this._measureAll(),
+      overlayV: this.scrollbar("overlay", "y", { overlay: true }),
+
+      tree: tree,
+      columns: columns,
+      rows: rows,
+      toasts: toasts,
+      toastReset: Object.assign(this.key("restore", { tone: "ghost" }), this.bind("restore", () => { this.setState({ toasts: ["saved", "export"] }); this.act("restore toasts"); })),
+
+      tipShown: s.tip,
+      tipTarget: this.key("tip", { held: s.tip }),
+      onTipEnter: () => this.setState({ tip: true }),
+      onTipLeave: () => this.setState({ tip: false }),
+
+      modalDiscard: Object.assign(this.key("discard", { tone: "danger", flex: true }), this.bind("discard", () => this.act("Discard"))),
+      modalKeep: Object.assign(this.key("keep", { flex: true }), this.bind("keep", () => this.act("Keep editing"))),
+
+      log: s.log,
+      count: s.count,
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -50,7 +50,7 @@ impl StyleValue {
 /// 64-bit FNV-1a hash of `name`. Used to address [`StyleKey::Custom`] keys by
 /// name without a global interner: the hash is a pure function, stable across
 /// themes and runs, so `StyleKey::custom("x")` always denotes the same key.
-const fn fnv1a64(name: &str) -> u64 {
+pub(crate) const fn fnv1a64(name: &str) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let bytes = name.as_bytes();
@@ -155,6 +155,65 @@ pub enum StyleKey {
     MenuItemMinWidth,
     /// Gap between a menu item's label and its accelerator hint, in pixels.
     MenuAccelGap,
+    // --- 4a material keys (colors) ---
+    /// Plinth fill beneath a raised face (see [`Theme::plinth`]).
+    Plinth,
+    /// Raised face gradient top, idle state (see [`Theme::face_top`]).
+    FaceTop,
+    /// Raised face gradient top, hovered.
+    FaceTopHover,
+    /// Raised face gradient top, pressed.
+    FaceTopPressed,
+    /// Raised face gradient bottom, idle state (see [`Theme::face_bottom`]).
+    FaceBottom,
+    /// Raised face gradient bottom, hovered.
+    FaceBottomHover,
+    /// Raised face gradient bottom, pressed.
+    FaceBottomPressed,
+    /// Top-edge highlight line on a raised face, idle.
+    EdgeHighlight,
+    /// Top-edge highlight line on a raised face, hovered.
+    EdgeHighlightHover,
+    /// Top-edge highlight line on a raised face, pressed.
+    EdgeHighlightPressed,
+    /// Inset shadow color for sunken surfaces (wells, tracks).
+    InnerShadow,
+    /// Bottom-edge light line under a sunken surface.
+    EdgeShadow,
+    /// Accent-face gradient top, idle (primary controls).
+    AccentFaceTop,
+    /// Accent-face gradient top, hovered.
+    AccentFaceTopHover,
+    /// Accent-face gradient top, pressed.
+    AccentFaceTopPressed,
+    /// Accent-face gradient bottom, idle.
+    AccentFaceBottom,
+    /// Accent-face gradient bottom, hovered.
+    AccentFaceBottomHover,
+    /// Accent-face gradient bottom, pressed.
+    AccentFaceBottomPressed,
+    /// Text/icon color on accent faces.
+    OnAccent,
+    /// Danger-face gradient top, idle (destructive controls).
+    DangerFaceTop,
+    /// Danger-face gradient top, hovered.
+    DangerFaceTopHover,
+    /// Danger-face gradient top, pressed.
+    DangerFaceTopPressed,
+    /// Danger-face gradient bottom, idle.
+    DangerFaceBottom,
+    /// Danger-face gradient bottom, hovered.
+    DangerFaceBottomHover,
+    /// Danger-face gradient bottom, pressed.
+    DangerFaceBottomPressed,
+    /// Text/icon color on danger faces.
+    OnDanger,
+    // --- 4a material keys (scalars) ---
+    /// Press travel: how far a face drops when pressed, in pixels.
+    Travel,
+    /// Depth of the inset "sunken" shadow fading down from a well's top edge,
+    /// in pixels (the design's `inset 0 2px 4px` band).
+    InnerShadowDepth,
     /// A mod-defined key, addressed by the FNV-1a hash of its name (see
     /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a [`StyleOverlay`].
     Custom(u64),
@@ -202,6 +261,32 @@ impl StyleKey {
                 | ProgressFill
                 | ProgressFillLow
                 | ProgressFillMedium
+                | Plinth
+                | FaceTop
+                | FaceTopHover
+                | FaceTopPressed
+                | FaceBottom
+                | FaceBottomHover
+                | FaceBottomPressed
+                | EdgeHighlight
+                | EdgeHighlightHover
+                | EdgeHighlightPressed
+                | InnerShadow
+                | EdgeShadow
+                | AccentFaceTop
+                | AccentFaceTopHover
+                | AccentFaceTopPressed
+                | AccentFaceBottom
+                | AccentFaceBottomHover
+                | AccentFaceBottomPressed
+                | OnAccent
+                | DangerFaceTop
+                | DangerFaceTopHover
+                | DangerFaceTopPressed
+                | DangerFaceBottom
+                | DangerFaceBottomHover
+                | DangerFaceBottomPressed
+                | OnDanger
         )
     }
 }
@@ -409,6 +494,32 @@ pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::ProgressFill,
     StyleKey::ProgressFillLow,
     StyleKey::ProgressFillMedium,
+    StyleKey::Plinth,
+    StyleKey::FaceTop,
+    StyleKey::FaceTopHover,
+    StyleKey::FaceTopPressed,
+    StyleKey::FaceBottom,
+    StyleKey::FaceBottomHover,
+    StyleKey::FaceBottomPressed,
+    StyleKey::EdgeHighlight,
+    StyleKey::EdgeHighlightHover,
+    StyleKey::EdgeHighlightPressed,
+    StyleKey::InnerShadow,
+    StyleKey::EdgeShadow,
+    StyleKey::AccentFaceTop,
+    StyleKey::AccentFaceTopHover,
+    StyleKey::AccentFaceTopPressed,
+    StyleKey::AccentFaceBottom,
+    StyleKey::AccentFaceBottomHover,
+    StyleKey::AccentFaceBottomPressed,
+    StyleKey::OnAccent,
+    StyleKey::DangerFaceTop,
+    StyleKey::DangerFaceTopHover,
+    StyleKey::DangerFaceTopPressed,
+    StyleKey::DangerFaceBottom,
+    StyleKey::DangerFaceBottomHover,
+    StyleKey::DangerFaceBottomPressed,
+    StyleKey::OnDanger,
 ];
 
 #[cfg(test)]
@@ -425,6 +536,8 @@ pub(crate) const SCALAR_KEYS: &[StyleKey] = &[
     StyleKey::MenuRowHeight,
     StyleKey::MenuItemMinWidth,
     StyleKey::MenuAccelGap,
+    StyleKey::Travel,
+    StyleKey::InnerShadowDepth,
 ];
 
 /// Internal helper for [`Theme`]'s custom map type (kept here so the key/value

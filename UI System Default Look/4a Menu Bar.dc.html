@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #07090b; }
+  a { color: #7fd1d8; }
+  a:hover { color: #a8e4e9; }
+</style>
+</helmet>
+
+<div style="min-height: 100vh; display: flex; flex-direction: column; font-family: 'IBM Plex Sans', Helvetica, sans-serif; color: #e6e9ec; background: linear-gradient(160deg, #10171c 0%, #060809 55%, #0a0d0f 100%);" onClick="{{ onRootClick }}">
+
+  <!-- MENU BAR -->
+  <div style="display: flex; align-items: stretch; height: 26px; padding: 0 4px; gap: 1px; background: linear-gradient(180deg, rgba(38,44,50,0.96), rgba(23,27,31,0.97)); border-bottom: 1px solid rgba(0,0,0,0.7); box-shadow: inset 0 1px 0 rgba(255,255,255,0.11), 0 1px 0 rgba(255,255,255,0.035), 0 2px 8px rgba(0,0,0,0.4); position: relative; z-index: 40;">
+    <span style="display: flex; align-items: center; padding: 0 9px 0 6px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: #6f7982; text-shadow: 0 -1px 0 rgba(0,0,0,0.7);">FORGE</span>
+    <sc-for list="{{ menus }}" as="menu" hint-placeholder-count="6">
+      <span style="position: relative; display: flex;">
+        <span style="{{ menu.style }}" onMouseDown="{{ menu.onMouseDown }}" onClick="{{ menu.onClick }}" onMouseEnter="{{ menu.onMouseEnter }}">{{ menu.label }}</span>
+        <sc-if value="{{ menu.open }}" hint-placeholder-val="{{ false }}">
+          <span style="{{ menu.sheet }}">
+            <sc-for list="{{ menu.items }}" as="item" hint-placeholder-count="7">
+              <span style="{{ item.wrap }}" onMouseEnter="{{ item.onMouseEnter }}" onMouseLeave="{{ item.onMouseLeave }}" onMouseDown="{{ item.onMouseDown }}" onClick="{{ item.onClick }}">
+                <span style="{{ item.rule }}"></span>
+                <span style="{{ item.row }}">
+                  <span style="{{ item.tick }}">{{ item.tickGlyph }}</span>
+                  <span style="{{ item.labelStyle }}">{{ item.label }}</span>
+                  <span style="{{ item.shortcut }}">{{ item.keys }}</span>
+                  <span style="{{ item.arrow }}">▸</span>
+                </span>
+                <sc-if value="{{ item.subOpen }}" hint-placeholder-val="{{ false }}">
+                  <span style="{{ item.subSheet }}">
+                    <sc-for list="{{ item.sub }}" as="sub" hint-placeholder-count="4">
+                      <span style="{{ sub.row }}" onMouseEnter="{{ sub.onMouseEnter }}" onMouseLeave="{{ sub.onMouseLeave }}" onClick="{{ sub.onClick }}">
+                        <span style="{{ sub.tick }}">{{ sub.tickGlyph }}</span>
+                        <span style="{{ sub.labelStyle }}">{{ sub.label }}</span>
+                        <span style="{{ sub.shortcut }}">{{ sub.keys }}</span>
+                      </span>
+                    </sc-for>
+                  </span>
+                </sc-if>
+              </span>
+            </sc-for>
+          </span>
+        </sc-if>
+      </span>
+    </sc-for>
+    <span style="flex: 1;"></span>
+    <span style="display: flex; align-items: center; gap: 9px; padding: 0 8px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #78818a; text-shadow: 0 -1px 0 rgba(0,0,0,0.6);">
+      <span>Level_01</span><span style="{{ dirtyDot }}"></span>
+    </span>
+  </div>
+
+  <!-- WORKSPACE: docks around the shell -->
+  <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+  <div style="display: flex; flex: 1; min-height: 0;">
+
+  <sc-if value="{{ left.open }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ left.wrap }}">
+      <div style="{{ left.header }}">
+        <sc-for list="{{ left.tabs }}" as="t" hint-placeholder-count="2">
+          <span style="{{ t.style }}" onClick="{{ t.onClick }}" onMouseEnter="{{ t.onMouseEnter }}" onMouseLeave="{{ t.onMouseLeave }}">{{ t.label }}</span>
+        </sc-for>
+        <span style="flex: 1;"></span>
+        <span style="{{ left.zoom.style }}" onClick="{{ left.zoom.onClick }}" onMouseEnter="{{ left.zoom.onMouseEnter }}" onMouseLeave="{{ left.zoom.onMouseLeave }}">⤢</span>
+        <span style="{{ left.close.style }}" onClick="{{ left.close.onClick }}" onMouseEnter="{{ left.close.onMouseEnter }}" onMouseLeave="{{ left.close.onMouseLeave }}">×</span>
+      </div>
+      <div style="{{ left.body }}">
+        <sc-for list="{{ left.rows }}" as="row" hint-placeholder-count="6">
+          <div style="{{ row.style }}"><span style="{{ row.glyph }}">{{ row.icon }}</span><span style="{{ row.labelStyle }}">{{ row.label }}</span><span style="{{ row.meta }}">{{ row.sub }}</span></div>
+        </sc-for>
+      </div>
+    </div>
+    <span style="{{ left.resizer }}" onMouseDown="{{ left.onResize }}" onMouseEnter="{{ left.onResizeEnter }}" onMouseLeave="{{ left.onResizeLeave }}"><span style="{{ left.grip }}"></span></span>
+  </sc-if>
+
+  <!-- SHELL: toolbar + viewport -->
+  <div style="{{ shell }}">
+
+  <!-- TOOLBAR -->
+  <div style="{{ tb.wrap }}" onContextMenu="{{ tb.onContext }}">
+    <span style="{{ tb.grip }}" onClick="{{ tb.onGrip }}"></span>
+    <sc-for list="{{ tb.items }}" as="it" hint-placeholder-count="12">
+      <span style="{{ it.holder }}" onMouseEnter="{{ it.onEnter }}" onMouseLeave="{{ it.onLeave }}">
+        <span style="{{ it.plinth }}" onClick="{{ it.onClick }}" onMouseDown="{{ it.onMouseDown }}" onMouseUp="{{ it.onMouseUp }}"><span style="{{ it.face }}">{{ it.glyph }}</span></span>
+        <span style="{{ it.rule }}"></span>
+        <sc-if value="{{ it.tip }}" hint-placeholder-val="{{ false }}">
+          <span style="{{ it.tipStyle }}">{{ it.label }}<span style="{{ it.tipKeys }}">{{ it.keys }}</span></span>
+        </sc-if>
+      </span>
+    </sc-for>
+    <span style="{{ tb.spacer }}"></span>
+    <span style="{{ tb.overflow.plinth }}" onClick="{{ tb.overflow.onClick }}" onMouseDown="{{ tb.overflow.onMouseDown }}" onMouseUp="{{ tb.overflow.onMouseUp }}" onMouseEnter="{{ tb.overflow.onMouseEnter }}" onMouseLeave="{{ tb.overflow.onMouseLeave }}"><span style="{{ tb.overflow.face }}">⋯</span></span>
+    <sc-if value="{{ tb.dockOpen }}" hint-placeholder-val="{{ false }}">
+      <span style="{{ tb.dockSheet }}">
+        <span style="{{ tb.dockTitle }}">Dock toolbar</span>
+        <sc-for list="{{ tb.dockItems }}" as="d" hint-placeholder-count="4">
+          <span style="{{ d.style }}" onClick="{{ d.onClick }}" onMouseEnter="{{ d.onMouseEnter }}" onMouseLeave="{{ d.onMouseLeave }}"><span style="{{ d.tick }}">•</span>{{ d.label }}</span>
+        </sc-for>
+      </span>
+    </sc-if>
+  </div>
+
+  <!-- VIEWPORT -->
+  <div style="flex: 1; position: relative; overflow: hidden; min-height: 460px;" onContextMenu="{{ onContextMenu }}">
+    <div style="position: absolute; inset: 0; background: radial-gradient(circle at 62% 46%, #2c5a66, #0c1c23 70%);"></div>
+    <div style="position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px); background-size: 46px 46px;"></div>
+    <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.32);">right-click anywhere</div>
+
+    <sc-if value="{{ ctxOpen }}" hint-placeholder-val="{{ false }}">
+      <span style="{{ ctxSheet }}">
+        <sc-for list="{{ ctxItems }}" as="item" hint-placeholder-count="8">
+          <span style="{{ item.wrap }}" onMouseEnter="{{ item.onMouseEnter }}" onMouseLeave="{{ item.onMouseLeave }}" onClick="{{ item.onClick }}">
+            <span style="{{ item.rule }}"></span>
+            <span style="{{ item.row }}">
+              <span style="{{ item.tick }}">{{ item.tickGlyph }}</span>
+              <span style="{{ item.labelStyle }}">{{ item.label }}</span>
+              <span style="{{ item.shortcut }}">{{ item.keys }}</span>
+              <span style="{{ item.arrow }}">▸</span>
+            </span>
+            <sc-if value="{{ item.subOpen }}" hint-placeholder-val="{{ false }}">
+              <span style="{{ item.subSheet }}">
+                <sc-for list="{{ item.sub }}" as="sub" hint-placeholder-count="4">
+                  <span style="{{ sub.row }}" onMouseEnter="{{ sub.onMouseEnter }}" onMouseLeave="{{ sub.onMouseLeave }}" onClick="{{ sub.onClick }}">
+                    <span style="{{ sub.tick }}">{{ sub.tickGlyph }}</span>
+                    <span style="{{ sub.labelStyle }}">{{ sub.label }}</span>
+                    <span style="{{ sub.shortcut }}">{{ sub.keys }}</span>
+                  </span>
+                </sc-for>
+              </span>
+            </sc-if>
+          </span>
+        </sc-for>
+      </span>
+    </sc-if>
+  </div>
+  </div>
+
+  <sc-if value="{{ right.open }}" hint-placeholder-val="{{ true }}">
+    <span style="{{ right.resizer }}" onMouseDown="{{ right.onResize }}" onMouseEnter="{{ right.onResizeEnter }}" onMouseLeave="{{ right.onResizeLeave }}"><span style="{{ right.grip }}"></span></span>
+    <div style="{{ right.wrap }}">
+      <div style="{{ right.header }}">
+        <sc-for list="{{ right.tabs }}" as="t" hint-placeholder-count="2">
+          <span style="{{ t.style }}" onClick="{{ t.onClick }}" onMouseEnter="{{ t.onMouseEnter }}" onMouseLeave="{{ t.onMouseLeave }}">{{ t.label }}</span>
+        </sc-for>
+        <span style="flex: 1;"></span>
+        <span style="{{ right.zoom.style }}" onClick="{{ right.zoom.onClick }}" onMouseEnter="{{ right.zoom.onMouseEnter }}" onMouseLeave="{{ right.zoom.onMouseLeave }}">⤢</span>
+        <span style="{{ right.close.style }}" onClick="{{ right.close.onClick }}" onMouseEnter="{{ right.close.onMouseEnter }}" onMouseLeave="{{ right.close.onMouseLeave }}">×</span>
+      </div>
+      <div style="{{ right.body }}">
+        <sc-for list="{{ right.rows }}" as="row" hint-placeholder-count="6">
+          <div style="{{ row.style }}"><span style="{{ row.glyph }}">{{ row.icon }}</span><span style="{{ row.labelStyle }}">{{ row.label }}</span><span style="{{ row.meta }}">{{ row.sub }}</span></div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  </div>
+
+  <sc-if value="{{ bottom.open }}" hint-placeholder-val="{{ false }}">
+    <span style="{{ bottom.resizer }}" onMouseDown="{{ bottom.onResize }}" onMouseEnter="{{ bottom.onResizeEnter }}" onMouseLeave="{{ bottom.onResizeLeave }}"><span style="{{ bottom.grip }}"></span></span>
+    <div style="{{ bottom.wrap }}">
+      <div style="{{ bottom.header }}">
+        <sc-for list="{{ bottom.tabs }}" as="t" hint-placeholder-count="2">
+          <span style="{{ t.style }}" onClick="{{ t.onClick }}" onMouseEnter="{{ t.onMouseEnter }}" onMouseLeave="{{ t.onMouseLeave }}">{{ t.label }}</span>
+        </sc-for>
+        <span style="flex: 1;"></span>
+        <span style="{{ bottom.zoom.style }}" onClick="{{ bottom.zoom.onClick }}" onMouseEnter="{{ bottom.zoom.onMouseEnter }}" onMouseLeave="{{ bottom.zoom.onMouseLeave }}">⤢</span>
+        <span style="{{ bottom.close.style }}" onClick="{{ bottom.close.onClick }}" onMouseEnter="{{ bottom.close.onMouseEnter }}" onMouseLeave="{{ bottom.close.onMouseLeave }}">×</span>
+      </div>
+      <div style="{{ bottom.body }}">
+        <sc-for list="{{ bottom.rows }}" as="row" hint-placeholder-count="6">
+          <div style="{{ row.style }}"><span style="{{ row.glyph }}">{{ row.icon }}</span><span style="{{ row.labelStyle }}">{{ row.label }}</span><span style="{{ row.meta }}">{{ row.sub }}</span></div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  </div>
+
+  <!-- STATUS -->
+  <div style="display: flex; align-items: center; gap: 14px; height: 26px; padding: 0 9px; background: linear-gradient(180deg, rgba(31,36,41,0.95), rgba(19,23,27,0.96)); border-top: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 1px 0 rgba(255,255,255,0.075); font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #7d858e;">
+    <span style="display: flex; align-items: center; gap: 3px; margin-right: 4px;">
+      <sc-for list="{{ dockToggles }}" as="d" hint-placeholder-count="3">
+        <span style="{{ d.style }}" onClick="{{ d.onClick }}" onMouseEnter="{{ d.onMouseEnter }}" onMouseLeave="{{ d.onMouseLeave }}">{{ d.glyph }}</span>
+      </sc-for>
+    </span>
+    <span style="width: 1px; height: 12px; background: rgba(0,0,0,0.6); box-shadow: 1px 0 0 rgba(255,255,255,0.06);"></span>
+    <span>last:</span><span style="color: #cfd6dd;">{{ log }}</span>
+    <span style="margin-left: auto;">snap {{ snapLabel }}</span>
+    <span style="width: 1px; height: 11px; background: rgba(0,0,0,0.6); box-shadow: 1px 0 0 rgba(255,255,255,0.06);"></span>
+    <span>shading {{ shadingLabel }}</span>
+    <span style="width: 1px; height: 11px; background: rgba(0,0,0,0.6); box-shadow: 1px 0 0 rgba(255,255,255,0.06);"></span>
+    <span>{{ gizmosLabel }}</span>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:900,&quot;height&quot;:600},&quot;radius&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1,&quot;min&quot;:0,&quot;max&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:200,&quot;min&quot;:0,&quot;max&quot;:360,&quot;unit&quot;:&quot;°&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;}}">
+class Component extends DCLogic {
+  state = {
+    open: null, hoverTop: null, hoverItem: null, subOpen: null,
+    ctx: null, ctxHover: null, ctxSub: null,
+    snap: "1 m", shading: "Lit", gizmos: true, grid: true, wireframe: false, stats: false,
+    dock: "left", tool: "select", tbHover: null, tbPressed: null, dockOpen: false, dockHover: null,
+    panels: {
+      left: { open: true, size: 186, tab: "outliner" },
+      right: { open: true, size: 216, tab: "inspector" },
+      bottom: { open: false, size: 148, tab: "console" },
+    },
+    panelHover: null, resizing: null,
+    log: "—",
+  };
+
+  r() { return this.props.radius ?? 1; }
+  accent(l, c, a) {
+    const h = this.props.accent ?? 200;
+    return "oklch(" + l + " " + c + " " + h + (a != null ? " / " + a : "") + ")";
+  }
+
+  componentDidMount() {
+    this._key = (e) => { if (e.key === "Escape") this.setState({ open: null, ctx: null, subOpen: null, dockOpen: false }); };
+    this._move = (e) => {
+      const side = this.state.resizing;
+      if (!side) return;
+      const p = this.state.panels[side];
+      const win = { w: window.innerWidth, h: window.innerHeight };
+      const size = side === "left" ? e.clientX
+        : side === "right" ? win.w - e.clientX
+        : win.h - e.clientY;
+      this.setPanel(side, { size: Math.max(120, Math.min(side === "bottom" ? 420 : 460, size)) });
+    };
+    this._up = () => { if (this.state.resizing) this.setState({ resizing: null }); };
+    window.addEventListener("keydown", this._key);
+    window.addEventListener("mousemove", this._move);
+    window.addEventListener("mouseup", this._up);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this._key);
+    window.removeEventListener("mousemove", this._move);
+    window.removeEventListener("mouseup", this._up);
+  }
+
+  act(name) { this.setState({ log: name, open: null, ctx: null, subOpen: null, ctxSub: null, dockOpen: false }); }
+
+  data() {
+    const s = this.state;
+    return {
+      File: [
+        { id: "new", label: "New Level", keys: "Ctrl N" },
+        { id: "open", label: "Open Level…", keys: "Ctrl O" },
+        { id: "recent", label: "Open Recent", sub: [
+          { id: "r1", label: "Level_01.scene" },
+          { id: "r2", label: "Greybox_Arena.scene" },
+          { id: "r3", label: "Test_Physics.scene" },
+          { id: "rsep", sep: true },
+          { id: "rclear", label: "Clear Menu" },
+        ] },
+        { id: "sep1", sep: true },
+        { id: "save", label: "Save", keys: "Ctrl S" },
+        { id: "saveas", label: "Save As…", keys: "⇧ Ctrl S" },
+        { id: "revert", label: "Revert", disabled: true },
+        { id: "sep2", sep: true },
+        { id: "export", label: "Export", sub: [
+          { id: "e1", label: "Level Package…", keys: "Ctrl E" },
+          { id: "e2", label: "Collision Mesh (OBJ)" },
+          { id: "e3", label: "Lightmap Atlas (EXR)" },
+        ] },
+        { id: "quit", label: "Quit", keys: "Ctrl Q" },
+      ],
+      Edit: [
+        { id: "undo", label: "Undo Move Bridge_A", keys: "Ctrl Z" },
+        { id: "redo", label: "Redo", keys: "⇧ Ctrl Z", disabled: true },
+        { id: "sep1", sep: true },
+        { id: "cut", label: "Cut", keys: "Ctrl X" },
+        { id: "copy", label: "Copy", keys: "Ctrl C" },
+        { id: "paste", label: "Paste", keys: "Ctrl V" },
+        { id: "dup", label: "Duplicate", keys: "Ctrl D" },
+        { id: "sep2", sep: true },
+        { id: "prefs", label: "Preferences…", keys: "Ctrl ," },
+      ],
+      View: [
+        { id: "shading", label: "Shading", sub: [
+          { id: "Lit", label: "Lit", keys: "1", radio: s.shading === "Lit" },
+          { id: "Unlit", label: "Unlit", keys: "2", radio: s.shading === "Unlit" },
+          { id: "Wireframe", label: "Wireframe", keys: "3", radio: s.shading === "Wireframe" },
+          { id: "Overdraw", label: "Overdraw", keys: "4", radio: s.shading === "Overdraw" },
+        ], onSub: (id) => { this.setState({ shading: id }); this.act("shading " + id); } },
+        { id: "sep1", sep: true },
+        { id: "grid", label: "Show Grid", keys: "G", check: s.grid, toggle: "grid" },
+        { id: "gizmos", label: "Show Gizmos", keys: "⇧ G", check: s.gizmos, toggle: "gizmos" },
+        { id: "stats", label: "Statistics Overlay", check: s.stats, toggle: "stats" },
+        { id: "sep2", sep: true },
+        { id: "frame", label: "Frame Selection", keys: "F" },
+        { id: "frameall", label: "Frame All", keys: "⇧ F" },
+      ],
+      Create: [
+        { id: "prim", label: "Primitive", sub: [
+          { id: "p1", label: "Box", keys: "⇧ A" },
+          { id: "p2", label: "Sphere" },
+          { id: "p3", label: "Cylinder" },
+          { id: "p4", label: "Plane" },
+        ] },
+        { id: "light", label: "Light", sub: [
+          { id: "l1", label: "Directional" },
+          { id: "l2", label: "Point" },
+          { id: "l3", label: "Spot" },
+          { id: "l4", label: "Area" },
+        ] },
+        { id: "sep1", sep: true },
+        { id: "volume", label: "Volume" },
+        { id: "spawn", label: "Player Spawn" },
+        { id: "empty", label: "Empty Group", keys: "Ctrl G" },
+      ],
+      Build: [
+        { id: "bake", label: "Bake Lightmaps", keys: "Ctrl B" },
+        { id: "nav", label: "Build Navmesh" },
+        { id: "collision", label: "Rebuild Collision" },
+        { id: "sep1", sep: true },
+        { id: "quality", label: "Bake Quality", sub: [
+          { id: "q1", label: "Preview", radio: true },
+          { id: "q2", label: "Medium" },
+          { id: "q3", label: "Production" },
+        ] },
+        { id: "sep2", sep: true },
+        { id: "clear", label: "Clear Baked Data", danger: true },
+      ],
+      Help: [
+        { id: "docs", label: "Documentation", keys: "F1" },
+        { id: "keys", label: "Keyboard Shortcuts" },
+        { id: "sep1", sep: true },
+        { id: "about", label: "About Forge" },
+      ],
+    };
+  }
+
+  sheetStyle(extra) {
+    return Object.assign({
+      position: "absolute",
+      display: "flex",
+      flexDirection: "column",
+      minWidth: "218px",
+      padding: "3px",
+      zIndex: 50,
+      borderRadius: this.r() + "px",
+      background: "linear-gradient(180deg, rgba(30,35,40,0.96), rgba(20,24,28,0.97))",
+      backdropFilter: "blur(22px)",
+      border: "1px solid rgba(0,0,0,0.75)",
+      boxShadow: "0 16px 40px rgba(0,0,0,0.7), 0 2px 6px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.5)",
+    }, extra || {});
+  }
+
+  buildItems(items, ctx) {
+    const s = this.state;
+    const hoverKey = ctx ? "ctxHover" : "hoverItem";
+    const subKey = ctx ? "ctxSub" : "subOpen";
+    const r = this.r();
+    return items.map(it => {
+      if (it.sep) {
+        return {
+          wrap: { display: "block", padding: "3px 0" },
+          rule: { display: "block", height: "1px", margin: "0 6px", background: "rgba(0,0,0,0.6)", boxShadow: "0 1px 0 rgba(255,255,255,0.06)" },
+          row: { display: "none" },
+          tick: { display: "none" }, labelStyle: { display: "none" }, shortcut: { display: "none" }, arrow: { display: "none" },
+          label: "", keys: "", tickGlyph: "", sub: [], subOpen: false, subSheet: {},
+          onMouseEnter: () => {}, onMouseLeave: () => {}, onMouseDown: () => {}, onClick: () => {},
+        };
+      }
+      const hot = s[hoverKey] === it.id && !it.disabled;
+      const subOpen = s[subKey] === it.id && !!it.sub;
+      const checked = it.check || it.radio;
+      return {
+        label: it.label,
+        keys: it.keys || "",
+        tickGlyph: it.radio ? "•" : it.check ? "✓" : "",
+        wrap: { display: "block", position: "relative" },
+        rule: { display: "none" },
+        row: {
+          display: "flex", alignItems: "center", gap: "7px", height: "22px", padding: "0 8px",
+          borderRadius: r + "px", cursor: it.disabled ? "default" : "pointer", userSelect: "none",
+          background: hot || subOpen ? this.accent(0.74, 0.11) : "transparent",
+          boxShadow: hot || subOpen ? "inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(0,0,0,0.25)" : "none",
+        },
+        tick: {
+          width: "10px", fontSize: it.radio ? "13px" : "10px", lineHeight: 1,
+          color: !checked ? "transparent" : (hot || subOpen) ? "#041418" : this.accent(0.8, 0.1),
+        },
+        labelStyle: {
+          flex: 1, fontSize: "11.5px", whiteSpace: "nowrap",
+          color: it.disabled ? "#5d656c"
+            : hot || subOpen ? "#041418"
+            : it.danger ? "oklch(0.72 0.15 25)" : "#dbe1e7",
+        },
+        shortcut: {
+          fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px", whiteSpace: "nowrap",
+          color: it.disabled ? "#464e55" : hot || subOpen ? "rgba(4,20,24,0.68)" : "#78818a",
+        },
+        arrow: { width: "8px", fontSize: "7px", textAlign: "right", color: !it.sub ? "transparent" : hot || subOpen ? "#041418" : "#8b939b" },
+        sub: (it.sub || []).map(sb => {
+          const shot = s[hoverKey] === it.id + "/" + sb.id;
+          if (sb.sep) {
+            return { row: { display: "block", height: "1px", margin: "3px 6px", background: "rgba(0,0,0,0.6)", boxShadow: "0 1px 0 rgba(255,255,255,0.06)" }, label: "", keys: "", tickGlyph: "", tick: { display: "none" }, labelStyle: { display: "none" }, shortcut: { display: "none" }, onMouseEnter: () => {}, onMouseLeave: () => {}, onClick: () => {} };
+          }
+          return {
+            label: sb.label, keys: sb.keys || "", tickGlyph: sb.radio ? "•" : "",
+            row: {
+              display: "flex", alignItems: "center", gap: "7px", height: "22px", padding: "0 8px",
+              borderRadius: r + "px", cursor: "pointer", userSelect: "none",
+              background: shot ? this.accent(0.74, 0.11) : "transparent",
+              boxShadow: shot ? "inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(0,0,0,0.25)" : "none",
+            },
+            tick: { width: "10px", fontSize: "13px", lineHeight: 1, color: !sb.radio ? "transparent" : shot ? "#041418" : this.accent(0.8, 0.1) },
+            labelStyle: { flex: 1, fontSize: "11.5px", whiteSpace: "nowrap", color: shot ? "#041418" : "#dbe1e7" },
+            shortcut: { fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px", color: shot ? "rgba(4,20,24,0.68)" : "#78818a" },
+            onMouseEnter: () => this.setState({ [hoverKey]: it.id + "/" + sb.id }),
+            onMouseLeave: () => this.setState({ [hoverKey]: it.id }),
+            onClick: (e) => { e.stopPropagation(); if (it.onSub) it.onSub(sb.id); else this.act(sb.label); },
+          };
+        }),
+        subOpen: subOpen,
+        subSheet: this.sheetStyle({ top: "-4px", left: "100%", marginLeft: "2px" }),
+        onMouseEnter: () => this.setState({ [hoverKey]: it.id, [subKey]: it.sub ? it.id : null }),
+        onMouseLeave: () => this.setState({ [hoverKey]: null }),
+        onMouseDown: (e) => e.stopPropagation(),
+        onClick: (e) => {
+          e.stopPropagation();
+          if (it.disabled || it.sub) return;
+          if (it.toggle) { this.setState(st => ({ [it.toggle]: !st[it.toggle] })); this.act(it.label); }
+          else this.act(it.label);
+        },
+      };
+    });
+  }
+
+  // Docks — Zed-style edge panels: tabbed header, drag-to-resize, toggled from the status bar
+  panelData() {
+    return {
+      outliner: { label: "Outliner", rows: [
+        { icon: "▣", label: "Level_01", sub: "12" },
+        { icon: "◧", label: "Terrain", sub: "96k" },
+        { icon: "◧", label: "Bridge_A", sub: "18k" },
+        { icon: "▣", label: "Props", sub: "4" },
+        { icon: "◈", label: "Water_Volume", sub: "1k" },
+        { icon: "☀", label: "Sun", sub: "" },
+      ] },
+      layers: { label: "Layers", rows: [
+        { icon: "◉", label: "Geometry", sub: "on" },
+        { icon: "◉", label: "Collision", sub: "off" },
+        { icon: "◉", label: "Navmesh", sub: "off" },
+        { icon: "◉", label: "Lighting", sub: "on" },
+      ] },
+      inspector: { label: "Inspector", rows: [
+        { icon: "", label: "Transform", sub: "" },
+        { icon: "x", label: "8.90", sub: "m" },
+        { icon: "y", label: "12.90", sub: "m" },
+        { icon: "z", label: "9.00", sub: "m" },
+        { icon: "", label: "Material", sub: "Diffuse" },
+        { icon: "", label: "Mass", sub: "72.0" },
+      ] },
+      assets: { label: "Assets", rows: [
+        { icon: "▣", label: "Crate_A", sub: "mesh" },
+        { icon: "▣", label: "Barrel", sub: "mesh" },
+        { icon: "◍", label: "Concrete", sub: "mat" },
+        { icon: "◍", label: "Metal_Rust", sub: "mat" },
+      ] },
+      console: { label: "Console", rows: [
+        { icon: "", label: "12:04:02  baking lightmaps · pass 1 of 3", sub: "" },
+        { icon: "", label: "12:04:09  warn  Terrain exceeds triangle budget", sub: "warn" },
+        { icon: "", label: "12:04:18  compiled water_caustics.wgsl", sub: "" },
+        { icon: "", label: "12:04:30  wrote /build/level_01.pak", sub: "" },
+      ] },
+      problems: { label: "Problems", rows: [
+        { icon: "!", label: "Terrain exceeds triangle budget", sub: "warn" },
+        { icon: "!", label: "Crate_Stack lightmap is stale", sub: "warn" },
+      ] },
+    };
+  }
+
+  dockPanel(side, tabIds) {
+    const s = this.state, r = this.r();
+    const p = s.panels[side];
+    const data = this.panelData();
+    const vertical = side !== "bottom";
+    const hoverName = (n) => s.panelHover === n;
+
+    const hdrKey = (name, glyph, onClick) => ({
+      style: {
+        display: "flex", alignItems: "center", justifyContent: "center", width: "17px", height: "17px",
+        borderRadius: r + "px", fontSize: "10px", cursor: "pointer", userSelect: "none",
+        color: hoverName(name) ? "#eef2f6" : "#8b939b",
+        background: hoverName(name) ? "rgba(255,255,255,0.1)" : "transparent",
+        boxShadow: hoverName(name) ? "inset 0 1px 0 rgba(255,255,255,0.12)" : "none",
+      },
+      onClick: onClick,
+      onMouseEnter: () => this.setState({ panelHover: name }),
+      onMouseLeave: () => this.setState({ panelHover: null }),
+    });
+
+    const tabs = tabIds.map(id => {
+      const active = p.tab === id;
+      const name = side + "-tab-" + id;
+      return {
+        label: data[id].label,
+        style: {
+          display: "flex", alignItems: "center", height: "18px", padding: "0 7px",
+          borderRadius: r + "px", fontSize: "11px", cursor: "pointer", userSelect: "none",
+          background: active
+            ? "linear-gradient(180deg, rgba(255,255,255,0.15), rgba(255,255,255,0.055))"
+            : hoverName(name) ? "rgba(255,255,255,0.07)" : "transparent",
+          border: "1px solid " + (active ? "rgba(0,0,0,0.5)" : "transparent"),
+          boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.22)" : "none",
+          color: active ? "#f1f5f9" : "#98a0a8",
+          textShadow: "0 -1px 0 rgba(0,0,0,0.5)",
+        },
+        onClick: () => this.setPanel(side, { tab: id }),
+        onMouseEnter: () => this.setState({ panelHover: name }),
+        onMouseLeave: () => this.setState({ panelHover: null }),
+      };
+    });
+
+    const rows = data[p.tab].rows.map((row, i) => ({
+      icon: row.icon, label: row.label, sub: row.sub,
+      style: {
+        display: "flex", alignItems: "center", gap: "6px", height: "21px", padding: "0 9px",
+        background: i % 2 ? "rgba(255,255,255,0.016)" : "transparent",
+      },
+      glyph: { width: "10px", fontSize: "9px", fontFamily: "'IBM Plex Mono', monospace", color: "#6f7880" },
+      labelStyle: {
+        flex: 1, minWidth: 0, fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        color: "#cfd6dd", fontFamily: p.tab === "console" ? "'IBM Plex Mono', monospace" : undefined,
+      },
+      meta: {
+        fontFamily: "'IBM Plex Mono', monospace", fontSize: "9px",
+        color: row.sub === "warn" ? "oklch(0.82 0.13 75)" : "#6a737b",
+      },
+    }));
+
+    return {
+      open: p.open,
+      wrap: {
+        display: "flex", flexDirection: "column", flexShrink: 0, minWidth: 0, minHeight: 0,
+        width: vertical ? p.size + "px" : "auto",
+        height: vertical ? "auto" : p.size + "px",
+        background: "linear-gradient(180deg, rgba(22,26,30,0.94), rgba(15,18,21,0.96))",
+      },
+      header: {
+        display: "flex", alignItems: "center", gap: "2px", height: "24px", padding: "0 4px", flexShrink: 0,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012))",
+        borderBottom: "1px solid rgba(0,0,0,0.6)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.09), inset 0 -1px 0 rgba(255,255,255,0.04)",
+      },
+      tabs: tabs,
+      zoom: hdrKey(side + "-zoom", "⤢", () => this.act("zoom " + side + " dock")),
+      close: hdrKey(side + "-close", "×", () => this.setPanel(side, { open: false })),
+      body: { flex: 1, minHeight: 0, overflow: "auto", padding: "3px 0" },
+      rows: rows,
+      resizer: {
+        position: "relative", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+        cursor: vertical ? "col-resize" : "row-resize",
+        width: vertical ? "6px" : "auto", height: vertical ? "auto" : "6px",
+        background: "linear-gradient(" + (vertical ? "90deg" : "180deg") + ", rgba(255,255,255,0.05), rgba(255,255,255,0.015))",
+        boxShadow: vertical
+          ? "inset 1px 0 0 rgba(0,0,0,0.55), inset -1px 0 0 rgba(0,0,0,0.55), inset 2px 0 0 rgba(255,255,255,0.05)"
+          : "inset 0 1px 0 rgba(0,0,0,0.55), inset 0 -1px 0 rgba(0,0,0,0.55), inset 0 2px 0 rgba(255,255,255,0.05)",
+      },
+      grip: {
+        display: "block", borderRadius: "1px", pointerEvents: "none",
+        width: vertical ? "2px" : "26px", height: vertical ? "26px" : "2px",
+        background: s.resizing === side
+          ? this.accent(0.82, 0.1)
+          : hoverName(side + "-resize") ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.26)",
+        boxShadow: s.resizing === side
+          ? "0 0 7px " + this.accent(0.74, 0.11, 0.65)
+          : (vertical ? "1px 0 0 rgba(0,0,0,0.5)" : "0 1px 0 rgba(0,0,0,0.5)"),
+      },
+      onResize: (e) => { e.preventDefault(); this.setState({ resizing: side }); },
+      onResizeEnter: () => this.setState({ panelHover: side + "-resize" }),
+      onResizeLeave: () => this.setState({ panelHover: null }),
+    };
+  }
+
+  setPanel(side, patch) {
+    this.setState(s => ({
+      panels: Object.assign({}, s.panels, { [side]: Object.assign({}, s.panels[side], patch) }),
+    }));
+  }
+
+  // Toolbar — same plinth keys as everything else, docked to any edge
+  toolbar() {
+    const s = this.state, r = this.r();
+    const vertical = s.dock === "left" || s.dock === "right";
+    const t = this.props.travel ?? 2;
+    const defs = [
+      { id: "select", glyph: "⌖", label: "Select", keys: "Q" },
+      { id: "move", glyph: "✥", label: "Move", keys: "W" },
+      { id: "rotate", glyph: "⟳", label: "Rotate", keys: "E" },
+      { id: "scale", glyph: "⤢", label: "Scale", keys: "R" },
+      { sep: true },
+      { id: "box", glyph: "▢", label: "Box brush", keys: "B" },
+      { id: "paint", glyph: "✎", label: "Paint", keys: "P" },
+      { id: "erase", glyph: "⌫", label: "Erase", keys: "X" },
+      { sep: true },
+      { id: "light", glyph: "☀", label: "Place light", keys: "L" },
+      { id: "volume", glyph: "◈", label: "Volume", keys: "V" },
+      { sep: true },
+      { id: "measure", glyph: "⟺", label: "Measure", keys: "M" },
+      { id: "snap", glyph: "⌗", label: "Snap to grid", keys: "⇧G", toggle: true },
+    ];
+
+    const items = defs.map((d, i) => {
+      if (d.sep) {
+        return {
+          holder: { display: "block", padding: vertical ? "3px 0" : "0 3px", alignSelf: "stretch" },
+          rule: {
+            display: "block",
+            width: vertical ? "auto" : "1px", height: vertical ? "1px" : "auto",
+            margin: vertical ? "0 3px" : "4px 0", alignSelf: "stretch",
+            minHeight: vertical ? "1px" : "16px",
+            background: "rgba(0,0,0,0.6)",
+            boxShadow: vertical ? "0 1px 0 rgba(255,255,255,0.07)" : "1px 0 0 rgba(255,255,255,0.07)",
+          },
+          plinth: { display: "none" }, face: {}, glyph: "", tip: false, tipStyle: {}, tipKeys: {}, label: "", keys: "",
+          onClick: () => {}, onMouseDown: () => {}, onMouseUp: () => {}, onEnter: () => {}, onLeave: () => {},
+        };
+      }
+      const held = d.toggle ? s.snapOn : s.tool === d.id;
+      const name = "tb-" + d.id;
+      const pressed = s.tbPressed === name || held;
+      const hover = !held && s.tbHover === name;
+      const a = pressed ? 0.09 : hover ? 0.24 : 0.16;
+      const b = pressed ? 0.035 : hover ? 0.11 : 0.06;
+      // the selected tool is modal state — it gets the accent, not just a held bevel
+      const faceBg = held
+        ? "linear-gradient(180deg, " + this.accent(0.62, 0.1) + ", " + this.accent(0.7, 0.11) + ")"
+        : "linear-gradient(180deg, rgba(255,255,255," + a + "), rgba(255,255,255," + b + "))";
+      const faceShadow = held
+        ? "inset 0 2px 4px " + this.accent(0.32, 0.07) + ", inset 0 1px 0 " + this.accent(0.55, 0.09)
+        : pressed
+        ? "inset 0 1px 0 rgba(255,255,255,0.06), inset 0 2px 3px rgba(0,0,0,0.4)"
+        : "inset 0 1px 0 rgba(255,255,255," + (hover ? 0.28 : 0.18) + ")";
+      return {
+        glyph: d.glyph, label: d.label, keys: d.keys,
+        holder: { position: "relative", display: "block" },
+        rule: { display: "none" },
+        plinth: {
+          display: "block", borderRadius: r + "px", background: "transparent",
+          paddingTop: pressed ? t + "px" : 0, paddingBottom: pressed ? 0 : t + "px",
+          cursor: "pointer", userSelect: "none",
+        },
+        face: {
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: "24px", height: "24px", boxSizing: "border-box", borderRadius: r + "px",
+          fontSize: "12px", lineHeight: 1,
+          background: faceBg,
+          border: "1px solid rgba(0,0,0," + (held || pressed ? 0.6 : 0.45) + ")",
+          boxShadow: faceShadow,
+          color: held ? "#eafaff" : pressed ? "#b7bfc6" : hover ? "#eef2f6" : "#b6bec5",
+          textShadow: held ? "0 -1px 0 " + this.accent(0.38, 0.08) : "0 -1px 0 rgba(0,0,0,0.55)",
+        },
+        tip: s.tbHover === name,
+        tipStyle: {
+          position: "absolute", zIndex: 60, whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "7px",
+          top: vertical ? "2px" : "calc(100% + 6px)",
+          left: s.dock === "left" ? "calc(100% + 7px)" : s.dock === "right" ? "auto" : "50%",
+          right: s.dock === "right" ? "calc(100% + 7px)" : "auto",
+          transform: vertical ? "none" : "translateX(-50%)",
+          padding: "3px 7px", borderRadius: r + "px", fontSize: "11px", color: "#e4e9ee",
+          background: "rgba(28,33,38,0.96)", backdropFilter: "blur(14px)",
+          border: "1px solid rgba(0,0,0,0.7)",
+          boxShadow: "0 6px 18px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.11)",
+        },
+        tipKeys: { fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px", color: "#8d959d" },
+        onClick: () => {
+          if (d.toggle) this.setState(st => ({ snapOn: !st.snapOn, log: d.label }));
+          else this.setState({ tool: d.id, log: d.label });
+        },
+        onMouseDown: () => this.setState({ tbPressed: name }),
+        onMouseUp: () => this.setState({ tbPressed: null }),
+        onEnter: () => this.setState({ tbHover: name }),
+        onLeave: () => this.setState({ tbHover: null, tbPressed: null }),
+      };
+    });
+
+    const edge = {
+      left: { borderRight: "1px solid rgba(0,0,0,0.7)", boxShadow: "inset -1px 0 0 rgba(255,255,255,0.05), 2px 0 8px rgba(0,0,0,0.35)" },
+      right: { borderLeft: "1px solid rgba(0,0,0,0.7)", boxShadow: "inset 1px 0 0 rgba(255,255,255,0.05), -2px 0 8px rgba(0,0,0,0.35)" },
+      top: { borderBottom: "1px solid rgba(0,0,0,0.7)", boxShadow: "inset 0 -1px 0 rgba(255,255,255,0.05), 0 2px 8px rgba(0,0,0,0.35)" },
+      bottom: { borderTop: "1px solid rgba(0,0,0,0.7)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 -2px 8px rgba(0,0,0,0.35)" },
+    }[s.dock];
+
+    const overPressed = s.tbPressed === "tb-more";
+    const overHover = s.tbHover === "tb-more";
+    const dockItems = ["top", "right", "bottom", "left"].map(side => ({
+      label: side.charAt(0).toUpperCase() + side.slice(1),
+      style: {
+        display: "flex", alignItems: "center", gap: "7px", height: "22px", padding: "0 8px",
+        borderRadius: r + "px", fontSize: "11.5px", cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+        background: s.dockHover === side ? this.accent(0.74, 0.11) : "transparent",
+        color: s.dockHover === side ? "#041418" : "#dbe1e7",
+      },
+      tick: { width: "8px", fontSize: "13px", lineHeight: 1, color: s.dock !== side ? "transparent" : s.dockHover === side ? "#041418" : this.accent(0.8, 0.1) },
+      onClick: (e) => { e.stopPropagation(); this.setState({ dock: side, dockOpen: false, log: "dock " + side }); },
+      onMouseEnter: () => this.setState({ dockHover: side }),
+      onMouseLeave: () => this.setState({ dockHover: null }),
+    }));
+
+    return {
+      wrap: Object.assign({
+        position: "relative", display: "flex", flexShrink: 0,
+        flexDirection: vertical ? "column" : "row",
+        alignItems: "center", gap: "2px", padding: "3px",
+        background: "linear-gradient(" + (vertical ? "90deg" : "180deg") + ", rgba(36,41,47,0.96), rgba(22,26,30,0.97))",
+        zIndex: 30,
+      }, edge),
+      grip: {
+        display: "block", flexShrink: 0, cursor: "pointer", borderRadius: "1px",
+        width: vertical ? "14px" : "3px", height: vertical ? "3px" : "14px",
+        margin: vertical ? "2px 0 4px" : "0 2px 0 0",
+        background: "repeating-linear-gradient(" + (vertical ? "90deg" : "180deg") + ", rgba(255,255,255,0.28) 0 1px, transparent 1px 3px)",
+        boxShadow: vertical ? "0 1px 0 rgba(0,0,0,0.5)" : "1px 0 0 rgba(0,0,0,0.5)",
+      },
+      spacer: { flex: 1 },
+      items: items,
+      overflow: {
+        plinth: {
+          display: "block", borderRadius: r + "px", background: "transparent",
+          paddingTop: overPressed ? t + "px" : 0, paddingBottom: overPressed ? 0 : t + "px",
+          cursor: "pointer", userSelect: "none",
+        },
+        face: {
+          display: "flex", alignItems: "center", justifyContent: "center",
+          width: "24px", height: "24px", boxSizing: "border-box", borderRadius: r + "px",
+          fontSize: "12px", lineHeight: 1,
+          background: overPressed ? "rgba(255,255,255,0.05)" : overHover ? "rgba(255,255,255,0.1)" : "transparent",
+          border: "1px solid rgba(0,0,0," + (overHover || overPressed ? 0.4 : 0.2) + ")",
+          boxShadow: overPressed ? "inset 0 2px 3px rgba(0,0,0,0.35)" : overHover ? "inset 0 1px 0 rgba(255,255,255,0.12)" : "none",
+          color: overHover ? "#eef2f6" : "#9aa2aa",
+        },
+        onClick: (e) => { e.stopPropagation(); this.setState(st => ({ dockOpen: !st.dockOpen })); },
+        onMouseDown: () => this.setState({ tbPressed: "tb-more" }),
+        onMouseUp: () => this.setState({ tbPressed: null }),
+        onMouseEnter: () => this.setState({ tbHover: "tb-more" }),
+        onMouseLeave: () => this.setState({ tbHover: null, tbPressed: null }),
+      },
+      dockOpen: s.dockOpen,
+      dockSheet: this.sheetStyle({
+        minWidth: "142px",
+        top: vertical ? "auto" : s.dock === "top" ? "calc(100% + 4px)" : "auto",
+        bottom: s.dock === "bottom" ? "calc(100% + 4px)" : vertical ? "4px" : "auto",
+        left: s.dock === "right" ? "auto" : vertical ? "calc(100% + 4px)" : "auto",
+        right: s.dock === "right" ? "calc(100% + 4px)" : vertical ? "auto" : "4px",
+      }),
+      dockTitle: {
+        display: "block", padding: "4px 8px 5px", fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: "9px", letterSpacing: "0.14em", textTransform: "uppercase", color: "#737c85",
+      },
+      dockItems: dockItems,
+      onContext: (e) => { e.preventDefault(); e.stopPropagation(); this.setState({ dockOpen: true, ctx: null, open: null }); },
+      onGrip: (e) => { e.stopPropagation(); this.setState(st => ({ dockOpen: !st.dockOpen })); },
+    };
+  }
+
+  renderVals() {
+    const s = this.state, data = this.data(), r = this.r();
+    const menus = Object.keys(data).map(name => {
+      const open = s.open === name;
+      const hot = s.hoverTop === name;
+      return {
+        label: name,
+        open: open,
+        style: {
+          display: "flex", alignItems: "center", alignSelf: "stretch", padding: "0 9px",
+          fontSize: "11.5px", cursor: "pointer", userSelect: "none",
+          background: open ? this.accent(0.74, 0.11) : hot ? "rgba(255,255,255,0.09)" : "transparent",
+          boxShadow: open ? "inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(0,0,0,0.3)" : "none",
+          color: open ? "#041418" : "#d5dce2",
+          textShadow: open ? "none" : "0 -1px 0 rgba(0,0,0,0.6)",
+        },
+        sheet: this.sheetStyle({ top: "26px", left: 0 }),
+        items: this.buildItems(data[name], false),
+        onMouseDown: (e) => {
+          e.stopPropagation();
+          this.setState({ open: open ? null : name, subOpen: null, ctx: null });
+        },
+        onClick: (e) => e.stopPropagation(),
+        onMouseEnter: () => this.setState(st => ({ hoverTop: name, open: st.open ? name : null, subOpen: null })),
+      };
+    });
+
+    const ctxDefs = [
+      { id: "focus", label: "Frame Selection", keys: "F" },
+      { id: "sep0", sep: true },
+      { id: "cut", label: "Cut", keys: "Ctrl X" },
+      { id: "copy", label: "Copy", keys: "Ctrl C" },
+      { id: "dup", label: "Duplicate", keys: "Ctrl D" },
+      { id: "sep1", sep: true },
+      { id: "snap", label: "Snap Size", sub: [
+        { id: "0.25 m", label: "0.25 m", radio: s.snap === "0.25 m" },
+        { id: "1 m", label: "1 m", radio: s.snap === "1 m" },
+        { id: "4 m", label: "4 m", radio: s.snap === "4 m" },
+      ], onSub: (id) => { this.setState({ snap: id }); this.act("snap " + id); } },
+      { id: "lock", label: "Lock Transform" },
+      { id: "hide", label: "Hide", keys: "H" },
+      { id: "sep2", sep: true },
+      { id: "delete", label: "Delete", keys: "Del", danger: true },
+    ];
+
+    const dockToggles = [
+      { side: "left", glyph: "◧" },
+      { side: "bottom", glyph: "▤" },
+      { side: "right", glyph: "◨" },
+    ].map(d => {
+      const open = s.panels[d.side].open;
+      const name = "toggle-" + d.side;
+      const hov = s.panelHover === name;
+      return {
+        glyph: d.glyph,
+        style: {
+          display: "flex", alignItems: "center", justifyContent: "center", width: "18px", height: "18px",
+          borderRadius: r + "px", fontSize: "10px", cursor: "pointer", userSelect: "none",
+          background: open
+            ? "linear-gradient(180deg, " + this.accent(0.6, 0.1) + ", " + this.accent(0.68, 0.11) + ")"
+            : hov ? "rgba(255,255,255,0.1)" : "transparent",
+          border: "1px solid " + (open ? "rgba(0,0,0,0.6)" : hov ? "rgba(0,0,0,0.4)" : "transparent"),
+          boxShadow: open
+            ? "inset 0 2px 3px " + this.accent(0.32, 0.07)
+            : hov ? "inset 0 1px 0 rgba(255,255,255,0.12)" : "none",
+          color: open ? "#eafaff" : hov ? "#eef2f6" : "#7d858e",
+        },
+        onClick: () => this.setPanel(d.side, { open: !open }),
+        onMouseEnter: () => this.setState({ panelHover: name }),
+        onMouseLeave: () => this.setState({ panelHover: null }),
+      };
+    });
+
+    return {
+      menus: menus,
+      tb: this.toolbar(),
+      left: this.dockPanel("left", ["outliner", "layers"]),
+      right: this.dockPanel("right", ["inspector", "assets"]),
+      bottom: this.dockPanel("bottom", ["console", "problems"]),
+      dockToggles: dockToggles,
+      shell: {
+        flex: 1, display: "flex", minHeight: 0,
+        flexDirection: s.dock === "left" ? "row" : s.dock === "right" ? "row-reverse" : s.dock === "top" ? "column" : "column-reverse",
+      },
+      ctxOpen: !!s.ctx,
+      ctxSheet: s.ctx ? this.sheetStyle({ top: s.ctx.y + "px", left: s.ctx.x + "px" }) : {},
+      ctxItems: this.buildItems(ctxDefs, true),
+      onContextMenu: (e) => {
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        this.setState({
+          ctx: { x: Math.min(e.clientX - rect.left, rect.width - 236), y: Math.min(e.clientY - rect.top, rect.height - 270) },
+          open: null, ctxSub: null, ctxHover: null,
+        });
+      },
+      onRootClick: () => this.setState({ open: null, ctx: null, subOpen: null, ctxSub: null, dockOpen: false }),
+      dirtyDot: { width: "5px", height: "5px", borderRadius: "3px", background: this.accent(0.78, 0.12), boxShadow: "0 0 6px " + this.accent(0.74, 0.11, 0.6) },
+      log: s.log,
+      snapLabel: s.snap,
+      shadingLabel: s.shading,
+      gizmosLabel: s.gizmos ? "gizmos on" : "gizmos off",
+    };
+  }
+}
+</script>
+</body>
+</html>

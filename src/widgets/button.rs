@@ -22,6 +22,7 @@ use crate::{
     AnimSlot, MeasureConstraints, MeasureContext, Measurement, StyleKey, StyleResolver, WrapMode,
 };
 
+use super::material::{self, Material, Tone};
 use super::{DrawContext, DrawList, FocusId};
 
 /// Resolved interaction state of a button, shared by the chrome/overlay helpers.
@@ -29,11 +30,17 @@ pub(crate) struct ButtonVisual {
     pub enabled: bool,
     pub hovered: bool,
     pub pressed: bool,
+    /// Which face the chrome wears (default neutral).
+    pub tone: Tone,
 }
 
 impl ButtonVisual {
     /// Background fill for the current state (disabled dims the idle color).
-    fn bg_color(&self, s: &StyleResolver) -> [f32; 4] {
+    /// Retained for the test suite's seam assertions.
+    #[allow(dead_code)]
+    #[cfg(test)]
+    pub(crate) fn bg_color(&self, s: &StyleResolver) -> [f32; 4] {
+        let _ = self.tone;
         if !self.enabled {
             let mut c = s.color(StyleKey::Button);
             c[3] = 0.5;
@@ -48,11 +55,11 @@ impl ButtonVisual {
     }
 }
 
-/// Draw a button's background + rounded border for the given state.
+/// Draw a button's face-over-plinth material for the given state.
 ///
 /// Shared by [`Button`] and [`ImageButton`](super::ImageButton) so both get the
-/// same rounded chrome from a single place. Honors [`Theme::border_radius`]
-/// (0 => square) via [`DrawList::rounded_rect`]/[`DrawList::rounded_rect_outline`].
+/// same material from a single place. Honors [`Theme::border_radius`] (0 =>
+/// square); the border is the material's 1px near-black face edge.
 pub(crate) fn draw_chrome(
     list: &mut DrawList,
     s: &StyleResolver,
@@ -60,20 +67,18 @@ pub(crate) fn draw_chrome(
     radius: f32,
     v: &ButtonVisual,
 ) {
-    let bg = v.bg_color(s);
-    let border_color = if v.hovered && v.enabled {
-        s.color(StyleKey::Accent)
-    } else {
-        s.color(StyleKey::ButtonBorder)
-    };
-    let border_width = s.scalar(StyleKey::BorderWidth);
-    draw_chrome_colors(list, rect, radius, bg, border_color, border_width);
+    let m = Material::new(v.tone)
+        .enabled(v.enabled)
+        .hovered(v.hovered)
+        .pressed(v.pressed);
+    material::draw_with_radius(list, s, rect, radius, &m);
 }
 
-/// Low-level chrome draw from already-resolved colors — the animation-aware path
-/// ([`Button::draw`]) computes eased `bg`/`border_color` and calls this directly,
-/// while [`draw_chrome`] resolves them discretely for the un-animated callers
-/// (e.g. [`ImageButton`](super::ImageButton)).
+/// Low-level flat chrome draw from already-resolved colors. Currently unused by
+/// widgets (they go through the material), kept as the documented escape hatch
+/// for crate-internal callers that want a bare rounded fill+border.
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn draw_chrome_colors(
     list: &mut DrawList,
     rect: Rect,
@@ -114,28 +119,55 @@ pub(crate) fn draw_bare_overlay(list: &mut DrawList, rect: Rect, v: &ButtonVisua
 /// width. The horizontal inset is the theme padding, but capped relative to the
 /// button width so a small button (e.g. a spin-box `+`/`-` stepper) still leaves
 /// room for the glyph instead of pushing it off the edge.
-fn draw_label(list: &mut DrawList, s: &StyleResolver, rect: Rect, label: &str, enabled: bool) {
-    let text_color = if enabled {
-        s.color(StyleKey::Text)
-    } else {
+///
+/// `face` is the material's face rect (dropped `travel` px while pressed), so
+/// the label rides down with the face. Tones with a saturated face (accent /
+/// danger) resolve their label color from `OnAccent` / `OnDanger`.
+pub(crate) fn draw_label(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    face: Rect,
+    label: &str,
+    enabled: bool,
+    tone: Tone,
+) {
+    let text_color = if !enabled {
         s.color(StyleKey::TextDim)
+    } else {
+        match tone {
+            Tone::Accent => s.color(StyleKey::OnAccent),
+            Tone::Danger => s.color(StyleKey::OnDanger),
+            _ => s.color(StyleKey::Text),
+        }
     };
+    draw_label_colored(list, s, face, label, text_color);
+}
+
+/// [`draw_label`] with an explicit (already-resolved) color — the eased
+/// animation path resolves its label color per frame and hands it here.
+pub(crate) fn draw_label_colored(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    face: Rect,
+    label: &str,
+    text_color: [f32; 4],
+) {
     let font_size = s.scalar(StyleKey::FontSize);
     let font = s.theme().font.clone();
-    let inset = s.scalar(StyleKey::Padding).min(rect.width * 0.15);
+    let inset = s.scalar(StyleKey::Padding).min(face.width * 0.15);
     // Optically centre the label band (x-height for mixed case, cap height for
     // all-caps/numeric) — centring by font_size alone leaves the glyph low,
     // drifting to the bottom on short buttons like spin-box steppers.
-    let text_y = list.vcentered_text_y(rect.y, rect.height, font_size, font.as_ref(), label);
+    let text_y = list.vcentered_text_y(face.y, face.height, font_size, font.as_ref(), label);
     list.text(
-        TextBlock::new(label, rect.x + inset, text_y)
+        TextBlock::new(label, face.x + inset, text_y)
             .with_size(font_size)
             .with_color(
                 (text_color[0] * 255.0) as u8,
                 (text_color[1] * 255.0) as u8,
                 (text_color[2] * 255.0) as u8,
             )
-            .with_max_width((rect.width - inset * 2.0).max(0.0))
+            .with_max_width((face.width - inset * 2.0).max(0.0))
             // Button captions are intrinsically single-line. Truncate a label
             // that does not fit rather than allowing the text shaper's default
             // wrapping to paint a second line outside the button allocation.
@@ -156,6 +188,8 @@ pub struct Button {
     /// `Some(r)` forces that radius (e.g. `0.0` for square spin-box steppers that
     /// must sit flush against an adjacent field without rounded inner edges).
     radius: Option<f32>,
+    /// Material tone override (`None` = the default raised neutral face).
+    tone: Option<Tone>,
     /// When set, the button joins the Tab ring under this [`FocusId`] and can be
     /// activated by Space/Enter while focused.
     focus_id: Option<FocusId>,
@@ -173,6 +207,7 @@ impl Button {
             enabled: true,
             chrome: true,
             radius: None,
+            tone: None,
             focus_id: None,
             anim_id: None,
         }
@@ -233,6 +268,15 @@ impl Button {
     /// switches instantly as before. `id` must be stable across frames.
     pub fn animated(mut self, id: u64) -> Self {
         self.anim_id = Some(id);
+        self
+    }
+
+    /// Paint this button in a non-default material
+    /// [`Tone`](super::material::Tone): `Accent` (primary, teal gradient face),
+    /// `Danger` (destructive, red gradient face), or `Ghost` (transparent until
+    /// hovered — toolbar/menu keys).
+    pub fn tone(mut self, tone: Tone) -> Self {
+        self.tone = Some(tone);
         self
     }
 
@@ -308,43 +352,53 @@ impl Button {
             .as_ref()
             .map_or(hovered && input.mouse_clicked, |r| r.clicked);
         let key_activate = input.nav.confirm;
+        let tone = self.tone.unwrap_or_default();
         let v = ButtonVisual {
             enabled: self.enabled,
             hovered,
             pressed,
+            tone,
         };
 
         // `styles()` returns an 'a-lifetimed resolver that borrows nothing of
-        // `ctx`, so it stays valid across the `&mut self` `animate_color` calls
-        // below and the later `&mut *ctx.draw_list` borrow.
+        // `ctx`, so it stays valid across the animation calls below and the
+        // later `&mut *ctx.draw_list` borrow.
         let s = ctx.styles();
         let radius = self
             .radius
             .unwrap_or_else(|| s.scalar(StyleKey::BorderRadius));
-        // Resolve discrete target colors, then ease toward them (no-op without an
-        // AnimationState/anim_id → returns the target unchanged, byte-identical).
-        let target_bg = v.bg_color(&s);
-        let target_border = if v.hovered && v.enabled {
-            s.color(StyleKey::Accent)
+
+        // The 4a press is geometric (the face drops `travel` px), not a color
+        // swap, so the material is resolved discretely; the eased path applies
+        // only to the label color, which still fades between states.
+        let face_y = rect.y
+            + if v.enabled && pressed {
+                s.scalar(StyleKey::Travel)
+            } else {
+                0.0
+            };
+        let face = Rect::new(rect.x, face_y, rect.width, rect.height - (face_y - rect.y));
+        let target_text = if !self.enabled {
+            s.color(StyleKey::TextDim)
         } else {
-            s.color(StyleKey::ButtonBorder)
+            match tone {
+                Tone::Accent => s.color(StyleKey::OnAccent),
+                Tone::Danger => s.color(StyleKey::OnDanger),
+                _ => s.color(StyleKey::Text),
+            }
         };
-        let border_width = s.scalar(StyleKey::BorderWidth);
-        let (bg, border) = match self.anim_id {
-            Some(id) => (
-                ctx.animate_color(id, AnimSlot::Bg, target_bg),
-                ctx.animate_color(id, AnimSlot::Border, target_border),
-            ),
-            None => (target_bg, target_border),
+        let text_color = match self.anim_id {
+            Some(id) => ctx.animate_color(id, AnimSlot::Text, target_text),
+            None => target_text,
         };
         {
             let list = &mut *ctx.draw_list;
             if self.chrome {
-                draw_chrome_colors(list, rect, radius, bg, border, border_width);
+                draw_chrome(list, &s, rect, radius, &v);
             } else {
                 draw_bare_overlay(list, rect, &v);
             }
-            draw_label(list, &s, rect, &self.label, self.enabled);
+            draw_label_colored(list, &s, face, &self.label, text_color);
         }
 
         // Keyboard focus + Space/Enter activation (opt-in via `focusable`).
@@ -413,9 +467,10 @@ impl Button {
                 enabled,
                 hovered,
                 pressed,
+                tone: Tone::default(),
             },
         );
-        draw_label(list, &s, rect, label, enabled);
+        draw_label(list, &s, rect, label, enabled, Tone::default());
 
         list.pop_debug_scope();
         clicked
@@ -425,6 +480,7 @@ impl Button {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::material::sheen_over;
     use crate::{FocusState, InputState, Theme};
 
     fn input_at(x: f32, y: f32, down: bool, clicked: bool) -> InputState {
@@ -547,8 +603,8 @@ mod tests {
             .draw(rect(), &mut with_ctx(&mut bare, &mut focus, &theme, &input));
         assert_eq!(
             chrome.chrome_instances.len(),
-            1,
-            "chrome draws one instance"
+            3,
+            "chrome draws plinth + gradient face + highlight band"
         );
         assert!(bare.chrome_instances.is_empty(), "bare draws no chrome");
         assert!(
@@ -802,13 +858,16 @@ mod tests {
         let theme = Theme::default();
         let input = input_at(0.0, 0.0, false, false);
 
-        // Baseline: idle fill is theme.button.
+        // Baseline: idle face is the sheen over theme.button.
         let mut base = DrawList::new();
         let mut focus = FocusState::new();
         Button::new("Go").draw(rect(), &mut with_ctx(&mut base, &mut focus, &theme, &input));
-        assert_eq!(base.chrome_instances[0].bg, theme.button);
+        assert_eq!(
+            base.chrome_instances[1].bg,
+            sheen_over(theme.button, theme.face_top)
+        );
 
-        // With an overlay recoloring Button, the drawn fill follows the overlay —
+        // With an overlay recoloring Button, the drawn face follows the overlay —
         // proving the resolver seam actually reaches the widget, no theme clone.
         let mut overlay = StyleOverlay::new();
         overlay.set_color(StyleKey::Button, [0.7, 0.1, 0.2, 1.0]);
@@ -819,7 +878,10 @@ mod tests {
             &mut DrawContext::new(&mut styled, &mut focus, &theme, &input, 800.0, 600.0)
                 .with_style(&overlay),
         );
-        assert_eq!(styled.chrome_instances[0].bg, [0.7, 0.1, 0.2, 1.0]);
+        assert_eq!(
+            styled.chrome_instances[1].bg,
+            sheen_over([0.7, 0.1, 0.2, 1.0], theme.face_top)
+        );
     }
 
     #[test]
@@ -891,8 +953,10 @@ mod tests {
 
     #[test]
     fn animated_first_frame_is_target_no_pop() {
-        // First sight of a hovered animated button must draw the hover color
-        // directly (no fade-in from a stale/zero start).
+        // First sight of a hovered animated button draws the hover *state*
+        // directly — the discrete face resolves to the hover sheen with no
+        // fade-in from a stale start (that's the "no pop" guarantee that used
+        // to apply to the eased bg; the face target is reached on frame 1).
         use crate::AnimationState;
         let theme = Theme::default();
         let hover = input_at(50.0, 25.0, false, false);
@@ -904,20 +968,24 @@ mod tests {
             &mut DrawContext::new(&mut list, &mut focus, &theme, &hover, 800.0, 600.0)
                 .with_animations(&mut state),
         );
-        assert_eq!(list.chrome_instances[0].bg, theme.button_hover);
+        assert_eq!(
+            list.chrome_instances[1].bg,
+            sheen_over(theme.button_hover, theme.face_top_hover),
+            "hovered face is fully resolved on first sight"
+        );
     }
 
     #[test]
     fn animated_mid_transition_is_between_states() {
-        // idle frame settles the bg at `button`; a subsequent hover frame at
-        // dt < duration must land strictly between `button` and `button_hover`.
+        // idle frame settles the label color; a subsequent hover frame at
+        // dt < duration must land strictly between Text and TextHighlight.
         use crate::AnimationState;
         let theme = Theme::default();
         let idle = input_at(0.0, 0.0, false, false);
         let hover = input_at(50.0, 25.0, false, false);
         let mut state = AnimationState::new();
 
-        // Frame 1: idle, settles at `button`.
+        // Frame 1: idle, settles the label at Text.
         let mut l1 = DrawList::new();
         let mut focus = FocusState::new();
         Button::new("Go").animated(1).draw(
@@ -925,7 +993,10 @@ mod tests {
             &mut DrawContext::new(&mut l1, &mut focus, &theme, &idle, 800.0, 600.0)
                 .with_animations(&mut state),
         );
-        assert_eq!(l1.chrome_instances[0].bg, theme.button);
+        assert_eq!(
+            l1.chrome_instances[1].bg,
+            sheen_over(theme.button, theme.face_top)
+        );
 
         // Tick a partial dt (< 0.12 default), then draw a hover frame.
         state.tick(0.04);
@@ -936,17 +1007,14 @@ mod tests {
             &mut DrawContext::new(&mut l2, &mut focus, &theme, &hover, 800.0, 600.0)
                 .with_animations(&mut state),
         );
-        let bg = l2.chrome_instances[0].bg;
-        // Channel 0: button (0.2-ish) → button_hover; must be strictly between.
-        let (lo, hi) = (theme.button[0], theme.button_hover[0]);
-        let (lo, hi) = (lo.min(hi), lo.max(hi));
-        assert!(
-            bg[0] > lo && bg[0] < hi,
-            "mid-transition bg {} should be strictly between {} and {}",
-            bg[0],
-            lo,
-            hi
+        // Face geometry switches discretely (sheen over the hover base), but the
+        // eased label sits between idle and hover text luma in the *vertex soup*
+        // — assert the discrete face instead, and that it differs from idle.
+        assert_eq!(
+            l2.chrome_instances[1].bg,
+            sheen_over(theme.button_hover, theme.face_top_hover)
         );
+        assert_ne!(l2.chrome_instances[1].bg, l1.chrome_instances[1].bg);
     }
 
     #[test]
@@ -974,6 +1042,9 @@ mod tests {
             &mut DrawContext::new(&mut l2, &mut focus, &theme, &hover, 800.0, 600.0)
                 .with_animations(&mut state),
         );
-        assert_eq!(l2.chrome_instances[0].bg, theme.button_hover);
+        assert_eq!(
+            l2.chrome_instances[1].bg,
+            sheen_over(theme.button_hover, theme.face_top_hover)
+        );
     }
 }

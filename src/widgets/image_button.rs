@@ -24,6 +24,7 @@ use crate::layout::Rect;
 use crate::{InputState, SpriteId, StyleKey, StyleResolver};
 
 use super::button::{ButtonVisual, draw_chrome};
+use super::material::Tone;
 use super::{DrawList, Image, ImageAlign, ImageFit};
 
 /// Image / icon button — an [`Image`] with clickable button chrome.
@@ -134,6 +135,7 @@ impl ImageButton {
                     enabled: self.enabled,
                     hovered,
                     pressed,
+                    tone: Tone::default(),
                 },
             );
         }
@@ -290,12 +292,12 @@ mod tests {
         ImageButton::sprite(ID)
             .bare()
             .draw(rect(), &mut bare, &StyleResolver::new(&theme), &input);
-        // Chrome records one instanced rounded-rect (background + border); the
+        // Chrome records the material (plinth + face + highlight); the
         // bare variant draws no chrome instance.
         assert_eq!(
             chrome.chrome_instances.len(),
-            1,
-            "chrome draws one instance"
+            3,
+            "chrome draws plinth + face + highlight"
         );
         assert!(bare.chrome_instances.is_empty(), "bare draws no chrome");
     }

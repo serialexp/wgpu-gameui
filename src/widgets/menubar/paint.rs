@@ -189,7 +189,10 @@ pub(super) fn draw_columns<'a>(
             ctx.interact(column_blocker_id(bar, column.menu_index, level), rect, true);
 
             ctx.draw_list.push_debug_scope_rect("Menu column", rect);
-            ctx.draw_list.push_clip_viewport(rect);
+            // Keep row washes inside the raised sheet so a highlighted first or
+            // last row cannot cover the same outer edge an idle row exposes.
+            let row_paint_rect = rect.inset(ctx.styles().scalar(StyleKey::BorderWidth).max(1.0));
+            ctx.draw_list.push_clip_viewport(row_paint_rect);
 
             // Rows: register for dispatch (culling the scrolled-out band and
             // everything that can never be highlighted) and collect what the
@@ -228,16 +231,19 @@ pub(super) fn draw_columns<'a>(
             // ---- paint ----
             let s = ctx.styles();
             let list = &mut *ctx.draw_list;
+            // The menu sheet: the raised panel (4a blurred-sheet look reads as a
+            // near-black panel with a black edge; apps can add a backdrop blur
+            // behind it via `UiRenderer::blur_backdrop`).
             list.chrome_rect(
                 rect,
                 s.scalar(StyleKey::BorderRadius),
                 s.scalar(StyleKey::BorderWidth),
                 s.color(StyleKey::Panel),
-                s.color(StyleKey::PanelBorder),
+                [0.0, 0.0, 0.0, 0.7],
             );
             let dim = rgb(s.color(StyleKey::TextDim));
             let text = rgb(s.color(StyleKey::Text));
-            let hover = s.color(StyleKey::ButtonHover);
+            let selected_bg = s.color(StyleKey::Accent);
             let border_width = s.scalar(StyleKey::BorderWidth).max(1.0);
             let check_w = column.check_w;
 
@@ -289,7 +295,20 @@ pub(super) fn draw_columns<'a>(
                     );
                 }
                 if state.highlighted_item == Some(row.item_index) && !row.disabled {
-                    list.quad(rect.x, y, rect.width, row_h, hover);
+                    // The design's menu selection: a translucent accent wash.
+                    let mut c = selected_bg;
+                    c[3] = 0.2;
+                    list.quad(rect.x, y, rect.width, row_h, c);
+                    if row.checked {
+                        // Selected + checked: solid accent row with dark text.
+                        list.quad(rect.x, y, rect.width, row_h, selected_bg);
+                    }
+                }
+                if row.checked && state.highlighted_item != Some(row.item_index) {
+                    // Latched filter row: accent wash.
+                    let mut c = selected_bg;
+                    c[3] = 0.16;
+                    list.quad(rect.x, y, rect.width, row_h, c);
                 }
 
                 let (r, g, b) = if row.disabled { dim } else { text };

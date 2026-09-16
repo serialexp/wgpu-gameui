@@ -1,9 +1,12 @@
 //! Checkbox widget.
 
+#[cfg(feature = "phosphor-icons")]
+use crate::PhosphorIcon;
 use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{AnimSlot, SpriteId, StyleKey, StyleResolver};
 
+use super::material::draw_inset_shadow;
 use super::{DrawContext, DrawList, FocusId};
 
 /// Icon keys for checkbox textures. Only used by the string-keyed
@@ -299,28 +302,52 @@ fn draw_vector_box(
     let border = s.scalar(StyleKey::BorderWidth).max(1.0).min(size * 0.5);
 
     if checked {
-        // Filled box (eased toward accent) + contrasting checkmark. The mark
-        // contrast is computed from the resolved accent so it stays crisp through
-        // the fill transition.
-        list.rounded_rect(box_rect, radius, fill);
-        let mark = contrast_color(s.color(StyleKey::Accent));
-        let t = (size * 0.14).max(1.5);
-        // Tick: down-stroke into the low-left, up-stroke to the high-right.
-        let pts = [
-            [box_rect.x + size * 0.22, box_rect.y + size * 0.52],
-            [box_rect.x + size * 0.42, box_rect.y + size * 0.72],
-            [box_rect.x + size * 0.78, box_rect.y + size * 0.28],
-        ];
-        list.polyline(&pts, t, mark);
+        // Checked = the accent face raised in the box: gradient fill (eased
+        // toward the accent tokens) + a dark on-accent tick. The design's mark
+        // color is fixed (`#04171d`), which `OnAccent` resolves to.
+        list.chrome_rect_gradient(box_rect, radius, border, fill, fill, [0.0, 0.0, 0.0, 0.5]);
+        let mark = s.color(StyleKey::OnAccent);
+        // The built-in MSDF icon keeps the small checkmark smooth at every DPI.
+        // Keep vector geometry as the no-feature fallback so checkbox rendering
+        // never depends on an optional font asset.
+        #[cfg(feature = "phosphor-icons")]
+        list.phosphor_icon(box_rect.inset(size * 0.18), PhosphorIcon::Check, mark);
+        #[cfg(not(feature = "phosphor-icons"))]
+        {
+            let t = (size * 0.14).max(1.5);
+            // Tick: down-stroke into the low-left, up-stroke to the high-right.
+            let pts = [
+                [box_rect.x + size * 0.22, box_rect.y + size * 0.52],
+                [box_rect.x + size * 0.42, box_rect.y + size * 0.72],
+                [box_rect.x + size * 0.78, box_rect.y + size * 0.28],
+            ];
+            list.polyline(&pts, t, mark);
+        }
+        // 1px inset highlight under the top edge (raised-face read).
+        let hl = s.color(StyleKey::EdgeHighlight);
+        list.quad(
+            box_rect.x + border,
+            box_rect.y + border,
+            (size - border * 2.0).max(0.0),
+            1.0,
+            hl,
+        );
     } else {
-        // Empty box: subtle fill (eased toward InputBackground) + border.
-        list.rounded_rect(box_rect, radius, fill);
-        list.rounded_rect_outline(box_rect, radius, border, s.color(StyleKey::InputBorder));
+        // Empty box: the sunken tone — dark fill + black edge + inset shadow.
+        list.chrome_rect(box_rect, radius, border, fill, [0.0, 0.0, 0.0, 0.6]);
+        draw_inset_shadow(
+            list,
+            s,
+            box_rect,
+            s.scalar(StyleKey::InnerShadowDepth),
+            border,
+        );
     }
 }
 
 /// Pick black or white for maximum contrast against `bg` using perceptual
-/// (Rec. 709) luminance.
+/// (Rec. 709) luminance. Kept for themes that resolve a light accent.
+#[cfg(test)]
 fn contrast_color(bg: [f32; 4]) -> [f32; 4] {
     let lum = 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2];
     if lum > 0.5 {
@@ -393,23 +420,31 @@ mod tests {
         assert!(list.icons.is_empty(), "vector path must not queue any icon");
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
-    fn vector_checked_adds_checkmark_over_fill() {
-        let th = theme();
-        // Reference: just the accent fill of the box, no checkmark. The box is
-        // a square the height of the rect (20px), with the same radius the
-        // widget computes.
-        let size = rect().height;
-        let radius = th.border_radius.min(size * 0.3).max(0.0);
-        let mut fill_only = DrawList::new();
-        fill_only.rounded_rect(Rect::new(0.0, 0.0, size, size), radius, th.accent);
-
+    fn vector_checked_uses_an_msdf_checkmark() {
         let (checked, _) = draw_cb(&Checkbox::new(), true, "", rect(), &input_at(-1.0, -1.0));
 
-        // Checked = same fill + a checkmark polyline, so strictly more geometry.
+        assert_eq!(
+            checked.icons_msdf.len(),
+            1,
+            "the checked mark should be rendered by the antialiased MSDF icon path"
+        );
+        let mark = checked.icons_msdf[0].local;
+        const EPSILON: f32 = 0.001;
+        assert!((mark.x - 3.6).abs() < EPSILON);
+        assert!((mark.y - 3.6).abs() < EPSILON);
+        assert!((mark.width - 12.8).abs() < EPSILON);
+        assert!((mark.height - 12.8).abs() < EPSILON);
+    }
+
+    #[cfg(not(feature = "phosphor-icons"))]
+    #[test]
+    fn vector_checked_falls_back_to_checkmark_geometry() {
+        let (checked, _) = draw_cb(&Checkbox::new(), true, "", rect(), &input_at(-1.0, -1.0));
         assert!(
-            checked.vertices.len() > fill_only.vertices.len(),
-            "checked box should add checkmark geometry beyond the accent fill"
+            !checked.vertices.is_empty(),
+            "no-icon builds retain a vector checkmark fallback"
         );
     }
 

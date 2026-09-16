@@ -54,10 +54,10 @@ impl Severity {
     /// path resolves through [`style_key`](Self::style_key) so themes/overlays win.
     pub fn accent(self) -> [f32; 4] {
         match self {
-            Severity::Info => [0.22, 0.55, 0.95, 1.0],
-            Severity::Success => [0.26, 0.72, 0.42, 1.0],
-            Severity::Warning => [0.95, 0.70, 0.20, 1.0],
-            Severity::Error => [0.9, 0.3, 0.3, 1.0],
+            Severity::Info => [0.3692, 0.6736, 0.92, 1.0],
+            Severity::Success => [0.3799, 0.7093, 0.3977, 1.0],
+            Severity::Warning => [0.9084, 0.6684, 0.3042, 1.0],
+            Severity::Error => [0.8413, 0.2796, 0.2724, 1.0],
         }
     }
 

@@ -1093,23 +1093,13 @@ impl TextInput {
         // (password) fields suppress the inline preedit so it can't leak.
         let composing = focused && !input.preedit.is_empty() && self.mask.is_none();
 
-        // ---- Draw background + border ----
-        // Honor `theme.border_radius` so text inputs match the other inputs
-        // (Dropdown/Button/Checkbox); `rounded_rect` falls back to a hard
-        // rectangle when the radius is 0, so a rectangular theme still works.
+        // ---- Draw background + border (the 4a input well) ----
+        // Sunken fill, black border, inset shadow, bottom light line; focus
+        // switches the border to the accent + soft outer ring (see
+        // `material::draw_well`). Hover keeps the resting border — the design
+        // highlights focus, not hover, on wells.
         let frame = Rect::new(self.x, self.y, self.width, self.height);
-        let radius = s.scalar(StyleKey::BorderRadius);
-        let border = s.scalar(StyleKey::BorderWidth);
-        let border_color = if focused {
-            s.color(StyleKey::InputFocusBorder)
-        } else if hovered {
-            s.color(StyleKey::Accent)
-        } else {
-            s.color(StyleKey::InputBorder)
-        };
-
-        list.rounded_rect(frame, radius, s.color(StyleKey::InputBackground));
-        list.rounded_rect_outline(frame, radius, border, border_color);
+        crate::widgets::material::draw_well(list, &s, frame, focused, false);
 
         // Render-time caret layout (multiline+focused), reflecting any edits made
         // this frame — used for autoscroll, per-line selection, and the caret.

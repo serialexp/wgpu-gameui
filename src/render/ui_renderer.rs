@@ -39,11 +39,16 @@ struct Uniforms {
 /// Size of one ortho uniform, and therefore of one dynamic-offset slot.
 const UNIFORM_SIZE: u64 = std::mem::size_of::<Uniforms>() as u64;
 
-/// Per-pass GPU arena bytes one frame may consume before the renderer assumes the
-/// frame boundary was missed and says so (see [`UiRenderer::begin_frame`]). Only
-/// reachable if a caller never calls `begin_frame`, in which case the arenas grow
-/// without bound; the cap turns silent growth into a one-shot warning.
+/// Per-frame GPU arena bytes one submission may consume before the renderer
+/// assumes its frame boundary was missed (see [`UiRenderer::begin_frame`]). A
+/// renderer that crosses this limit refuses later render calls until the caller
+/// opens a new frame, rather than geometrically growing an arena into wgpu's hard
+/// maximum-buffer validation failure.
 const ARENA_SANITY_CAP: u64 = 64 * 1024 * 1024;
+
+fn frame_arena_within_cap(bytes: u64) -> bool {
+    bytes <= ARENA_SANITY_CAP
+}
 
 #[derive(Clone, Copy)]
 struct OrderedColorUpload {
@@ -101,12 +106,13 @@ const CHROME_BASE_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array!
 ];
 
 /// Per-instance chrome attributes — matches [`ChromeInstance`] / `vs_chrome`.
-const CHROME_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+const CHROME_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
     1 => Float32x4, // rect
-    2 => Float32x4, // bg
-    3 => Float32x4, // border
-    4 => Float32x4, // clip
-    5 => Float32x4, // params (radius, thickness, clip_enabled, _pad)
+    2 => Float32x4, // bg (gradient top)
+    3 => Float32x4, // bg2 (gradient bottom)
+    4 => Float32x4, // border
+    5 => Float32x4, // clip
+    6 => Float32x4, // params (radius, thickness, clip_enabled, _pad)
 ];
 
 /// Per-instance circle attributes — matches [`CircleInstance`] / `vs_circle`
@@ -330,7 +336,10 @@ pub struct UiRenderer {
     uniform: UniformArena,
     /// The slot the pass being recorded binds. Set by `prepare_pass`.
     pass_uniform_offset: u32,
-    warn_missed_frame: bool,
+    /// Once an arena crosses the submission cap, refuse further rendering until
+    /// `begin_frame` resets all cursors. This turns a missed frame boundary into
+    /// one actionable log rather than a fatal oversized-buffer allocation.
+    frame_boundary_required: bool,
 
     // Atlas resources
     atlas: SpriteAtlas,
@@ -731,7 +740,7 @@ impl UiRenderer {
             nine_slice_pipeline,
             uniform,
             pass_uniform_offset: 0,
-            warn_missed_frame: false,
+            frame_boundary_required: false,
             atlas,
             texture,
             texture_bind_group_layout: texture_bgl,
@@ -1077,7 +1086,7 @@ impl UiRenderer {
             );
         }
         self.frame_stats = RenderStats::default();
-        self.warn_missed_frame = false;
+        self.frame_boundary_required = false;
         self.color_vbo_offset = 0;
         self.color_ibo_offset = 0;
         self.icon_inst_offset = 0;
@@ -1114,11 +1123,15 @@ impl UiRenderer {
     ) -> RenderStats {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_render").entered();
+        if !self.can_render_this_frame("render") {
+            return self.frame_stats;
+        }
         if self.stale_list.observe(draw_list.id()) {
             Self::warn_stale_list("render", "DrawList");
         }
         self.prepare_pass(device, queue, viewport, scale_factor);
         self.render_one(device, queue, encoder, view, draw_list);
+        self.check_frame_arena();
         self.frame_stats
     }
 
@@ -1138,6 +1151,9 @@ impl UiRenderer {
     ) -> RenderStats {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_render_layers").entered();
+        if !self.can_render_this_frame("render_layers") {
+            return self.frame_stats;
+        }
         // Key the footgun detector on the BASE list only: modal/popup/tooltip
         // layers are legitimately transient (built per push), so their ids would
         // be false positives.
@@ -1149,6 +1165,7 @@ impl UiRenderer {
         for layer in layers.layers() {
             self.render_one(device, queue, encoder, view, &layer.list);
         }
+        self.check_frame_arena();
         self.frame_stats
     }
 
@@ -1287,14 +1304,29 @@ impl UiRenderer {
             + self.text_renderer.frame_arena_bytes()
     }
 
-    /// Warn once if one frame's arena grows past [`ARENA_SANITY_CAP`]: at that size
-    /// the frame boundary was almost certainly never declared, and the caller needs
-    /// to know before the arena eats the machine.
+    /// Return whether a new render call may consume this submission's arenas.
+    /// Once the cap has been crossed, later calls are refused until `begin_frame`
+    /// resets the cursors; this protects applications that forgot the explicit
+    /// frame boundary from a late, fatal wgpu max-buffer validation error.
+    fn can_render_this_frame(&mut self, method: &str) -> bool {
+        if !self.frame_boundary_required {
+            return true;
+        }
+        log::error!(
+            "wgpu-gameui: refusing `UiRenderer::{method}` because its per-frame GPU arenas exceeded {} MiB without a `UiRenderer::begin_frame()` reset. Call `begin_frame()` exactly once before encoding each submission.",
+            ARENA_SANITY_CAP / (1024 * 1024)
+        );
+        false
+    }
+
+    /// Arm the missed-frame gate as soon as the current submission exceeds the
+    /// sanity cap. The offending render still completed safely; later calls are
+    /// refused before another geometric growth allocation is attempted.
     fn check_frame_arena(&mut self) {
-        if !self.warn_missed_frame && self.frame_arena_bytes() > ARENA_SANITY_CAP {
-            self.warn_missed_frame = true;
-            log::warn!(
-                "wgpu-gameui: one frame has bumped {} MiB through the renderer's per-frame arenas. `UiRenderer::begin_frame` is probably never being called: it is what resets those arenas between frames, and without it they grow without bound (and every pass in a submission keeps clobbering the previous one's buffers).",
+        if !frame_arena_within_cap(self.frame_arena_bytes()) {
+            self.frame_boundary_required = true;
+            log::error!(
+                "wgpu-gameui: this submission has bumped more than {} MiB through per-frame GPU arenas. `UiRenderer::begin_frame()` was probably not called before it; rendering is now blocked until that method resets the arenas, preventing an oversized GPU-buffer allocation.",
                 ARENA_SANITY_CAP / (1024 * 1024)
             );
         }
@@ -2070,6 +2102,12 @@ mod tests {
     fn crop_uv_none_is_identity() {
         let full = [0.25, 0.5, 0.75, 1.0];
         approx4(apply_crop_uv(full, None), full);
+    }
+
+    #[test]
+    fn frame_arena_cap_accepts_limit_and_rejects_overflow() {
+        assert!(frame_arena_within_cap(ARENA_SANITY_CAP));
+        assert!(!frame_arena_within_cap(ARENA_SANITY_CAP + 1));
     }
 
     // ---- StaleListDetector ----

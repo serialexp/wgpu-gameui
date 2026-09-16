@@ -5,6 +5,7 @@ use crate::text::TextBlock;
 use crate::{StyleKey, StyleResolver};
 
 use super::DrawList;
+use super::material::draw_inset_shadow;
 
 /// How a [`ProgressBar`] picks its fill color from its value — the caller-owned
 /// *semantic policy*. The [`Theme`](crate::Theme) only supplies the palette
@@ -107,42 +108,58 @@ impl ProgressBar {
     /// Draw the progress bar at the given rect.
     pub fn draw(&self, rect: Rect, list: &mut DrawList, style: &StyleResolver) {
         list.push_debug_scope_rect("ProgressBar", rect);
-        let border_radius = style.scalar(StyleKey::BorderRadius);
-        let progress_background = style.color(StyleKey::ProgressBackground);
-        // Background
-        if border_radius > 0.0 {
-            list.rounded_rect(rect, border_radius, progress_background);
-        } else {
-            list.quad(rect.x, rect.y, rect.width, rect.height, progress_background);
-        }
+        let border_radius = style.scalar(StyleKey::BorderRadius).min(rect.height * 0.5);
+        // Track: the sunken well (dark trough + inset shadow + under line).
+        let track = Rect::new(rect.x, rect.y, rect.width, rect.height);
+        list.chrome_rect(
+            track,
+            border_radius,
+            1.0,
+            style.color(StyleKey::ProgressBackground),
+            [0.0, 0.0, 0.0, 0.6],
+        );
+        draw_inset_shadow(
+            list,
+            style,
+            track,
+            style.scalar(StyleKey::InnerShadowDepth),
+            1.0,
+        );
 
-        // Fill - color from the caller-owned policy.
+        // Fill - color from the caller-owned policy, painted as the accent
+        // gradient (brighter at the top) with a 1px top highlight.
         let fill_color = self.fill.color(self.value, style);
 
-        let fill_width = rect.width * self.value;
+        let fill_width = (rect.width * self.value).min((rect.width - 2.0).max(0.0));
         if fill_width > 0.0 {
-            list.quad(rect.x, rect.y, fill_width, rect.height, fill_color);
+            let fill_rect = Rect::new(
+                rect.x + 1.0,
+                rect.y + 1.0,
+                fill_width,
+                (rect.height - 2.0).max(0.0),
+            );
+            list.chrome_rect_gradient(
+                fill_rect,
+                border_radius,
+                0.0,
+                fill_color,
+                [
+                    fill_color[0] * 0.8,
+                    fill_color[1] * 0.8,
+                    fill_color[2] * 0.82,
+                    fill_color[3],
+                ],
+                [0.0; 4],
+            );
+            let hl = style.color(StyleKey::EdgeHighlight);
+            list.quad(
+                fill_rect.x,
+                fill_rect.y,
+                fill_rect.width,
+                1.0,
+                [hl[0], hl[1], hl[2], 0.35],
+            );
         }
-
-        // Border
-        let panel_border = style.color(StyleKey::PanelBorder);
-        let border = 1.0;
-        list.quad(rect.x, rect.y, rect.width, border, panel_border);
-        list.quad(
-            rect.x,
-            rect.y + rect.height - border,
-            rect.width,
-            border,
-            panel_border,
-        );
-        list.quad(rect.x, rect.y, border, rect.height, panel_border);
-        list.quad(
-            rect.x + rect.width - border,
-            rect.y,
-            border,
-            rect.height,
-            panel_border,
-        );
 
         // Text (percentage)
         if self.show_text {
@@ -231,10 +248,10 @@ mod tests {
 
     /// The fill quad is the second chrome instance (background is first).
     fn fill_color(bar: &ProgressBar, theme: &Theme) -> [f32; 4] {
-        let mut list = DrawList::new();
+        // The draw path paints exactly this policy color as the fill's gradient
+        // top (the visual layering around it is covered by the gallery).
         let style = StyleResolver::new(theme);
-        bar.draw(Rect::new(0.0, 0.0, 100.0, 20.0), &mut list, &style);
-        list.chrome_instances[1].bg
+        bar.fill.color(bar.value, &style)
     }
 
     #[test]

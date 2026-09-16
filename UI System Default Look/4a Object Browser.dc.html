@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #07090b; }
+  a { color: #7fd1d8; }
+  a:hover { color: #a8e4e9; }
+  .ob .scroller { scrollbar-width: none; -ms-overflow-style: none; }
+  .ob .scroller::-webkit-scrollbar { width: 0; height: 0; display: none; }
+</style>
+</helmet>
+
+<div class="ob" style="position: relative; height: 100vh; min-height: 640px; overflow: hidden; font-family: 'IBM Plex Sans', Helvetica, sans-serif; color: #e6e9ec;">
+
+  <!-- editor behind -->
+  <div style="position: absolute; inset: 0; background: radial-gradient(circle at 58% 38%, #2b5764, #0b191f 72%);"></div>
+  <div style="position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px); background-size: 48px 48px;"></div>
+  <div style="position: absolute; inset: 0; background: rgba(4,7,9,0.62); backdrop-filter: blur(5px);"></div>
+
+  <!-- MODAL -->
+  <div style="position: absolute; inset: 34px; display: flex; flex-direction: column; border-radius: 2px; overflow: hidden; background: linear-gradient(180deg, rgba(27,31,36,0.97), rgba(16,19,22,0.98)); border: 1px solid rgba(0,0,0,0.75); box-shadow: 0 30px 70px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.6);">
+
+    <!-- title bar -->
+    <div style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.015)); border-bottom: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 0 -1px 0 rgba(255,255,255,0.045);">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: #9aa3ac; text-shadow: 0 -1px 0 rgba(0,0,0,0.65);">Object Browser</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #626b73;">45,616 objects</span>
+      <span style="flex: 1;"></span>
+      <span style="{{ closeKey.plinth }}" onClick="{{ closeKey.onClick }}" onMouseDown="{{ closeKey.onMouseDown }}" onMouseUp="{{ closeKey.onMouseUp }}" onMouseEnter="{{ closeKey.onMouseEnter }}" onMouseLeave="{{ closeKey.onMouseLeave }}"><span style="{{ closeKey.face }}">×</span></span>
+    </div>
+
+    <!-- search row -->
+    <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; flex-shrink: 0; border-bottom: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 -1px 0 rgba(255,255,255,0.045);">
+      <span style="{{ searchWrap }}">
+        <span style="font-size: 11px; color: #7b848d;">⌕</span>
+        <input type="text" value="{{ query }}" placeholder="Type to search 45,616 objects" onChange="{{ onQuery }}" onFocus="{{ onFocus }}" onBlur="{{ onBlur }}" ref="{{ searchRef }}" style="flex: 1; min-width: 0; background: transparent; border: none; outline: none; font: inherit; font-size: 12px; color: #eef2f5;">
+        <sc-if value="{{ hasQuery }}" hint-placeholder-val="{{ false }}">
+          <span style="{{ clearKey.plinth }}" onClick="{{ clearKey.onClick }}" onMouseDown="{{ clearKey.onMouseDown }}" onMouseUp="{{ clearKey.onMouseUp }}" onMouseEnter="{{ clearKey.onMouseEnter }}" onMouseLeave="{{ clearKey.onMouseLeave }}"><span style="{{ clearKey.face }}">×</span></span>
+        </sc-if>
+      </span>
+      <span style="{{ sizeStrip }}">
+        <sc-for list="{{ sizes }}" as="z" hint-placeholder-count="3">
+          <span style="{{ z.style }}" onClick="{{ z.onClick }}" onMouseDown="{{ z.onMouseDown }}" onMouseUp="{{ z.onMouseUp }}" onMouseEnter="{{ z.onMouseEnter }}" onMouseLeave="{{ z.onMouseLeave }}">{{ z.label }}</span>
+        </sc-for>
+      </span>
+    </div>
+
+    <!-- body: categories + grid -->
+    <div style="display: flex; flex: 1; min-height: 0;">
+
+      <div style="width: 156px; flex-shrink: 0; display: flex; flex-direction: column; background: rgba(0,0,0,0.26); border-right: 1px solid rgba(0,0,0,0.6); box-shadow: inset -1px 0 0 rgba(255,255,255,0.045);">
+        <span style="padding: 8px 10px 5px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #6a737b;">Collections</span>
+        <div class="scroller" style="flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 6px;">
+          <sc-for list="{{ cats }}" as="c" hint-placeholder-count="9">
+            <div style="{{ c.row }}" onClick="{{ c.onClick }}" onMouseEnter="{{ c.onMouseEnter }}" onMouseLeave="{{ c.onMouseLeave }}">
+              <span style="{{ c.labelStyle }}">{{ c.label }}</span>
+              <span style="{{ c.count }}">{{ c.n }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 13px;">
+        <div class="scroller" ref="{{ gridRef }}" onScroll="{{ onGridScroll }}" style="overflow-y: auto; padding: 10px;">
+          <sc-if value="{{ hasResults }}" hint-placeholder-val="{{ true }}">
+            <div style="{{ gridStyle }}">
+              <sc-for list="{{ items }}" as="it" hint-placeholder-count="18">
+                <span style="{{ it.cell }}" onClick="{{ it.onClick }}" onDoubleClick="{{ it.onDoubleClick }}" onMouseEnter="{{ it.onMouseEnter }}" onMouseLeave="{{ it.onMouseLeave }}">
+                  <span style="{{ it.thumb }}"><span style="{{ it.shape }}"></span></span>
+                  <span style="{{ it.labelStyle }}">{{ it.label }}</span>
+                </span>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ empty }}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 220px;">
+              <span style="font-size: 20px; color: #3f474e;">⌕</span>
+              <span style="font-size: 11.5px; color: #98a0a8;">No objects match “{{ query }}”</span>
+              <span style="{{ resetKey.plinth }}" onClick="{{ resetKey.onClick }}" onMouseDown="{{ resetKey.onMouseDown }}" onMouseUp="{{ resetKey.onMouseUp }}" onMouseEnter="{{ resetKey.onMouseEnter }}" onMouseLeave="{{ resetKey.onMouseLeave }}"><span style="{{ resetKey.face }}">Clear search</span></span>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="{{ sb.bar }}">
+          <span style="{{ sb.up.plinth }}" onClick="{{ sb.up.onClick }}" onMouseDown="{{ sb.up.onMouseDown }}" onMouseUp="{{ sb.up.onMouseUp }}" onMouseEnter="{{ sb.up.onMouseEnter }}" onMouseLeave="{{ sb.up.onMouseLeave }}"><span style="{{ sb.up.face }}">▲</span></span>
+          <span style="{{ sb.track }}" onMouseDown="{{ sb.onTrackDown }}">
+            <span style="{{ sb.thumb }}" onMouseDown="{{ sb.onThumbDown }}" onMouseEnter="{{ sb.onThumbEnter }}" onMouseLeave="{{ sb.onThumbLeave }}"></span>
+          </span>
+          <span style="{{ sb.down.plinth }}" onClick="{{ sb.down.onClick }}" onMouseDown="{{ sb.down.onMouseDown }}" onMouseUp="{{ sb.down.onMouseUp }}" onMouseEnter="{{ sb.down.onMouseEnter }}" onMouseLeave="{{ sb.down.onMouseLeave }}"><span style="{{ sb.down.face }}">▼</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- footer -->
+    <div style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.01)); border-top: 1px solid rgba(0,0,0,0.6); box-shadow: inset 0 1px 0 rgba(255,255,255,0.07);">
+      <span style="{{ selSwatch }}"><span style="{{ selShape }}"></span></span>
+      <span style="display: flex; flex-direction: column; gap: 1px; min-width: 0;">
+        <span style="font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #eef2f6;">{{ selLabel }}</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #78818a;">{{ selMeta }}</span>
+      </span>
+      <span style="flex: 1;"></span>
+      <span style="display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #6a737b;">
+        <span style="{{ cap }}">↵</span>place
+        <span style="{{ cap }}">Esc</span>close
+        <span style="{{ cap }}">⇧↵</span>place &amp; keep open
+      </span>
+      <span style="{{ cancelKey.plinth }}" onClick="{{ cancelKey.onClick }}" onMouseDown="{{ cancelKey.onMouseDown }}" onMouseUp="{{ cancelKey.onMouseUp }}" onMouseEnter="{{ cancelKey.onMouseEnter }}" onMouseLeave="{{ cancelKey.onMouseLeave }}"><span style="{{ cancelKey.face }}">Cancel</span></span>
+      <span style="{{ placeKey.plinth }}" onClick="{{ placeKey.onClick }}" onMouseDown="{{ placeKey.onMouseDown }}" onMouseUp="{{ placeKey.onMouseUp }}" onMouseEnter="{{ placeKey.onMouseEnter }}" onMouseLeave="{{ placeKey.onMouseLeave }}"><span style="{{ placeKey.face }}">Place object</span></span>
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1180,&quot;height&quot;:740},&quot;radius&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:1,&quot;min&quot;:0,&quot;max&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;},&quot;travel&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:2,&quot;min&quot;:0,&quot;max&quot;:4,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:200,&quot;min&quot;:0,&quot;max&quot;:360,&quot;unit&quot;:&quot;°&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tokens&quot;}}">
+class Component extends DCLogic {
+  state = {
+    query: "", focus: false, cat: "all", catHover: null,
+    sel: "wood_3x4", hover: null, pressed: null, tileHover: null,
+    size: "M", metrics: null, sbHover: false, sbDrag: false,
+  };
+
+  r() { return this.props.radius ?? 1; }
+  t() { return this.props.travel ?? 2; }
+  accent(l, c, a) {
+    const h = this.props.accent ?? 200;
+    return "oklch(" + l + " " + c + " " + h + (a != null ? " / " + a : "") + ")";
+  }
+
+  componentDidMount() {
+    this._move = (e) => {
+      if (!this._sb) return;
+      const el = this._grid;
+      if (!el) return;
+      const range = this._sb.trackPx - this._sb.thumbPx;
+      if (range <= 0) return;
+      const frac = Math.min(1, Math.max(0, (this._sb.startThumb + e.clientY - this._sb.start) / range));
+      el.scrollTop = frac * (el.scrollHeight - el.clientHeight);
+      this.measure();
+    };
+    this._up = () => { this._sb = null; if (this.state.sbDrag) this.setState({ sbDrag: false }); };
+    window.addEventListener("mousemove", this._move);
+    window.addEventListener("mouseup", this._up);
+    requestAnimationFrame(() => this.measure());
+  }
+
+  componentDidUpdate() { this.measure(); }
+
+  componentWillUnmount() {
+    window.removeEventListener("mousemove", this._move);
+    window.removeEventListener("mouseup", this._up);
+  }
+
+  measure() {
+    const el = this._grid;
+    if (!el) return;
+    const m = { top: el.scrollTop, ch: el.clientHeight, sh: el.scrollHeight };
+    const p = this.state.metrics;
+    if (!p || p.top !== m.top || p.ch !== m.ch || p.sh !== m.sh) this.setState({ metrics: m });
+  }
+
+  bind(name, onClick) {
+    return {
+      onMouseDown: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.setState({ pressed: name }); },
+      onMouseUp: () => this.setState({ pressed: null }),
+      onMouseEnter: () => this.setState({ hover: name }),
+      onMouseLeave: () => this.setState({ pressed: null, hover: null }),
+      onClick: onClick,
+    };
+  }
+
+  key(name, o) {
+    o = o || {};
+    const t = o.travel != null ? o.travel : this.t(), r = this.r();
+    const pressed = this.state.pressed === name || o.held;
+    const hover = !o.held && this.state.hover === name;
+    let bg, border, inset, color;
+    if (o.tone === "ghost") {
+      bg = pressed ? "rgba(255,255,255,0.04)" : hover ? "rgba(255,255,255,0.1)" : "transparent";
+      border = "1px solid rgba(0,0,0," + (hover || pressed ? 0.4 : 0.2) + ")";
+      inset = pressed ? "inset 0 1px 2px rgba(0,0,0,0.3)" : hover ? "inset 0 1px 0 rgba(255,255,255,0.12)" : "none";
+      color = pressed ? "#98a0a8" : hover ? "#eef2f6" : "#a8b0b8";
+    } else if (o.tone === "accent") {
+      bg = pressed ? "linear-gradient(180deg, " + this.accent(0.7, 0.1) + ", " + this.accent(0.6, 0.11) + ")"
+        : "linear-gradient(180deg, " + this.accent(hover ? 0.86 : 0.82, 0.1) + ", " + this.accent(hover ? 0.72 : 0.68, 0.12) + ")";
+      border = "1px solid rgba(0,0,0,0.5)";
+      inset = pressed ? "inset 0 1px 0 rgba(255,255,255,0.18), inset 0 2px 3px rgba(0,0,0,0.3)" : "inset 0 1px 0 rgba(255,255,255,0.5)";
+      color = "#04171d";
+    } else {
+      const a = pressed ? 0.09 : hover ? 0.24 : 0.16;
+      const b = pressed ? 0.035 : hover ? 0.11 : 0.06;
+      bg = "linear-gradient(180deg, rgba(255,255,255," + a + "), rgba(255,255,255," + b + "))";
+      border = "1px solid rgba(0,0,0," + (pressed ? 0.55 : 0.5) + ")";
+      inset = pressed ? "inset 0 1px 0 rgba(255,255,255,0.07), inset 0 2px 3px rgba(0,0,0,0.4)"
+        : "inset 0 1px 0 rgba(255,255,255," + (hover ? 0.26 : 0.18) + ")";
+      color = pressed ? "#bdc5cc" : hover ? "#f1f5f9" : "#e2e8ee";
+    }
+    return {
+      plinth: {
+        display: "block", borderRadius: r + "px", background: o.hollow ? "transparent" : "rgba(0,0,0,0.6)",
+        paddingTop: pressed ? t + "px" : 0, paddingBottom: pressed ? 0 : t + "px",
+        cursor: "pointer", userSelect: "none", boxSizing: "border-box", flexShrink: 0,
+      },
+      face: {
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: o.size ? o.size + "px" : undefined, height: o.size ? o.size + "px" : undefined,
+        padding: o.pad || "5px 10px", boxSizing: "border-box", borderRadius: r + "px",
+        fontSize: (o.fontSize || 11) + "px", fontWeight: o.tone === "accent" ? 600 : 500, lineHeight: 1,
+        background: bg, border: border, boxShadow: inset, color: color,
+        textShadow: o.tone === "accent" ? "0 1px 0 rgba(255,255,255,0.25)" : "0 -1px 0 rgba(0,0,0,0.5)",
+      },
+    };
+  }
+
+  library() {
+    const defs = [
+      ["metal", "teal_5x4 white_3x4 white_5x8 rust_2x2 beam_i_4x8 beam_h_6x6 plate_2x4 grate_4x4 pipe_3x3"],
+      ["wood", "2x2_log 2x2_painted 3x3_log 3x3_painted 3x4 4x4_log 4x4_log_light 4x4_painted 5x5_log 5x5_log_dark 6x6_log plank_2x6"],
+      ["roof", "water_drain_a water_drain_b water_drain_c water_drain_d vent_box vent_pipe hatch_small chimney_brick"],
+      ["scaffolding", "support pole plank plank_long plank_short frame_2m frame_4m tie_bar"],
+      ["concrete", "slab_2x2 slab_4x4 pillar_round pillar_square curb_straight curb_corner block_hollow"],
+      ["glass", "pane_1x1 pane_2x2 pane_frosted pane_broken block_clear"],
+      ["fence", "chainlink_2m chainlink_4m picket_2m barbed_top gate_single"],
+      ["prop", "crate_small crate_large barrel_steel barrel_plastic pallet_wood sack_grain toolbox"],
+      ["light", "lamp_post street_light flood_light bulb_bare neon_sign"],
+    ];
+    const tint = {
+      metal: "oklch(0.72 0.02 240)", wood: "oklch(0.58 0.08 62)", roof: "oklch(0.36 0.02 250)",
+      scaffolding: "oklch(0.7 0.05 95)", concrete: "oklch(0.66 0.01 110)", glass: "oklch(0.78 0.06 215)",
+      fence: "oklch(0.6 0.02 200)", prop: "oklch(0.55 0.07 48)", light: "oklch(0.8 0.12 85)",
+    };
+    const shapes = { metal: "beam", wood: "beam", roof: "block", scaffolding: "lattice", concrete: "block", glass: "pane", fence: "lattice", prop: "block", light: "post" };
+    const out = [];
+    defs.forEach(([cat, names]) => names.split(" ").forEach(n => out.push({
+      id: cat + "_" + n, label: cat + "_" + n, cat: cat, tint: tint[cat], shape: shapes[cat],
+    })));
+    return out;
+  }
+
+  renderVals() {
+    const s = this.state, r = this.r();
+    const lib = this.library();
+    const q = s.query.trim().toLowerCase();
+    const filtered = lib.filter(o => (s.cat === "all" || o.cat === s.cat) && (!q || o.label.toLowerCase().includes(q)));
+
+    const counts = { all: lib.length };
+    lib.forEach(o => { counts[o.cat] = (counts[o.cat] || 0) + 1; });
+    const catList = ["all"].concat(Object.keys(counts).filter(k => k !== "all"));
+    const cats = catList.map(id => {
+      const active = s.cat === id, hv = s.catHover === id;
+      return {
+        label: id === "all" ? "All objects" : id, n: counts[id],
+        row: {
+          display: "flex", alignItems: "center", gap: "7px", height: "22px", padding: "0 10px",
+          cursor: "pointer", userSelect: "none",
+          background: active ? this.accent(0.74, 0.11) : hv ? "rgba(255,255,255,0.055)" : "transparent",
+          boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -1px 0 rgba(0,0,0,0.25)" : "none",
+        },
+        labelStyle: { flex: 1, fontSize: "11.5px", textTransform: id === "all" ? "none" : "capitalize", color: active ? "#041418" : "#cfd6dd" },
+        count: { fontFamily: "'IBM Plex Mono', monospace", fontSize: "9.5px", color: active ? "rgba(4,20,24,0.65)" : "#6a737b" },
+        onClick: () => this.setState({ cat: id }),
+        onMouseEnter: () => this.setState({ catHover: id }),
+        onMouseLeave: () => this.setState({ catHover: null }),
+      };
+    });
+
+    const tile = { S: 74, M: 96, L: 128 }[s.size];
+    const shapeFor = (o, sel) => {
+      const base = { display: "block", background: o.tint, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.35), 0 2px 5px rgba(0,0,0,0.55)" };
+      if (o.shape === "beam") return Object.assign({}, base, { width: "62%", height: "10%", transform: "rotate(-28deg)", borderRadius: "1px" });
+      if (o.shape === "block") return Object.assign({}, base, { width: "46%", height: "42%", borderRadius: "1px" });
+      if (o.shape === "pane") return Object.assign({}, base, { width: "44%", height: "52%", opacity: 0.55, border: "1px solid rgba(255,255,255,0.35)" });
+      if (o.shape === "post") return Object.assign({}, base, { width: "9%", height: "62%", borderRadius: "1px" });
+      return Object.assign({}, base, {
+        width: "58%", height: "44%", background: "repeating-linear-gradient(45deg, " + o.tint + " 0 2px, rgba(0,0,0,0.35) 2px 5px)",
+      });
+    };
+
+    const items = filtered.map(o => {
+      const sel = s.sel === o.id, hv = s.tileHover === o.id;
+      return {
+        label: o.label,
+        cell: {
+          display: "flex", flexDirection: "column", gap: "5px", padding: "4px", borderRadius: r + "px",
+          cursor: "pointer", userSelect: "none",
+          background: sel ? this.accent(0.74, 0.11, 0.2) : hv ? "rgba(255,255,255,0.05)" : "transparent",
+          boxShadow: sel ? "inset 0 0 0 1px " + this.accent(0.74, 0.11, 0.75) : "none",
+        },
+        thumb: {
+          display: "flex", alignItems: "center", justifyContent: "center",
+          height: Math.round(tile * 0.72) + "px", borderRadius: r + "px", overflow: "hidden",
+          background: "linear-gradient(180deg, #2b3138 0%, #1b1f24 55%, #14181c 100%)",
+          border: "1px solid rgba(0,0,0,0.65)",
+          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.13), inset 0 -10px 18px rgba(0,0,0,0.4)",
+        },
+        shape: shapeFor(o, sel),
+        labelStyle: {
+          fontSize: "10px", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          color: sel ? "#eef2f6" : "#9aa2aa",
+        },
+        onClick: () => this.setState({ sel: o.id }),
+        onDoubleClick: () => this.setState({ sel: o.id }),
+        onMouseEnter: () => this.setState({ tileHover: o.id }),
+        onMouseLeave: () => this.setState({ tileHover: null }),
+      };
+    });
+
+    // drawn scrollbar for the grid
+    const m = s.metrics || { top: 0, ch: 1, sh: 1 };
+    const stepPx = 13;
+    const trackPx = Math.max(0, m.ch - stepPx * 2);
+    const scrollable = m.sh - m.ch > 1;
+    const thumbPx = Math.max(24, Math.round(trackPx * Math.min(1, m.ch / Math.max(1, m.sh))));
+    const thumbOff = Math.round((trackPx - thumbPx) * Math.min(1, m.top / Math.max(1, m.sh - m.ch)));
+    const sbFace = s.sbDrag
+      ? { background: "linear-gradient(180deg, rgba(255,255,255,0.1), rgba(255,255,255,0.04))", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.07), inset 0 2px 4px rgba(0,0,0,0.45)" }
+      : s.sbHover
+      ? { background: "linear-gradient(180deg, rgba(255,255,255,0.25), rgba(255,255,255,0.11))", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.3)" }
+      : { background: "linear-gradient(180deg, rgba(255,255,255,0.19), rgba(255,255,255,0.07))", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.22)" };
+    const sbStep = (name, dir) => {
+      const k = this.key(name, { travel: 1, hollow: true, pad: "0", fontSize: 6, size: 13 });
+      k.face.color = "#aeb6be";
+      Object.assign(k, this.bind(name, () => { if (this._grid) { this._grid.scrollTop += dir * 60; this.measure(); } }));
+      return k;
+    };
+
+    const selObj = lib.find(o => o.id === s.sel) || filtered[0] || lib[0];
+    const sizes = ["S", "M", "L"].map((z, i) => {
+      const held = s.size === z;
+      const pressed = s.pressed === "size" + z || held;
+      const hover = !held && s.hover === "size" + z;
+      const a = pressed ? 0.08 : hover ? 0.24 : 0.16;
+      const b = pressed ? 0.03 : hover ? 0.11 : 0.06;
+      return Object.assign({
+        label: z,
+        style: {
+          display: "flex", alignItems: "center", justifyContent: "center", width: "24px", height: "23px",
+          boxSizing: "border-box", cursor: "pointer", userSelect: "none",
+          fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px",
+          borderRight: i === 2 ? "none" : "1px solid rgba(0,0,0,0.6)",
+          background: "linear-gradient(180deg, rgba(255,255,255," + a + "), rgba(255,255,255," + b + "))",
+          boxShadow: pressed ? "inset 0 2px 4px rgba(0,0,0,0.5)" : "inset 0 1px 0 rgba(255,255,255," + (hover ? 0.26 : 0.18) + ")",
+          color: held ? "#ffffff" : "#c7cfd6",
+          textShadow: "0 -1px 0 rgba(0,0,0,0.6)",
+        },
+      }, this.bind("size" + z, () => this.setState({ size: z })));
+    });
+
+    return {
+      query: s.query,
+      hasQuery: s.query.length > 0,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      onFocus: () => this.setState({ focus: true }),
+      onBlur: () => this.setState({ focus: false }),
+      searchRef: (el) => { if (el && !this._focused) { this._focused = true; el.focus(); } },
+      searchWrap: {
+        flex: 1, display: "flex", alignItems: "center", gap: "7px", padding: "5px 5px 5px 8px",
+        borderRadius: r + "px", background: s.focus ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.42)",
+        border: "1px solid " + (s.focus ? this.accent(0.74, 0.11) : "rgba(0,0,0,0.6)"),
+        boxShadow: s.focus
+          ? "inset 0 2px 4px rgba(0,0,0,0.6), 0 0 0 2px " + this.accent(0.74, 0.11, 0.16)
+          : "inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.07)",
+      },
+      clearKey: Object.assign(this.key("clear", { tone: "ghost", size: 17, pad: "0", travel: 1, fontSize: 11 }), this.bind("clear", () => this.setState({ query: "" }))),
+      sizeStrip: {
+        display: "inline-flex", alignItems: "stretch", borderRadius: r + "px", overflow: "hidden", flexShrink: 0,
+        border: "1px solid rgba(0,0,0,0.6)", boxShadow: "0 1px 0 rgba(255,255,255,0.06), 0 2px 3px rgba(0,0,0,0.4)",
+      },
+      sizes: sizes,
+
+      cats: cats,
+      items: items,
+      hasResults: filtered.length > 0,
+      empty: filtered.length === 0,
+      gridStyle: {
+        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(" + tile + "px, 1fr))", gap: "6px",
+      },
+      gridRef: (el) => { if (el) this._grid = el; },
+      onGridScroll: () => this.measure(),
+
+      sb: {
+        bar: {
+          display: "flex", flexDirection: "column", background: "rgba(0,0,0,0.46)",
+          boxShadow: "inset 1px 0 0 rgba(0,0,0,0.6), inset -1px 0 0 rgba(255,255,255,0.05)",
+        },
+        track: { position: "relative", flex: 1, boxShadow: "inset 0 1px 3px rgba(0,0,0,0.5)" },
+        thumb: Object.assign({
+          position: "absolute", left: "2px", right: "2px", top: thumbOff + "px", height: thumbPx + "px",
+          borderRadius: r + "px", border: "1px solid rgba(0,0,0,0.55)", boxSizing: "border-box",
+          display: scrollable ? "block" : "none",
+        }, sbFace),
+        up: sbStep("sb-up", -1), down: sbStep("sb-down", 1),
+        onThumbDown: (e) => {
+          e.preventDefault();
+          this._sb = { start: e.clientY, startThumb: thumbOff, trackPx: trackPx, thumbPx: thumbPx };
+          this.setState({ sbDrag: true });
+        },
+        onThumbEnter: () => this.setState({ sbHover: true }),
+        onThumbLeave: () => this.setState({ sbHover: false }),
+        onTrackDown: (e) => {
+          if (!this._grid || e.target !== e.currentTarget) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const at = e.clientY - rect.top;
+          this._grid.scrollTop += (at > thumbOff + thumbPx / 2 ? 1 : -1) * this._grid.clientHeight * 0.9;
+          this.measure();
+        },
+      },
+
+      selSwatch: {
+        display: "flex", alignItems: "center", justifyContent: "center", width: "26px", height: "26px",
+        flexShrink: 0, borderRadius: r + "px",
+        background: "linear-gradient(180deg, #2b3138, #14181c)",
+        border: "1px solid rgba(0,0,0,0.65)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.13), 0 1px 3px rgba(0,0,0,0.5)",
+      },
+      selShape: selObj ? shapeFor(selObj) : { display: "none" },
+      selLabel: selObj ? selObj.label : "—",
+      selMeta: selObj ? selObj.cat + " · " + filtered.length + " shown" : "",
+      cap: {
+        display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: "17px",
+        padding: "2px 5px 3px", marginRight: "2px", borderRadius: r + "px",
+        fontFamily: "'IBM Plex Mono', monospace", fontSize: "9.5px", lineHeight: 1, color: "#dbe1e7",
+        background: "linear-gradient(180deg, rgba(255,255,255,0.17), rgba(255,255,255,0.06))",
+        border: "1px solid rgba(0,0,0,0.6)",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.22), 0 1px 0 rgba(0,0,0,0.5)",
+      },
+      closeKey: Object.assign(this.key("close", { tone: "ghost", size: 18, pad: "0", travel: 1, fontSize: 12 }), this.bind("close", () => {})),
+      resetKey: Object.assign(this.key("reset", {}), this.bind("reset", () => this.setState({ query: "" }))),
+      cancelKey: Object.assign(this.key("cancel", {}), this.bind("cancel", () => {})),
+      placeKey: Object.assign(this.key("place", { tone: "accent" }), this.bind("place", () => {})),
+    };
+  }
+}
+</script>
+</body>
+</html>

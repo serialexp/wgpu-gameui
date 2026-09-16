@@ -1,14 +1,22 @@
 //! UI widgets - buttons, text inputs, panels, etc.
 
+mod asset_grid;
+mod badge;
 mod banner;
+mod breadcrumb;
+mod busy;
 mod button;
 mod checkbox;
 mod color_picker;
+mod combo_box;
+mod curve_editor;
+mod doc_tabs;
 mod drag;
 mod drag_handle;
 mod draw_list;
 mod dropdown;
 mod focus;
+mod gradient_ramp;
 mod group;
 mod hit_zone;
 #[cfg(feature = "phosphor-icons")]
@@ -16,25 +24,41 @@ mod icon;
 mod image;
 mod image_button;
 mod list;
+mod material;
 mod menubar;
 mod number_input;
 mod panel;
+mod popover;
 mod progress_bar;
 mod radio;
 mod scroll_view;
 mod separator;
 mod slider;
+mod splitter;
+mod status_bar;
 mod table;
 mod tabs;
+mod tag_input;
 mod text_input;
 mod toast;
+mod toggle;
 mod tooltip;
 mod tree;
+mod vector_field;
 
+pub use asset_grid::{AssetGrid, AssetGridOutput};
+pub use badge::{ChipOutput, badge, chip, keycap};
 pub use banner::{Banner, Severity};
+pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
+pub use busy::{EmptyState, dots, empty_state, skeleton, spinner};
 pub use button::Button;
 pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
+pub use combo_box::{
+    ComboOutput, draw_list as draw_combo_list, draw_trigger as draw_combo_trigger,
+};
+pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
+pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use drag::{DragCapture, DragId};
 pub use drag_handle::{DragHandle, DragHandleOutput};
 #[cfg(feature = "phosphor-icons")]
@@ -46,6 +70,10 @@ pub use draw_list::{
 };
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use focus::{FocusId, FocusState};
+pub use gradient_ramp::{
+    GradientStop, RampOutput, draw as draw_gradient_ramp, readout as gradient_ramp_readout,
+    sample as sample_ramp,
+};
 pub use group::Group;
 pub use hit_zone::{HitZone, HitZoneOutput};
 #[cfg(feature = "phosphor-icons")]
@@ -53,6 +81,8 @@ pub use icon::Icon;
 pub use image::{Image, ImageAlign, ImageFit};
 pub use image_button::ImageButton;
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
+pub(crate) use material::sheen_over;
+pub use material::{Material, Tone};
 pub use menubar::{
     AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBar, MenuBarId, MenuBarOutput,
     MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger, Modifiers,
@@ -60,17 +90,23 @@ pub use menubar::{
 };
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};
+pub use popover::{Popover, PopoverOutput, PopoverSide, measure_sheet_height, place_popover};
 pub use progress_bar::{ProgressBar, ProgressFill};
 pub use radio::RadioGroup;
 pub use scroll_view::{ScrollBegin, ScrollState, ScrollView};
 pub use separator::{Orientation, Separator};
 pub use slider::{Slider, SliderOutput};
+pub use splitter::{SplitAxis, Splitter, SplitterOutput};
+pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
+pub use tag_input::{TagOutput, draw as draw_tag_input};
 pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
 pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
+pub use toggle::Toggle;
 pub use tooltip::{TooltipContent, TooltipLayer};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
+pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};
 
 use crate::{
     AnimSlot, AnimationState, Easing, InputState, StyleKey, StyleOverlay, StyleResolver, Theme,

@@ -1163,3 +1163,134 @@ Design: `docs/design/menubar.md` (phases 1–2 landed).
   popup-layer chrome rendered fine, and pre-existing at HEAD; the GPU suites
   never caught it because each rendered exactly one pass.)
 
+---
+
+## 2026-09-15 — "4a" default theme + the design-folder widget set
+
+Source: the `UI System Default Look/` design folder (4a sheets). Two halves:
+restyle everything that existed to the design language, then implement the
+designed components we didn't have. Fantasy Theme sheet intentionally ignored.
+
+### Theme retokened to the 4a design language
+
+- [x] **Renderer: gradient chrome.** `ChromeInstance` grew `bg2` — the SDF
+      fragment now mixes `bg → bg2` vertically across the rect — and
+      `DrawList::chrome_rect_gradient(rect, radius, thickness, bg, bg2, border)`
+      is the normal chrome entry point (`chrome_rect` = flat special case).
+      Instance stride 6×vec4; fallback (rotated transforms) composites
+      `rounded_rect` + `vertical_gradient`.
+- [x] **New material tokens on `Theme`/`StyleKey`** (all resolver/overlay
+      addressable, round-trip tested): `plinth`, `travel` (scalar),
+      `face_top/_hover/_pressed`, `face_bottom/…`, `edge_highlight(+hover/
+      _pressed)`, `inner_shadow`, `edge_shadow`, accent/danger face gradient
+      tops+bottoms per state, `on_accent`, `on_danger`. Existing keys retuned:
+      near-black neutrals (#10171c backdrop, #16191d panels), compact sizing
+      (13px text, 24px controls, radius 1, padding 4), teal oklch(200°) accent
+      reserved for state, redesigned severity hues, sunken wells
+      (`input_background` @ 42% black), doc-tab colors.
+- [x] **`src/widgets/material.rs` — the face-over-plinth vocabulary.** `Tone`
+      (Default/Accent/Danger/Ghost/Sunken) × `Material` state; `draw` paints
+      plinth + gradient face + 1px top highlight (pressed: face drops `travel`
+      px and a short inner shadow replaces the highlight), returning the face
+      rect for label centering. `draw_well(_simple)` paints the sunken input
+      field (inset shadow + under-line + accent border when focused).
+      `sheen_over` composites the translucent face tokens over the state base
+      (`Button`/`ButtonHover`/`ButtonPressed`) so `StyleKey::Button` overlays
+      still recolor buttons — the seam tests carry over unchanged in spirit.
+- [x] **Existing widgets restyled through the material:** Button (+ new
+      `.tone(Tone)` builder; press is geometric, label rides the face),
+      ImageButton, Checkbox (accent face + on-accent tick when checked, sunken
+      trough when not), RadioGroup (accent disc + dark dot selected), Slider
+      (sunken track, accent-gradient fill, light rectangular key knob),
+      TextInput/NumberInput (via the well), Dropdown (trigger = well; open
+      list = raised sheet), Tabs & menu sheets (held-key active tab, translucent
+      accent row highlight), ScrollView bars (docked plinth track + material
+      thumb), ProgressBar (sunken track + gradient fill + highlight).
+- [x] **Fonts:** design leans on IBM Plex Sans/Mono from Google Fonts — *not*
+      bundled. Kept Noto Sans as the default (`bundled-font`); theming to Plex
+      is `theme.font = Some(load_font_file(..)?)`. Flagged for Bart.
+
+### New widgets from the design sheets
+
+All under `src/widgets/`, exported from the crate root, unit-tested headless,
+and rendered in new `4a:*` gallery sections.
+
+- [x] **Toggle** (`toggle.rs`) — 28×15 slide switch; accent face when on, sunken
+      trough when off; `.focusable()` Space/Enter.
+- [x] **Badge / keycap / chip** (`badge.rs`) — free functions: `badge` (tinted
+      status pill), `keycap` (raised key cap with side line), `chip`
+      (toggleable filter pill: raised at rest, held-in accent when on).
+- [x] **Breadcrumb** (`breadcrumb.rs`) — clickable path trail; final segment is
+      the non-clickable current location.
+- [x] **Pager** (`breadcrumb.rs`) — `◀ n / total ▶` strip with clamping arrows,
+      or `.numeric()` page keys for small totals.
+- [x] **Status bar** (`status_bar.rs`) — 26px strip; first cell stretches,
+      hairline dividers between cells, `StatusCell::text/spacer/highlight`.
+- [x] **Splitter** (`splitter.rs`) — pane divider (vertical/horizontal) through
+      `DragCapture`; reports `drag_delta` along the axis while owned.
+- [x] **Tag input** (`tag_input.rs`) — well with removable chips + inline draft
+      field; Enter commits, ✕ reports removal; all state caller-owned.
+- [x] **Combo box** (`combo_box.rs`) — `draw_combo_trigger` (well + chevron key,
+      editable query, Enter submits) + `draw_combo_list` (raised option sheet
+      with accent match-highlighting), for popup-layer composition like
+      `Dropdown`.
+- [x] **Vector field** (`vector_field.rs`) — labeled XYZ rows; colored axis-tag
+      scrubbing through one shared `DragCapture`; reports `(row, component,
+      value)` deltas.
+- [x] **Document tabs** (`doc_tabs.rs`) — editor tabs: active flush, inactive
+      dropped 2px, dirty dot swaps to a ✕ key on hover.
+- [x] **Asset grid** (`asset_grid.rs`) — thumbnail plate grid; selection =
+      accent wash + inset ring; click reports the index.
+- [x] **Busy states** (`busy.rs`) — `skeleton` (shimmer band, app-owned phase),
+      `spinner` (accent arc on a ring), `dots` (pulsing trio),
+      `empty_state` (glyph/title/body block returning its extent for a CTA).
+- [x] **Gradient ramp** (`gradient_ramp.rs`) — 64-sample interpolated bar with
+      draggable diamond stops (order-agnostic; `sample()` + `RampOutput`
+      insert/drag reporting are pure).
+- [x] **Curve editor** (`curve_editor.rs`) — sunken plot, 4×4 grid, filled
+      curve region, draggable keys with neighbor-clamped x, empty-click insert.
+- [x] **Popover** (`popover.rs`) — anchored arrow sheet; `place_popover` keeps
+      the body inside bounds; `Popover::draw` reports close (✕ or outside
+      click).
+
+### Not ported (by design)
+
+- Fantasy Theme sheet (explicitly out of scope).
+- Backdrop-blur sheets: the popover/menu *looks* work today; the blurred-glass
+  material itself is already available to apps via `UiRenderer::blur_backdrop`
+  (render-side, not a widget concern).
+- Palette 255-swatch panel: needs a texture/UV story for swatch cells that
+  doesn't fit any existing widget; deferred until the editor needs it.
+
+## 2026-09-15 (later) — shadow audit: curve-fill fix, deeper inset shadows, drop shadows
+
+Bart asked whether the inner/outer shadows were missing and noticed the curve
+editor's under-curve region was blank. Audit against the 4a design sheets found
+three gaps, all closed:
+
+- **Curve fill was triangulated wrong** (`curve_editor.rs`): the old two
+  triangles per segment painted slivers beside the chord instead of the area
+  under it. Now each segment emits the under-chord trapezoid
+  (`a, b, b↓, a↓` split on the `b → a↓` diagonal) via the new
+  `DrawList::triangle_gradient`, with the design's vertical accent fade
+  (alpha 0.30 at the curve → 0.05 at the bottom). Key handles cast the
+  design's `0 1px 3px` mini shadow.
+- **Inset shadows were 2px stubs**; the design specifies `inset 0 2px 4px`.
+  New `Theme::inner_shadow_depth` scalar (`StyleKey::InnerShadowDepth`,
+  default 6) + shared `material::draw_inset_shadow(list, style, rect, depth,
+  inset)` helper now used by wells, slider track, progress track, checkbox
+  well, toggle off-state, chips, and the curve/ramp wells.
+- **Outer drop shadows were entirely absent.** New `DrawList::drop_shadow(
+  rect, offset_y, blur, radius, color)` primitive (five butt-joined gradient
+  rects; SDF-instanced under translation) applied at half-CSS-blur falloffs
+  from the design: tooltip `0 6px 18px`, dropdown list `0 10px 26px`,
+  toast `0 12px 30px`, popover `0 14px 44px`.
+
+Supporting changes: `DrawList::triangle_gradient` (per-corner colors),
+`Vertex` now derives `PartialEq` (tests), the debug linter no longer flags
+zero-alpha gradient skirts (`bg2` counts as paint) and exempts `Layer` nodes
+from `overflows_declared` (a layer's rect is input-blocking bounds, not a
+paint contract — popovers cast shadows past it by design). Gallery render
+eyeballed: curve fill, floating sheets, and well depth all match the 4a
+sheets; only the 5 pre-existing intentional `sibling_overlap` demo warnings
+remain.

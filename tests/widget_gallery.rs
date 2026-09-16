@@ -14,15 +14,22 @@
 use wgpu_gameui::debug::DebugReport;
 use wgpu_gameui::layout::{Flow as LayoutFlow, HStack, LayoutNode, MainAlign, Rect};
 use wgpu_gameui::{
-    Accelerator, Backdrop, Banner, BlurParams, Button, Checkbox, ColorPicker, ColumnWidth, Corner,
-    DragCapture, DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState,
-    Group, HitZone, Hsva, ImageButton, ImageFit, InputState, InteractionScene, Key, LayerStack,
-    List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu, MenuBar,
-    MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, ProgressBar, ProgressFill,
-    RadioGroup, ScrollState, ScrollView, SelectionMode, Separator, Severity, Slider, StyleKey,
-    StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock,
-    TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack, TooltipContent, TooltipLayer,
-    TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState, Underline, ease, lerp_color,
+    Accelerator, AssetGrid, Backdrop, Banner, BlurParams, Breadcrumb, Button, Checkbox,
+    ColorPicker, ColumnWidth, Corner, DocTab, DragCapture, DragHandle, DrawContext, DrawList,
+    Dropdown, DropdownState, Easing, FocusState, GradientStop, Group, HitZone, Hsva, ImageButton,
+    ImageFit, InputState, InteractionScene, Key, LayerStack, List, ListItem, ListState,
+    MeasureBuffer, MeasureConstraints, MeasuredChild, Menu, MenuBar, MenuBarState, MenuDrawEnv,
+    MenuItem, NavInput, NumberInput, Pager, Popover, PopoverSide, ProgressBar, ProgressFill,
+    RadioGroup, ScrollState, ScrollView, SelectionMode, Separator, Severity, Slider, StatusCell,
+    StyleKey, StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign,
+    TextBlock, TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack, Toggle, Tone,
+    TooltipContent, TooltipLayer, TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState,
+    Underline, VectorField, VectorScrub, ease, lerp_color,
+};
+use wgpu_gameui::{
+    EmptyState, STATUS_BAR_HEIGHT, badge, chip, dots, draw_combo_trigger, draw_curve_editor,
+    draw_doc_tabs, draw_gradient_ramp, draw_status_bar, draw_tag_input, empty_state, keycap,
+    place_popover, skeleton, spinner,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -1993,6 +2000,231 @@ fn render_widget_gallery() {
                     .with_size(13.0)
                     .with_color(150, 160, 180),
             );
+        }
+
+        // --- 4a design additions --------------------------------------------
+        // The new widgets ported from the "4a" UI design folder. One section
+        // per design-sheet grouping; every widget is drawn from its public API.
+        let s = StyleResolver::new(&theme);
+
+        flow.section(list, "4a: toggle · badge · keycap · chip");
+        {
+            let row = flow.cell(list, "", 360.0, 48.0);
+            let mut x = row.x;
+            // Toggle (off + on + labeled).
+            let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let r = Rect::new(x, row.y + 2.0, 60.0, 18.0);
+            Toggle::new().draw(false, r, &mut tctx);
+            let r = Rect::new(x, row.y + 26.0, 90.0, 18.0);
+            Toggle::new().label("shadows").draw(true, r, &mut tctx);
+            x += 100.0;
+            // Badges (status tones from the design's table).
+            badge(
+                list,
+                &s,
+                Rect::new(x, row.y + 2.0, 70.0, 15.0),
+                "ok",
+                s.color(StyleKey::Success),
+            );
+            badge(
+                list,
+                &s,
+                Rect::new(x, row.y + 24.0, 90.0, 15.0),
+                "over",
+                s.color(StyleKey::Error),
+            );
+            x += 100.0;
+            // Keycaps.
+            let mut kx = x;
+            for cap in ["⇧", "Ctrl", "F"] {
+                kx = keycap(list, &s, Rect::new(kx, row.y + 6.0, 200.0, 22.0), cap, 18.0).right()
+                    + 4.0;
+            }
+            x += 150.0;
+            // Chips (filter row: first on, rest off).
+            let mut cx = x;
+            for (j, label) in ["info", "warn", "verbose"].iter().enumerate() {
+                let out = chip(
+                    list,
+                    &s,
+                    Rect::new(cx, row.y + 8.0, 70.0, 20.0),
+                    label,
+                    j == 0,
+                    &input,
+                );
+                let _ = out;
+                cx += 62.0;
+            }
+        }
+
+        flow.section(list, "4a: breadcrumb · pager · status bar");
+        {
+            let r = flow.cell(list, "", 300.0, 20.0);
+            let segs = ["World", "Region", "Forest"];
+            Breadcrumb::new(&segs).draw(r, &mut {
+                DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
+            });
+
+            let r = flow.cell(list, "", 150.0, 20.0);
+            Pager::new().draw(2, 12, r, &mut {
+                DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
+            });
+
+            let r = flow.cell(list, "", 300.0, 18.0);
+            Pager::new().numeric().draw(0, 4, r, &mut {
+                DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
+            });
+
+            let r = flow.cell(list, "", 400.0, STATUS_BAR_HEIGHT);
+            draw_status_bar(
+                r,
+                &[
+                    StatusCell::text("Ready"),
+                    StatusCell::text("118 fps").highlight(),
+                    StatusCell::text(" tri 18,204"),
+                    StatusCell::spacer(24.0),
+                ],
+                &mut DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0),
+            );
+        }
+
+        flow.section(list, "4a: vector field · tag input · combo trigger");
+        {
+            let r_vec = flow.cell(list, "", 280.0, 46.0);
+            let r_tags = flow.cell(list, "Tags", 220.0, 48.0);
+            let r_combo = flow.cell(list, "Combo", 170.0, 24.0);
+            let r_docs = flow.cell(list, "Doc tabs", 300.0, 24.0);
+
+            let mut vctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let mut scrub: Option<VectorScrub> = None;
+            let mut capture = DragCapture::new();
+            let rows = [
+                ("Position", [8.90f32, 12.90, 9.00]),
+                ("Rotation", [0.00, 45.00, 0.00]),
+            ];
+            let _ = VectorField::new(&rows).draw(r_vec, &mut scrub, &mut capture, 900, &mut vctx);
+
+            // Tag input with committed tags + a draft.
+            let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let tags = vec!["occlusion".to_string(), "static".to_string()];
+            let mut draft = String::new();
+            let _ = draw_tag_input(r_tags, &tags, &mut draft, false, &mut tctx);
+
+            // Combo trigger.
+            let mut cctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let _ = draw_combo_trigger(r_combo, "Standard Lit", false, false, &mut cctx);
+
+            // Document tabs.
+            let docs = [
+                DocTab {
+                    label: "Level_01",
+                    dirty: true,
+                },
+                DocTab {
+                    label: "Arena",
+                    dirty: false,
+                },
+                DocTab {
+                    label: "Physics",
+                    dirty: true,
+                },
+            ];
+            let _ = draw_doc_tabs(r_docs, &docs, 0, &mut {
+                DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
+            });
+        }
+
+        flow.section(list, "4a: asset grid · busy states · empty state");
+        {
+            let assets = ["Crate_A", "Barrel", "Lamp_Post", "Bridge_A"];
+            let r = flow.cell(list, "", 380.0, 96.0);
+            let _ = AssetGrid::new(&assets, "▣").draw(r, 0, &mut {
+                DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
+            });
+
+            // Busy states.
+            let mut bctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let _ = &mut bctx;
+            let r = flow.cell(list, "Skeleton", 120.0, 10.0);
+            skeleton(list, &s, r, 0.3);
+            let r = flow.cell(list, "Spinner + dots", 80.0, 24.0);
+            spinner(list, &s, (r.x + 12.0, r.y + 12.0), 8.0, 0.4, 1.7);
+            dots(list, &s, (r.x + 52.0, r.y + 12.0), 0.3);
+
+            // Empty state with a CTA button under it.
+            let r = flow.cell(list, "Empty state", 260.0, 110.0);
+            let used = empty_state(
+                list,
+                &s,
+                r,
+                &EmptyState {
+                    glyph: "◈",
+                    title: "No entities",
+                    body: "Create one to get started.",
+                },
+            );
+            let cta = Rect::new(
+                used.x + (used.width - 120.0) * 0.5,
+                used.bottom() + 6.0,
+                120.0,
+                24.0,
+            );
+            let mut ectx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let _ = Button::new("Create Entity")
+                .tone(Tone::Accent)
+                .draw(cta, &mut ectx);
+        }
+
+        flow.section(list, "4a: gradient ramp · curve editor · popover");
+        {
+            let r_ramp = flow.cell(list, "Ramp (handles above)", 240.0, 42.0);
+            let r_curve = flow.cell(list, "Curve", 170.0, 110.0);
+            let r_pop = flow.cell(list, "Popover", 240.0, 96.0);
+
+            // Gradient ramp with three stops.
+            let mut gctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let stops = [
+                GradientStop::new(0.0, [0.05, 0.1, 0.12, 1.0]),
+                GradientStop::new(0.45, [0.24, 0.75, 0.78, 1.0]),
+                GradientStop::new(1.0, [0.95, 0.97, 0.98, 1.0]),
+            ];
+            let mut drag: Option<usize> = None;
+            let mut capture = DragCapture::new();
+            let _ = draw_gradient_ramp(r_ramp, &stops, 1, &mut drag, &mut capture, 901, &mut gctx);
+
+            // Curve editor.
+            let mut dctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let keys = [[0.0f32, 0.0], [0.35, 0.65], [0.7, 0.8], [1.0, 1.0]];
+            let mut cdrag: Option<usize> = None;
+            let mut ccapture = DragCapture::new();
+            let _ = draw_curve_editor(r_curve, &keys, 1, &mut cdrag, &mut ccapture, 902, &mut dctx);
+
+            // Popover (drawn pointing up at an anchor stub).
+            let anchor = Rect::new(r_pop.x + 90.0, r_pop.y + r_pop.height - 24.0, 60.0, 20.0);
+            list.rounded_rect(anchor, 1.0, [0.16, 0.19, 0.22, 1.0]);
+            list.text(
+                TextBlock::new("Anchor", anchor.x + 8.0, anchor.y + 4.0)
+                    .with_size(11.0)
+                    .with_color(190, 200, 220),
+            );
+            let popover_lines = ["Enter a new name for the selected entity."];
+            let popover_width = 212.0;
+            let popover_height = wgpu_gameui::measure_sheet_height(
+                popover_width,
+                "Rename",
+                &popover_lines,
+                list,
+                &s,
+            );
+            let body = place_popover(
+                [anchor.x + anchor.width * 0.5, anchor.y],
+                [popover_width, popover_height],
+                Rect::new(0.0, 0.0, W as f32, 600.0),
+                PopoverSide::Above,
+            );
+            Popover.draw(body, PopoverSide::Above, "Rename", &popover_lines, &mut {
+                DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
+            });
         }
 
         // --- Banners & toasts ----------------------------------------------

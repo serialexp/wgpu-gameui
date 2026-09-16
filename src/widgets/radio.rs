@@ -207,15 +207,18 @@ impl<'a> RadioGroup<'a> {
             }
 
             let list = &mut *ctx.draw_list;
-            // Outer ring over a subtle fill.
-            list.circle((cx, cy), radius, s.color(StyleKey::InputBackground));
-            list.circle_outline((cx, cy), radius, border, s.color(StyleKey::InputBorder));
-            // Filled dot for the selected option.
+            // 4a: unselected = sunken dark trough with a black edge; selected =
+            // the accent face with a dark on-accent dot.
             if i == selected {
-                list.circle((cx, cy), inner_radius, s.color(StyleKey::Accent));
+                list.circle((cx, cy), radius, s.color(StyleKey::Accent));
+                list.circle_outline((cx, cy), radius, border, [0.0, 0.0, 0.0, 0.5]);
+                list.circle((cx, cy), inner_radius, s.color(StyleKey::OnAccent));
+            } else {
+                list.circle((cx, cy), radius, s.color(StyleKey::InputBackground));
+                list.circle_outline((cx, cy), radius, border, [0.0, 0.0, 0.0, 0.6]);
             }
             // Hover highlight over the whole cell.
-            if hovered {
+            if hovered && i != selected {
                 list.quad(
                     cell.x,
                     cell.y,

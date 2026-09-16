@@ -252,10 +252,17 @@ impl ToastStack {
             let alpha = fade_alpha(a.elapsed, a.toast.ttl, self.fade);
             let toast_rect = Rect::new(x, y, self.width, h);
             // Scoped per toast rather than per stack: the stack has no
-            // allocation of its own, each toast does.
-            list.push_debug_scope_rect("Toast", toast_rect);
+            // allocation of its own, each toast does. Includes the drop
+            // shadow's skirt (`0 12px 30px` design shadow → 15px falloff).
+            list.push_debug_scope_rect(
+                "Toast",
+                Rect::new(x - 15.0, y - 15.0, self.width + 30.0, h + 30.0 + 12.0),
+            );
             list.push_tint();
             list.multiply_tint([1.0, 1.0, 1.0, alpha]);
+            // Drop shadow first, under the banner chrome; both fade with the
+            // toast via the tint multiply.
+            list.drop_shadow(toast_rect, 12.0, 15.0, 3.0, [0.0, 0.0, 0.0, 0.6]);
             banner.draw(toast_rect, list, style);
             list.pop_tint();
             list.pop_debug_scope();
@@ -324,10 +331,17 @@ mod tests {
             s.push(Toast::info(format!("toast {i}")));
         }
         s.draw(800.0, 600.0, &mut list, &s_style);
-        // Each banner emits exactly 2 chrome instances (bg + accent bar); with a
-        // cap of 2, only 2 banners (4 chrome instances) are drawn despite 3 queued.
+        // Each banner paints a fill quad + accent bar (2 chrome rects per
+        // toast, at the toast rect's origin); the drop shadow adds its own 3
+        // chrome instances per toast, so count banner plates only.
         assert_eq!(s.len(), 3, "all three stay queued");
-        assert_eq!(list.chrome_instances.len(), 4, "only 2 banners rendered");
+        let w = 300.0;
+        let plates = list
+            .chrome_instances
+            .iter()
+            .filter(|c| c.rect[2] == w && c.border[3] > 0.0)
+            .count();
+        assert_eq!(plates, 2, "only 2 banner plates rendered");
     }
 
     #[test]
@@ -338,8 +352,14 @@ mod tests {
 
         let mut right = DrawList::new();
         s.draw(800.0, 600.0, &mut right, &s_style);
-        // First chrome instance is the toast bg; its left edge.
-        let right_x = right.chrome_instances[0].rect[0];
+        // First banner-plate chrome instance (the drop shadow skirts are
+        // wider than the toast); its left edge.
+        let right_x = right
+            .chrome_instances
+            .iter()
+            .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
+            .unwrap()
+            .rect[0];
         assert!(
             (right_x - (800.0 - 16.0 - 300.0)).abs() < 1e-3,
             "right-anchored"
@@ -353,7 +373,12 @@ mod tests {
         s.push(Toast::info("x"));
         let mut left = DrawList::new();
         s.draw(800.0, 600.0, &mut left, &s_style);
-        let left_x = left.chrome_instances[0].rect[0];
+        let left_x = left
+            .chrome_instances
+            .iter()
+            .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
+            .unwrap()
+            .rect[0];
         assert!((left_x - 16.0).abs() < 1e-3, "left-anchored");
     }
 
@@ -368,7 +393,12 @@ mod tests {
         top.push(Toast::info("a"));
         let mut tlist = DrawList::new();
         top.draw(800.0, 600.0, &mut tlist, &s_style);
-        let top_y = tlist.chrome_instances[0].rect[1];
+        let top_y = tlist
+            .chrome_instances
+            .iter()
+            .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
+            .unwrap()
+            .rect[1];
         assert!((top_y - 16.0).abs() < 1e-3, "top toast at the top margin");
 
         // Bottom corner: toast's bottom edge near the bottom margin.
@@ -378,7 +408,12 @@ mod tests {
         bot.push(Toast::info("a"));
         let mut blist = DrawList::new();
         bot.draw(800.0, 600.0, &mut blist, &s_style);
-        let r = blist.chrome_instances[0].rect;
+        let r = blist
+            .chrome_instances
+            .iter()
+            .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
+            .unwrap()
+            .rect;
         let bottom_edge = r[1] + r[3];
         assert!(
             (bottom_edge - (600.0 - 16.0)).abs() < 1e-3,

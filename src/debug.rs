@@ -1266,8 +1266,10 @@ fn collect_nodes(
         n.clip = clip_from_parts(c.clip, c.params[2]);
         n.counts.chrome_instances = 1;
         n.layer = layer;
-        // Fully transparent fill *and* border paints nothing at all.
-        if c.bg[3] <= 0.0 && c.border[3] <= 0.0 {
+        // Fully transparent fill *and* border paints nothing at all. The
+        // gradient partner `bg2` counts as paint: a falloff band (e.g. a drop
+        // shadow's top skirt) is transparent at one edge by design.
+        if c.bg[3] <= 0.0 && c.bg2[3] <= 0.0 && c.border[3] <= 0.0 {
             n.effects.push("invisible");
         }
         n.order = (list_order, chrome_order[i].0, chrome_order[i].1);
@@ -1631,6 +1633,10 @@ fn lint(nodes: &[DebugNode], screen: Rect, cfg: &LintConfig, text_measured: bool
         if let Some(declared) = node.declared {
             // Overlay layers are pushed speculatively every frame and are empty
             // whenever nothing is open, so an empty one is not a defect.
+            // (Layer nodes are likewise exempt from `overflows_declared`
+            // below: a layer's rect is its input-blocking/hit-test bounds,
+            // not a paint contract — popovers and tooltips legitimately cast
+            // soft shadows past it.)
             if cfg.missing_paint
                 && node.kind != NodeKind::Layer
                 && !declared.is_empty()
@@ -1647,6 +1653,7 @@ fn lint(nodes: &[DebugNode], screen: Rect, cfg: &LintConfig, text_measured: bool
                     declared,
                 });
             } else if cfg.overflows_declared
+                && node.kind != NodeKind::Layer
                 && geometric
                 && has_area
                 && !declared.contains_rect(bounds, tol)

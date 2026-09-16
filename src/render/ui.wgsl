@@ -73,10 +73,11 @@ struct ChromeVsIn {
     @location(0) corner: vec2<f32>,
     // Per-instance:
     @location(1) rect: vec4<f32>,    // x, y, w, h  (post-transform world space)
-    @location(2) bg: vec4<f32>,      // fill color
-    @location(3) border: vec4<f32>,  // border color
-    @location(4) clip: vec4<f32>,    // clip rect x, y, w, h
-    @location(5) params: vec4<f32>,  // radius, thickness, clip_enabled, _pad
+    @location(2) bg: vec4<f32>,      // fill color (gradient top)
+    @location(3) bg2: vec4<f32>,     // fill color (gradient bottom)
+    @location(4) border: vec4<f32>,  // border color
+    @location(5) clip: vec4<f32>,    // clip rect x, y, w, h
+    @location(6) params: vec4<f32>,  // radius, thickness, clip_enabled, _pad
 };
 
 struct ChromeVsOut {
@@ -84,10 +85,11 @@ struct ChromeVsOut {
     @location(0) local: vec2<f32>,   // px from the rect's top-left
     @location(1) size: vec2<f32>,
     @location(2) bg: vec4<f32>,
-    @location(3) border: vec4<f32>,
-    @location(4) clip: vec4<f32>,
-    @location(5) params: vec4<f32>,
-    @location(6) frag_pos: vec2<f32>,
+    @location(3) bg2: vec4<f32>,
+    @location(4) border: vec4<f32>,
+    @location(5) clip: vec4<f32>,
+    @location(6) params: vec4<f32>,
+    @location(7) frag_pos: vec2<f32>,
 };
 
 @vertex
@@ -98,6 +100,7 @@ fn vs_chrome(in: ChromeVsIn) -> ChromeVsOut {
     out.local = in.corner * in.rect.zw;
     out.size = in.rect.zw;
     out.bg = in.bg;
+    out.bg2 = in.bg2;
     out.border = in.border;
     out.clip = in.clip;
     out.params = in.params;
@@ -129,7 +132,10 @@ fn fs_chrome(in: ChromeVsOut) -> @location(0) vec4<f32> {
     let aa = max(fwidth(d), 1e-4);
     let outer = 1.0 - smoothstep(-aa, aa, d);              // coverage inside outer edge
     let inner = 1.0 - smoothstep(-aa, aa, d + thickness);  // coverage inside the fill region
-    var color = mix(in.border, in.bg, inner);
+    // Vertical gradient fill: `bg` at the top edge → `bg2` at the bottom edge.
+    let t = clamp(in.local.y / max(in.size.y, 1e-4), 0.0, 1.0);
+    let fill = mix(in.bg, in.bg2, vec4<f32>(t));
+    var color = mix(in.border, fill, inner);
     let alpha = outer * color.a;
     if (alpha <= 0.0) {
         discard;

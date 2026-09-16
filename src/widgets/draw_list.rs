@@ -22,7 +22,7 @@ fn next_draw_list_id() -> u64 {
 
 /// A colored vertex for triangle-based rendering.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     /// World-space position `[x, y]`.
     pub position: [f32; 2],
@@ -98,6 +98,9 @@ pub struct ChromeInstance {
     pub rect: [f32; 4],
     /// Fill (background) color, tint already applied.
     pub bg: [f32; 4],
+    /// Gradient partner for `bg`: the fill is a vertical gradient from `bg` at
+    /// the top edge to `bg2` at the bottom edge. Equal to `bg` for a flat fill.
+    pub bg2: [f32; 4],
     /// Border color, tint already applied.
     pub border: [f32; 4],
     /// Clip rect `[x, y, w, h]` (ignored unless `params[2] > 0.5`).
@@ -547,8 +550,11 @@ impl DrawList {
     /// Cached per font. Exposed mainly so debug tooling can draw the band; most
     /// callers want [`Self::vcentered_text_y`].
     pub fn font_vmetrics(&mut self, font: Option<&FontHandle>) -> FontVMetrics {
-        self.text_measurer
-            .vmetrics(font, cosmic_text::Weight::NORMAL, cosmic_text::Style::Normal)
+        self.text_measurer.vmetrics(
+            font,
+            cosmic_text::Weight::NORMAL,
+            cosmic_text::Style::Normal,
+        )
     }
 
     /// Top `y` for a single-line text block of `font_size` so the label `text` is
@@ -963,6 +969,27 @@ impl DrawList {
         self.indices.extend_from_slice(&[base, base + 1, base + 2]);
     }
 
+    /// Add a single triangle with a distinct color per corner, in `p0`, `p1`,
+    /// `p2` order — the GPU interpolates linearly across the face. Like
+    /// [`Self::quad_gradient`], this reproduces any *linear* color ramp over
+    /// the triangle exactly (used for fills whose alpha follows an axis, e.g.
+    /// the curve editor's under-curve fade). Always soup geometry.
+    pub fn triangle_gradient(
+        &mut self,
+        p0: (f32, f32),
+        p1: (f32, f32),
+        p2: (f32, f32),
+        c0: [f32; 4],
+        c1: [f32; 4],
+        c2: [f32; 4],
+    ) {
+        let base = self.vertices.len() as u32;
+        self.vertices.push(self.vertex(p0.0, p0.1, c0));
+        self.vertices.push(self.vertex(p1.0, p1.1, c1));
+        self.vertices.push(self.vertex(p2.0, p2.1, c2));
+        self.indices.extend_from_slice(&[base, base + 1, base + 2]);
+    }
+
     /// Add a filled rectangle.
     ///
     /// Fast path (translation-only transform): records a single fill-only SDF
@@ -1073,6 +1100,113 @@ impl DrawList {
     /// Fill `rect` with a vertical gradient (`top` edge → `bottom` edge).
     pub fn vertical_gradient(&mut self, rect: Rect, top: [f32; 4], bottom: [f32; 4]) {
         self.quad_gradient(rect, [top, top, bottom, bottom]);
+    }
+
+    /// Draw a soft rectangular **drop shadow** below/around a floating surface
+    /// (the design language's outer `box-shadow`s: dropdown lists, tooltips,
+    /// toasts, popovers, modals).
+    ///
+    /// `offset_y` shifts the **falloff** down (a positive design y-offset);
+    /// `blur` is the CSS-style blur radius. The opaque core always remains
+    /// beneath `rect`: translating it would expose a solid strip below the
+    /// surface whenever `offset_y` is nonzero. The upper/lower skirts instead
+    /// become asymmetrical, which preserves the directional shadow without an
+    /// offset copy of the panel. `radius` rounds the core so a shadow under a
+    /// rounded sheet doesn't poke out square corners.
+    ///
+    /// Built from five butt-joined gradient rects (top skirt, core, bottom
+    /// skirt, left/right skirts) — under a translation-only transform each is
+    /// a cheap instanced SDF rect; under rotation they fall back to soup.
+    /// Paints the shadow only: draw it *before* the surface so the sheet
+    /// covers the opaque center.
+    pub fn drop_shadow(
+        &mut self,
+        rect: Rect,
+        offset_y: f32,
+        blur: f32,
+        radius: f32,
+        color: [f32; 4],
+    ) {
+        if color[3] <= 0.0 || (blur <= 0.0 && offset_y == 0.0) {
+            self.dropped_degenerate += 1;
+            return;
+        }
+        if blur <= 0.0 {
+            // Without a falloff there is no way to express directional shadow
+            // without duplicating the entire surface as an opaque offset rect.
+            self.dropped_degenerate += 1;
+            return;
+        }
+
+        if rect.is_empty() {
+            self.dropped_degenerate += 1;
+            return;
+        }
+
+        let rgb = [color[0], color[1], color[2]];
+        let zero = [rgb[0], rgb[1], rgb[2], 0.0];
+        // CSS blur convolution softens even the part of the shadow touching the
+        // surface edge. Starting our linear skirts at the unblurred alpha made
+        // their first rows read as a dark, offset duplicate of the panel.
+        let edge = [rgb[0], rgb[1], rgb[2], color[3] * 0.35];
+        // The surface covers this core exactly. A positive offset redistributes
+        // the skirt, rather than translating that solid shape below the panel.
+        let core = rect;
+        let top_blur = (blur - offset_y).max(0.0);
+        let bottom_blur = (blur + offset_y).max(0.0);
+
+        // A nine-patch falloff. The previous implementation translated an
+        // opaque core by the offset, visibly extending a shadow surface past
+        // dropdown content. Keep the core coincident with the surface and only
+        // extend the directional falloff below it.
+        self.chrome_rect(core, radius, 0.0, color, [0.0; 4]);
+        if top_blur > 0.0 {
+            self.vertical_gradient(
+                Rect::new(core.x, core.y - top_blur, core.width, top_blur),
+                zero,
+                edge,
+            );
+        }
+        if bottom_blur > 0.0 {
+            self.vertical_gradient(
+                Rect::new(core.x, core.bottom(), core.width, bottom_blur),
+                edge,
+                zero,
+            );
+        }
+        self.horizontal_gradient(
+            Rect::new(core.x - blur, core.y, blur, core.height),
+            zero,
+            edge,
+        );
+        self.horizontal_gradient(
+            Rect::new(core.right(), core.y, blur, core.height),
+            edge,
+            zero,
+        );
+        // Quad-gradient corners connect the side ramps without painting an
+        // opaque square outside a rounded surface. Their one opaque corner is
+        // the corner adjacent to `core`.
+        if top_blur > 0.0 {
+            self.quad_gradient(
+                Rect::new(core.x - blur, core.y - top_blur, blur, top_blur),
+                [zero, zero, edge, zero],
+            );
+            self.quad_gradient(
+                Rect::new(core.right(), core.y - top_blur, blur, top_blur),
+                [zero, zero, zero, edge],
+            );
+        }
+        if bottom_blur > 0.0 {
+            self.quad_gradient(
+                Rect::new(core.x - blur, core.bottom(), blur, bottom_blur),
+                [zero, edge, zero, zero],
+            );
+            self.quad_gradient(
+                Rect::new(core.right(), core.bottom(), blur, bottom_blur),
+                [edge, zero, zero, zero],
+            );
+        }
     }
 
     /// Fill `rect` with a radial gradient: `inner` at the center fading to
@@ -1430,6 +1564,26 @@ impl DrawList {
         bg: [f32; 4],
         border: [f32; 4],
     ) {
+        self.chrome_rect_gradient(rect, radius, thickness, bg, bg, border);
+    }
+
+    /// Draw a rounded-rect "chrome" panel whose **fill is a vertical gradient**
+    /// from `bg` (top edge) to `bg2` (bottom edge), plus a border — the same
+    /// instanced SDF fast path as [`Self::chrome_rect`].
+    ///
+    /// The design language this crate ships ("4a") builds every raised control
+    /// from such a face gradient (a subtle white sheen: brightest at the top,
+    /// falling off toward the bottom), so this is the normal entry point for
+    /// themed chrome; [`Self::chrome_rect`] is the flat-fill special case.
+    pub fn chrome_rect_gradient(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        thickness: f32,
+        bg: [f32; 4],
+        bg2: [f32; 4],
+        border: [f32; 4],
+    ) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             self.dropped_degenerate += 1;
             return;
@@ -1441,8 +1595,10 @@ impl DrawList {
             // run every vertex through the active transform.
             if radius > 0.0 {
                 self.rounded_rect(rect, radius, bg);
+                self.vertical_gradient(rect, bg, bg2);
             } else {
                 self.quad(rect.x, rect.y, rect.width, rect.height, bg);
+                self.vertical_gradient(rect, bg, bg2);
             }
             if thickness > 0.0 {
                 self.rounded_rect_outline(rect, radius, thickness, border);
@@ -1451,7 +1607,7 @@ impl DrawList {
         }
 
         // Fast path: one instance carrying both fill and border.
-        self.push_chrome_instance(rect, radius, thickness, bg, border);
+        self.push_chrome_instance(rect, radius, thickness, bg, bg2, border);
     }
 
     /// Record one SDF chrome instance (fill + border) for a translation-only
@@ -1465,6 +1621,7 @@ impl DrawList {
         radius: f32,
         thickness: f32,
         bg: [f32; 4],
+        bg2: [f32; 4],
         border: [f32; 4],
     ) {
         self.flush_soup();
@@ -1477,6 +1634,7 @@ impl DrawList {
         let inst = ChromeInstance {
             rect: [rect.x + m.tx, rect.y + m.ty, rect.width, rect.height],
             bg: self.apply_tint(bg),
+            bg2: self.apply_tint(bg2),
             border: self.apply_tint(border),
             clip,
             params: [radius, thickness, clip_enabled, 0.0],
@@ -1498,7 +1656,7 @@ impl DrawList {
     /// edge stays the fill color, no border ring). Backs the translation-only
     /// fast path of [`DrawList::quad`] / [`DrawList::rounded_rect`].
     fn fill_rect_instance(&mut self, rect: Rect, radius: f32, color: [f32; 4]) {
-        self.push_chrome_instance(rect, radius, 0.0, color, color);
+        self.push_chrome_instance(rect, radius, 0.0, color, color, color);
     }
 
     /// Record an outline-only SDF rect instance (transparent fill so only the
@@ -1506,7 +1664,7 @@ impl DrawList {
     /// [`DrawList::rect_outline`] / [`DrawList::rounded_rect_outline`].
     fn stroke_rect_instance(&mut self, rect: Rect, radius: f32, thickness: f32, color: [f32; 4]) {
         let transparent = [color[0], color[1], color[2], 0.0];
-        self.push_chrome_instance(rect, radius, thickness, transparent, color);
+        self.push_chrome_instance(rect, radius, thickness, transparent, transparent, color);
     }
 
     /// Record one SDF circle instance for a translation-only circle. Same
@@ -2470,6 +2628,130 @@ mod tests {
         list.quad_gradient(Rect::new(0.0, 0.0, 20.0, 0.0), [[1.0; 4]; 4]);
         assert!(list.vertices.is_empty());
         assert!(list.indices.is_empty());
+    }
+
+    #[test]
+    fn triangle_gradient_assigns_corner_colors() {
+        let mut list = DrawList::new();
+        let c0 = [1.0, 0.0, 0.0, 0.3];
+        let c1 = [0.0, 1.0, 0.0, 0.3];
+        let c2 = [0.0, 0.0, 1.0, 0.05];
+        list.triangle_gradient((0.0, 0.0), (10.0, 0.0), (5.0, 8.0), c0, c1, c2);
+        // Three soup vertices in argument order, each carrying its color, one
+        // triangle of indices.
+        assert_eq!(list.vertices.len(), 3);
+        assert_eq!(list.vertices[0].position, [0.0, 0.0]);
+        assert_eq!(list.vertices[0].color, c0);
+        assert_eq!(list.vertices[1].position, [10.0, 0.0]);
+        assert_eq!(list.vertices[1].color, c1);
+        assert_eq!(list.vertices[2].position, [5.0, 8.0]);
+        assert_eq!(list.vertices[2].color, c2);
+        assert_eq!(list.indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn triangle_gradient_matches_triangle_for_flat_colors() {
+        let mut g = DrawList::new();
+        let mut f = DrawList::new();
+        let c = [0.2, 0.5, 0.9, 0.5];
+        g.triangle_gradient((0.0, 0.0), (9.0, 1.0), (4.0, 7.0), c, c, c);
+        f.triangle((0.0, 0.0), (9.0, 1.0), (4.0, 7.0), c);
+        assert_eq!(g.vertices, f.vertices);
+        assert_eq!(g.indices, f.indices);
+    }
+
+    #[test]
+    fn drop_shadow_emits_soft_rects_beyond_the_surface() {
+        let mut list = DrawList::new();
+        let shadow = [0.0, 0.0, 0.0, 0.6];
+        let surface = Rect::new(100.0, 50.0, 80.0, 20.0);
+        list.drop_shadow(surface, 4.0, 10.0, 2.0, shadow);
+        // The opaque core stays exactly beneath the surface; offset makes the
+        // lower skirt longer instead of translating a dark panel-shaped copy.
+        assert_eq!(list.chrome_instances.len(), 1);
+        assert_eq!(list.chrome_instances[0].rect, [100.0, 50.0, 80.0, 20.0]);
+        assert_eq!(list.chrome_instances[0].bg, shadow);
+        assert_eq!(list.vertices.len(), 32); // 8 gradient patches
+        // The top ramp ends at the surface edge and starts transparent.
+        assert_eq!(list.vertices[0].position, [100.0, 44.0]);
+        assert_eq!(list.vertices[0].color, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(list.vertices[2].position, [180.0, 50.0]);
+        assert_eq!(list.vertices[2].color, [0.0, 0.0, 0.0, shadow[3] * 0.35]);
+    }
+
+    #[test]
+    fn drop_shadow_blur_zero_does_not_duplicate_the_surface() {
+        let mut list = DrawList::new();
+        let shadow = [0.0, 0.0, 0.0, 0.5];
+        let surface = Rect::new(10.0, 10.0, 40.0, 12.0);
+        list.drop_shadow(surface, 3.0, 0.0, 1.0, shadow);
+        assert!(list.chrome_instances.is_empty());
+        assert!(
+            list.vertices.is_empty(),
+            "no falloff means no shadow is emitted"
+        );
+    }
+
+    #[test]
+    fn drop_shadow_short_core_trims_the_skirts_without_degenerates() {
+        let mut list = DrawList::new();
+        // 4px-tall surface with an 8px blur: the core is 20px, so the skirts
+        // clamp toward the middle and the opaque band shrinks to 4px. Nothing
+        // degenerates (a dropped degenerate would trip the debug lints).
+        let before = list.dropped_degenerate;
+        list.drop_shadow(
+            Rect::new(0.0, 0.0, 50.0, 4.0),
+            0.0,
+            8.0,
+            1.0,
+            [0.0, 0.0, 0.0, 0.6],
+        );
+        assert_eq!(list.dropped_degenerate, before);
+        // One opaque core plus eight falloff patches; no degenerates even when
+        // the source surface is much shorter than its blur radius.
+        assert_eq!(list.chrome_instances.len(), 1);
+        assert_eq!(list.chrome_instances[0].rect, [0.0, 0.0, 50.0, 4.0]);
+        assert_eq!(list.vertices.len(), 32);
+    }
+
+    #[test]
+    fn drop_shadow_zero_height_surface_is_a_noop() {
+        let mut list = DrawList::new();
+        // A degenerate surface has no shadow core or meaningful edge to blur.
+        let before = list.dropped_degenerate;
+        list.drop_shadow(
+            Rect::new(0.0, 0.0, 50.0, 0.0),
+            0.0,
+            8.0,
+            1.0,
+            [0.0, 0.0, 0.0, 0.6],
+        );
+        assert_eq!(list.dropped_degenerate, before + 1);
+        assert!(list.chrome_instances.is_empty());
+        assert!(list.vertices.is_empty());
+    }
+
+    #[test]
+    fn drop_shadow_zero_alpha_and_zero_params_are_noops() {
+        let mut list = DrawList::new();
+        let before = list.dropped_degenerate;
+        list.drop_shadow(
+            Rect::new(0.0, 0.0, 40.0, 10.0),
+            0.0,
+            0.0,
+            1.0,
+            [0.0, 0.0, 0.0, 0.0],
+        );
+        list.drop_shadow(
+            Rect::new(0.0, 0.0, 40.0, 10.0),
+            0.0,
+            8.0,
+            1.0,
+            [0.0, 0.0, 0.0, 0.0],
+        );
+        assert!(list.chrome_instances.is_empty());
+        assert!(list.vertices.is_empty());
+        assert_eq!(list.dropped_degenerate, before + 2);
     }
 
     #[test]
