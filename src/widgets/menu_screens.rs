@@ -28,7 +28,13 @@ use super::draw_list::DrawList;
 /// MenuList::new(&["Resume", "Settings", "Quit"]).draw(column_rect, &mut ctx);
 /// ```
 pub fn draw_scrim(rect: Rect, list: &mut DrawList, styles: &StyleResolver) {
-    list.quad(rect.x, rect.y, rect.width, rect.height, styles.color(StyleKey::Scrim));
+    list.quad(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        styles.color(StyleKey::Scrim),
+    );
 }
 
 /// Interaction results from one [`MenuList::draw`].
@@ -196,8 +202,9 @@ impl<'a> MenuList<'a> {
             let (w, _) = ctx.draw_list.measure_block(&block);
             max_label_w = max_label_w.max(w);
         }
-        out.intrinsic_width =
-            (max_label_w + padding * 2.0).max(max_label_w * 3.0).min(rect.width);
+        out.intrinsic_width = (max_label_w + padding * 2.0)
+            .max(max_label_w * 3.0)
+            .min(rect.width);
 
         // Center the block vertically within the rect.
         let content_h = self.total_height(row_height, gap, n);
@@ -226,18 +233,21 @@ impl<'a> MenuList<'a> {
         // Resolve pointer hover BEFORE painting any row, so every row's
         // chrome reflects the same (new) selection — otherwise rows painted
         // above the hovered one show the stale selection for a frame.
-        let mouse = (ctx.input.mouse_x, ctx.input.mouse_y, ctx.input.mouse_consumed);
+        let mouse = (
+            ctx.input.mouse_x,
+            ctx.input.mouse_y,
+            ctx.input.mouse_consumed,
+        );
         let mut hovered_index: Option<usize> = None;
         {
             let mut hy = y;
             for (i, _) in self.items.iter().enumerate() {
                 let row = Rect::new(x, hy, out.intrinsic_width, row_height);
                 hy += row_height + gap;
-                let enabled = self.enabled.map_or(true, |e| e.get(i).copied().unwrap_or(true));
-                if enabled
-                    && !mouse.2
-                    && row.contains(mouse.0, mouse.1)
-                {
+                let enabled = self
+                    .enabled
+                    .map_or(true, |e| e.get(i).copied().unwrap_or(true));
+                if enabled && !mouse.2 && row.contains(mouse.0, mouse.1) {
                     hovered_index = Some(i);
                     break;
                 }
@@ -259,7 +269,9 @@ impl<'a> MenuList<'a> {
             let row = Rect::new(x, y, out.intrinsic_width, row_height);
             y += row_height + gap;
 
-            let enabled = self.enabled.map_or(true, |e| e.get(i).copied().unwrap_or(true));
+            let enabled = self
+                .enabled
+                .map_or(true, |e| e.get(i).copied().unwrap_or(true));
 
             // Hover chrome comes from selection (hover promotes selection),
             // so nothing per-row is needed beyond the tone above.
@@ -305,9 +317,9 @@ impl<'a> MenuList<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::StyleOverlay;
     use crate::FocusState;
     use crate::InputState;
+    use crate::style::StyleOverlay;
 
     const ITEMS: &[&str] = &["Resume", "Settings", "Quit"];
 
@@ -335,7 +347,11 @@ mod tests {
 
     #[test]
     fn nothing_selected_without_input() {
-        let (out, _) = draw_at(Rect::new(0.0, 0.0, 200.0, 200.0), &mut 0, &InputState::default());
+        let (out, _) = draw_at(
+            Rect::new(0.0, 0.0, 200.0, 200.0),
+            &mut 0,
+            &InputState::default(),
+        );
         assert_eq!(out.activated, None);
         assert_eq!(out.hovered, None);
         assert!(!out.selected_changed);
@@ -409,7 +425,11 @@ mod tests {
     #[test]
     fn selection_is_clamped_to_the_item_range() {
         let mut sel = 7;
-        let (out, _) = draw_at(Rect::new(0.0, 0.0, 200.0, 200.0), &mut sel, &InputState::default());
+        let (out, _) = draw_at(
+            Rect::new(0.0, 0.0, 200.0, 200.0),
+            &mut sel,
+            &InputState::default(),
+        );
         assert_eq!(sel, ITEMS.len() - 1, "out-of-range selection clamps");
         assert!(!out.selected_changed, "clamping alone is not a change");
     }
@@ -430,9 +450,8 @@ mod tests {
         let mut overlay = StyleOverlay::new();
         overlay.set_scalar(StyleKey::ButtonHeight, 24.0);
         overlay.set_scalar(StyleKey::Spacing, 4.0);
-        let mut ctx =
-            crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
-                .with_style(&overlay);
+        let mut ctx = crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
+            .with_style(&overlay);
         let out = MenuList::new(ITEMS).enabled(enabled).draw(
             Rect::new(0.0, 0.0, 200.0, 200.0),
             &mut 0,
@@ -443,7 +462,11 @@ mod tests {
 
     #[test]
     fn rows_are_equal_width_and_block_centered() {
-        let (_, list) = draw_at(Rect::new(0.0, 0.0, 400.0, 400.0), &mut 0, &InputState::default());
+        let (_, list) = draw_at(
+            Rect::new(0.0, 0.0, 400.0, 400.0),
+            &mut 0,
+            &InputState::default(),
+        );
         // A raised button paints a plinth (full row height) + face (row
         // height minus travel) chrome pair. Group chrome rects into row
         // bands by y, take each band's max width — that's the row
@@ -485,11 +508,12 @@ mod tests {
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let theme = crate::Theme::default();
-        let mut ctx =
-            crate::DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
-        MenuList::new(ITEMS)
-            .focusable(900)
-            .draw(Rect::new(0.0, 0.0, 200.0, 200.0), &mut 0, &mut ctx);
+        let mut ctx = crate::DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
+        MenuList::new(ITEMS).focusable(900).draw(
+            Rect::new(0.0, 0.0, 200.0, 200.0),
+            &mut 0,
+            &mut ctx,
+        );
         // Registered ids surface when Tab resolves: focus 900+0, request next.
         let mut input = InputState::default();
         input.nav.next = true;
@@ -508,8 +532,7 @@ mod tests {
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let theme = crate::Theme::default();
-        let mut ctx =
-            crate::DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
+        let mut ctx = crate::DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
         let mut sel = 0;
         let out = MenuList::new(&[]).draw(Rect::new(0.0, 0.0, 200.0, 200.0), &mut sel, &mut ctx);
         assert_eq!(out.activated, None);

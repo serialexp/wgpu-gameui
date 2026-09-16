@@ -28,6 +28,8 @@ mod image_button;
 mod list;
 mod material;
 mod menu_screens;
+mod binding;
+mod settings;
 mod menubar;
 mod number_input;
 mod panel;
@@ -93,6 +95,11 @@ pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
 pub(crate) use material::sheen_over;
 pub use material::{Material, Tone};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
+pub use binding::{Binding, KeyCode, PadButton};
+pub use settings::{
+    default_values, SettingField, SettingValue, SettingsForm, SettingsFormOutput, SettingsSpec,
+    SettingsFormState,
+};
 pub use menubar::{
     AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBar, MenuBarId, MenuBarOutput,
     MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger, Modifiers,

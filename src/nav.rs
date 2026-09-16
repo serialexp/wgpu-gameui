@@ -459,7 +459,13 @@ mod tests {
     fn arrow_focus_preserves_confirm_cancel_and_composes_with_gamepad() {
         let combined = |i: &mut InputState| {
             map_keyboard(i);
-            map_gamepad(i, &GamepadNav { south: true, ..Default::default() });
+            map_gamepad(
+                i,
+                &GamepadNav {
+                    south: true,
+                    ..Default::default()
+                },
+            );
         };
         let mut input = InputState {
             key_down: true,
@@ -471,7 +477,10 @@ mod tests {
         assert!(input.nav.next);
         assert!(input.nav.confirm, "confirm/cancel pass through untouched");
         assert!(input.nav.cancel);
-        assert!(!input.nav.down, "consumed so a focused widget can't double-act");
+        assert!(
+            !input.nav.down,
+            "consumed so a focused widget can't double-act"
+        );
     }
 
     #[test]
@@ -480,10 +489,11 @@ mod tests {
         input.nav.confirm = true; // caller-set intent
         ArrowFocusNav::over(ManualNav).apply(&mut input);
         assert!(
-            input.nav == NavInput {
-                confirm: true,
-                ..Default::default()
-            },
+            input.nav
+                == NavInput {
+                    confirm: true,
+                    ..Default::default()
+                },
             "no directional intents: nothing is touched or consumed"
         );
     }

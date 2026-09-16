@@ -2057,7 +2057,12 @@ fn build_icon_instance(
         clip: clip_rect,
         // flags[1] = tile-wrap: the fragment shader folds `uv` modulo the
         // one-tile span in flags[2..4] so one instance tiles any dest.
-        flags: [clip_enabled, u8::from(wrap) as f32, tile_span[0], tile_span[1]],
+        flags: [
+            clip_enabled,
+            u8::from(wrap) as f32,
+            tile_span[0],
+            tile_span[1],
+        ],
     }
 }
 
@@ -2342,7 +2347,14 @@ mod tests {
     #[test]
     fn icon_instance_clip_none_disables() {
         let corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        let inst = build_icon_instance(corners, [0.0, 0.0, 1.0, 1.0], [1.0; 4], None, false, [0.0, 0.0]);
+        let inst = build_icon_instance(
+            corners,
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0; 4],
+            None,
+            false,
+            [0.0, 0.0],
+        );
         assert_eq!(inst.flags[0], 0.0); // clip disabled
         assert_eq!(inst.clip, [0.0; 4]);
     }

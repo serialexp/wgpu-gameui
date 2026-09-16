@@ -10,11 +10,12 @@
 use wgpu_gameui::layout::{Anchor, MainAlign, Positioned, Rect, Size, VStack};
 use wgpu_gameui::{
     ArrowFocusNav, Button, DrawContext, FocusState, Image, ImageFit, InputState, KeyboardNav,
-    LayerStack, MenuList, StyleResolver, Theme, UiRenderer, draw_scrim, map_gamepad,
+    LayerStack, MenuList, SettingsForm, SettingsFormState, SettingsSpec,
+    StyleResolver, Theme, UiRenderer, default_values, draw_scrim, map_gamepad,
 };
 
 const W: u32 = 640;
-const H: u32 = 720;
+const H: u32 = 980;
 
 fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) -> Vec<u8> {
     let mut out = vec![0u8; (size * size * 4) as usize];
@@ -125,14 +126,7 @@ fn render_menu_gallery() {
         let mut menu_focus = FocusState::new();
         menu_focus.begin_frame(&hover_input);
         {
-            let mut ctx = DrawContext::new(
-                list,
-                &mut menu_focus,
-                &theme,
-                &hover_input,
-                sw,
-                sh,
-            );
+            let mut ctx = DrawContext::new(list, &mut menu_focus, &theme, &hover_input, sw, sh);
             let mut selected = 0usize;
             let out = MenuList::new(&["New Game", "Continue", "Settings", "Credits", "Quit"])
                 .row_height(40.0)
@@ -164,11 +158,11 @@ fn render_menu_gallery() {
             .draw(panel, list);
         draw_scrim(panel, list, &styles);
         {
-            let gear = PanelButton {
-                label: "Settings",
-            };
+            let gear = PanelButton { label: "Settings" };
             let corner = Positioned::new(
-                Anchor::BottomRight { offset: (-8.0, -8.0) },
+                Anchor::BottomRight {
+                    offset: (-8.0, -8.0),
+                },
                 Size::fixed(90.0, 26.0),
                 VStack::new(0.0),
             );
@@ -178,7 +172,12 @@ fn render_menu_gallery() {
             gear_focus.begin_frame(&input);
             let mut ctx = DrawContext::new(list, &mut gear_focus, &theme, &input, sw, sh);
             gear.draw(
-                Rect::new(panel.x + inner.x, panel.y + inner.y, inner.width, inner.height),
+                Rect::new(
+                    panel.x + inner.x,
+                    panel.y + inner.y,
+                    inner.width,
+                    inner.height,
+                ),
                 &mut ctx,
             );
         }
@@ -205,7 +204,11 @@ fn render_menu_gallery() {
                 .row_height(34.0)
                 .gap(6.0)
                 .focusable(700)
-                .draw(Rect::new(370.0, 260.0, 200.0, 170.0), &mut selected, &mut ctx);
+                .draw(
+                    Rect::new(370.0, 260.0, 200.0, 170.0),
+                    &mut selected,
+                    &mut ctx,
+                );
         }
         {
             // Small corner button in the bottom-right of this half.
@@ -217,6 +220,9 @@ fn render_menu_gallery() {
                 .draw(Rect::new(540.0, 440.0, 64.0, 24.0), &mut cctx);
         }
     }
+
+    // ---- 5. Settings form (drawn before capture, onto the base list) ----
+    draw_settings_section(layers.base_mut(), &theme, &input);
 
     let pixels = wgpu_gameui::capture_layers(
         &device,
@@ -240,6 +246,40 @@ fn render_menu_gallery() {
     let _ = ArrowFocusNav::over(KeyboardNav);
     let _ = MainAlign::Start;
     let _ = map_gamepad as fn(&mut InputState, &wgpu_gameui::GamepadNav);
+}
+
+/// ---- 5. Settings form: declarative spec + values slice --------------------
+/// Drawn in its own function so the section above stays readable.
+fn draw_settings_section(list: &mut wgpu_gameui::DrawList, theme: &Theme, input: &InputState) {
+    list.text(
+        wgpu_gameui::TextBlock::new("SettingsForm (spec + values slice)", 20.0, 736.0)
+            .with_size(11.0)
+            .with_color(150, 160, 180),
+    );
+
+    let spec = SettingsSpec::new()
+        .section("Video")
+        .toggle("VSync")
+        .slider("Brightness", 0.0..=1.0)
+        .choice("Quality", &["Low", "Medium", "High"])
+        .section("Controls")
+        .binding("Jump")
+        .action("Reset to defaults");
+    let mut values = default_values(
+        &spec,
+        &[(0, true.into()), (1, 0.7.into()), (2, 1usize.into())],
+    );
+    // The binding row shows a custom capture: field 3 listening (armed last
+    // frame, grace passed) with a pad button in this frame's snapshot — the
+    // PNG shows the "press a key…" state resolving to "D-Up".
+    let mut state = SettingsFormState::new();
+    state.listening = None; // show bound labels, not the capture hint
+    let mut focus = FocusState::new();
+    focus.begin_frame(input);
+    let mut ctx = DrawContext::new(list, &mut focus, theme, input, W as f32, H as f32);
+    let rect = Rect::new(20.0, 752.0, 280.0, 220.0);
+    let out = SettingsForm::new(&spec).draw(&mut values, rect, &mut state, &mut ctx);
+    assert!(out.changed.is_empty(), "idle form writes nothing");
 }
 
 /// Minimal stand-in for a corner "settings" button (kept local; the point of

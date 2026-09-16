@@ -137,11 +137,14 @@ harden those foundations rather than create parallel replacements.
       painted bounds, hit bounds, constraints, font changes, disabled/focus
       behavior, scaling, and clipping.
 
-- [ ] **P2 — Add semantic form/layout conveniences on top of interactive rows.**
+- [~] **P2 — Add semantic form/layout conveniences on top of interactive rows.**
       Provide `FormRow`, `FormGrid`, `FieldLabel`, `Section`, `InlineError`, and
       trailing-action patterns, plus compact/application/game-menu density
       presets. Add standard text, icon, and icon+text button variants and generate
       the Phosphor enum/codepoint mapping from bundled-font metadata.
+      *(First slice landed 2026-09-16: `SettingsSpec`/`SettingsForm` covers
+      label|control rows, `Section` headers, and game-menu usage; text/color
+      fields, `InlineError`, density presets, and generic `FormGrid` remain.)*
 
 - [ ] **P2 — Add optional host integrations.** Provide a winit input adapter for
       logical coordinates, text/key/mouse/wheel routing, and per-window state;
@@ -1430,3 +1433,51 @@ Two bugs made Tree-sitter highlighting visibly wrong in multiline Lua (Bart:
   `function` (the keyword) colors as a keyword and `greet` as a function name.
   `examples/lua_highlight_probe.rs` (`--features syntax-lua`) renders a Lua
   snippet headless to `test_output/lua_highlight_probe.png` for eyeballing.
+
+## 2026-09-16 — Settings form, bindings, and control mapping
+
+"Define a bunch of settings and have that automatically transformed to a
+settings configurator" — declarative form over caller-owned values, plus
+control rebinding as just another field kind. Chosen by Bart: one spec with
+bindings included, homogeneous values slice, and a pragmatic `Binding` enum
+over what `InputState` already expresses (no input-layer changes).
+
+### New pieces
+
+- [x] **Declarative settings form** (`src/widgets/settings.rs`) — build a
+      `SettingsSpec` (`section` / `toggle` / `slider` / `choice` / `binding` /
+      `action`), keep a parallel `Vec<SettingValue>` the caller owns, and
+      `SettingsForm::new(&spec).draw(&mut values, rect, &mut state, &mut ctx)`
+      draws label-left/control-right rows and mutates values in place.
+      `SettingsFormOutput { changed: Vec<usize>, activated, listening }`
+      reports field indices. Sections draw as `Group` panels (or
+      `.bare_headers()` title text); the label column auto-sizes to the widest
+      label per section (`.label_fraction()` to pin); `intrinsic_height()`
+      sizes a scroll viewport; every row joins the Tab focus ring. Choice rows
+      open a `Dropdown` popup: drive `state.dropdowns.begin_frame` /
+      `form.push_open_layer` / `layers.input_for_base` / ... /
+      `form.draw_open_layer(...)` (applies the pick, returns the changed
+      field) / `state.dropdowns.end_frame`. `default_values(&spec, &[(idx,
+      value)])` builds the slice, dropping mistyped defaults so it can't
+      desync. 13 unit tests.
+      API: `SettingsSpec`, `SettingField`, `SettingValue` (+ `From`), `SettingsFormState`,
+      `SettingsFormOutput`, `SettingsForm`, `default_values`.
+- [x] **Bindings / control mapping** (`src/widgets/binding.rs`) — `Binding`
+      enum: `Key(KeyCode)` for the named keys `InputState` carries as fields
+      (Esc/Tab/Space/Enter/Bksp/arrows/Home/End/Del), `Char { c, ctrl, shift,
+      alt }` for typed characters + modifier chords, `MouseLeft/Middle/Right`,
+      `Pad(PadButton)` over the `GamepadNav` fields. `label()` renders
+      "Ctrl+Shift+S" / "←" / "Mouse2" / "D-Up"; `is_down(input, pad)` matches
+      edges and held state. The form's `binding` row shows the current
+      binding as a button; clicking arms it (`state.listening`), the arm
+      frame is grace-protected from capturing itself, Escape cancels, and the
+      next key/char/mouse/pad press (via `state.pad`, the same snapshot the
+      host feeds `map_gamepad`) becomes the new value. Conflict resolution
+      (unbind the row that had it) is caller policy on `out.changed`. 7 unit
+      tests.
+      API: `Binding`, `KeyCode`, `PadButton`.
+
+### Gallery
+
+`tests/menu_gallery.rs` grew a `SettingsForm` section (checked toggle, slider
+at 0.7, Medium dropdown, Space binding, Reset action) — canvas 640×980.
