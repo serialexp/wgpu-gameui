@@ -1294,3 +1294,54 @@ paint contract — popovers cast shadows past it by design). Gallery render
 eyeballed: curve fill, floating sheets, and well depth all match the 4a
 sheets; only the 5 pre-existing intentional `sibling_overlap` demo warnings
 remain.
+
+## 2026-09-16 — Toolbar, dock panels, and application shell
+
+Design: `UI System Default Look/` mockups (4a Level Editor, 4a Menu Bar sheets).
+Plan: `docs/design/menubar.md` covers the menubar; the toolbar/dock/shell are
+new systems designed to compose with it and the existing widgets.
+
+### New widgets
+
+- [x] **Toolbar** (`src/widgets/toolbar.rs`) — edge-dockable strip of tool
+      buttons with grip handle, group separators, and active-tool accent
+      highlighting. `Toolbar::new(items).draw(rect, &mut state, &mut capture,
+      grip_id, &mut ctx) -> ToolbarOutput`. Tool buttons use the plinth+face
+      material (`Tone::Ghost` idle, `Tone::Accent` active). Icon via `Icon`
+      widget (PhosphorIcon or custom font). Grip via `DragCapture` protocol
+      (same as `Splitter`/`DragHandle`). Hovered tool reported in output for
+      external `TooltipLayer`. No popup, no frame-deferred state. State is
+      caller-owned `ToolbarState { edge, active_tool }`. 7 unit tests.
+      API: `ToolbarEdge` (`Left`/`Right`/`Top`/`Bottom`), `ToolDef`, `ToolbarItem`
+      (`Tool`/`Separator`), `ToolbarState`, `Toolbar`, `ToolbarOutput`.
+
+- [x] **Dock panel** (`src/widgets/dock_panel.rs`) — tabbed, closable panel
+      chrome for left/right/bottom docks. `DockPanel::new(side, tabs).closable()
+      .draw(rect, &mut state, &mut ctx) -> DockPanelOutput`. Draws tab header
+      (active = gradient bg + bright text, inactive = transparent + dim text) and
+      panel background; returns the body rect for the caller to draw content into.
+      Close button is a ghost-style `×`. The resize splitter is *not* internal —
+      it's a layout concern drawn by `AppShell` or the caller. State is
+      caller-owned `DockPanelState { visible, size, min_size, max_size,
+      active_tab }`. 7 unit tests.
+      API: `DockSide` (`Left`/`Right`/`Bottom`), `DockTab`, `DockPanelState`,
+      `DockPanel`, `DockPanelOutput`.
+
+- [x] **Application shell** (`src/widgets/app_shell.rs`) — layout composition
+      that arranges menu bar + doc tabs + left/right/bottom docks with splitters +
+      toolbar + viewport + status bar. `AppShell::new().with_menu_bar()
+      .with_toolbar().layout(screen, docks, toolbar, &styles) -> ShellLayout`
+      (pure geometry, no drawing). `draw_chrome(layout, docks, toolbar, &mut
+      capture, &mut ctx) -> ShellChromeOutput` draws splitters, dock headers, and
+      toolbar; applies splitter deltas with clamping. Well-known `DragId`
+      constants (`SHELL_DRAG_LEFT_SPLITTER` etc.) at `0xA551_*`. 6 unit tests
+      (all-zones-visible, hidden-dock-expands-viewport, no-overlap, toolbar-edge,
+      heights, empty-shell).
+      API: `AppShell`, `ShellLayout`, `ShellChromeOutput`, `SHELL_DRAG_*`.
+
+### New `StyleKey` scalars
+
+`ToolbarButtonSize` (24), `ToolbarPadding` (2), `DockTabHeight` (24),
+`DockSplitterWidth` (6) — all with `Theme` fields, `get`/`set` arms, and
+defaults. No new color keys (reuses existing palette: Panel, PanelBorder,
+TabActive, TabInactive, Accent, Text, TextDim, etc.).

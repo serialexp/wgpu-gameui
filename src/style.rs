@@ -214,6 +214,16 @@ pub enum StyleKey {
     /// Depth of the inset "sunken" shadow fading down from a well's top edge,
     /// in pixels (the design's `inset 0 2px 4px` band).
     InnerShadowDepth,
+    // --- Toolbar / dock / shell scalars ---
+    /// Side length of one toolbar tool button, in pixels.
+    ToolbarButtonSize,
+    /// Edge padding inside the toolbar strip, in pixels.
+    ToolbarPadding,
+    /// Height of a dock panel's tab header row, in pixels.
+    DockTabHeight,
+    /// Width (or height, for horizontal) of the resize splitter between a dock
+    /// panel and the viewport, in pixels.
+    DockSplitterWidth,
     /// A mod-defined key, addressed by the FNV-1a hash of its name (see
     /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a [`StyleOverlay`].
     Custom(u64),

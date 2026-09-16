@@ -2267,6 +2267,136 @@ fn render_widget_gallery() {
             list.pop_transform();
         }
 
+        // --- Toolbar ---------------------------------------------------------
+        flow.section(list, "Toolbar (vertical + horizontal)");
+        {
+            use wgpu_gameui::{
+                Toolbar, ToolbarEdge, ToolbarItem, ToolbarState,
+                Icon, DragCapture,
+            };
+            use wgpu_gameui::render::PhosphorIcon;
+
+            let items: Vec<ToolbarItem<'_>> = vec![
+                ToolbarItem::tool(1, Icon::new(PhosphorIcon::Diamond), "Select", "Q"),
+                ToolbarItem::tool(2, Icon::new(PhosphorIcon::ArrowClockwise), "Move", "W"),
+                ToolbarItem::separator(),
+                ToolbarItem::tool(3, Icon::new(PhosphorIcon::Cube), "Box", "B"),
+                ToolbarItem::tool(4, Icon::new(PhosphorIcon::PaintBrush), "Paint", "P"),
+                ToolbarItem::tool(5, Icon::new(PhosphorIcon::Eraser), "Erase", "X"),
+            ];
+            let mut state = ToolbarState::new(ToolbarEdge::Left);
+            state.active_tool = Some(2);
+            let mut capture = DragCapture::new();
+            let toolbar = Toolbar::new(&items);
+            let btn_size = theme.toolbar_button_size;
+            let pad = theme.toolbar_padding;
+            let cross = toolbar.preferred_cross(btn_size, pad);
+            let extent = toolbar.preferred_extent(btn_size, pad);
+
+            // Vertical toolbar.
+            let r = flow.cell(list, "Vertical", cross, extent);
+            let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            toolbar.draw(r, &mut state, &mut capture, 0x7B01, &mut tctx);
+
+            // Horizontal toolbar.
+            let r2 = flow.cell(list, "Horizontal", extent, cross);
+            state.edge = ToolbarEdge::Top;
+            let mut tctx2 = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            toolbar.draw(r2, &mut state, &mut capture, 0x7B02, &mut tctx2);
+        }
+
+        // --- App shell -------------------------------------------------------
+        flow.section(list, "App shell (mini layout)");
+        {
+            use wgpu_gameui::{
+                AppShell, DockPanelState, ToolbarEdge, ToolbarState,
+            };
+
+            let left = DockPanelState::new(60.0).with_range(40.0, 120.0);
+            let right = DockPanelState::new(70.0).with_range(40.0, 120.0);
+            let bottom = DockPanelState::new(40.0).with_range(30.0, 80.0);
+            let toolbar = ToolbarState::new(ToolbarEdge::Left);
+
+            let shell = AppShell::new()
+                .with_menu_bar()
+                .with_doc_tabs()
+                .with_status_bar()
+                .with_toolbar();
+
+            let r = flow.cell(list, "Full shell layout", 360.0, 240.0);
+            let s = StyleResolver::new(&theme);
+            let layout = shell.layout(
+                r,
+                Some(&left),
+                Some(&right),
+                Some(&bottom),
+                Some(&toolbar),
+                &s,
+            );
+
+            // Draw zone outlines with labels to visualize the layout.
+            let dim = [0.3, 0.35, 0.45, 1.0];
+            let accent = theme.accent;
+            let draw_zone = |list: &mut DrawList, rect: Rect, label: &str, color: [f32; 4]| {
+                list.rounded_rect_outline(rect, 1.0, 1.0, color);
+                if rect.width > 30.0 && rect.height > 12.0 {
+                    list.text(
+                        TextBlock::new(label, rect.x + 3.0, rect.y + 2.0)
+                            .with_size(8.0)
+                            .with_color(
+                                (color[0] * 255.0) as u8,
+                                (color[1] * 255.0) as u8,
+                                (color[2] * 255.0) as u8,
+                            ),
+                    );
+                }
+            };
+
+            if let Some(r) = layout.menu_bar { draw_zone(list, r, "menu", dim); }
+            if let Some(r) = layout.doc_tabs { draw_zone(list, r, "tabs", dim); }
+            if let Some(r) = layout.left_dock { draw_zone(list, r, "L dock", dim); }
+            if let Some(r) = layout.left_splitter { list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]); }
+            if let Some(r) = layout.right_dock { draw_zone(list, r, "R dock", dim); }
+            if let Some(r) = layout.right_splitter { list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]); }
+            if let Some(r) = layout.bottom_dock { draw_zone(list, r, "B dock", dim); }
+            if let Some(r) = layout.bottom_splitter { list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]); }
+            if let Some(r) = layout.toolbar { draw_zone(list, r, "toolbar", accent); }
+            draw_zone(list, layout.viewport, "viewport", accent);
+            if let Some(r) = layout.status_bar { draw_zone(list, r, "status", dim); }
+        }
+
+        // --- Dock panel -----------------------------------------------------
+        flow.section(list, "Dock panel (tabbed header + body)");
+        {
+            use wgpu_gameui::{DockPanel, DockPanelState, DockSide, DockTab as DPanelTab};
+
+            let tabs = vec![
+                DPanelTab { label: "Outliner" },
+                DPanelTab { label: "Layers" },
+                DPanelTab { label: "Assets" },
+            ];
+            let mut state = DockPanelState::new(200.0);
+            state.active_tab = 1;
+            let r = flow.cell(list, "Left dock (closable)", 200.0, 130.0);
+            let mut dctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let out = DockPanel::new(DockSide::Left, &tabs)
+                .closable()
+                .draw(r, &mut state, &mut dctx);
+
+            // Draw placeholder content in the body rect.
+            let body = out.body;
+            let bd = dctx.styles().color(StyleKey::TextDim);
+            dctx.draw_list.text(
+                TextBlock::new("(body area)", body.x + 8.0, body.y + 8.0)
+                    .with_size(10.0)
+                    .with_color(
+                        (bd[0] * 255.0) as u8,
+                        (bd[1] * 255.0) as u8,
+                        (bd[2] * 255.0) as u8,
+                    ),
+            );
+        }
+
         // --- Backdrop blur (UiBlur) ----------------------------------------
         // Reserve a cell; the blur samples an app-provided "scene" texture into
         // this region (in the encoder below) and a crisp panel is drawn on top.

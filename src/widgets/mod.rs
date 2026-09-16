@@ -1,5 +1,6 @@
 //! UI widgets - buttons, text inputs, panels, etc.
 
+mod app_shell;
 mod asset_grid;
 mod badge;
 mod banner;
@@ -10,6 +11,7 @@ mod checkbox;
 mod color_picker;
 mod combo_box;
 mod curve_editor;
+mod dock_panel;
 mod doc_tabs;
 mod drag;
 mod drag_handle;
@@ -42,6 +44,7 @@ mod tag_input;
 mod text_input;
 mod toast;
 mod toggle;
+mod toolbar;
 mod tooltip;
 mod tree;
 mod vector_field;
@@ -52,12 +55,17 @@ pub use banner::{Banner, Severity};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
 pub use busy::{EmptyState, dots, empty_state, skeleton, spinner};
 pub use button::Button;
+pub use app_shell::{
+    AppShell, ShellChromeOutput, ShellLayout, SHELL_DRAG_BOTTOM_SPLITTER,
+    SHELL_DRAG_LEFT_SPLITTER, SHELL_DRAG_RIGHT_SPLITTER, SHELL_DRAG_TOOLBAR_GRIP,
+};
 pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
 pub use combo_box::{
     ComboOutput, draw_list as draw_combo_list, draw_trigger as draw_combo_trigger,
 };
 pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
+pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
 pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use drag::{DragCapture, DragId};
 pub use drag_handle::{DragHandle, DragHandleOutput};
@@ -104,6 +112,7 @@ pub use tag_input::{TagOutput, draw as draw_tag_input};
 pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
 pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
 pub use toggle::Toggle;
+pub use toolbar::{Toolbar, ToolbarEdge, ToolbarItem, ToolbarOutput, ToolbarState, ToolDef};
 pub use tooltip::{TooltipContent, TooltipLayer};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};

@@ -96,6 +96,17 @@ pub struct Theme {
     /// Gap between a menu item's label and its accelerator hint, in pixels.
     pub menu_accel_gap: f32,
 
+    /// Side length of one toolbar tool button, in pixels. Read by
+    /// [`Toolbar`](crate::Toolbar) via
+    /// [`StyleKey::ToolbarButtonSize`](crate::StyleKey::ToolbarButtonSize).
+    pub toolbar_button_size: f32,
+    /// Edge padding inside the toolbar strip, in pixels.
+    pub toolbar_padding: f32,
+    /// Height of a dock panel's tab header row, in pixels.
+    pub dock_tab_height: f32,
+    /// Width of the resize splitter between a dock panel and the viewport.
+    pub dock_splitter_width: f32,
+
     /// Hover/press transition duration in seconds. `0.0` disables animation
     /// (colors switch instantly). Read by widgets via
     /// [`StyleKey::AnimationDuration`](crate::StyleKey::AnimationDuration) so a
@@ -265,6 +276,10 @@ impl Default for Theme {
             menu_row_height: font_size + padding * 2.0 + 6.0,
             menu_item_min_width: font_size * 10.0,
             menu_accel_gap: 14.0,
+            toolbar_button_size: 24.0,
+            toolbar_padding: 2.0,
+            dock_tab_height: 24.0,
+            dock_splitter_width: 6.0,
             animation_duration: 0.12,
 
             // 4a material tokens (see the field docs above).
@@ -495,6 +510,10 @@ impl Theme {
             MenuRowHeight => StyleValue::Scalar(self.menu_row_height),
             MenuItemMinWidth => StyleValue::Scalar(self.menu_item_min_width),
             MenuAccelGap => StyleValue::Scalar(self.menu_accel_gap),
+            ToolbarButtonSize => StyleValue::Scalar(self.toolbar_button_size),
+            ToolbarPadding => StyleValue::Scalar(self.toolbar_padding),
+            DockTabHeight => StyleValue::Scalar(self.dock_tab_height),
+            DockSplitterWidth => StyleValue::Scalar(self.dock_splitter_width),
             Travel => StyleValue::Scalar(self.travel),
             InnerShadowDepth => StyleValue::Scalar(self.inner_shadow_depth),
             // Custom namespace
@@ -581,6 +600,10 @@ impl Theme {
             (MenuRowHeight, StyleValue::Scalar(s)) => self.menu_row_height = s,
             (MenuItemMinWidth, StyleValue::Scalar(s)) => self.menu_item_min_width = s,
             (MenuAccelGap, StyleValue::Scalar(s)) => self.menu_accel_gap = s,
+            (ToolbarButtonSize, StyleValue::Scalar(s)) => self.toolbar_button_size = s,
+            (ToolbarPadding, StyleValue::Scalar(s)) => self.toolbar_padding = s,
+            (DockTabHeight, StyleValue::Scalar(s)) => self.dock_tab_height = s,
+            (DockSplitterWidth, StyleValue::Scalar(s)) => self.dock_splitter_width = s,
             (Travel, StyleValue::Scalar(s)) => self.travel = s,
             (InnerShadowDepth, StyleValue::Scalar(s)) => self.inner_shadow_depth = s,
             (k, v) => debug_assert!(
