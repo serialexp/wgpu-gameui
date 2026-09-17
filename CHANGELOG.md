@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0 (2026-09-17)
+
+### Features
+
+- add contextual widget measurement
+- add optional syntax highlighting
+- add letter spacing and dropdown intent claiming
+- add a one-level menubar widget
+- implement the 4a default UI system
+- add toolbar, dock panel, and app shell widgets
+- add menu-screen primitives (scrim, MenuList, arrow focus, ImageFit::Tile)
+- add declarative settings form with control-rebinding fields
+
+### Bug Fixes
+
+- make the submission, not the call, the GPU scratch lifetime
+- map glyphs and dotted captures to the right styles
+- settings dropdown popup honors the form's style overrides
+
+### Styles
+
+- apply rustfmt to the toolbar/dock/shell set
+
 ## 0.4.0 (2026-09-02)
 
 ### Features
