@@ -185,6 +185,19 @@ impl TooltipLayer {
         self.hovered_idx.is_some() && self.hover_seconds * 1000.0 >= self.hover_delay_ms as f32
     }
 
+    /// After this frame's tick: pending tooltip timing. `Some(delay)` when
+    /// the cursor rests on a region whose delay hasn't elapsed yet (`delay` =
+    /// seconds until the tooltip appears); `None` when nothing is pending (no
+    /// hover, or the tooltip is already visible).
+    pub fn pending(&self) -> Option<f32> {
+        if self.hovered_idx.is_none() {
+            return None;
+        }
+        let delay_s = self.hover_delay_ms as f32 / 1000.0;
+        let remaining = delay_s - self.hover_seconds;
+        (remaining > 0.0).then_some(remaining)
+    }
+
     /// Render the active tooltip onto a fresh tooltip layer of `layers`.
     /// Does nothing if no tooltip is active or the delay has not elapsed.
     pub fn draw_into_layers(

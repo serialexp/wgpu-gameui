@@ -89,6 +89,7 @@ mod cursor;
 pub mod debug;
 mod drag_tracker;
 mod frame;
+mod frame_result;
 mod interaction;
 pub mod layer;
 pub mod layout;
@@ -110,6 +111,7 @@ pub use cursor::{CursorIcon, CursorState};
 pub use debug::DebugReport;
 pub use drag_tracker::{DEFAULT_DRAG_THRESHOLD, DragTracker};
 pub use frame::Frame;
+pub use frame_result::{MAX_DT, UiFrameResult};
 pub use interaction::{
     HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
 };

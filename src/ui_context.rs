@@ -183,6 +183,16 @@ pub struct UiState {
     clipboard_get: Option<crate::widgets::ClipboardGet>,
     /// Shared platform clipboard writer installed on retained text editors.
     clipboard_set: Option<crate::widgets::ClipboardSet>,
+    /// Deadlines registered by the application this frame (caret blink,
+    /// spinner phase — anything the host animates on its own clock), in
+    /// seconds from the frame's start. Cleared by
+    /// [`begin_frame`](Self::begin_frame); folded into the frame result by
+    /// [`end_frame`](Self::end_frame). Reused vector, never shrunk.
+    app_deadlines: Vec<f32>,
+    /// Per-frame timing accumulation consumed by
+    /// [`end_frame`](Self::end_frame) to produce the host-facing
+    /// [`UiFrameResult`](crate::UiFrameResult).
+    frame_timings: crate::frame_result::FrameTimings,
     /// Vertical gap inserted between auto-advanced verbs. Re-seeded from
     /// `theme.spacing` each frame by [`UiState::begin_frame`].
     pub item_gap: f32,
@@ -264,7 +274,16 @@ impl UiState {
         self.item_gap = theme.spacing;
         self.next_auto_id = 0;
         self.tree_focus_registered = false;
+        self.app_deadlines.clear();
+        // One sanitized clock for every timed source this frame: the animation
+        // easing, toast aging, and tooltip hover-delay. Ticking here (rather
+        // than leaving toasts/tooltips to the host) is what makes
+        // [`end_frame`](Self::end_frame)'s repaint deadline accurate.
+        let dt = crate::frame_result::sanitize_dt(dt);
         self.anim.tick(dt);
+        self.toasts.tick(dt);
+        self.tooltips.tick(dt, input);
+        self.frame_timings.reset(dt);
     }
 
     /// Per-frame teardown: resolve tree arrow-navigation (gated on the tree
@@ -275,7 +294,7 @@ impl UiState {
     /// Order matters here too: the dropdown reports its row claim to
     /// [`FocusState`] **before** focus resolves click-elsewhere blur, so choosing
     /// an option does not blur the widget the option acts on.
-    pub fn end_frame(&mut self) {
+    pub fn end_frame(&mut self) -> crate::frame_result::UiFrameResult {
         // Resolve tree nav before Tab moves focus, using this frame's focus owner.
         let tree_focused = self.focus.is_focused(TREE_FOCUS_ID);
         self.tree.end_frame(tree_focused);
@@ -284,6 +303,34 @@ impl UiState {
         self.dropdowns.end_frame(&mut self.focus);
         self.focus.end_frame(None);
         self.interactions.end_frame();
+        // Aggregate every timed source into the host-facing result: an
+        // in-flight transition, a visible toast, a pending tooltip hover, or
+        // an app-registered deadline each keep the frame loop awake until the
+        // earliest next change.
+        if let Some(delay) = self.anim.pending_deadline() {
+            self.frame_timings.mark_after(delay);
+        }
+        if let Some(delay) = self.toasts.pending() {
+            self.frame_timings.mark_after(delay);
+        }
+        if let Some(delay) = self.tooltips.pending() {
+            self.frame_timings.mark_after(delay);
+        }
+        for &deadline in &self.app_deadlines {
+            self.frame_timings.mark_after(deadline);
+        }
+        self.frame_timings.finish()
+    }
+
+    /// Register an application-owned deadline: "something I animate on my own
+    /// clock (caret blink, spinner phase, …) will visibly change `seconds`
+    /// from now". Call between [`begin_frame`](Self::begin_frame) and
+    /// [`end_frame`](Self::end_frame) — e.g. from inside a `Frame::run` build
+    /// closure via [`UiContext::request_repaint_after`]. Registrations last
+    /// for one frame; the earliest one wins in
+    /// [`end_frame`](Self::end_frame)'s [`UiFrameResult::next_deadline`].
+    pub fn request_repaint_after(&mut self, seconds: f32) {
+        self.app_deadlines.push(seconds.max(0.0));
     }
 
     /// Push the popup layer for the open dropdown (using last frame's geometry)
@@ -820,6 +867,18 @@ impl<'a> UiContext<'a> {
     pub fn set_style(&mut self, key: StyleKey, value: StyleValue) {
         if let Some(top) = self.style_stack.last_mut() {
             top.set(key, value);
+        }
+    }
+
+    /// Register an application-owned repaint deadline (see
+    /// [`UiState::request_repaint_after`]) from inside a `Frame::run` build
+    /// closure. No-op outside interactive mode. Typical use: a focused text
+    /// field's caret blink or an app-drawn spinner phase — anything the
+    /// application animates on its own clock. Re-register each frame while
+    /// the timer should keep the frame loop awake.
+    pub fn request_repaint_after(&mut self, seconds: f32) {
+        if let Some(state) = self.state.as_mut() {
+            state.request_repaint_after(seconds);
         }
     }
 

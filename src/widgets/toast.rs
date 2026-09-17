@@ -198,6 +198,26 @@ impl ToastStack {
         self.active.retain(|a| a.elapsed < a.toast.ttl);
     }
 
+    /// After this frame's draws: the stack's pending timing — `Some(delay)`
+    /// when any toast is visible, where `delay` is the earliest number of
+    /// seconds until a toast enters its fade window or expires; `None` when
+    /// no toasts are shown. The actives list is small and bounded (`max`,
+    /// default 4), so the on-demand scan at frame end is allocation-free and
+    /// cheap.
+    pub fn pending(&self) -> Option<f32> {
+        let earliest = self.active.iter().fold(f32::INFINITY, |acc, a| {
+            // Next visible change for this toast: entering the fade window
+            // (when there is one), otherwise expiry — both measured from now.
+            let next = if self.fade > 0.0 && a.toast.ttl > self.fade {
+                (a.toast.ttl - self.fade - a.elapsed).max(0.0)
+            } else {
+                (a.toast.ttl - a.elapsed).max(0.0)
+            };
+            acc.min(next)
+        });
+        (!self.active.is_empty()).then_some(earliest)
+    }
+
     /// Whether there are no active toasts.
     pub fn is_empty(&self) -> bool {
         self.active.is_empty()

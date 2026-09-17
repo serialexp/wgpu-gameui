@@ -4,6 +4,7 @@ mod app_shell;
 mod asset_grid;
 mod badge;
 mod banner;
+mod binding;
 mod breadcrumb;
 mod busy;
 mod button;
@@ -28,8 +29,6 @@ mod image_button;
 mod list;
 mod material;
 mod menu_screens;
-mod binding;
-mod settings;
 mod menubar;
 mod number_input;
 mod panel;
@@ -38,6 +37,7 @@ mod progress_bar;
 mod radio;
 mod scroll_view;
 mod separator;
+mod settings;
 mod slider;
 mod splitter;
 mod status_bar;
@@ -59,6 +59,7 @@ pub use app_shell::{
 pub use asset_grid::{AssetGrid, AssetGridOutput};
 pub use badge::{ChipOutput, badge, chip, keycap};
 pub use banner::{Banner, Severity};
+pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
 pub use busy::{EmptyState, dots, empty_state, skeleton, spinner};
 pub use button::Button;
@@ -95,11 +96,6 @@ pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
 pub(crate) use material::sheen_over;
 pub use material::{Material, Tone};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
-pub use binding::{Binding, KeyCode, PadButton};
-pub use settings::{
-    default_values, SettingField, SettingValue, SettingsForm, SettingsFormOutput, SettingsSpec,
-    SettingsFormState,
-};
 pub use menubar::{
     AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBar, MenuBarId, MenuBarOutput,
     MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger, Modifiers,
@@ -112,6 +108,10 @@ pub use progress_bar::{ProgressBar, ProgressFill};
 pub use radio::RadioGroup;
 pub use scroll_view::{ScrollBegin, ScrollState, ScrollView};
 pub use separator::{Orientation, Separator};
+pub use settings::{
+    SettingField, SettingValue, SettingsForm, SettingsFormOutput, SettingsFormState, SettingsSpec,
+    default_values,
+};
 pub use slider::{Slider, SliderOutput};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
 pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};

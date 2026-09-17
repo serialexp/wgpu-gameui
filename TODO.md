@@ -80,13 +80,19 @@ harden those foundations rather than create parallel replacements.
       layout for painting so measurement, ellipsis, caret placement, and render
       cannot disagree.
 
-- [ ] **P1 — Return repaint requirements and deadlines from a UI frame.** Build
+- [x] **P1 — Return repaint requirements and deadlines from a UI frame.** Build
       on the existing animation clock with a host-facing
       `UiFrameResult { changed, needs_repaint, next_deadline }` that aggregates
       widget transitions, toast/tooltip timing, caret blinking, and externally
       registered animation. Clamp invalid or very large delta times. Event-driven
       hosts must be able to schedule another frame without relying on incidental
       mouse movement.
+      *(Landed 2026-09-17: `UiState::end_frame` returns
+      `UiFrameResult { needs_repaint, next_deadline }`; `Frame::run`/`run_layers`
+      return `(R, UiFrameResult)`. `begin_frame` ticks anim+toasts+tooltips with
+      one sanitized `dt` (clamped to `MAX_DT` = 100 ms, invalid → 0);
+      `request_repaint_after` covers app-owned timers. See the 2026-09-17
+      section below.)*
 
 - [ ] **P1 — Harden animation IDs and lifecycle.** Replace untyped `(u64,
       AnimSlot)` usage with scoped/typed widget IDs and generations; diagnose
@@ -1481,3 +1487,66 @@ over what `InputState` already expresses (no input-layer changes).
 
 `tests/menu_gallery.rs` grew a `SettingsForm` section (checked toggle, slider
 at 0.7, Medium dropdown, Space binding, Reset action) — canvas 640×980.
+
+## 2026-09-17 — Frame repaint deadlines (`UiFrameResult`)
+
+"Return repaint requirements and deadlines from a UI frame" (P1). Event-driven
+hosts (winit `ControlFlow::Wait`/`WaitUntil`, daemon UIs) previously had no way
+to know when the UI next changes appearance — animation transitions, toast
+fades, and tooltip delays only advanced if the host kept redrawing, so a
+still host either spun or froze its animations. Now the frame itself reports
+when it needs to run again.
+
+### New pieces
+
+- [x] **`UiFrameResult`** (`src/frame_result.rs`) —
+      `{ needs_repaint: bool, next_deadline: Option<f32> }` in seconds from
+      frame end. `UiState::end_frame` now **returns** it (was `()`), and
+      `Frame::run`/`Frame::run_layers` return `(R, UiFrameResult)` (breaking:
+      previously just `R`). Conservative contract: any pending deadline implies
+      `needs_repaint`; `IDLE` (false/None) means the host may sleep until the
+      next input event. Host recipe:
+      `let (_, frame) = state.frame(...).dt(dt).run_layers(&mut layers, |ui| {...});`
+      then `ControlFlow::WaitUntil(now + frame.next_deadline)` / `Wait`.
+      API: `UiFrameResult` (+ `IDLE`, `merge`), `MAX_DT`.
+- [x] **Aggregated sources.** All three library timing sources now report
+      pending time: `AnimationState::pending_deadline()` (running-min of
+      in-flight transition remainders, maintained in `animate_color`/
+      `animate_scalar`'s existing paths — no extra iteration),
+      `ToastStack::pending()` (earliest fade start or expiry; on-demand scan of
+      the bounded actives vec), `TooltipLayer::pending()` (delay remainder
+      while a hover is pending). Anything already due reports `needs_repaint`
+      without a future deadline.
+- [x] **Library ticks everything.** `UiState::begin_frame` now ticks anim,
+      **toasts**, and **tooltips** with one sanitized `dt` (previously hosts
+      ticked toasts/tooltips manually — remove those calls or the timers run
+      2×). Tooltip regions must therefore be registered *before* `begin_frame`
+      (its tick resolves the hover target); the tooltip's own docs already
+      required registration before `tick`, which is now the library's job.
+- [x] **`dt` sanitization.** `frame_result::sanitize_dt`: NaN/negative/±inf →
+      `0.0` (a broken clock freezes rather than jumps), finite values clamped
+      to `MAX_DT` = 0.1 s, so a backgrounded window resuming with a 5 s delta
+      advances at most one normal step instead of teleporting animations and
+      instantly expiring toasts.
+- [x] **App-owned timers.** `UiState::request_repaint_after(seconds)` and the
+      `UiContext::request_repaint_after` verb (no-op outside interactive mode)
+      fold caret-blink / spinner-phase style app clocks into the same
+      deadline. Registrations are per-frame; call every frame while the timer
+      should keep the loop awake. The earliest source wins.
+- [x] **`examples/event_driven_ui.rs`** — complete winit host using
+      `AboutToWait` + `ControlFlow::WaitUntil(next_deadline)`: zero redraws
+      when idle, wakes exactly at hover fades and a `request_repaint_after`-
+      driven caret toggle.
+
+### Breaking / migration notes
+
+- `end_frame()` callers that ignored the result keep compiling (it's not
+  `#[must_use]`); `Frame::run` callers need `(out, frame)` destructuring.
+- Hosts that called `toasts.tick(dt)` / `tooltips.tick(dt, &input)` themselves
+  must **stop** — `begin_frame` does it now (double-ticking ages toasts 2×).
+- `UiFrameResult.changed` from the design doc became `needs_repaint` — same
+  meaning, and `next_deadline == None` carries the "nothing scheduled" case.
+
+7 new unit tests in `src/frame_result.rs` + `src/frame.rs` (sanitization,
+merge/finish semantics, per-source deadlines, earliest-wins, per-frame
+registration lifetime, resume clamp). 1071 lib tests green.

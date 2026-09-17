@@ -168,6 +168,11 @@ pub struct AnimationState {
     /// per-frame allocation.
     seen: HashSet<(u64, AnimSlot)>,
     dt: f32,
+    /// Earliest time at which an in-flight transition will next change what is
+    /// drawn (seconds from the current frame's `tick`). Reset by `tick`,
+    /// accumulated by `animate_color`/`animate_scalar`; consumed by
+    /// [`pending_deadline`](Self::pending_deadline) for frame scheduling.
+    pending_deadline: Option<f32>,
 }
 
 impl AnimationState {
@@ -186,6 +191,30 @@ impl AnimationState {
         self.scalar_anims.retain(|k, _| self.seen.contains(k));
         self.seen.clear();
         self.dt = dt.max(0.0);
+        self.pending_deadline = None;
+    }
+
+    /// After this frame's draws: whether any transition is still in flight,
+    /// and, if so, the earliest time (seconds from now) at which one finishes.
+    /// `None` when everything has settled.
+    ///
+    /// An entry is unsettled while `t < duration`; because progress only
+    /// advances in `tick`, the earliest next change is exactly
+    /// `remaining = duration - t`, tracked as a running minimum as entries are
+    /// drawn (see `note_remaining`).
+    pub fn pending_deadline(&self) -> Option<f32> {
+        self.pending_deadline
+    }
+
+    /// Record a transition's remaining time against the running minimum.
+    /// Called from `animate_color`/`animate_scalar` after any advance this
+    /// frame, so `t` is already up to date.
+    #[inline]
+    fn note_remaining(&mut self, remaining: f32) {
+        self.pending_deadline = Some(match self.pending_deadline {
+            Some(d) => d.min(remaining),
+            None => remaining,
+        });
     }
 
     /// Ease the stored color for `(id, slot)` toward `target` and return the
@@ -248,7 +277,12 @@ impl AnimationState {
                         a.start = target; // settle exactly
                     }
                 }
-                a.current(easing, duration)
+                let pending = (a.t < duration).then(|| duration - a.t);
+                let drawn = a.current(easing, duration);
+                if let Some(remaining) = pending {
+                    self.note_remaining(remaining);
+                }
+                drawn
             }
         }
     }
@@ -305,7 +339,12 @@ impl AnimationState {
                         a.start = target;
                     }
                 }
-                a.current(easing, duration)
+                let pending = (a.t < duration).then(|| duration - a.t);
+                let drawn = a.current(easing, duration);
+                if let Some(remaining) = pending {
+                    self.note_remaining(remaining);
+                }
+                drawn
             }
         }
     }
