@@ -2,6 +2,12 @@
 
 ## 0.5.0 (2026-09-17)
 
+### Bug Fixes
+
+- stop pinning shaped text width in the height-clip test
+
+## 0.5.0 (2026-09-17)
+
 ### Features
 
 - add contextual widget measurement
