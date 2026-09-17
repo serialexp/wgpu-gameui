@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 (2026-09-17)
+
+### Features
+
+- return repaint requirements and deadlines from a UI frame
+
+### Styles
+
+- apply rustfmt to the settings-form set
+
 ## 0.5.0 (2026-09-17)
 
 ### Bug Fixes
