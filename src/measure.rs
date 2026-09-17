@@ -813,8 +813,20 @@ mod tests {
         );
         let measured = cx.measure_text(cx.text_block("one two three four"));
         assert!(measured.metrics.size[1] > measured.measurement.preferred[1]);
+        // The clip rect is the layout allocation, whose width is derived from
+        // shaped line advances; those drift slightly across shaper/font
+        // dependency versions, so assert the relationship, not a magic float.
+        let allocated_width = measured.measurement.preferred[0];
         let block = measured.into_block_at(5.0, 7.0);
-        assert_eq!(block.clip, Some(Rect::new(5.0, 7.0, 40.0, 20.0)));
+        let clip = block.clip.expect("constrained text must carry a clip rect");
+        assert_eq!((clip.x, clip.y, clip.height), (5.0, 7.0, 20.0));
+        assert_eq!(clip.width, allocated_width);
+        assert!(clip.width < 50.0, "clip must fit the max_width budget");
+        let clip_width = clip.width;
+        assert!(
+            (clip_width - 40.0).abs() < 1.0,
+            "clip width should track the widest wrapped line, got {clip_width}"
+        );
     }
 
     #[test]
