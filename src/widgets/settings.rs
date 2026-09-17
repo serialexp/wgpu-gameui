@@ -32,7 +32,7 @@
 use crate::layout::Rect;
 use crate::widgets::binding::{Binding, KeyCode, PadButton};
 use crate::widgets::{DrawContext, Group};
-use crate::{Dropdown, DropdownState, DragCapture, DragId, FocusId, Slider, StyleKey, Tone};
+use crate::{DragCapture, DragId, Dropdown, DropdownState, FocusId, Slider, StyleKey, Tone};
 
 // ---------------------------------------------------------------------------
 // Spec
@@ -150,7 +150,11 @@ impl SettingsSpec {
     pub fn section_ranges(&self) -> Vec<(&'static str, std::ops::Range<usize>)> {
         let mut out = Vec::with_capacity(self.sections.len() + 1);
         if self.section_starts.first().copied() != Some(0) && !self.fields.is_empty() {
-            let first = self.section_starts.first().copied().unwrap_or(self.fields.len());
+            let first = self
+                .section_starts
+                .first()
+                .copied()
+                .unwrap_or(self.fields.len());
             out.push(("", 0..first));
         }
         for (si, &start) in self.section_starts.iter().enumerate() {
@@ -398,7 +402,9 @@ impl<'spec> SettingsForm<'spec> {
     /// scroll viewport or panel around the form before drawing it.
     pub fn intrinsic_height(&self, ctx: &DrawContext) -> f32 {
         let s = ctx.styles();
-        let row_h = self.row_height.unwrap_or_else(|| s.scalar(StyleKey::InputHeight));
+        let row_h = self
+            .row_height
+            .unwrap_or_else(|| s.scalar(StyleKey::InputHeight));
         let spacing = s.scalar(StyleKey::Spacing);
         let pad = s.scalar(StyleKey::Padding);
         let title = s.scalar(StyleKey::FontSize);
@@ -438,7 +444,9 @@ impl<'spec> SettingsForm<'spec> {
         let mut out = SettingsFormOutput::default();
 
         let s = ctx.styles();
-        let row_h = self.row_height.unwrap_or_else(|| s.scalar(StyleKey::InputHeight));
+        let row_h = self
+            .row_height
+            .unwrap_or_else(|| s.scalar(StyleKey::InputHeight));
         let spacing = s.scalar(StyleKey::Spacing);
         let pad = s.scalar(StyleKey::Padding);
         let title_size = s.scalar(StyleKey::FontSize);
@@ -522,7 +530,16 @@ impl<'spec> SettingsForm<'spec> {
                 };
                 let focus_id: FocusId = state.id_base.wrapping_add(i as u64 + 1);
                 let mut row_out = RowOut::default();
-                self.draw_control(i, field, value, control_rect, state, ctx, focus_id, &mut row_out);
+                self.draw_control(
+                    i,
+                    field,
+                    value,
+                    control_rect,
+                    state,
+                    ctx,
+                    focus_id,
+                    &mut row_out,
+                );
                 if row_out.changed {
                     out.changed.push(i);
                 }
@@ -580,7 +597,9 @@ impl<'spec> SettingsForm<'spec> {
         styles: &crate::StyleResolver,
         input: &crate::InputState,
     ) -> Option<usize> {
-        let (id, idx) = state.dropdowns.draw_open_layer(layers, popup, styles, input)?;
+        let (id, idx) = state
+            .dropdowns
+            .draw_open_layer(layers, popup, styles, input)?;
         // Map the dropdown id back to its field: field i ⇔ id_base + i + 1.
         let field = (id.wrapping_sub(state.id_base).checked_sub(1)?) as usize;
         match self.spec.fields.get(field) {
@@ -719,7 +738,10 @@ impl<'spec> SettingsForm<'spec> {
     /// The binding satisfied by this frame's input, if any. Scans in device
     /// order (named keys, chars, mouse, pad); `Escape` is excluded — it
     /// cancels listening instead.
-    fn captured_binding(input: &crate::InputState, pad: Option<&crate::GamepadNav>) -> Option<Binding> {
+    fn captured_binding(
+        input: &crate::InputState,
+        pad: Option<&crate::GamepadNav>,
+    ) -> Option<Binding> {
         const KEYS: &[KeyCode] = &[
             KeyCode::Tab,
             KeyCode::Space,
@@ -901,7 +923,11 @@ mod tests {
     fn default_values_reject_mistyped_defaults() {
         // Index 0 is a toggle; a Number default doesn't fit and is dropped.
         let v = default_values(&spec(), &[(0, 0.5.into())]);
-        assert_eq!(v[0], SettingValue::Bool(false), "fell back to the zero value");
+        assert_eq!(
+            v[0],
+            SettingValue::Bool(false),
+            "fell back to the zero value"
+        );
         // Out-of-range index ignored; slice still complete.
         let v = default_values(&spec(), &[(99, true.into())]);
         assert_eq!(v.len(), 5);
@@ -917,7 +943,10 @@ mod tests {
         assert_eq!(ranges[1].0, "Controls");
         assert_eq!(ranges[1].1, 3..5);
         // Fields before the first section get the "" group.
-        let s = SettingsSpec::new().toggle("Orphan").section("S").toggle("A");
+        let s = SettingsSpec::new()
+            .toggle("Orphan")
+            .section("S")
+            .toggle("A");
         let r = s.section_ranges();
         assert_eq!(r.len(), 2);
         assert_eq!(r[0], ("", 0..1));
@@ -937,7 +966,11 @@ mod tests {
             "toggle flipped; changed = {:?}",
             out.changed
         );
-        assert_eq!(values[0], SettingValue::Bool(false), "started true, clicked to false");
+        assert_eq!(
+            values[0],
+            SettingValue::Bool(false),
+            "started true, clicked to false"
+        );
     }
 
     #[test]
@@ -961,7 +994,10 @@ mod tests {
         input.key_space = true;
         let (out, _) = draw_with(&mut values, &mut state, &input);
         assert!(out.changed.contains(&3), "space captured");
-        assert_eq!(values[3], SettingValue::Binding(Binding::Key(KeyCode::Space)));
+        assert_eq!(
+            values[3],
+            SettingValue::Binding(Binding::Key(KeyCode::Space))
+        );
         assert_eq!(state.listening, None, "listener cleared");
     }
 
@@ -992,7 +1028,12 @@ mod tests {
         assert!(out.changed.contains(&3));
         assert_eq!(
             values[3],
-            SettingValue::Binding(Binding::Char { c: 's', ctrl: true, shift: false, alt: false })
+            SettingValue::Binding(Binding::Char {
+                c: 's',
+                ctrl: true,
+                shift: false,
+                alt: false
+            })
         );
     }
 
@@ -1051,18 +1092,16 @@ mod tests {
         overlay.set_scalar(StyleKey::Spacing, 4.0);
         let rect = Rect::new(0.0, 0.0, 400.0, 600.0);
         let h = {
-            let ctx =
-                crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
-                    .with_style(&overlay);
+            let ctx = crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
+                .with_style(&overlay);
             SettingsForm::new(&spec).intrinsic_height(&ctx)
         };
         let mut values = fresh_values();
         let mut state = SettingsFormState::new();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
-        let mut ctx =
-            crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
-                .with_style(&overlay);
+        let mut ctx = crate::DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
+            .with_style(&overlay);
         let _ = SettingsForm::new(&spec).draw(&mut values, rect, &mut state, &mut ctx);
         // The deepest drawn chrome bottom must not exceed the announced height.
         let max_y = list
@@ -1107,7 +1146,12 @@ mod tests {
         assert!(out.changed.is_empty());
         // The first label sits vertically centered in a 48px row: its baseline
         // is far lower than the default-theme draw's (rows were 24px).
-        let vsync_y = list.texts.iter().find(|t| t.content == "VSync").expect("label").y;
+        let vsync_y = list
+            .texts
+            .iter()
+            .find(|t| t.content == "VSync")
+            .expect("label")
+            .y;
         let mut default_list = DrawList::new();
         let mut default_focus = FocusState::new();
         let default_input = InputState::default();
@@ -1154,9 +1198,12 @@ mod tests {
         let mut values = fresh_values();
         // Seed the dropdown as open on field 2 (id_base + 3), button at the
         // real control-column spot.
-        state
-            .dropdowns
-            .open_for_test(state.id_base + 3, Rect::new(78.0, 85.0, 318.0, 24.0), OPTIONS, 1);
+        state.dropdowns.open_for_test(
+            state.id_base + 3,
+            Rect::new(78.0, 85.0, 318.0, 24.0),
+            OPTIONS,
+            1,
+        );
         let mut layers = crate::LayerStack::new();
         let theme = crate::Theme::default();
         let styles = crate::StyleResolver::new(&theme);

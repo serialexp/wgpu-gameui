@@ -10,8 +10,8 @@
 use wgpu_gameui::layout::{Anchor, MainAlign, Positioned, Rect, Size, VStack};
 use wgpu_gameui::{
     ArrowFocusNav, Button, DrawContext, FocusState, Image, ImageFit, InputState, KeyboardNav,
-    LayerStack, MenuList, SettingsForm, SettingsFormState, SettingsSpec,
-    StyleResolver, Theme, UiRenderer, default_values, draw_scrim, map_gamepad,
+    LayerStack, MenuList, SettingsForm, SettingsFormState, SettingsSpec, StyleResolver, Theme,
+    UiRenderer, default_values, draw_scrim, map_gamepad,
 };
 
 const W: u32 = 640;

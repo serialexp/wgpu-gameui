@@ -181,7 +181,12 @@ impl Binding {
     pub fn label(&self) -> String {
         match self {
             Binding::Key(k) => k.label().to_string(),
-            Binding::Char { c, ctrl, shift, alt } => {
+            Binding::Char {
+                c,
+                ctrl,
+                shift,
+                alt,
+            } => {
                 let mut s = String::new();
                 if *ctrl {
                     s.push_str("Ctrl+");
@@ -210,10 +215,17 @@ impl Binding {
     pub fn is_down(&self, input: &InputState, pad: Option<&GamepadNav>) -> bool {
         match self {
             Binding::Key(k) => k.pressed(input),
-            Binding::Char { c, ctrl, shift, alt } => {
-                input.text_input.chars().any(|ch| {
-                    ch.eq_ignore_ascii_case(c)
-                }) && input.ctrl_pressed == *ctrl
+            Binding::Char {
+                c,
+                ctrl,
+                shift,
+                alt,
+            } => {
+                input
+                    .text_input
+                    .chars()
+                    .any(|ch| ch.eq_ignore_ascii_case(c))
+                    && input.ctrl_pressed == *ctrl
                     && input.shift_pressed == *shift
                     && input.alt_down == *alt
             }
@@ -229,13 +241,18 @@ impl Binding {
 mod tests {
     use super::*;
 
-
     #[test]
     fn labels_cover_all_variants_and_read_naturally() {
         assert_eq!(Binding::Key(KeyCode::Escape).label(), "Esc");
         assert_eq!(Binding::Key(KeyCode::Left).label(), "←");
         assert_eq!(
-            Binding::Char { c: 's', ctrl: true, shift: true, alt: false }.label(),
+            Binding::Char {
+                c: 's',
+                ctrl: true,
+                shift: true,
+                alt: false
+            }
+            .label(),
             "Ctrl+Shift+S"
         );
         assert_eq!(Binding::MouseRight.label(), "Mouse2");
@@ -260,7 +277,12 @@ mod tests {
         let mut input = InputState::default();
         input.text_input = "s".into();
         input.ctrl_pressed = true;
-        let bind = Binding::Char { c: 's', ctrl: true, shift: false, alt: false };
+        let bind = Binding::Char {
+            c: 's',
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
         assert!(bind.is_down(&input, None), "Ctrl+S matches");
         input.shift_pressed = true;
         assert!(!bind.is_down(&input, None), "extra Shift breaks the chord");
@@ -281,7 +303,10 @@ mod tests {
             !Binding::Pad(PadButton::East).is_down(&input, None),
             "no pad snapshot: nothing matches"
         );
-        let pad = GamepadNav { east: true, ..Default::default() };
+        let pad = GamepadNav {
+            east: true,
+            ..Default::default()
+        };
         assert!(Binding::Pad(PadButton::East).is_down(&input, Some(&pad)));
         assert!(!Binding::Pad(PadButton::South).is_down(&input, Some(&pad)));
     }
@@ -324,9 +349,19 @@ mod tests {
 
     #[test]
     fn char_label_uppercases_and_orders_modifiers() {
-        let b = Binding::Char { c: 'a', ctrl: false, shift: false, alt: true };
+        let b = Binding::Char {
+            c: 'a',
+            ctrl: false,
+            shift: false,
+            alt: true,
+        };
         assert_eq!(b.label(), "Alt+A");
-        let b = Binding::Char { c: 'x', ctrl: true, shift: true, alt: true };
+        let b = Binding::Char {
+            c: 'x',
+            ctrl: true,
+            shift: true,
+            alt: true,
+        };
         assert_eq!(b.label(), "Ctrl+Alt+Shift+X");
     }
 }
