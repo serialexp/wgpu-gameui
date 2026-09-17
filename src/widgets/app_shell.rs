@@ -217,7 +217,12 @@ impl AppShell {
         // --- Top: menu bar ---
         if self.menu_bar {
             out.menu_bar = Some(Rect::new(rem.x, rem.y, rem.width, menu_h));
-            rem = Rect::new(rem.x, rem.y + menu_h, rem.width, (rem.height - menu_h).max(0.0));
+            rem = Rect::new(
+                rem.x,
+                rem.y + menu_h,
+                rem.width,
+                (rem.height - menu_h).max(0.0),
+            );
         }
 
         // --- Top: doc tabs ---
@@ -244,12 +249,7 @@ impl AppShell {
                 let dock_h = bs.size.min(rem.height - splitter_w);
                 let sp_y = rem.y + rem.height - dock_h - splitter_w;
                 out.bottom_splitter = Some(Rect::new(rem.x, sp_y, rem.width, splitter_w));
-                out.bottom_dock = Some(Rect::new(
-                    rem.x,
-                    sp_y + splitter_w,
-                    rem.width,
-                    dock_h,
-                ));
+                out.bottom_dock = Some(Rect::new(rem.x, sp_y + splitter_w, rem.width, dock_h));
                 rem = Rect::new(
                     rem.x,
                     rem.y,
@@ -264,12 +264,7 @@ impl AppShell {
             if ls.visible && rem.width > splitter_w + 1.0 {
                 let dock_w = ls.size.min(rem.width - splitter_w);
                 out.left_dock = Some(Rect::new(rem.x, rem.y, dock_w, rem.height));
-                out.left_splitter = Some(Rect::new(
-                    rem.x + dock_w,
-                    rem.y,
-                    splitter_w,
-                    rem.height,
-                ));
+                out.left_splitter = Some(Rect::new(rem.x + dock_w, rem.y, splitter_w, rem.height));
                 rem = Rect::new(
                     rem.x + dock_w + splitter_w,
                     rem.y,
@@ -285,12 +280,7 @@ impl AppShell {
                 let dock_w = rs.size.min(rem.width - splitter_w);
                 let sp_x = rem.x + rem.width - dock_w - splitter_w;
                 out.right_splitter = Some(Rect::new(sp_x, rem.y, splitter_w, rem.height));
-                out.right_dock = Some(Rect::new(
-                    sp_x + splitter_w,
-                    rem.y,
-                    dock_w,
-                    rem.height,
-                ));
+                out.right_dock = Some(Rect::new(sp_x + splitter_w, rem.y, dock_w, rem.height));
                 rem = Rect::new(
                     rem.x,
                     rem.y,
@@ -310,41 +300,23 @@ impl AppShell {
                     ToolbarEdge::Left => {
                         let tw = cross.min(rem.width);
                         out.toolbar = Some(Rect::new(rem.x, rem.y, tw, rem.height));
-                        rem = Rect::new(
-                            rem.x + tw,
-                            rem.y,
-                            (rem.width - tw).max(0.0),
-                            rem.height,
-                        );
+                        rem = Rect::new(rem.x + tw, rem.y, (rem.width - tw).max(0.0), rem.height);
                     }
                     ToolbarEdge::Right => {
                         let tw = cross.min(rem.width);
-                        out.toolbar = Some(Rect::new(
-                            rem.x + rem.width - tw,
-                            rem.y,
-                            tw,
-                            rem.height,
-                        ));
+                        out.toolbar =
+                            Some(Rect::new(rem.x + rem.width - tw, rem.y, tw, rem.height));
                         rem = Rect::new(rem.x, rem.y, (rem.width - tw).max(0.0), rem.height);
                     }
                     ToolbarEdge::Top => {
                         let th = cross.min(rem.height);
                         out.toolbar = Some(Rect::new(rem.x, rem.y, rem.width, th));
-                        rem = Rect::new(
-                            rem.x,
-                            rem.y + th,
-                            rem.width,
-                            (rem.height - th).max(0.0),
-                        );
+                        rem = Rect::new(rem.x, rem.y + th, rem.width, (rem.height - th).max(0.0));
                     }
                     ToolbarEdge::Bottom => {
                         let th = cross.min(rem.height);
-                        out.toolbar = Some(Rect::new(
-                            rem.x,
-                            rem.y + rem.height - th,
-                            rem.width,
-                            th,
-                        ));
+                        out.toolbar =
+                            Some(Rect::new(rem.x, rem.y + rem.height - th, rem.width, th));
                         rem = Rect::new(rem.x, rem.y, rem.width, (rem.height - th).max(0.0));
                     }
                 }
@@ -377,8 +349,12 @@ impl AppShell {
 
         // --- Left splitter + dock ---
         if let (Some(sp_rect), Some((tabs, dock_state))) = (shell.left_splitter, left) {
-            let sp = Splitter::vertical(sp_rect.width)
-                .draw(SHELL_DRAG_LEFT_SPLITTER, drag_capture, sp_rect, ctx);
+            let sp = Splitter::vertical(sp_rect.width).draw(
+                SHELL_DRAG_LEFT_SPLITTER,
+                drag_capture,
+                sp_rect,
+                ctx,
+            );
             dock_state.size =
                 (dock_state.size + sp.delta).clamp(dock_state.min_size, dock_state.max_size);
             out.left_splitter = Some(sp);
@@ -393,8 +369,12 @@ impl AppShell {
 
         // --- Right splitter + dock ---
         if let (Some(sp_rect), Some((tabs, dock_state))) = (shell.right_splitter, right) {
-            let sp = Splitter::vertical(sp_rect.width)
-                .draw(SHELL_DRAG_RIGHT_SPLITTER, drag_capture, sp_rect, ctx);
+            let sp = Splitter::vertical(sp_rect.width).draw(
+                SHELL_DRAG_RIGHT_SPLITTER,
+                drag_capture,
+                sp_rect,
+                ctx,
+            );
             // Right splitter: dragging left (negative delta) increases right dock width.
             dock_state.size =
                 (dock_state.size - sp.delta).clamp(dock_state.min_size, dock_state.max_size);
@@ -410,8 +390,12 @@ impl AppShell {
 
         // --- Bottom splitter + dock ---
         if let (Some(sp_rect), Some((tabs, dock_state))) = (shell.bottom_splitter, bottom) {
-            let sp = Splitter::horizontal(sp_rect.height)
-                .draw(SHELL_DRAG_BOTTOM_SPLITTER, drag_capture, sp_rect, ctx);
+            let sp = Splitter::horizontal(sp_rect.height).draw(
+                SHELL_DRAG_BOTTOM_SPLITTER,
+                drag_capture,
+                sp_rect,
+                ctx,
+            );
             // Bottom splitter: dragging up (negative delta) increases bottom dock height.
             dock_state.size =
                 (dock_state.size - sp.delta).clamp(dock_state.min_size, dock_state.max_size);
@@ -428,7 +412,13 @@ impl AppShell {
         // --- Toolbar ---
         if let (Some(tb_rect), Some((items, tb_state))) = (shell.toolbar, toolbar) {
             let tb = Toolbar::new(items);
-            let tb_out = tb.draw(tb_rect, tb_state, drag_capture, SHELL_DRAG_TOOLBAR_GRIP, ctx);
+            let tb_out = tb.draw(
+                tb_rect,
+                tb_state,
+                drag_capture,
+                SHELL_DRAG_TOOLBAR_GRIP,
+                ctx,
+            );
             out.toolbar = Some(tb_out);
         }
 
@@ -449,8 +439,8 @@ impl Default for AppShell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::StyleResolver;
     use crate::Theme;
+    use crate::style::StyleResolver;
 
     #[test]
     fn all_zones_visible() {
@@ -514,8 +504,7 @@ mod tests {
         // Hidden dock (visible = false).
         let mut left_hidden = DockPanelState::new(180.0);
         left_hidden.visible = false;
-        let layout_hidden =
-            shell.layout(screen, Some(&left_hidden), None, None, None, &s);
+        let layout_hidden = shell.layout(screen, Some(&left_hidden), None, None, None, &s);
 
         assert!(
             (layout_none.viewport.width - layout_hidden.viewport.width).abs() < 0.01,
@@ -538,21 +527,48 @@ mod tests {
             .with_doc_tabs()
             .with_status_bar()
             .with_toolbar()
-            .layout(screen, Some(&left), Some(&right), Some(&bottom), Some(&toolbar), &s);
+            .layout(
+                screen,
+                Some(&left),
+                Some(&right),
+                Some(&bottom),
+                Some(&toolbar),
+                &s,
+            );
 
         // Collect all rects that are present.
         let mut rects: Vec<(&str, Rect)> = vec![];
-        if let Some(r) = layout.menu_bar { rects.push(("menu_bar", r)); }
-        if let Some(r) = layout.doc_tabs { rects.push(("doc_tabs", r)); }
-        if let Some(r) = layout.left_dock { rects.push(("left_dock", r)); }
-        if let Some(r) = layout.left_splitter { rects.push(("left_splitter", r)); }
-        if let Some(r) = layout.right_dock { rects.push(("right_dock", r)); }
-        if let Some(r) = layout.right_splitter { rects.push(("right_splitter", r)); }
-        if let Some(r) = layout.bottom_dock { rects.push(("bottom_dock", r)); }
-        if let Some(r) = layout.bottom_splitter { rects.push(("bottom_splitter", r)); }
-        if let Some(r) = layout.toolbar { rects.push(("toolbar", r)); }
+        if let Some(r) = layout.menu_bar {
+            rects.push(("menu_bar", r));
+        }
+        if let Some(r) = layout.doc_tabs {
+            rects.push(("doc_tabs", r));
+        }
+        if let Some(r) = layout.left_dock {
+            rects.push(("left_dock", r));
+        }
+        if let Some(r) = layout.left_splitter {
+            rects.push(("left_splitter", r));
+        }
+        if let Some(r) = layout.right_dock {
+            rects.push(("right_dock", r));
+        }
+        if let Some(r) = layout.right_splitter {
+            rects.push(("right_splitter", r));
+        }
+        if let Some(r) = layout.bottom_dock {
+            rects.push(("bottom_dock", r));
+        }
+        if let Some(r) = layout.bottom_splitter {
+            rects.push(("bottom_splitter", r));
+        }
+        if let Some(r) = layout.toolbar {
+            rects.push(("toolbar", r));
+        }
         rects.push(("viewport", layout.viewport));
-        if let Some(r) = layout.status_bar { rects.push(("status_bar", r)); }
+        if let Some(r) = layout.status_bar {
+            rects.push(("status_bar", r));
+        }
 
         // Check that no two rects overlap (more than epsilon).
         for i in 0..rects.len() {

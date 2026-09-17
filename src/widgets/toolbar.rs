@@ -294,8 +294,7 @@ impl<'a> Toolbar<'a> {
             capture.release(drag_id);
         }
 
-        let hovered = !input.mouse_consumed
-            && rect.contains(input.mouse_x, input.mouse_y);
+        let hovered = !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
 
         if hovered && input.mouse_clicked && capture.is_free() {
             capture.try_begin(drag_id);
@@ -322,14 +321,12 @@ impl<'a> Toolbar<'a> {
         if vertical {
             // Three dots in a horizontal row.
             for dx in [-3.0_f32, 0.0, 3.0] {
-                ctx.draw_list
-                    .circle((cx + dx, cy), 1.0, dot_color);
+                ctx.draw_list.circle((cx + dx, cy), 1.0, dot_color);
             }
         } else {
             // Three dots in a vertical column.
             for dy in [-3.0_f32, 0.0, 3.0] {
-                ctx.draw_list
-                    .circle((cx, cy + dy), 1.0, dot_color);
+                ctx.draw_list.circle((cx, cy + dy), 1.0, dot_color);
             }
         }
 
@@ -357,18 +354,13 @@ impl<'a> Toolbar<'a> {
         let radius = s.scalar(StyleKey::BorderRadius);
 
         let is_active = state.active_tool == Some(tool.id);
-        let hovered = tool.enabled
-            && !input.mouse_consumed
-            && rect.contains(input.mouse_x, input.mouse_y);
+        let hovered =
+            tool.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
         let pressed = hovered && input.mouse_down;
         let clicked = hovered && input.mouse_clicked;
 
         // Determine tone.
-        let tone = if is_active {
-            Tone::Accent
-        } else {
-            Tone::Ghost
-        };
+        let tone = if is_active { Tone::Accent } else { Tone::Ghost };
 
         let mat = Material::new(tone)
             .enabled(tool.enabled)
@@ -444,11 +436,11 @@ const SEPARATOR_GAP: f32 = 3.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Theme;
     use crate::layout::Rect;
+    use crate::widgets::DrawList;
     use crate::widgets::drag::DragCapture;
     use crate::widgets::focus::FocusState;
-    use crate::widgets::DrawList;
-    use crate::Theme;
 
     fn ctx<'a>(
         list: &'a mut DrawList,
@@ -462,9 +454,19 @@ mod tests {
     fn sample_items() -> Vec<ToolbarItem<'static>> {
         vec![
             ToolbarItem::tool(1, Icon::new(crate::render::PhosphorIcon::Plus), "Add", "A"),
-            ToolbarItem::tool(2, Icon::new(crate::render::PhosphorIcon::Minus), "Remove", "D"),
+            ToolbarItem::tool(
+                2,
+                Icon::new(crate::render::PhosphorIcon::Minus),
+                "Remove",
+                "D",
+            ),
             ToolbarItem::separator(),
-            ToolbarItem::tool(3, Icon::new(crate::render::PhosphorIcon::Gear), "Settings", "S"),
+            ToolbarItem::tool(
+                3,
+                Icon::new(crate::render::PhosphorIcon::Gear),
+                "Settings",
+                "S",
+            ),
         ]
     }
 
@@ -588,7 +590,11 @@ mod tests {
 
         let mut cx = ctx(&mut list, &mut focus, &theme, &input);
         let out = Toolbar::new(&items).draw(rect, &mut state, &mut capture, 99, &mut cx);
-        assert_eq!(out.clicked, Some(1), "horizontal layout should find first tool");
+        assert_eq!(
+            out.clicked,
+            Some(1),
+            "horizontal layout should find first tool"
+        );
     }
 
     #[test]
@@ -622,10 +628,8 @@ mod tests {
         let btn = 24.0;
         let pad = 2.0;
         // 3 tools + 1 separator + grip
-        let expected = GRIP_SIZE
-            + 3.0 * btn
-            + (SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0)
-            + pad * 2.0;
+        let expected =
+            GRIP_SIZE + 3.0 * btn + (SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0) + pad * 2.0;
         let actual = toolbar.preferred_extent(btn, pad);
         assert!(
             (actual - expected).abs() < 0.01,

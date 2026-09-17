@@ -35,8 +35,8 @@ use crate::layout::Rect;
 use crate::style::StyleKey;
 use crate::text::TextBlock;
 
-use super::material;
 use super::DrawContext;
+use super::material;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -154,7 +154,12 @@ impl<'a> DockPanel<'a> {
         let mut out = DockPanelOutput {
             tab_clicked: None,
             close_clicked: false,
-            body: Rect::new(rect.x, rect.y + tab_h, rect.width, (rect.height - tab_h).max(0.0)),
+            body: Rect::new(
+                rect.x,
+                rect.y + tab_h,
+                rect.width,
+                (rect.height - tab_h).max(0.0),
+            ),
             rect,
         };
 
@@ -194,16 +199,15 @@ impl<'a> DockPanel<'a> {
                 17.0,
                 17.0,
             );
-            let close_hovered = close_rect.contains(input.mouse_x, input.mouse_y)
-                && !input.mouse_consumed;
+            let close_hovered =
+                close_rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
             let close_pressed = close_hovered && input.mouse_down;
             let close_clicked = close_hovered && input.mouse_clicked;
 
             // Ghost button chrome.
             if close_hovered {
                 let hover_bg = [1.0, 1.0, 1.0, if close_pressed { 0.12 } else { 0.06 }];
-                ctx.draw_list
-                    .rounded_rect(close_rect, radius, hover_bg);
+                ctx.draw_list.rounded_rect(close_rect, radius, hover_bg);
             }
             // "×" glyph.
             let xc = if close_hovered {
@@ -219,18 +223,14 @@ impl<'a> DockPanel<'a> {
                 "✕",
             );
             ctx.draw_list.text(
-                TextBlock::new(
-                    "✕",
-                    close_rect.x + (close_rect.width - 6.0) * 0.5,
-                    xty,
-                )
-                .with_size(10.0)
-                .with_color(
-                    (xc[0] * 255.0) as u8,
-                    (xc[1] * 255.0) as u8,
-                    (xc[2] * 255.0) as u8,
-                )
-                .with_font_opt(s.theme().font.clone()),
+                TextBlock::new("✕", close_rect.x + (close_rect.width - 6.0) * 0.5, xty)
+                    .with_size(10.0)
+                    .with_color(
+                        (xc[0] * 255.0) as u8,
+                        (xc[1] * 255.0) as u8,
+                        (xc[2] * 255.0) as u8,
+                    )
+                    .with_font_opt(s.theme().font.clone()),
             );
 
             if close_clicked {
@@ -247,24 +247,17 @@ impl<'a> DockPanel<'a> {
 
             for (i, tab) in self.tabs.iter().enumerate() {
                 let tx = rect.x + 2.0 + i as f32 * tab_w;
-                let tab_rect = Rect::new(
-                    tx,
-                    rect.y + (tab_h - 18.0) * 0.5,
-                    tab_w,
-                    18.0,
-                );
+                let tab_rect = Rect::new(tx, rect.y + (tab_h - 18.0) * 0.5, tab_w, 18.0);
                 let is_active = i == state.active_tab;
-                let tab_hovered = tab_rect.contains(input.mouse_x, input.mouse_y)
-                    && !input.mouse_consumed;
+                let tab_hovered =
+                    tab_rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
                 let tab_clicked = tab_hovered && input.mouse_clicked;
 
                 // Tab background.
                 if is_active {
                     // Gradient with subtle highlight.
-                    let top = material::sheen_over(
-                        s.color(StyleKey::TabActive),
-                        [1.0, 1.0, 1.0, 0.10],
-                    );
+                    let top =
+                        material::sheen_over(s.color(StyleKey::TabActive), [1.0, 1.0, 1.0, 0.10]);
                     ctx.draw_list
                         .chrome_rect(tab_rect, radius, 1.0, top, [0.0, 0.0, 0.0, 0.35]);
                     // Inset highlight on active tab.
@@ -277,11 +270,8 @@ impl<'a> DockPanel<'a> {
                         hl,
                     );
                 } else if tab_hovered {
-                    ctx.draw_list.rounded_rect(
-                        tab_rect,
-                        radius,
-                        [1.0, 1.0, 1.0, 0.04],
-                    );
+                    ctx.draw_list
+                        .rounded_rect(tab_rect, radius, [1.0, 1.0, 1.0, 0.04]);
                 }
 
                 // Tab label.
@@ -385,8 +375,11 @@ mod tests {
         };
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
-        let out =
-            DockPanel::new(DockSide::Left, &ts).draw(rect, &mut state, &mut ctx(&mut list, &mut focus, &theme, &input));
+        let out = DockPanel::new(DockSide::Left, &ts).draw(
+            rect,
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
         assert_eq!(out.tab_clicked, Some(1));
     }
 
@@ -407,9 +400,11 @@ mod tests {
         };
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
-        let out = DockPanel::new(DockSide::Left, &ts)
-            .closable()
-            .draw(rect, &mut state, &mut ctx(&mut list, &mut focus, &theme, &input));
+        let out = DockPanel::new(DockSide::Left, &ts).closable().draw(
+            rect,
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
         assert!(out.close_clicked);
     }
 
@@ -422,8 +417,11 @@ mod tests {
         let input = InputState::default();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
-        let out =
-            DockPanel::new(DockSide::Left, &ts).draw(rect, &mut state, &mut ctx(&mut list, &mut focus, &theme, &input));
+        let out = DockPanel::new(DockSide::Left, &ts).draw(
+            rect,
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
 
         let tab_h = theme.dock_tab_height;
         assert!((out.body.y - (rect.y + tab_h)).abs() < 0.01);
@@ -441,8 +439,11 @@ mod tests {
         let input = InputState::default();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
-        let out =
-            DockPanel::new(DockSide::Left, &tabs).draw(rect, &mut state, &mut ctx(&mut list, &mut focus, &theme, &input));
+        let out = DockPanel::new(DockSide::Left, &tabs).draw(
+            rect,
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
 
         // Should still emit geometry (background) and return a body rect.
         assert!(!list.chrome_instances.is_empty() || !list.vertices.is_empty());
@@ -466,8 +467,11 @@ mod tests {
         };
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
-        let out =
-            DockPanel::new(DockSide::Left, &ts).draw(rect, &mut state, &mut ctx(&mut list, &mut focus, &theme, &input));
+        let out = DockPanel::new(DockSide::Left, &ts).draw(
+            rect,
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
         assert_eq!(out.tab_clicked, None);
     }
 

@@ -2270,11 +2270,8 @@ fn render_widget_gallery() {
         // --- Toolbar ---------------------------------------------------------
         flow.section(list, "Toolbar (vertical + horizontal)");
         {
-            use wgpu_gameui::{
-                Toolbar, ToolbarEdge, ToolbarItem, ToolbarState,
-                Icon, DragCapture,
-            };
             use wgpu_gameui::render::PhosphorIcon;
+            use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
 
             let items: Vec<ToolbarItem<'_>> = vec![
                 ToolbarItem::tool(1, Icon::new(PhosphorIcon::Diamond), "Select", "Q"),
@@ -2308,9 +2305,7 @@ fn render_widget_gallery() {
         // --- App shell -------------------------------------------------------
         flow.section(list, "App shell (mini layout)");
         {
-            use wgpu_gameui::{
-                AppShell, DockPanelState, ToolbarEdge, ToolbarState,
-            };
+            use wgpu_gameui::{AppShell, DockPanelState, ToolbarEdge, ToolbarState};
 
             let left = DockPanelState::new(60.0).with_range(40.0, 120.0);
             let right = DockPanelState::new(70.0).with_range(40.0, 120.0);
@@ -2352,17 +2347,37 @@ fn render_widget_gallery() {
                 }
             };
 
-            if let Some(r) = layout.menu_bar { draw_zone(list, r, "menu", dim); }
-            if let Some(r) = layout.doc_tabs { draw_zone(list, r, "tabs", dim); }
-            if let Some(r) = layout.left_dock { draw_zone(list, r, "L dock", dim); }
-            if let Some(r) = layout.left_splitter { list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]); }
-            if let Some(r) = layout.right_dock { draw_zone(list, r, "R dock", dim); }
-            if let Some(r) = layout.right_splitter { list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]); }
-            if let Some(r) = layout.bottom_dock { draw_zone(list, r, "B dock", dim); }
-            if let Some(r) = layout.bottom_splitter { list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]); }
-            if let Some(r) = layout.toolbar { draw_zone(list, r, "toolbar", accent); }
+            if let Some(r) = layout.menu_bar {
+                draw_zone(list, r, "menu", dim);
+            }
+            if let Some(r) = layout.doc_tabs {
+                draw_zone(list, r, "tabs", dim);
+            }
+            if let Some(r) = layout.left_dock {
+                draw_zone(list, r, "L dock", dim);
+            }
+            if let Some(r) = layout.left_splitter {
+                list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]);
+            }
+            if let Some(r) = layout.right_dock {
+                draw_zone(list, r, "R dock", dim);
+            }
+            if let Some(r) = layout.right_splitter {
+                list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]);
+            }
+            if let Some(r) = layout.bottom_dock {
+                draw_zone(list, r, "B dock", dim);
+            }
+            if let Some(r) = layout.bottom_splitter {
+                list.quad(r.x, r.y, r.width, r.height, [0.5, 0.5, 0.5, 0.3]);
+            }
+            if let Some(r) = layout.toolbar {
+                draw_zone(list, r, "toolbar", accent);
+            }
             draw_zone(list, layout.viewport, "viewport", accent);
-            if let Some(r) = layout.status_bar { draw_zone(list, r, "status", dim); }
+            if let Some(r) = layout.status_bar {
+                draw_zone(list, r, "status", dim);
+            }
         }
 
         // --- Dock panel -----------------------------------------------------
