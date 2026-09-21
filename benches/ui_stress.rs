@@ -31,10 +31,11 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use wgpu_gameui::layout::{Anchor, LayoutResult, Positioned, Rect, Size, VStack};
 use wgpu_gameui::{
     AnimSlot, AnimationState, BoxShadow, Button, Checkbox, ColumnWidth, CornerRadii, DragCapture,
-    DrawContext, DrawList, Easing, FocusState, FontSystemHandle, Frame, InputState, KeyboardNav,
-    List, ListItem, ListState, MeasureBuffer, MeasuredChild, Measurement, NumberInput, ScrollState,
-    ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn, TextBlock, TextInput,
-    TextMeasurer, Theme, UiRenderer, UiState,
+    DrawContext, DrawList, Easing, FocusState, FontSystemHandle, Frame, InputState,
+    InteractionScene, KeyboardNav, LayerStack, List, ListItem, ListState, MAX_MENU_DEPTH,
+    MeasureBuffer, MeasuredChild, Measurement, Menu, MenuBar, MenuBarState, MenuDrawEnv, MenuItem,
+    NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn,
+    TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
 };
 #[cfg(feature = "syntax-lua")]
 use wgpu_gameui::{SyntaxHighlighting, SyntaxTheme};
@@ -1082,6 +1083,183 @@ fn bench_ui_context_frame(c: &mut Criterion) {
 /// Simulates a frame where N widgets each request an eased color transition
 /// (the common pattern for hover/press feedback). Each `animate_color` call
 /// does a hash lookup + lerp; `tick` reaps stale entries.
+const MENU_LEVEL_8: &[MenuItem<'static>] = &[
+    MenuItem::new("Final leaf — export the complete production workspace").shortcut("Ctrl+Shift+E"),
+    MenuItem::new("Final leaf — rebuild all generated navigation meshes"),
+    MenuItem::new("Final leaf — validate every referenced content package"),
+    MenuItem::new("Final leaf — publish diagnostics and frame captures"),
+    MenuItem::separator(),
+    MenuItem::new("Final leaf — close the recursive menu benchmark"),
+];
+const MENU_LEVEL_7: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 7 — deployment and packaging operations").with_children(MENU_LEVEL_8),
+    MenuItem::new("Level 7 — prepare platform-specific asset bundles"),
+    MenuItem::new("Level 7 — inspect signing and entitlement settings"),
+    MenuItem::new("Level 7 — compare staged release manifests"),
+    MenuItem::separator(),
+    MenuItem::new("Level 7 — disabled production operation").enabled(false),
+];
+const MENU_LEVEL_6: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 6 — world streaming and partition controls").with_children(MENU_LEVEL_7),
+    MenuItem::new("Level 6 — rebuild hierarchical level-of-detail data"),
+    MenuItem::new("Level 6 — inspect persistent streaming overrides"),
+    MenuItem::new("Level 6 — validate cross-partition object references"),
+    MenuItem::separator(),
+    MenuItem::new("Level 6 — show advanced streaming diagnostics").checked(true),
+];
+const MENU_LEVEL_5: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 5 — rendering and visualization controls").with_children(MENU_LEVEL_6),
+    MenuItem::new("Level 5 — capture a complete renderer diagnostics frame"),
+    MenuItem::new("Level 5 — rebuild virtual texture residency metadata"),
+    MenuItem::new("Level 5 — inspect all active post-process volumes"),
+    MenuItem::separator(),
+    MenuItem::new("Level 5 — use deterministic render scheduling").checked(true),
+];
+const MENU_LEVEL_4: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 4 — simulation and deterministic replay").with_children(MENU_LEVEL_5),
+    MenuItem::new("Level 4 — record a multi-system simulation snapshot"),
+    MenuItem::new("Level 4 — compare authoritative replay checkpoints"),
+    MenuItem::new("Level 4 — inspect fixed-step scheduling diagnostics"),
+    MenuItem::separator(),
+    MenuItem::new("Level 4 — pause background simulation workers"),
+];
+const MENU_LEVEL_3: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 3 — content validation and dependency tools").with_children(MENU_LEVEL_4),
+    MenuItem::new("Level 3 — scan all packages for missing dependencies"),
+    MenuItem::new("Level 3 — rebuild searchable content metadata"),
+    MenuItem::new("Level 3 — report duplicated production resources"),
+    MenuItem::separator(),
+    MenuItem::new("Level 3 — include optional editor-only content").checked(true),
+];
+const MENU_LEVEL_2: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 2 — project maintenance and migration").with_children(MENU_LEVEL_3),
+    MenuItem::new("Level 2 — migrate selected resources to current schema"),
+    MenuItem::new("Level 2 — consolidate redirectors across all packages"),
+    MenuItem::new("Level 2 — inspect source-control reconciliation status"),
+    MenuItem::separator(),
+    MenuItem::new("Level 2 — preserve compatibility metadata").checked(true),
+];
+const MENU_LEVEL_1: &[MenuItem<'static>] = &[
+    MenuItem::new("Level 1 — recursive production tool collection").with_children(MENU_LEVEL_2),
+    MenuItem::new("Level 1 — open representative workspace configuration"),
+    MenuItem::new("Level 1 — save all modified production resources").shortcut("Ctrl+Shift+S"),
+    MenuItem::new("Level 1 — inspect project-wide operation history"),
+    MenuItem::separator(),
+    MenuItem::new("Level 1 — enable detailed operation logging").checked(true),
+];
+const RECURSIVE_BENCH_MENUS: &[Menu<'static>] =
+    &[Menu::new("Production Tools").with_items(MENU_LEVEL_1)];
+
+/// CPU-only steady-state cost of an adversarial recursive menubar frame.
+///
+/// The static model opens all [`MAX_MENU_DEPTH`] columns; every column contains
+/// wide production-style labels and six rows. Each timed iteration performs the
+/// public frame contract: clear retained frame structures, begin input/dispatch,
+/// push popup layers, build and measure the base bar plus all eight columns,
+/// paint those columns into their draw lists, and end dispatch/focus state. It
+/// does not call `UiRenderer` or submit GPU work.
+///
+/// Menu state, the base draw list, interaction scene, focus, input, and layer
+/// stack are retained across iterations. `LayerStack::clear` currently drops
+/// popup `DrawList`s, and text primitives own their `String`s, so allocations
+/// required by those public ownership boundaries are intentionally included;
+/// this benchmark does not claim a zero-allocation frame.
+fn bench_recursive_menu(c: &mut Criterion) {
+    const BAR: u64 = 0xB3EC_0001;
+    let harness = Harness::new();
+    let theme = Theme::default();
+    let mut state = MenuBarState::new();
+    let mut layers = LayerStack::with_font_system(harness.font_system.clone());
+    let mut interactions = InteractionScene::new();
+    let mut focus = FocusState::new();
+    let mut input = InputState {
+        alt_pressed: true,
+        alt_released: true,
+        nav: wgpu_gameui::NavInput {
+            down: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Open the root through public input, then extend it through the public
+    // retained-state API. Setup is intentionally outside Criterion timing.
+    state.begin_frame(&mut input);
+    interactions.begin_frame(&input);
+    focus.begin_frame(&input);
+    {
+        let mut ctx = DrawContext::new(
+            layers.base_mut(),
+            &mut focus,
+            &theme,
+            &input,
+            W as f32,
+            H as f32,
+        )
+        .with_interactions(&mut interactions);
+        MenuBar::new(BAR, RECURSIVE_BENCH_MENUS).draw(
+            Rect::new(0.0, 0.0, W as f32, 28.0),
+            &mut state,
+            &mut ctx,
+        );
+    }
+    state.end_frame(&mut focus);
+    interactions.end_frame();
+    focus.end_frame(None);
+    input.end_frame();
+    assert_eq!(state.open_menu(), Some(0));
+    assert!(state.set_open_path(RECURSIVE_BENCH_MENUS, &[0; MAX_MENU_DEPTH - 1]));
+
+    let mut frame = || {
+        layers.clear();
+        state.begin_frame(&mut input);
+        interactions.begin_frame(&input);
+        focus.begin_frame(&input);
+        let slots = state.push_open_layers(&mut layers);
+        let base_input = layers.input_for_base(&input);
+        {
+            let mut ctx = DrawContext::new(
+                layers.base_mut(),
+                &mut focus,
+                &theme,
+                &base_input,
+                W as f32,
+                H as f32,
+            )
+            .with_interactions(&mut interactions);
+            MenuBar::new(BAR, RECURSIVE_BENCH_MENUS).draw(
+                Rect::new(0.0, 0.0, W as f32, 28.0),
+                &mut state,
+                &mut ctx,
+            );
+        }
+        let mut env = MenuDrawEnv {
+            theme: &theme,
+            style: None,
+            input: &input,
+            focus: &mut focus,
+            interactions: &mut interactions,
+            animations: None,
+            cursor: None,
+            screen_width: W as f32,
+            screen_height: H as f32,
+        };
+        let activated = state.draw_open_layers(&mut layers, slots, RECURSIVE_BENCH_MENUS, &mut env);
+        state.end_frame(&mut focus);
+        interactions.end_frame();
+        focus.end_frame(None);
+        input.end_frame();
+        std::hint::black_box((activated, &layers));
+    };
+
+    // Promote geometry and populate retained capacities before Criterion starts.
+    frame();
+    frame();
+    c.bench_function("recursive_menu/max_depth_wide_columns", |b| {
+        b.iter(&mut frame)
+    });
+}
+
 fn bench_animation(c: &mut Criterion) {
     let counts: &[usize] = &[100, 1_000, 10_000];
 
@@ -1147,6 +1325,7 @@ criterion_group!(
     bench_list_virtual,
     bench_table,
     bench_ui_context_frame,
+    bench_recursive_menu,
     bench_animation,
 );
 criterion_main!(benches);

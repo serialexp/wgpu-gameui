@@ -1,6 +1,6 @@
 # Menubar — Design
 
-Status: partial — phases 1 and 2 plus reusable context menus landed; phases 2b+ outstanding
+Status: partial — phases 1–3 plus recursive context menus landed; phases 2b and 4+ outstanding
 Owner: Bart
 Last updated: 2026-09-21
 
@@ -97,11 +97,20 @@ note) — there is no "implemented but not in the gallery" state.
       `single_owner_opening_b_replaces_a`: a press on another dropdown's button
       currently opens that one, and under a blanket blocker it would be swallowed
       (Open Question 3).
-- [ ] **Phase 3 — recursion.** N levels, hover intent, the corridor rule, the
-      close-on-sibling rule, a viewport blocker plus one popup layer and one
-      column blocker region per level, per-level Escape, `MAX_MENU_DEPTH`
-      truncation with a diagnostic; extended gallery row with a three-level
-      chain; re-eyeball.
+- [x] **Phase 3 — recursion.** `MenuBarState` now retains an open index path,
+      per-level highlights/scroll offsets and measured columns up to public
+      `MAX_MENU_DEPTH = 8`; full paths namespace row, column-blocker, and fallback
+      activation ids. Right/Confirm opens parents; Right on a leaf at any depth
+      switches to the next enabled top-level menu and collapses to its root;
+      Left/Escape unwinds. Submenu placement overlaps and Auto-flips per level.
+      Timed hover intent uses sanitized/capped frame deltas, `MenuHoverDelay`, and
+      a safe-triangle corridor for both left- and right-opening children; sibling
+      parents replace immediately while a leaf closes an open child after the
+      delay. `ContextMenuState::begin_frame_with_dt` provides the same timed hover
+      behavior (`begin_frame` remains the zero-delta compatibility entry point),
+      with `open_levels`, `set_open_path`, and `depth_truncations` inspection.
+      Both widgets truncate at the depth cap without panicking or logging each
+      frame. The gallery renders nested menubar and context-menu chains.
 - [ ] **Phase 4 — accelerator dispatch.** `InputState::keys` (`KeyState`),
       `Accelerator::matches`, `MenuTrigger::KeyTap` (F10-style arming), the host
       key-mapping recipe, and tests proving the rendered hint and the matching
@@ -137,9 +146,9 @@ note) — there is no "implemented but not in the gallery" state.
       mirroring `TreeAction`).
 - [ ] **Defer — `place_popup` back-fill into `Dropdown`.** The dropdown cannot
       flip or shift today (`src/widgets/dropdown.rs:161`).
-- [ ] **Defer — recursive context-menu submenus.** Context menus reuse
-      `MenuItem` and render submenu affordances, but child-column interaction
-      remains part of the shared menu recursion phase.
+- [x] **Recursive context-menu submenus.** Context menus reuse `MenuItem`, open
+      arbitrary-depth child columns through the same bounded path model, and
+      support pointer activation plus Right/Confirm and Left/Escape traversal.
 - [ ] **Defer — accessibility/semantic output.** Covered by the `TODO.md` P2
       semantic-output item; nothing here emits semantics.
 

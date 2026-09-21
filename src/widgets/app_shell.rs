@@ -118,6 +118,11 @@ pub struct ShellLayout {
     /// Toolbar strip rect. `None` when no toolbar.
     #[cfg(feature = "phosphor-icons")]
     pub toolbar: Option<Rect>,
+    /// The area the toolbar can dock within (viewport + toolbar, before the
+    /// toolbar is peeled). Used by grip drag-to-dock so it considers the
+    /// valid docking area, not the full screen.
+    #[cfg(feature = "phosphor-icons")]
+    pub toolbar_dock_area: Rect,
     /// The viewport — the remaining area after all chrome is subtracted.
     pub viewport: Rect,
     /// Status bar strip. `None` when the shell has no status bar.
@@ -216,7 +221,7 @@ impl AppShell {
         let mut out = ShellLayout::default();
         let mut rem = screen;
 
-        let menu_h = styles.scalar(StyleKey::MenuRowHeight);
+        let menu_h = styles.scalar(StyleKey::MenuBarHeight);
         let dock_tab_h = styles.scalar(StyleKey::DockTabHeight);
         let splitter_w = styles.scalar(StyleKey::DockSplitterWidth);
         let status_h = 26.0_f32; // STATUS_BAR_HEIGHT from status_bar.rs
@@ -298,6 +303,12 @@ impl AppShell {
         }
 
         // --- Toolbar: peel from the toolbar's edge of the viewport ---
+        // `rem` here is the area after menu bar, status bar, and dock panels —
+        // the valid region the toolbar can dock within.
+        #[cfg(feature = "phosphor-icons")]
+        {
+            out.toolbar_dock_area = rem;
+        }
         #[cfg(feature = "phosphor-icons")]
         if self.has_toolbar {
             if let Some(ts) = toolbar {
@@ -440,6 +451,7 @@ impl AppShell {
         // --- Toolbar ---
         #[cfg(feature = "phosphor-icons")]
         if let (Some(tb_rect), Some((items, tb_state))) = (shell.toolbar, toolbar) {
+            tb_state.dock_area = shell.toolbar_dock_area;
             let tb = Toolbar::new(items);
             let tb_out = tb.draw_with_id(
                 SHELL_TOOLBAR_ID,
@@ -764,7 +776,7 @@ mod tests {
         );
 
         let menu = layout.menu_bar.unwrap();
-        assert!((menu.height - theme.menu_row_height).abs() < 0.01);
+        assert!((menu.height - theme.menu_bar_height).abs() < 0.01);
         assert!((menu.y - 0.0).abs() < 0.01);
 
         let status = layout.status_bar.unwrap();

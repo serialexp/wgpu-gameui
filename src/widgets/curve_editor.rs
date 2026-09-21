@@ -194,7 +194,7 @@ pub fn draw(
             r.into(),
             key_surface,
             std::slice::from_ref(&chrome.shadow),
-            &[],
+            &chrome.lines,
         );
         surface.paint_pre_content();
         surface.paint_post_content();

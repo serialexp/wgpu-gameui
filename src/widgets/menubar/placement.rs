@@ -13,6 +13,9 @@ use super::model::SubmenuSide;
 /// is physically attached to the 26px title strip, so its top edge starts exactly
 /// at the strip's bottom edge.
 pub(crate) const DROP_GAP: f32 = 0.0;
+/// Submenus overlap their parent sheet slightly, avoiding a dead gap while the
+/// pointer travels into the child.
+pub(crate) const SUBMENU_OVERLAP: f32 = 3.0;
 
 /// Where a column goes, given the label it hangs off, its own measured size, the
 /// viewport it must stay inside, and the preferred side.
@@ -74,6 +77,34 @@ pub fn place_popup(
     // Only `Auto` flips; an explicit side slides.
     let x = preferred_x.min(viewport.right() - width).max(viewport.x);
 
+    (Rect::new(x, y, width, height), effective)
+}
+
+/// Place a submenu beside its parent row. Unlike a top-level dropdown, the
+/// vertical edge follows the row and slides into the viewport; horizontally it
+/// overlaps the parent sheet by [`SUBMENU_OVERLAP`] and `Auto` flips per level.
+pub fn place_submenu(
+    parent_row: Rect,
+    size: [f32; 2],
+    viewport: Rect,
+    side: SubmenuSide,
+) -> (Rect, SubmenuSide) {
+    let width = size[0].max(0.0).min(viewport.width.max(0.0));
+    let height = size[1].max(0.0).min(viewport.height.max(0.0));
+    let right_x = parent_row.right() - SUBMENU_OVERLAP;
+    let left_x = parent_row.x - width + SUBMENU_OVERLAP;
+    let effective = match side {
+        SubmenuSide::Auto if right_x + width <= viewport.right() => SubmenuSide::Right,
+        SubmenuSide::Auto => SubmenuSide::Left,
+        explicit => explicit,
+    };
+    let preferred_x = if effective == SubmenuSide::Left {
+        left_x
+    } else {
+        right_x
+    };
+    let x = preferred_x.min(viewport.right() - width).max(viewport.x);
+    let y = parent_row.y.min(viewport.bottom() - height).max(viewport.y);
     (Rect::new(x, y, width, height), effective)
 }
 

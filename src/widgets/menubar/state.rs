@@ -41,6 +41,9 @@ const CHECK_WIDTH: f32 = 10.0;
 const CHEVRON_WIDTH: f32 = 8.0;
 /// A separator is a 1px rule with 3px breathing room above and below.
 const SEPARATOR_HEIGHT: f32 = 7.0;
+/// Maximum number of simultaneously open columns. A parent at this depth still
+/// renders, but cannot open another child.
+pub const MAX_MENU_DEPTH: usize = 8;
 
 /// The popup layers pushed for one frame's open chain.
 ///
@@ -153,6 +156,8 @@ pub(super) struct ColumnGeom {
     pub rows: Vec<RowGeom>,
     /// Index of the open top-level menu this column belongs to.
     pub menu_index: usize,
+    /// Index path from the root column to this column.
+    pub path: [usize; MAX_MENU_DEPTH],
 }
 
 /// The open chain's frame-invariant geometry: which menu is open, where the bar
@@ -214,10 +219,25 @@ pub struct MenuBarState {
     pub(super) open: Option<usize>,
     /// Which bar label the armed mode has highlighted.
     pub(super) highlighted_menu: Option<usize>,
-    /// Which row of the open column is highlighted.
+    /// Which row of the root column is highlighted (kept as the compatibility
+    /// view of `highlights[0]`).
     pub(super) highlighted_item: Option<usize>,
-    /// Vertical scroll offset of the open column, in pixels.
+    /// Vertical scroll offset of the root column (the compatibility view of
+    /// `scrolls[0]`).
     pub(super) scroll: f32,
+    /// Parent-row indices selecting each child after the root column.
+    pub(super) open_path: Vec<usize>,
+    /// Per-level highlighted rows and vertical scrolling.
+    pub(super) highlights: Vec<Option<usize>>,
+    pub(super) scrolls: Vec<f32>,
+    /// Number of attempts to open a child beyond [`MAX_MENU_DEPTH`].
+    depth_truncations: usize,
+    /// Hover-intent target and elapsed dwell time.
+    pub(super) hover_level: Option<usize>,
+    pub(super) hover_item: Option<usize>,
+    pub(super) hover_elapsed: f32,
+    pub(super) frame_dt: f32,
+    pub(super) previous_pointer: Option<(f32, f32)>,
     /// Bar label under the pointer this frame.
     pub(super) hovered_menu: Option<usize>,
     /// Row under the pointer this frame.
@@ -303,6 +323,15 @@ impl MenuBarState {
             highlighted_menu: None,
             highlighted_item: None,
             scroll: 0.0,
+            open_path: Vec::with_capacity(MAX_MENU_DEPTH - 1),
+            highlights: Vec::with_capacity(MAX_MENU_DEPTH),
+            scrolls: Vec::with_capacity(MAX_MENU_DEPTH),
+            depth_truncations: 0,
+            hover_level: None,
+            hover_item: None,
+            hover_elapsed: 0.0,
+            frame_dt: 0.0,
+            previous_pointer: None,
             hovered_menu: None,
             hovered_item: None,
             pointer_moved: false,
@@ -351,9 +380,9 @@ impl MenuBarState {
         self.armed
     }
 
-    /// How many levels of the chain are open (0 or, until submenus land, 1).
+    /// How many levels of the chain are open.
     pub fn open_levels(&self) -> usize {
-        self.open.map_or(0, |_| 1)
+        self.open.map_or(0, |_| 1 + self.open_path.len())
     }
 
     /// The index of the open top-level menu, if a chain is open.
@@ -383,6 +412,32 @@ impl MenuBarState {
                 .and_then(|menu| menu.items().get(index))
                 .is_some_and(|item| item.is_enabled())
         });
+        if let Some(slot) = self.highlights.first_mut() {
+            *slot = self.highlighted_item;
+        }
+    }
+
+    /// Open a submenu path for a static preview or restored state. Every index
+    /// must name an enabled submenu parent; invalid paths stop at the last valid
+    /// level and return `false`.
+    pub fn set_open_path(&mut self, menus: &[Menu<'_>], path: &[usize]) -> bool {
+        let Some(menu) = self.open.and_then(|index| menus.get(index)) else {
+            return false;
+        };
+        self.open_path.clear();
+        self.highlights.truncate(1);
+        self.scrolls.truncate(1);
+        for &parent in path.iter().take(MAX_MENU_DEPTH - 1) {
+            let level = self.open_path.len();
+            if !self.open_child(menu, level, parent) {
+                return false;
+            }
+        }
+        if path.len() >= MAX_MENU_DEPTH {
+            self.depth_truncations += 1;
+            return false;
+        }
+        true
     }
 
     /// Whether the bar is armed or a chain is open.
@@ -402,6 +457,9 @@ impl MenuBarState {
         self.highlighted_menu = None;
         self.highlighted_item = None;
         self.scroll = 0.0;
+        self.open_path.clear();
+        self.highlights.clear();
+        self.scrolls.clear();
         self.geom = None;
         self.next_geom = None;
         // The measured columns (and the text they hold) belong to a chain that is
@@ -421,6 +479,15 @@ impl MenuBarState {
     /// Tab (`next`/`prev`) is deliberately **never** claimed: a menu is not a
     /// focus trap.
     pub fn begin_frame(&mut self, input: &mut InputState) {
+        self.begin_frame_with_dt(input, 0.0);
+    }
+
+    /// Frame-top entry point with elapsed seconds for submenu hover intent.
+    /// Invalid/negative deltas become zero and long stalls are capped at
+    /// [`crate::MAX_DT`], matching the crate's other timed frame state.
+    pub fn begin_frame_with_dt(&mut self, input: &mut InputState, dt: f32) {
+        self.frame_dt = crate::frame_result::sanitize_dt(dt);
+        self.previous_pointer = self.last_pointer;
         // Promote last frame's measured geometry. With nothing open there is nothing
         // to promote — and nothing may survive either: a closed chain keeps no
         // measured columns (the buffers keep their capacity, though).
@@ -611,98 +678,127 @@ impl MenuBarState {
             WrapMode::None,
         );
 
-        // The staged columns are rebuilt in the buffer the previous promotion swap
-        // left here; its rows `Vec` (and the columns `Vec`) keep their capacity.
-        let mut rows = self
-            .next_columns
-            .first_mut()
-            .map(|column| std::mem::take(&mut column.rows))
-            .unwrap_or_default();
-        rows.clear();
-        let mut label_max = 0.0f32;
-        let mut hint_max = 0.0f32;
-        let mut any_hint = false;
-        let mut any_submenu = false;
-        let mut content_h = 0.0;
-        for (item_index, item) in menu.items().iter().enumerate() {
-            if item.is_separator() {
-                rows.push(RowGeom::separator(item_index, content_h));
-                content_h += SEPARATOR_HEIGHT;
-                continue;
+        // Rebuild every open level while retaining each level's row allocation.
+        let mut row_buffers: [Vec<RowGeom>; MAX_MENU_DEPTH] = std::array::from_fn(|level| {
+            self.next_columns
+                .get_mut(level)
+                .map(|column| std::mem::take(&mut column.rows))
+                .unwrap_or_default()
+        });
+        self.next_columns.clear();
+        let levels = self.open_levels().min(MAX_MENU_DEPTH);
+        let mut items = menu.items();
+        let mut path = [usize::MAX; MAX_MENU_DEPTH];
+        for level in 0..levels {
+            if level > 0 {
+                let parent = self.open_path[level - 1];
+                path[level - 1] = parent;
+                let Some(parent_item) = items.get(parent).filter(|item| item.is_submenu()) else {
+                    self.open_path.truncate(level - 1);
+                    self.highlights.truncate(level);
+                    self.scrolls.truncate(level);
+                    break;
+                };
+                items = parent_item.children();
             }
-            let block = cx.text_block(item.label());
-            let label = cx.measure_text(block);
-            let label_w = label.metrics.size[0];
 
-            let hint = if item.accelerator().is_some() || item.shortcut_text().is_some() {
-                self.hint_scratch.clear();
-                item.write_hint(platform, &mut self.hint_scratch);
-                let block = cx
-                    .text_block(self.hint_scratch.as_str())
-                    .with_size(HINT_FONT_SIZE)
-                    .with_font_opt(mono.clone());
-                let measured = cx.measure_text(block);
-                hint_max = hint_max.max(measured.metrics.size[0]);
-                any_hint = true;
-                Some(measured)
+            let rows = &mut row_buffers[level];
+            rows.clear();
+            let mut label_max = 0.0f32;
+            let mut hint_max = 0.0f32;
+            let mut any_hint = false;
+            let mut any_submenu = false;
+            let mut content_h = 0.0;
+            for (item_index, item) in items.iter().enumerate() {
+                if item.is_separator() {
+                    rows.push(RowGeom::separator(item_index, content_h));
+                    content_h += SEPARATOR_HEIGHT;
+                    continue;
+                }
+                let label = cx.measure_text(cx.text_block(item.label()));
+                let label_w = label.metrics.size[0];
+                let hint = if item.accelerator().is_some() || item.shortcut_text().is_some() {
+                    self.hint_scratch.clear();
+                    item.write_hint(platform, &mut self.hint_scratch);
+                    let block = cx
+                        .text_block(self.hint_scratch.as_str())
+                        .with_size(HINT_FONT_SIZE)
+                        .with_font_opt(mono.clone());
+                    let measured = cx.measure_text(block);
+                    hint_max = hint_max.max(measured.metrics.size[0]);
+                    any_hint = true;
+                    Some(measured)
+                } else {
+                    None
+                };
+                label_max = label_max.max(label_w);
+                any_submenu |= item.is_submenu();
+                rows.push(RowGeom {
+                    item_index,
+                    y: content_h,
+                    height: row_h,
+                    separator: false,
+                    label: Some(label),
+                    label_w,
+                    hint,
+                    submenu: item.is_submenu() && level + 1 < MAX_MENU_DEPTH,
+                    disabled: !item.is_enabled(),
+                    checked: item.is_checked(),
+                });
+                content_h += row_h;
+            }
+
+            let hint_area = if any_hint { gap + hint_max } else { 0.0 };
+            let chevron_reserve = if any_submenu { gap + chevron_w } else { 0.0 };
+            let intrinsic = SHEET_PADDING * 2.0
+                + ROW_PADDING * 2.0
+                + check_w
+                + gap
+                + label_max
+                + hint_area
+                + chevron_reserve;
+            let width = intrinsic.max(min_width).min(viewport.width).max(1.0);
+            let full_height = content_h + SHEET_PADDING * 2.0;
+            let height = full_height
+                .min(viewport.height)
+                .max(viewport.height.min(row_h + SHEET_PADDING * 2.0));
+            let rect = if level == 0 {
+                placement::place_popup(anchor, [width, height], viewport, side).0
             } else {
-                None
+                let parent = &self.next_columns[level - 1];
+                let parent_index = self.open_path[level - 1];
+                let parent_row = parent
+                    .rows
+                    .iter()
+                    .find(|row| row.item_index == parent_index);
+                let Some(parent_row) = parent_row else { break };
+                let scroll = self.scrolls.get(level - 1).copied().unwrap_or(0.0);
+                let row_rect = Rect::new(
+                    parent.rect.x,
+                    parent.rect.y + parent.sheet_padding + parent_row.y - scroll,
+                    parent.rect.width,
+                    parent_row.height,
+                );
+                placement::place_submenu(row_rect, [width, height], viewport, side).0
             };
-
-            label_max = label_max.max(label_w);
-            any_submenu |= item.is_submenu();
-            rows.push(RowGeom {
-                item_index,
-                y: content_h,
-                height: row_h,
-                separator: false,
-                label: Some(label),
-                label_w,
-                hint,
-                submenu: item.is_submenu(),
-                disabled: !item.is_enabled(),
-                checked: item.is_checked(),
+            let content_left = rect.x + SHEET_PADDING + ROW_PADDING;
+            let content_right = rect.right() - SHEET_PADDING - ROW_PADDING;
+            let hint_right = content_right - chevron_reserve;
+            let label_x = content_left + check_w + gap;
+            self.next_columns.push(ColumnGeom {
+                rect,
+                row_h,
+                check_w,
+                hint_right,
+                label_avail: (hint_right - hint_area - label_x).max(0.0),
+                content_h,
+                sheet_padding: SHEET_PADDING,
+                rows: std::mem::take(rows),
+                menu_index,
+                path,
             });
-            content_h += row_h;
         }
         drop(cx);
-
-        // Sheet width includes its 3px outer inset and each row's 8px horizontal
-        // padding. The four columns are fixed: tick · label · shortcut · arrow.
-        let hint_area = if any_hint { gap + hint_max } else { 0.0 };
-        let chevron_reserve = if any_submenu { gap + chevron_w } else { 0.0 };
-        let intrinsic = SHEET_PADDING * 2.0
-            + ROW_PADDING * 2.0
-            + check_w
-            + gap
-            + label_max
-            + hint_area
-            + chevron_reserve;
-        let width = intrinsic.max(min_width).min(viewport.width).max(1.0);
-        let full_height = content_h + SHEET_PADDING * 2.0;
-        let height = full_height
-            .min(viewport.height)
-            .max(viewport.height.min(row_h + SHEET_PADDING * 2.0));
-        let (rect, _placed) = placement::place_popup(anchor, [width, height], viewport, side);
-
-        let content_left = rect.x + SHEET_PADDING + ROW_PADDING;
-        let content_right = rect.right() - SHEET_PADDING - ROW_PADDING;
-        let hint_right = content_right - chevron_reserve;
-        let label_x = content_left + check_w + gap;
-        let label_avail = (hint_right - hint_area - label_x).max(0.0);
-
-        self.next_columns.clear();
-        self.next_columns.push(ColumnGeom {
-            rect,
-            row_h,
-            check_w,
-            hint_right,
-            label_avail,
-            content_h,
-            sheet_padding: SHEET_PADDING,
-            rows,
-            menu_index,
-        });
         self.next_geom = Some(MenuGeom {
             bar_rect,
             viewport,
@@ -734,22 +830,31 @@ impl MenuBarState {
         &self.label_pool
     }
 
-    /// Return the retained capacity of the geometry scratch buffers, in
-    /// `(columns, rows)`. Exposed so allocation-reuse tests can assert the open
-    /// chain keeps its buffers across frames instead of reallocating them.
+    /// Return the retained capacity of the geometry scratch buffers as the
+    /// column-vector capacity and one row-vector capacity per possible level.
+    ///
+    /// Exposed so allocation-reuse tests can assert that the whole open chain,
+    /// rather than only its root, keeps its buffers across frames. The fixed-size
+    /// array avoids allocating merely to inspect the hot path.
     #[doc(hidden)]
-    pub fn scratch_capacities(&self) -> (usize, usize) {
+    pub fn scratch_capacities(&self) -> (usize, [usize; MAX_MENU_DEPTH]) {
         let columns = self.columns.capacity().max(self.next_columns.capacity());
-        let rows = self
-            .columns
-            .first()
-            .map_or(0, |column| column.rows.capacity())
-            .max(
-                self.next_columns
-                    .first()
-                    .map_or(0, |column| column.rows.capacity()),
-            );
+        let rows = std::array::from_fn(|level| {
+            self.columns
+                .get(level)
+                .map_or(0, |column| column.rows.capacity())
+                .max(
+                    self.next_columns
+                        .get(level)
+                        .map_or(0, |column| column.rows.capacity()),
+                )
+        });
         (columns, rows)
+    }
+
+    /// Number of child-open attempts truncated at [`MAX_MENU_DEPTH`].
+    pub fn depth_truncations(&self) -> usize {
+        self.depth_truncations
     }
 
     // ---- internal transitions -------------------------------------------------
@@ -813,6 +918,11 @@ impl MenuBarState {
         self.highlighted_menu = Some(menu_index);
         self.highlighted_item = menu.first_enabled_item();
         self.scroll = 0.0;
+        self.open_path.clear();
+        self.highlights.clear();
+        self.highlights.push(self.highlighted_item);
+        self.scrolls.clear();
+        self.scrolls.push(0.0);
         // A column hangs off its label: moving the chain to another menu
         // invalidates the measured columns, which the bar re-measures during the
         // same frame's draw.
@@ -847,28 +957,82 @@ impl MenuBarState {
         true
     }
 
-    /// Move the row highlight by `delta`, wrapping and skipping separators and
-    /// disabled items. Returns whether the highlight moved.
-    pub(super) fn step_item(&mut self, items: &[MenuItem<'_>], delta: isize) -> bool {
+    pub(super) fn items_at_level<'a>(
+        &self,
+        menu: &'a Menu<'a>,
+        level: usize,
+    ) -> Option<&'a [MenuItem<'a>]> {
+        let mut items = menu.items();
+        for &parent in self.open_path.iter().take(level) {
+            items = items.get(parent)?.children();
+        }
+        Some(items)
+    }
+
+    pub(super) fn open_child(&mut self, menu: &Menu<'_>, level: usize, parent: usize) -> bool {
+        if level + 1 >= MAX_MENU_DEPTH {
+            self.depth_truncations += 1;
+            return false;
+        }
+        let Some(children) = self
+            .items_at_level(menu, level)
+            .and_then(|items| items.get(parent))
+            .map(MenuItem::children)
+            .filter(|items| !items.is_empty())
+        else {
+            return false;
+        };
+        self.open_path.truncate(level);
+        self.open_path.push(parent);
+        self.highlights.truncate(level + 1);
+        self.highlights
+            .push(children.iter().position(MenuItem::is_enabled));
+        self.scrolls.truncate(level + 1);
+        self.scrolls.push(0.0);
+        true
+    }
+
+    pub(super) fn unwind_level(&mut self) -> bool {
+        if self.open_path.pop().is_some() {
+            self.highlights.truncate(1 + self.open_path.len());
+            self.scrolls.truncate(1 + self.open_path.len());
+            self.highlighted_item = self.highlights.first().copied().flatten();
+            self.scroll = self.scrolls.first().copied().unwrap_or(0.0);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move one level's row highlight, wrapping and skipping unavailable rows.
+    pub(super) fn step_item(&mut self, items: &[MenuItem<'_>], level: usize, delta: isize) -> bool {
         let count = items.len();
         if count == 0 {
             return false;
         }
-        let from = self.highlighted_item.unwrap_or(0);
+        let from = self.highlights.get(level).copied().flatten().unwrap_or(0);
         let mut index = from;
         for _ in 0..count {
             index = ((index as isize + delta).rem_euclid(count as isize)) as usize;
             if items[index].is_enabled() {
-                self.highlighted_item = Some(index);
+                if let Some(slot) = self.highlights.get_mut(level) {
+                    *slot = Some(index);
+                }
+                if level == 0 {
+                    self.highlighted_item = Some(index);
+                }
+                self.open_path.truncate(level);
+                self.highlights.truncate(level + 1);
+                self.scrolls.truncate(level + 1);
                 return true;
             }
         }
         false
     }
 
-    /// Keep the highlight inside the column's visible band.
-    pub(super) fn scroll_into_view(&mut self, column: &ColumnGeom) {
-        let Some(index) = self.highlighted_item else {
+    /// Keep one level's highlight inside the column's visible band.
+    pub(super) fn scroll_into_view(&mut self, column: &ColumnGeom, level: usize) {
+        let Some(index) = self.highlights.get(level).copied().flatten() else {
             return;
         };
         let visible_height = (column.rect.height - column.sheet_padding * 2.0).max(0.0);
@@ -878,12 +1042,19 @@ impl MenuBarState {
         };
         let top = row.y;
         let bottom = top + row.height;
-        if top < self.scroll {
-            self.scroll = top;
-        } else if bottom > self.scroll + visible_height {
-            self.scroll = bottom - visible_height;
+        let scroll = self
+            .scrolls
+            .get_mut(level)
+            .expect("open level has scroll state");
+        if top < *scroll {
+            *scroll = top;
+        } else if bottom > *scroll + visible_height {
+            *scroll = bottom - visible_height;
         }
-        self.scroll = self.scroll.clamp(0.0, max_scroll);
+        *scroll = scroll.clamp(0.0, max_scroll);
+        if level == 0 {
+            self.scroll = *scroll;
+        }
     }
 }
 
@@ -892,6 +1063,22 @@ impl MenuBarState {
 ///
 /// Derived ids exist so an item the caller never named still has a stable
 /// identity to report; explicit ids are what a caller can match on in advance.
+pub(super) fn activation_id_for_path(menu: &Menu<'_>, path: &[usize], item: &MenuItem<'_>) -> u64 {
+    let mut labels = [""; MAX_MENU_DEPTH + 1];
+    labels[0] = menu.label();
+    let mut items = menu.items();
+    let mut count = 1;
+    for &step in path {
+        let Some(parent) = items.get(step) else { break };
+        labels[count] = parent.label();
+        count += 1;
+        items = parent.children();
+    }
+    labels[count] = item.label();
+    item.activation_id(&labels[..=count])
+}
+
+#[cfg(test)]
 pub(super) fn activation_id(menu: &Menu<'_>, item: &MenuItem<'_>) -> u64 {
-    item.activation_id(&[menu.label(), item.label()])
+    activation_id_for_path(menu, &[], item)
 }

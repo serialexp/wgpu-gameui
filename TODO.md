@@ -1129,6 +1129,19 @@ off-screen. All were one root cause: **`place_rect` returns *world* space, but
 
 ---
 
+## 2026-09-21 — Recursive menus
+
+- [x] **P0 — Arbitrary-depth MenuBar and ContextMenu submenus.** Both widgets
+  traverse `MenuItem::children()` to `MAX_MENU_DEPTH = 8`, retain per-level
+  highlight/scroll state, report full-path activation ids, place overlapping
+  Auto-flipping flyouts, unwind with Left/Escape, and use `MenuHoverDelay` plus
+  safe-triangle hover intent. Path-scoped row and blocker IDs prevent retained
+  sibling response leaks; sanitized `begin_frame_with_dt` drives timed context
+  hover while `begin_frame` remains compatible; `open_levels`, `set_open_path`,
+  and `depth_truncations` expose bounded context state. Right on any menubar leaf
+  switches top-level menus and collapses to root. The gallery shows nested chains
+  for both widgets.
+
 ## 2026-09-15 — Menubar (one level), and a renderer bug it surfaced
 
 Design: `docs/design/menubar.md` (phases 1–2 landed).

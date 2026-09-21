@@ -218,6 +218,7 @@ impl<'a> DockPanel<'a> {
                         (xc[1] * 255.0) as u8,
                         (xc[2] * 255.0) as u8,
                     )
+                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_font_opt(s.theme().font.clone()),
             );
 
@@ -227,14 +228,28 @@ impl<'a> DockPanel<'a> {
         }
 
         // --- Tab buttons ---
+        // The design sizes each tab chip to its label with 7px horizontal
+        // padding, not to equal shares of the header width.
         if !self.tabs.is_empty() {
-            let available_w = rect.width - close_w - 4.0; // 2px margin each side
-            let max_tab_w = 120.0_f32;
-            let tab_w = (available_w / self.tabs.len() as f32).min(max_tab_w);
             let tab_pad_h = 7.0;
+            let tab_gap = 2.0;
+            let header_pad = 4.0; // left padding inside the header
 
+            // First pass: measure each tab's text width to size chips to content.
+            let mut tab_widths: Vec<f32> = Vec::with_capacity(self.tabs.len());
+            for tab in self.tabs {
+                let block = TextBlock::new(tab.label, 0.0, 0.0)
+                    .with_size(font_size)
+                    .with_font_opt(s.theme().font.clone());
+                let (text_w, _) = ctx.draw_list.measure_block(&block);
+                // Chip width = text + horizontal padding on each side + border (1px each side).
+                tab_widths.push(text_w + tab_pad_h * 2.0 + 2.0);
+            }
+
+            // Second pass: draw.
+            let mut tx = rect.x + header_pad;
             for (i, tab) in self.tabs.iter().enumerate() {
-                let tx = rect.x + 2.0 + i as f32 * tab_w;
+                let tab_w = tab_widths[i];
                 let tab_rect = Rect::new(tx, rect.y + (tab_h - 18.0) * 0.5, tab_w, 18.0);
                 let is_active = i == state.active_tab;
                 let tab_hovered =
@@ -282,22 +297,26 @@ impl<'a> DockPanel<'a> {
                     s.theme().font.as_ref(),
                     tab.label,
                 );
+                // Text starts at the left padding inside the chip (after the 1px border).
+                // text-shadow: 0 -1px 0 rgba(0,0,0,0.5) — the carved-in look
+                // applied to every chrome label in the design.
                 ctx.draw_list.text(
-                    TextBlock::new(tab.label, tx + tab_pad_h, ty)
+                    TextBlock::new(tab.label, tab_rect.x + tab_pad_h + 1.0, ty)
                         .with_size(font_size)
                         .with_color(
                             (text_color[0] * 255.0) as u8,
                             (text_color[1] * 255.0) as u8,
                             (text_color[2] * 255.0) as u8,
                         )
-                        .with_ellipsis()
-                        .with_max_width((tab_w - tab_pad_h * 2.0).max(8.0))
+                        .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(s.theme().font.clone()),
                 );
 
                 if tab_clicked {
                     out.tab_clicked = Some(i);
                 }
+
+                tx += tab_w + tab_gap;
             }
         }
 

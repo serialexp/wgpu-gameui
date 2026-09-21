@@ -165,6 +165,11 @@ pub struct ToolbarState {
     /// Independently-held toggle ids. The application owns and updates this
     /// collection after receiving [`ToolbarEvent::ToggleActivated`].
     pub active_toggles: Vec<u64>,
+    /// The bounding rect the toolbar can dock within — set by
+    /// [`AppShell`](crate::AppShell) (or the caller) before drawing. Grip
+    /// drag-to-dock checks the mouse against this area, not the full screen.
+    /// Defaults to a zero rect; when zero the drag falls back to screen bounds.
+    pub dock_area: Rect,
     popup: Option<PopupKind>,
     geom: Option<PopupGeometry>,
     next_geom: Option<PopupGeometry>,
@@ -180,6 +185,7 @@ impl ToolbarState {
             edge,
             active_tool: None,
             active_toggles: Vec::new(),
+            dock_area: Rect::default(),
             popup: None,
             geom: None,
             next_geom: None,
@@ -377,17 +383,48 @@ impl<'a> Toolbar<'a> {
             &mut output,
             ctx,
         );
-        if !ctx.input.mouse_consumed
-            && ctx.input.mouse_clicked
-            && ctx.input.drag_delta == [0.0, 0.0]
-            && grip_rect.contains(ctx.input.mouse_x, ctx.input.mouse_y)
-        {
-            state.popup = match state.popup {
-                Some(PopupKind::Dock) => None,
-                _ => Some(PopupKind::Dock),
+
+        // Once the grip gesture has crossed the DragTracker's movement
+        // threshold, snap the toolbar to whichever edge of the dock area the
+        // pointer is closest to — classic drag-to-dock. Capture starts on the
+        // press edge, so checking `is_dragging` here is what prevents a tap (or
+        // sub-threshold pointer jitter) from unexpectedly changing edges.
+        // `dock_area` is the space the toolbar can validly occupy (set by
+        // AppShell to the rect remaining after menu bar, status bar, and
+        // sidebars). Falls back to the full screen when unset.
+        if output.grip_dragging && ctx.input.is_dragging {
+            let area = if state.dock_area.width > 0.0 && state.dock_area.height > 0.0 {
+                state.dock_area
+            } else {
+                Rect::new(
+                    0.0,
+                    0.0,
+                    ctx.screen_width.max(1.0),
+                    ctx.screen_height.max(1.0),
+                )
             };
-            state.click_claimed = true;
+            let mx = ctx.input.mouse_x;
+            let my = ctx.input.mouse_y;
+
+            let distances = [
+                (mx - area.x, ToolbarEdge::Left),
+                (area.right() - mx, ToolbarEdge::Right),
+                (my - area.y, ToolbarEdge::Top),
+                (area.bottom() - my, ToolbarEdge::Bottom),
+            ];
+            let new_edge = distances
+                .iter()
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+                .unwrap()
+                .1;
+
+            if new_edge != state.edge {
+                state.edge = new_edge;
+                output.event = Some(ToolbarEvent::DockChanged(new_edge));
+                state.close_popup();
+            }
         }
+
         cursor += grip_main_extent(vertical) + ITEM_GAP;
 
         // Reserve the trailing overflow control only when the complete strip does
@@ -510,6 +547,21 @@ impl<'a> Toolbar<'a> {
         if output.overflowed > 0 {
             self.draw_overflow_button(overflow_rect, state, &mut output, ctx);
         }
+
+        // Right-click anywhere on the strip opens the dock-position chooser,
+        // anchored to the grip. The design reserves left-click on the grip for
+        // dragging only; the `⋯` overflow key is a separate left-click target.
+        if !ctx.input.mouse_consumed
+            && ctx.input.mouse_right_clicked
+            && rect.contains(ctx.input.mouse_x, ctx.input.mouse_y)
+        {
+            state.popup = match state.popup {
+                Some(PopupKind::Dock) => None,
+                _ => Some(PopupKind::Dock),
+            };
+            state.click_claimed = true;
+        }
+
         let viewport = Rect::new(
             0.0,
             0.0,
@@ -795,7 +847,8 @@ impl<'a> Toolbar<'a> {
                     (color[0] * 255.0) as u8,
                     (color[1] * 255.0) as u8,
                     (color[2] * 255.0) as u8,
-                ),
+                )
+                .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
         );
         if hovered {
             ctx.request_cursor(crate::CursorIcon::Pointer);
@@ -1076,7 +1129,8 @@ impl ToolbarState {
                 style
                     .text_block(title, rect.x + 8.0, title_y)
                     .with_size(10.0)
-                    .with_color(220, 225, 230),
+                    .with_color(220, 225, 230)
+                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
             );
             match geometry.kind {
                 PopupKind::Dock => {
@@ -1125,13 +1179,15 @@ impl ToolbarState {
                             style
                                 .text_block(mark, row.x + 4.0, y)
                                 .with_size(11.0)
-                                .with_color(140, 210, 215),
+                                .with_color(140, 210, 215)
+                                .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
                         );
                         list.text(
                             style
                                 .text_block(label, row.x + 18.0, y)
                                 .with_size(11.0)
-                                .with_color(225, 230, 235),
+                                .with_color(225, 230, 235)
+                                .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
                         );
                         if hovered && layer_input.mouse_clicked {
                             event = Some(ToolbarEvent::DockChanged(edge));
@@ -1180,7 +1236,8 @@ impl ToolbarState {
                             style
                                 .text_block(tool.label, row.x + 7.0, y)
                                 .with_size(11.0)
-                                .with_color(225, 230, 235),
+                                .with_color(225, 230, 235)
+                                .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
                         );
                         if hovered && layer_input.mouse_clicked {
                             event = Some(match item {
@@ -1391,7 +1448,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
 
-        let top = opaque_srgb8([0x41, 0x44, 0x49]);
+        let top = opaque_srgb8([0x41, 0x44, 0x48]);
         let bottom = opaque_srgb8([0x2a, 0x2e, 0x33]);
         let border = opaque_srgb8([0x10, 0x12, 0x15]);
         assert!(
@@ -1509,6 +1566,75 @@ mod tests {
     }
 
     #[test]
+    fn grip_only_snaps_after_drag_threshold_is_crossed() {
+        let items = sample_items();
+        let toolbar = Toolbar::new(&items);
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        state.dock_area = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let mut capture = DragCapture::new();
+        let mut tracker = crate::DragTracker::new();
+        let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
+        let grip_y = theme.toolbar_padding + grip_main_extent(true) * 0.5;
+
+        // Pressing near the top edge captures the grip, but is not a drag yet.
+        // Without the threshold gate, nearest-edge docking would jump to Top.
+        let mut input = crate::InputState {
+            mouse_x: 14.0,
+            mouse_y: grip_y,
+            mouse_clicked: true,
+            mouse_down: true,
+            ..Default::default()
+        };
+        tracker.update(&mut input);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let out = toolbar.draw(
+            rect,
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+        assert!(out.grip_dragging, "the pressed grip should own capture");
+        assert!(!input.is_dragging);
+        assert_eq!(state.edge, ToolbarEdge::Left);
+        assert_eq!(out.event, None);
+
+        // Sub-threshold jitter must likewise leave the dock edge alone.
+        input.mouse_clicked = false;
+        input.mouse_x = 16.0;
+        tracker.update(&mut input);
+        let mut list = DrawList::new();
+        let out = toolbar.draw(
+            rect,
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+        assert!(!input.is_dragging);
+        assert_eq!(state.edge, ToolbarEdge::Left);
+        assert_eq!(out.event, None);
+
+        // Crossing DragTracker's default 4px threshold enables nearest-edge
+        // docking for the remainder of the held gesture.
+        input.mouse_x = 20.0;
+        tracker.update(&mut input);
+        let mut list = DrawList::new();
+        let out = toolbar.draw(
+            rect,
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+        assert!(input.is_dragging);
+        assert_eq!(state.edge, ToolbarEdge::Top);
+        assert_eq!(out.event, Some(ToolbarEvent::DockChanged(ToolbarEdge::Top)));
+    }
+
+    #[test]
     fn preferred_extent_accounts_for_all_items() {
         let items = sample_items();
         let toolbar = Toolbar::new(&items);
@@ -1557,7 +1683,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
 
-        let idle_top = opaque_srgb8([0x41, 0x44, 0x49]);
+        let idle_top = opaque_srgb8([0x41, 0x44, 0x48]);
         let face = list
             .chrome_instances()
             .find(|instance| instance.bg == idle_top)
@@ -1808,10 +1934,12 @@ mod tests {
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let mut focus = FocusState::default();
+        // Right-click on the strip opens the dock popup (the design reserves
+        // left-click on the grip for dragging only).
         let mut first_input = crate::InputState::default();
         first_input.mouse_x = 14.0;
         first_input.mouse_y = 10.0;
-        first_input.mouse_clicked = true;
+        first_input.mouse_right_clicked = true;
         let mut base = DrawList::new();
         Toolbar::new(&items).draw_with_id(
             7,

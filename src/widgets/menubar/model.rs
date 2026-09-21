@@ -590,6 +590,7 @@ pub(crate) fn bar_label_id(bar: MenuBarId, menu_index: usize) -> WidgetId {
 /// Derived from the bar id, the menu's index *and* its explicit id, the item
 /// index and the level: unique by construction, stable across frames while the
 /// tree shape holds, and independent of label text.
+#[cfg(test)]
 pub(crate) fn row_id(
     bar: MenuBarId,
     menu_index: usize,
@@ -597,10 +598,26 @@ pub(crate) fn row_id(
     item_index: usize,
     level: usize,
 ) -> WidgetId {
+    row_path_id(bar, menu_index, menu_id, &[], item_index, level)
+}
+
+/// Path-aware row id used by recursive chains. The old helper remains for the
+/// root-level tests and API invariants.
+pub(crate) fn row_path_id(
+    bar: MenuBarId,
+    menu_index: usize,
+    menu_id: Option<MenuItemId>,
+    path: &[usize],
+    item_index: usize,
+    level: usize,
+) -> WidgetId {
     let mut acc = FNV_BASIS ^ Seed::Row as u64;
     acc = hash_u64(acc, bar);
     acc = hash_u64(acc, menu_index as u64);
     acc = hash_u64(acc, menu_id.unwrap_or(0));
+    for &step in path {
+        acc = hash_u64(acc, step as u64);
+    }
     acc = hash_u64(acc, item_index as u64);
     acc = hash_u64(acc, level as u64);
     WidgetId(acc)
@@ -615,10 +632,18 @@ pub(crate) fn blocker_region_id(bar: MenuBarId, index: usize) -> WidgetId {
 }
 
 /// The [`WidgetId`] of one column's own blocker region.
-pub(crate) fn column_blocker_id(bar: MenuBarId, menu_index: usize, level: usize) -> WidgetId {
+pub(crate) fn column_blocker_id(
+    bar: MenuBarId,
+    menu_index: usize,
+    path: &[usize],
+    level: usize,
+) -> WidgetId {
     let mut acc = FNV_BASIS ^ Seed::ColumnBlocker as u64;
     acc = hash_u64(acc, bar);
     acc = hash_u64(acc, menu_index as u64);
+    for &step in path {
+        acc = hash_u64(acc, step as u64);
+    }
     acc = hash_u64(acc, level as u64);
     WidgetId(acc)
 }

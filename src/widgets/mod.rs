@@ -102,9 +102,9 @@ pub(crate) use material::sheen_over;
 pub use material::{Material, Tone};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
 pub use menubar::{
-    AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBar, MenuBarId, MenuBarOutput,
-    MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger, Modifiers,
-    SubmenuSide, blocker_regions, place_popup,
+    AccelPlatform, Accelerator, ActivatedItem, Key, MAX_MENU_DEPTH, Menu, MenuBar, MenuBarId,
+    MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger,
+    Modifiers, SubmenuSide, blocker_regions, place_popup,
 };
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};

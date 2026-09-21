@@ -145,6 +145,7 @@ pub fn draw(rect: Rect, cells: &[StatusCell<'_>], ctx: &mut DrawContext) {
                         (color[1] * 255.0) as u8,
                         (color[2] * 255.0) as u8,
                     )
+                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_font_opt(s.theme().font.clone()),
             );
         }

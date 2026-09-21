@@ -21,11 +21,18 @@ use crate::text::{FontHandle, TextBlock};
 use crate::theme::Theme;
 use crate::widgets::DrawList;
 use crate::widgets::{
-    Banner, Button, Checkbox, ColorPicker, ColorPickerOutput, DragCapture, DragHandle,
-    DragHandleOutput, DragId, DrawContext, Dropdown, DropdownId, DropdownState, FocusId,
-    FocusState, Group, HitZone, HitZoneOutput, ImageButton, NumberInput, Panel, ProgressBar,
-    RadioGroup, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Tabs, TextInput,
-    ToastStack, TooltipLayer, TreeId, TreeNode, TreeNodeOutput, TreeState,
+    AssetGrid, AssetGridOutput, Banner, Breadcrumb, Button, Checkbox, ChipOutput, ColorPicker,
+    ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId, DrawContext,
+    Dropdown, DropdownId, DropdownState, EmptyState, FocusId, FocusState, GradientStop, Group,
+    HitZone, HitZoneOutput, ImageButton, List, ListItem, ListOutput, ListState, NumberInput, Pager,
+    PagerOutput, Panel, ProgressBar, RadioGroup, RampOutput, ScrollBegin, ScrollState, ScrollView,
+    Separator, Severity, Slider, Table, TableCell, TableOutput, Tabs, TagOutput, TextInput,
+    ToastStack, Toggle, TooltipLayer, TreeId, TreeNode, TreeNodeOutput, TreeState, VectorField,
+    VectorFieldOutput, VectorScrub,
+};
+use crate::widgets::{
+    badge, chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, empty_state, keycap,
+    skeleton, spinner,
 };
 #[cfg(feature = "phosphor-icons")]
 use crate::{Icon, PhosphorIcon};
@@ -542,6 +549,7 @@ impl<'a> UiContext<'a> {
         ctx.input = Some(input);
         ctx.state = Some(state);
         ctx.theme = Some(theme);
+        ctx.apply_theme_font_default(theme);
         ctx
     }
 
@@ -558,7 +566,15 @@ impl<'a> UiContext<'a> {
         ctx.input = Some(input);
         ctx.state = Some(state);
         ctx.theme = Some(theme);
+        ctx.apply_theme_font_default(theme);
         ctx
+    }
+
+    fn apply_theme_font_default(&mut self, theme: &Theme) {
+        if let Some(font) = self.font_stack.first_mut() {
+            font.font.clone_from(&theme.font);
+            font.size = theme.font_size;
+        }
     }
 
     /// Push transform + tint + align + clip/window scope (Teardown's `UiPush`).
@@ -2518,6 +2534,533 @@ impl<'a> UiContext<'a> {
         self.advance(height);
     }
 
+    // ── newly exposed widgets ────────────────────────────────────────
+
+    /// Draw a toggle switch. Returns the **new** on/off state (flipped when
+    /// the user clicks the switch or presses Enter/Space while focused).
+    /// Auto-advances by the toggle's intrinsic height.
+    pub fn toggle(&mut self, label: &str, on: bool) -> bool {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return on,
+        };
+        let toggle = Toggle::new().label(label);
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let (width, height) = toggle.intrinsic_size(self.backend.list_mut(), &styles);
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let fid = self
+            .state
+            .as_mut()
+            .map(|s| s.auto_id())
+            .expect("toggle requires interactive state");
+        let new_state = {
+            let list = self.backend.list_mut();
+            let state = self
+                .state
+                .as_mut()
+                .expect("toggle requires interactive state");
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            toggle.focusable(fid).draw(on, local, &mut ctx)
+        };
+        self.advance(height);
+        new_state
+    }
+
+    /// Draw a tag input — a well containing removable chips followed by an
+    /// inline text field. Returns a [`TagOutput`] describing removals and
+    /// commits. Auto-advances by `theme.input_height`.
+    pub fn tag_input(
+        &mut self,
+        tags: &[String],
+        draft: &mut String,
+        focused: bool,
+        w: Option<f32>,
+    ) -> TagOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return TagOutput::default(),
+        };
+        let width = w.unwrap_or_else(|| self.default_field_width());
+        let height = theme.input_height;
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::tag_input requires interactive state");
+                    return TagOutput::default();
+                }
+            };
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            draw_tag_input(local, tags, draft, focused, &mut ctx)
+        };
+        self.advance(height);
+        out
+    }
+
+    /// Draw a scrollable list. `count` is the total item count; `item` is a
+    /// closure called for each visible row with the `DrawList`, the row `Rect`,
+    /// and a [`ListItem`] descriptor. Returns [`ListOutput`] with click/hover
+    /// results. Auto-advances by `h`.
+    pub fn list_view<F>(
+        &mut self,
+        list_widget: List,
+        count: usize,
+        state: &mut ListState,
+        h: f32,
+        item: F,
+    ) -> ListOutput
+    where
+        F: FnMut(&mut DrawList, Rect, ListItem),
+    {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return ListOutput::default(),
+        };
+        let width = self.default_field_width();
+        let world = self.place_rect(width, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, mut local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
+            list_widget.draw(local, count, state, list, &style, &mut local_input, item)
+        };
+        self.advance(h);
+        out
+    }
+
+    /// Draw a scrollable table. Returns [`TableOutput`] with row click/hover
+    /// results. Auto-advances by `h`.
+    pub fn table(
+        &mut self,
+        table_widget: Table<'_>,
+        rows: &[Vec<TableCell>],
+        scroll: &mut ScrollState,
+        h: f32,
+    ) -> TableOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => {
+                return TableOutput {
+                    rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+                    clicked_row: None,
+                    hovered_row: None,
+                    mouse_over_content: false,
+                };
+            }
+        };
+        let width = self.default_field_width();
+        let world = self.place_rect(width, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, mut local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
+            table_widget.draw(local, rows, scroll, list, &style, &mut local_input)
+        };
+        self.advance(h);
+        out
+    }
+
+    /// Draw a badge (a tinted inline label). Does **not** auto-advance — use
+    /// as an inline decoration next to other content. Returns the `Rect`
+    /// actually drawn.
+    pub fn badge_label(&mut self, text: &str, tint: [f32; 4]) -> Rect {
+        let theme = self.theme;
+        let overlay = self.style_stack.last().cloned();
+        let (theme, overlay) = match (theme, overlay) {
+            (Some(t), o) => (t, o),
+            _ => return Rect::new(0.0, 0.0, 0.0, 0.0),
+        };
+        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
+        let font_size = style.scalar(StyleKey::FontSize);
+        let (tw, _) = self.backend.list_mut().measure_text(text, font_size, None);
+        let pad = 4.0;
+        let w = tw + pad * 2.0 + 4.0;
+        let h = font_size + pad;
+        let rect = self.place_local(w, h);
+        badge(self.backend.list_mut(), &style, rect, text, tint);
+        rect
+    }
+
+    /// Draw a toggleable chip (pill button). Returns [`ChipOutput`] with a
+    /// `clicked` flag; the caller flips `on` accordingly. Auto-advances by
+    /// the chip's height.
+    pub fn chip_button(&mut self, label: &str, on: bool) -> ChipOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return ChipOutput { clicked: false },
+        };
+        // Measure inside a scoped borrow so `self` is free for `place_rect`.
+        let (w, h) = {
+            let styles = StyleResolver::with_overlay(
+                theme,
+                self.style_stack.last().expect("style stack is never empty"),
+            );
+            let font_size = styles.scalar(StyleKey::FontSize);
+            let (tw, _) = self.backend.list_mut().measure_text(label, font_size, None);
+            let pad = 6.0;
+            (tw + pad * 2.0 + 4.0, font_size + pad * 2.0)
+        };
+        let world = self.place_rect(w, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let styles = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
+            chip(
+                self.backend.list_mut(),
+                &styles,
+                local,
+                label,
+                on,
+                &local_input,
+            )
+        };
+        self.advance(h);
+        out
+    }
+
+    /// Draw a keycap decoration (a physical-key label). Does **not**
+    /// auto-advance — use as an inline decoration. Returns the `Rect` drawn.
+    pub fn keycap_label(&mut self, label: &str, min_w: f32) -> Rect {
+        let theme = self.theme;
+        let overlay = self.style_stack.last().cloned();
+        let (theme, overlay) = match (theme, overlay) {
+            (Some(t), o) => (t, o),
+            _ => return Rect::new(0.0, 0.0, 0.0, 0.0),
+        };
+        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
+        let font_size = style.scalar(StyleKey::FontSize);
+        let (tw, _) = self.backend.list_mut().measure_text(label, font_size, None);
+        let w = (tw + 10.0).max(min_w);
+        let h = font_size + 6.0;
+        let rect = self.place_local(w, h);
+        keycap(self.backend.list_mut(), &style, rect, label, min_w);
+        rect
+    }
+
+    /// Draw a shimmer skeleton placeholder of height `h`. Auto-advances by `h`.
+    /// `phase` is the app-owned shimmer position in `[0, 1)`.
+    pub fn skeleton(&mut self, h: f32, phase: f32) {
+        let theme = self.theme;
+        let overlay = self.style_stack.last().cloned();
+        let (theme, overlay) = match (theme, overlay) {
+            (Some(t), o) => (t, o),
+            _ => return,
+        };
+        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
+        let width = self.default_field_width();
+        let rect = self.place_local(width, h);
+        skeleton(self.backend.list_mut(), &style, rect, phase);
+        self.advance(h);
+    }
+
+    /// Draw a spinner ring centered at the current origin. `phase` is the
+    /// app-owned rotation angle (radians); `sweep` is the arc length.
+    /// Auto-advances by `radius * 2`.
+    pub fn spinner(&mut self, radius: f32, phase: f32, sweep: f32) {
+        let theme = self.theme;
+        let overlay = self.style_stack.last().cloned();
+        let (theme, overlay) = match (theme, overlay) {
+            (Some(t), o) => (t, o),
+            _ => return,
+        };
+        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
+        let side = radius * 2.0;
+        let rect = self.place_local(side, side);
+        let center = (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        spinner(
+            self.backend.list_mut(),
+            &style,
+            center,
+            radius,
+            phase,
+            sweep,
+        );
+        self.advance(side);
+    }
+
+    /// Draw three pulsing dots at the current origin. `phase` is the app-owned
+    /// pulse position in `[0, 1)`. Auto-advances by `font_size`.
+    pub fn dots(&mut self, phase: f32) {
+        let theme = self.theme;
+        let overlay = self.style_stack.last().cloned();
+        let (theme, overlay) = match (theme, overlay) {
+            (Some(t), o) => (t, o),
+            _ => return,
+        };
+        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
+        let size = style.scalar(StyleKey::FontSize);
+        let rect = self.place_local(size * 3.0, size);
+        let center = (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        dots(self.backend.list_mut(), &style, center, phase);
+        self.advance(size);
+    }
+
+    /// Draw an empty-state placeholder (icon + title + body). Auto-advances by
+    /// the consumed height. Returns the `Rect` consumed so the caller can place
+    /// a CTA button below it.
+    pub fn empty_state_block(&mut self, es: &EmptyState<'_>) -> Rect {
+        let theme = self.theme;
+        let overlay = self.style_stack.last().cloned();
+        let (theme, overlay) = match (theme, overlay) {
+            (Some(t), o) => (t, o),
+            _ => return Rect::new(0.0, 0.0, 0.0, 0.0),
+        };
+        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
+        let width = self.default_field_width();
+        // Height estimate: icon + title + body lines. Generous fallback.
+        let h = style.scalar(StyleKey::FontSize) * 6.0;
+        let rect = self.place_local(width, h);
+        let consumed = empty_state(self.backend.list_mut(), &style, rect, es);
+        self.advance(consumed.height);
+        consumed
+    }
+
+    /// Draw a breadcrumb trail. Returns `Some(index)` when a non-final segment
+    /// is clicked. Auto-advances by the trail height.
+    pub fn breadcrumb(&mut self, segments: &[&str]) -> Option<usize> {
+        let (input, theme) = self.interactive_refs()?;
+        let bc = Breadcrumb::new(segments);
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let width = bc.intrinsic_width(self.backend.list_mut(), &styles);
+        let height = styles.scalar(StyleKey::FontSize) + 4.0;
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let clicked = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::breadcrumb requires interactive state");
+                    return None;
+                }
+            };
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            bc.draw(local, &mut ctx)
+        };
+        self.advance(height);
+        clicked
+    }
+
+    /// Draw a page navigator (prev/next arrows, optional numeric keys).
+    /// Returns [`PagerOutput`] with the (possibly changed) page index.
+    /// Auto-advances by `theme.input_height`.
+    pub fn pager(&mut self, page: usize, total: usize, w: Option<f32>) -> PagerOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => {
+                return PagerOutput {
+                    changed: false,
+                    page,
+                };
+            }
+        };
+        let width = w.unwrap_or_else(|| self.default_field_width());
+        let height = theme.input_height;
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::pager requires interactive state");
+                    return PagerOutput {
+                        changed: false,
+                        page,
+                    };
+                }
+            };
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            Pager::new().draw(page, total, local, &mut ctx)
+        };
+        self.advance(height);
+        out
+    }
+
+    /// Draw a thumbnail asset grid. Returns [`AssetGridOutput`] with a clicked
+    /// cell index. Auto-advances by `h`.
+    pub fn asset_grid(
+        &mut self,
+        items: &[&str],
+        glyph: &str,
+        selected: usize,
+        h: f32,
+    ) -> AssetGridOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return AssetGridOutput::default(),
+        };
+        let width = self.default_field_width();
+        let world = self.place_rect(width, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::asset_grid requires interactive state");
+                    return AssetGridOutput::default();
+                }
+            };
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            AssetGrid::new(items, glyph).draw(local, selected, &mut ctx)
+        };
+        self.advance(h);
+        out
+    }
+
+    /// Draw a multi-row XYZ vector editor. `scrub` is the caller-owned drag
+    /// state (`None` when idle). Returns [`VectorFieldOutput`] listing changed
+    /// `(row, component, new_value)` tuples. Auto-advances by the field height.
+    pub fn vector_field(
+        &mut self,
+        id: DragId,
+        rows: &[(&str, [f32; 3])],
+        scrub: &mut Option<VectorScrub>,
+    ) -> VectorFieldOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => {
+                return VectorFieldOutput {
+                    changed: Vec::new(),
+                };
+            }
+        };
+        let width = self.default_field_width();
+        let vf = VectorField::new(rows);
+        let cell_h = theme.input_height;
+        let height = vf.height(cell_h);
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::vector_field requires interactive state");
+                    return VectorFieldOutput {
+                        changed: Vec::new(),
+                    };
+                }
+            };
+            let UiState { drag, focus, .. } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            vf.draw(local, scrub, drag, id, &mut ctx)
+        };
+        self.advance(height);
+        out
+    }
+
+    /// Draw a gradient ramp bar with draggable stop handles. `selected` is the
+    /// caller-owned selected stop index; `drag` tracks which stop (if any) is
+    /// mid-drag. Returns [`RampOutput`]. Auto-advances by 36px (bar + handles).
+    pub fn gradient_ramp(
+        &mut self,
+        id: DragId,
+        stops: &[GradientStop],
+        selected: usize,
+        drag_stop: &mut Option<usize>,
+    ) -> RampOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => {
+                return RampOutput {
+                    dragging: None,
+                    dragged_pos: None,
+                    insert_requested: false,
+                    click_pos: 0.0,
+                };
+            }
+        };
+        let width = self.default_field_width();
+        let height = 36.0; // bar (18px) + handle headroom (18px)
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::gradient_ramp requires interactive state");
+                    return RampOutput {
+                        dragging: None,
+                        dragged_pos: None,
+                        insert_requested: false,
+                        click_pos: 0.0,
+                    };
+                }
+            };
+            let UiState { drag, focus, .. } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            draw_gradient_ramp(local, stops, selected, drag_stop, drag, id, &mut ctx)
+        };
+        self.advance(height);
+        out
+    }
+
+    /// Draw the trigger well of a combo box (editable dropdown). Returns
+    /// [`ComboOutput`] describing text edits and open/close requests. The
+    /// popup option list is the caller's responsibility (same pattern as
+    /// [`dropdown`](Self::dropdown)). Auto-advances by `theme.input_height`.
+    pub fn combo_box(
+        &mut self,
+        label: &str,
+        open: bool,
+        focused: bool,
+        w: Option<f32>,
+    ) -> ComboOutput {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return ComboOutput::default(),
+        };
+        let width = w.unwrap_or_else(|| self.default_field_width());
+        let height = theme.input_height;
+        let world = self.place_rect(width, height);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let state = match self.state.as_mut() {
+                Some(s) => s,
+                None => {
+                    debug_assert!(false, "UiContext::combo_box requires interactive state");
+                    return ComboOutput::default();
+                }
+            };
+            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            draw_combo_trigger(local, label, open, focused, &mut ctx)
+        };
+        self.advance(height);
+        out
+    }
+
     /// Open a modal layer covering `rect`. Subsequent draw calls go to the
     /// modal layer until `modal_end` is called. Lower layers receive
     /// `mouse_consumed = true` for input dispatch.
@@ -3979,6 +4522,24 @@ mod tests {
         assert!(approx(c2[1], c1[1] + 30.0 + theme.spacing));
         // Horizontal cursor unchanged by a vertical stack.
         assert!(approx(c2[0], c0[0]));
+    }
+
+    #[test]
+    fn interactive_context_defaults_text_to_the_theme_body_font() {
+        let mut theme = Theme::default();
+        theme.font_size = 11.5;
+        theme.font = Some(FontHandle("chrome-font".into()));
+        let input = InputState::default();
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        {
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            assert_eq!(ui.current_font().size, 11.5);
+            assert_eq!(ui.current_font().font, theme.font);
+            ui.text("body");
+        }
+        assert_eq!(list.texts[0].font_size, 11.5);
+        assert_eq!(list.texts[0].font, theme.font);
     }
 
     #[test]

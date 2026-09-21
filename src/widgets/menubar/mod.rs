@@ -62,9 +62,9 @@
 //!
 //! ## Not yet
 //!
-//! Submenus are *rendered* (a parent row shows its chevron) but not opened: the
-//! chain is one level deep. Hover intent, the corridor rule, mnemonics and
-//! accelerator dispatch are later phases of `docs/design/menubar.md`.
+//! Submenus support an eight-level open chain with per-level keyboard and pointer
+//! state, hover intent, and a safe-triangle corridor. Mnemonics and accelerator
+//! dispatch remain later phases of `docs/design/menubar.md`.
 
 mod model;
 mod paint;
@@ -77,8 +77,8 @@ pub use model::{
     AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBarId, MenuItem, MenuItemId,
     MenuTrigger, Modifiers, SubmenuSide,
 };
-pub use placement::{blocker_regions, place_popup};
-pub use state::{MenuBarState, MenuDrawEnv, MenuLayers};
+pub use placement::{blocker_regions, place_popup, place_submenu};
+pub use state::{MAX_MENU_DEPTH, MenuBarState, MenuDrawEnv, MenuLayers};
 
 use crate::color::opaque_srgb8;
 use crate::layout::{Constraint, Rect};
@@ -154,11 +154,11 @@ impl<'a> MenuBar<'a> {
         self.menus
     }
 
-    /// Contextual measurement of the strip: one [`StyleKey::MenuRowHeight`] tall,
+    /// Contextual measurement of the strip: one [`StyleKey::MenuBarHeight`] tall,
     /// as wide as the sum of the labels plus their insets.
     pub fn measure(&self, cx: &mut MeasureContext<'_>) -> Measurement {
         let styles = cx.styles();
-        let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
+        let row_h = styles.scalar(StyleKey::MenuBarHeight).max(1.0);
         let mut width = MENU_BAR_SIDE_PADDING * 2.0;
         let mut baseline = row_h * 0.5;
         for menu in self.menus {
@@ -206,11 +206,11 @@ impl<'a> MenuBar<'a> {
         let theme = ctx.theme;
         let overlay = ctx.style;
         let styles = StyleResolver::with_overlay_opt(theme, overlay);
-        let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
+        let bar_h = styles.scalar(StyleKey::MenuBarHeight).max(1.0);
         let height = if rect.height > 0.0 {
             rect.height
         } else {
-            row_h
+            bar_h
         };
         let strip = Rect::new(rect.x, rect.y, rect.width.max(0.0), height);
         let viewport = Rect::new(
@@ -287,11 +287,29 @@ impl<'a> MenuBar<'a> {
         // the mirror of "right on a leaf moves to the next top-level menu". This
         // lives here, not in the chain's own pass, because it has to land before
         // the geometry pass below measures the column it switches to.
-        if state.open_menu().is_some() {
-            if state.left {
+        if let Some(open) = state.open_menu() {
+            // At the root, Left walks the bar. Right on a leaf does likewise at
+            // every depth and `switch_menu` collapses the chain back to its root;
+            // submenu parents are handled by the popup pass so they open a child.
+            if state.open_levels() == 1 && state.left {
                 state.switch_menu(self.menus, -1);
             }
-            if state.right {
+            let level = state.open_levels().saturating_sub(1);
+            let right_on_leaf = state.right
+                && self
+                    .menus
+                    .get(open)
+                    .and_then(|menu| state.items_at_level(menu, level))
+                    .and_then(|items| {
+                        state
+                            .highlights
+                            .get(level)
+                            .copied()
+                            .flatten()
+                            .and_then(|item| items.get(item))
+                    })
+                    .is_some_and(|item| item.is_enabled() && !item.is_submenu());
+            if right_on_leaf {
                 state.switch_menu(self.menus, 1);
             }
         } else if state.armed {

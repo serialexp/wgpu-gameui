@@ -10,12 +10,14 @@ use crate::color::{opaque_srgb8, srgb_to_linear};
 use crate::layout::Rect;
 use crate::{
     Affine2, CornerRadii, DrawContext, Edge, HitShape, InteractionScene, LayerStack, PointerPolicy,
-    StyleKey, SurfacePainter,
+    StyleKey, StyleResolver, SurfacePainter,
 };
 
-use super::model::{ActivatedItem, Menu, MenuBarId, blocker_region_id, column_blocker_id, row_id};
+use super::model::{
+    ActivatedItem, Menu, MenuBarId, MenuItem, blocker_region_id, column_blocker_id, row_path_id,
+};
 use super::placement;
-use super::state::{MenuBarState, MenuDrawEnv, MenuLayers, activation_id};
+use super::state::{MenuBarState, MenuDrawEnv, MenuLayers, activation_id_for_path};
 
 /// Check-mark stroke width, as a fraction of the row height.
 const CHECK_STROKE: f32 = 0.10;
@@ -91,19 +93,32 @@ pub(super) fn draw_columns<'a>(
     // switches to.
     let mut keyed = false;
     if navigable {
+        let level = state.open_levels().saturating_sub(1);
+        let items = state.items_at_level(menu, level).unwrap_or(&[]);
         if state.up {
-            keyed |= state.step_item(menu.items(), -1);
+            keyed |= state.step_item(items, level, -1);
         }
         if state.down {
-            keyed |= state.step_item(menu.items(), 1);
+            keyed |= state.step_item(items, level, 1);
         }
-        if state.cancel {
-            // Unwind one level. With nothing left open the bar stays armed, so menu
-            // mode survives the first Escape.
-            state.open = None;
-            state.highlighted_item = None;
-            state.scroll = 0.0;
-            forget_geometry(state);
+        let highlighted = state.highlights.get(level).copied().flatten();
+        if (state.right || state.confirm)
+            && let Some(parent) = highlighted
+            && items
+                .get(parent)
+                .is_some_and(|item| item.is_enabled() && item.is_submenu())
+        {
+            keyed |= state.open_child(menu, level, parent);
+        }
+        if (state.left && level > 0) || state.cancel {
+            if state.unwind_level() {
+                forget_geometry(state);
+            } else if state.cancel {
+                state.open = None;
+                state.highlighted_item = None;
+                state.scroll = 0.0;
+                forget_geometry(state);
+            }
             return None;
         }
     }
@@ -144,12 +159,13 @@ pub(super) fn draw_columns<'a>(
         register_viewport_blocker(env.interactions, bar, slots.blocker, viewport, bar_rect);
     }
 
-    let mut hovered_row = None;
-    let mut clicked_row = None;
+    let mut hovered_row: Option<(usize, usize)> = None;
+    let mut clicked_row: Option<(usize, usize)> = None;
     let mut column_click = false;
 
     for (level, column) in columns.iter_mut().enumerate() {
-        state.scroll_into_view(column);
+        state.scroll_into_view(column, level);
+        let level_scroll = state.scrolls.get(level).copied().unwrap_or(0.0);
 
         // ---- register this column's hit regions ----
         let index = match slots {
@@ -189,8 +205,13 @@ pub(super) fn draw_columns<'a>(
             // The column's own blocker, registered *before* the rows so the rows
             // win dispatch within the layer: a scene-backed base widget under the
             // column's padding, border or a separator would otherwise still win
-            // hover and click.
-            ctx.interact(column_blocker_id(bar, column.menu_index, level), rect, true);
+            // hover and click. Include the full branch path: retained responses
+            // from an equal-depth sibling column must not transfer to its replacement.
+            ctx.interact(
+                column_blocker_id(bar, column.menu_index, &column.path[..level], level),
+                rect,
+                true,
+            );
 
             ctx.draw_list.push_debug_scope_rect("Menu column", rect);
 
@@ -201,23 +222,30 @@ pub(super) fn draw_columns<'a>(
                 if row.separator || row.disabled {
                     continue;
                 }
-                let y = rect.y + column.sheet_padding + row.y - state.scroll;
+                let y = rect.y + column.sheet_padding + row.y - level_scroll;
                 if y + row.height <= rect.y + column.sheet_padding
                     || y >= rect.bottom() - column.sheet_padding
                 {
                     continue;
                 }
                 let response = ctx.interact(
-                    row_id(bar, column.menu_index, menu_id, row.item_index, level),
+                    row_path_id(
+                        bar,
+                        column.menu_index,
+                        menu_id,
+                        &column.path[..level],
+                        row.item_index,
+                        level,
+                    ),
                     Rect::new(row_x, y, row_width, row.height),
                     true,
                 );
                 if response.hovered {
-                    hovered_row = Some(row.item_index);
+                    hovered_row = Some((level, row.item_index));
                     ctx.request_cursor(crate::CursorIcon::Pointer);
                 }
                 if response.clicked {
-                    clicked_row = Some(row.item_index);
+                    clicked_row = Some((level, row.item_index));
                 }
             }
 
@@ -225,9 +253,15 @@ pub(super) fn draw_columns<'a>(
             // so a stationary pointer over the column doesn't fight arrow keys.
             if state.pointer_moved
                 && !keyed
-                && let Some(item) = hovered_row
+                && let Some((hover_level, item)) = hovered_row
+                && hover_level == level
             {
-                state.highlighted_item = Some(item);
+                if let Some(slot) = state.highlights.get_mut(level) {
+                    *slot = Some(item);
+                }
+                if level == 0 {
+                    state.highlighted_item = Some(item);
+                }
             }
 
             // ---- paint ----
@@ -258,7 +292,7 @@ pub(super) fn draw_columns<'a>(
             // paint beyond the popup rect.
             list.push_clip_viewport(padding_box);
             for row in column.rows.iter_mut() {
-                let y = rect.y + column.sheet_padding + row.y - state.scroll;
+                let y = rect.y + column.sheet_padding + row.y - level_scroll;
                 if y + row.height <= rect.y + column.sheet_padding
                     || y >= rect.bottom() - column.sheet_padding
                 {
@@ -288,7 +322,9 @@ pub(super) fn draw_columns<'a>(
                     );
                     continue;
                 }
-                let highlighted = state.highlighted_item == Some(row.item_index) && !row.disabled;
+                let highlighted = state.highlights.get(level).copied().flatten()
+                    == Some(row.item_index)
+                    && !row.disabled;
                 if highlighted {
                     paint_accent_row(
                         list,
@@ -396,24 +432,81 @@ pub(super) fn draw_columns<'a>(
     // ---- resolve ----
     let mut activated = None;
     if navigable {
-        let chosen = clicked_row.or(if state.confirm {
-            state.highlighted_item
+        if let Some((level, item_index)) = hovered_row {
+            let item = state
+                .items_at_level(menu, level)
+                .and_then(|items| items.get(item_index));
+            let corridor = state.open_path.get(level).is_some_and(|_| {
+                columns.get(level + 1).is_some_and(|child| {
+                    state.previous_pointer.is_some_and(|from| {
+                        safe_corridor(from, (state.mouse_x, state.mouse_y), child.rect)
+                    })
+                })
+            });
+            if !corridor && item.is_some_and(MenuItem::is_enabled) {
+                if state.hover_level == Some(level) && state.hover_item == Some(item_index) {
+                    state.hover_elapsed += state.frame_dt;
+                } else {
+                    state.hover_level = Some(level);
+                    state.hover_item = Some(item_index);
+                    state.hover_elapsed = 0.0;
+                }
+                let delay = StyleResolver::with_overlay_opt(env.theme, env.style)
+                    .scalar(StyleKey::MenuHoverDelay)
+                    .max(0.0);
+                let open_parent = state.open_path.get(level).copied();
+                let child_is_open = open_parent.is_some();
+                if item.is_some_and(MenuItem::is_submenu)
+                    && open_parent.is_some_and(|parent| parent != item_index)
+                {
+                    // Once this parent already has a child, sibling parents replace
+                    // it immediately; leaf rows still use the close delay below.
+                    state.open_child(menu, level, item_index);
+                } else if state.hover_elapsed >= delay {
+                    if item.is_some_and(MenuItem::is_submenu) {
+                        state.open_child(menu, level, item_index);
+                    } else if child_is_open {
+                        state.open_path.truncate(level);
+                        state.highlights.truncate(level + 1);
+                        state.scrolls.truncate(level + 1);
+                        forget_geometry(state);
+                    }
+                }
+            }
         } else {
-            None
+            state.hover_level = None;
+            state.hover_item = None;
+            state.hover_elapsed = 0.0;
+        }
+
+        let deepest = state.open_levels().saturating_sub(1);
+        let chosen = clicked_row.or_else(|| {
+            (state.confirm && !keyed)
+                .then(|| {
+                    state
+                        .highlights
+                        .get(deepest)
+                        .copied()
+                        .flatten()
+                        .map(|item| (deepest, item))
+                })
+                .flatten()
         });
-        if let Some(item_index) = chosen
-            && let Some(item) = menu.items().get(item_index)
+        if let Some((level, item_index)) = chosen
+            && let Some(items) = state.items_at_level(menu, level)
+            && let Some(item) = items.get(item_index)
             && item.is_enabled()
-            && !item.is_submenu()
         {
             state.click_claimed = true;
-            activated = Some(ActivatedItem {
-                id: activation_id(menu, item),
-                item,
-            });
-            // Acting on an item ends the interaction: the chain closes and the
-            // bar leaves menu mode.
-            state.close();
+            if item.is_submenu() {
+                state.open_child(menu, level, item_index);
+            } else {
+                activated = Some(ActivatedItem {
+                    id: activation_id_for_path(menu, &state.open_path[..level], item),
+                    item,
+                });
+                state.close();
+            }
         }
     }
     if column_click {
@@ -435,6 +528,32 @@ pub(super) fn draw_columns<'a>(
 fn forget_geometry(state: &mut MenuBarState) {
     state.geom = None;
     state.columns.clear();
+}
+
+pub(super) fn safe_corridor(from: (f32, f32), point: (f32, f32), child: Rect) -> bool {
+    if child.contains(point.0, point.1) {
+        return true;
+    }
+    let edge_x = if child.x >= from.0 {
+        if point.0 <= from.0 {
+            return false;
+        }
+        child.x
+    } else {
+        if point.0 >= from.0 {
+            return false;
+        }
+        child.right()
+    };
+    point_in_triangle(point, from, (edge_x, child.y), (edge_x, child.bottom()))
+}
+
+fn point_in_triangle(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    fn cross(a: (f32, f32), b: (f32, f32), p: (f32, f32)) -> f32 {
+        (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0)
+    }
+    let (x, y, z) = (cross(a, b, p), cross(b, c, p), cross(c, a, p));
+    (x >= 0.0 && y >= 0.0 && z >= 0.0) || (x <= 0.0 && y <= 0.0 && z <= 0.0)
 }
 
 fn sheet_padding_box(rect: Rect, widths: crate::EdgeWidths) -> Rect {

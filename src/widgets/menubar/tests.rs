@@ -8,11 +8,12 @@ use crate::{
     MenuBar, MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, StyleOverlay, Theme,
 };
 
+use super::MAX_MENU_DEPTH;
 use super::model::{
     AccelPlatform, Accelerator, Key, MenuTrigger, Modifiers, SubmenuSide, bar_label_id,
     blocker_region_id, column_blocker_id, row_id,
 };
-use super::placement::{blocker_regions, place_popup};
+use super::placement::{blocker_regions, place_popup, place_submenu};
 
 const BAR: u64 = 0x5EED;
 const W: f32 = 800.0;
@@ -61,6 +62,104 @@ fn strip() -> Rect {
 
 fn viewport() -> Rect {
     Rect::new(0.0, 0.0, W, H)
+}
+
+#[test]
+fn submenu_placement_overlaps_and_auto_flips_per_level() {
+    let parent = Rect::new(700.0, 100.0, 90.0, 22.0);
+    let (left, side) = place_submenu(parent, [150.0, 100.0], viewport(), SubmenuSide::Auto);
+    assert_eq!(side, SubmenuSide::Left);
+    assert!(
+        left.right() > parent.x,
+        "the sheets overlap without a dead gap"
+    );
+
+    let parent = Rect::new(10.0, 100.0, 90.0, 22.0);
+    let (right, side) = place_submenu(parent, [150.0, 100.0], viewport(), SubmenuSide::Auto);
+    assert_eq!(side, SubmenuSide::Right);
+    assert!(right.x < parent.right());
+}
+
+#[test]
+fn full_path_activation_ids_distinguish_equal_leaf_labels() {
+    const A: &[MenuItem<'static>] = &[MenuItem::new("Run")];
+    const ROOT: &[MenuItem<'static>] = &[
+        MenuItem::new("First").with_children(A),
+        MenuItem::new("Second").with_children(A),
+    ];
+    let menu = Menu::new("Tools").with_items(ROOT);
+    let first = super::state::activation_id_for_path(&menu, &[0], &A[0]);
+    let second = super::state::activation_id_for_path(&menu, &[1], &A[0]);
+    assert_ne!(first, second);
+}
+
+#[test]
+fn column_blockers_include_the_full_branch_path() {
+    assert_ne!(
+        column_blocker_id(BAR, 0, &[1], 1),
+        column_blocker_id(BAR, 0, &[2], 1)
+    );
+    assert_ne!(
+        column_blocker_id(BAR, 0, &[1, 3], 2),
+        column_blocker_id(BAR, 0, &[1, 4], 2)
+    );
+}
+
+#[test]
+fn frame_dt_is_sanitized_for_hover_intent() {
+    let mut state = MenuBarState::new();
+    let mut input = InputState::default();
+    for (dt, expected) in [
+        (f32::NAN, 0.0),
+        (f32::INFINITY, 0.0),
+        (-1.0, 0.0),
+        (10.0, crate::MAX_DT),
+    ] {
+        state.begin_frame_with_dt(&mut input, dt);
+        assert_eq!(state.frame_dt, expected);
+    }
+}
+
+#[test]
+fn safe_corridor_handles_right_and_left_opening_children() {
+    let right = Rect::new(100.0, 20.0, 80.0, 100.0);
+    assert!(super::paint::safe_corridor(
+        (50.0, 40.0),
+        (80.0, 50.0),
+        right
+    ));
+    let left = Rect::new(0.0, 20.0, 80.0, 100.0);
+    assert!(super::paint::safe_corridor(
+        (130.0, 40.0),
+        (100.0, 50.0),
+        left
+    ));
+    assert!(!super::paint::safe_corridor(
+        (130.0, 40.0),
+        (100.0, 150.0),
+        left
+    ));
+}
+
+#[test]
+fn max_depth_truncates_without_panicking_and_counts_attempts() {
+    const L8: &[MenuItem<'static>] = &[MenuItem::new("Leaf")];
+    const L7: &[MenuItem<'static>] = &[MenuItem::new("7").with_children(L8)];
+    const L6: &[MenuItem<'static>] = &[MenuItem::new("6").with_children(L7)];
+    const L5: &[MenuItem<'static>] = &[MenuItem::new("5").with_children(L6)];
+    const L4: &[MenuItem<'static>] = &[MenuItem::new("4").with_children(L5)];
+    const L3: &[MenuItem<'static>] = &[MenuItem::new("3").with_children(L4)];
+    const L2: &[MenuItem<'static>] = &[MenuItem::new("2").with_children(L3)];
+    const L1: &[MenuItem<'static>] = &[MenuItem::new("1").with_children(L2)];
+    const ROOT: &[MenuItem<'static>] = &[MenuItem::new("0").with_children(L1)];
+    const DEEP: &[Menu<'static>] = &[Menu::new("Deep").with_items(ROOT)];
+    let mut state = MenuBarState::new();
+    state.open_menu_at(DEEP, 0);
+    assert!(!state.set_open_path(DEEP, &[0; MAX_MENU_DEPTH]));
+    assert_eq!(state.open_levels(), MAX_MENU_DEPTH);
+    assert_eq!(state.depth_truncations(), 1);
+    assert!(!state.open_child(&DEEP[0], MAX_MENU_DEPTH - 1, 0));
+    assert_eq!(state.depth_truncations(), 2);
 }
 
 #[test]
@@ -158,10 +257,14 @@ impl Rig {
 
     /// Run one frame. Returns the bar's output and the activation id, if any.
     fn step(&mut self) -> (MenuBarOutput, Option<u64>) {
+        self.step_with_dt(0.0)
+    }
+
+    fn step_with_dt(&mut self, dt: f32) -> (MenuBarOutput, Option<u64>) {
         // Keep the just-painted lists available for assertions until the next
         // frame starts, when their transient layers are discarded.
         self.layers.clear();
-        self.state.begin_frame(&mut self.input);
+        self.state.begin_frame_with_dt(&mut self.input, dt);
         self.scene.begin_frame(&self.input);
         // Focus runs *after* the menu, which is the order the crate documents: the
         // menu claims the intents it handles first, so Escape with menu mode active
@@ -505,7 +608,7 @@ fn widget_ids_are_distinct_across_the_id_families() {
         row_id(BAR, 0, None, 0, 1),
         blocker_region_id(BAR, 0),
         blocker_region_id(BAR, 1),
-        column_blocker_id(BAR, 0, 0),
+        column_blocker_id(BAR, 0, &[], 0),
     ];
     for (i, a) in ids.iter().enumerate() {
         for b in &ids[i + 1..] {
@@ -1049,7 +1152,7 @@ fn an_explicitly_identified_leaf_reports_that_id() {
 }
 
 #[test]
-fn a_submenu_parent_never_activates_in_this_phase() {
+fn confirming_a_submenu_parent_opens_its_child_without_activation() {
     let mut rig = Rig::new();
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
@@ -1061,8 +1164,9 @@ fn a_submenu_parent_never_activates_in_this_phase() {
     assert_eq!(rig.state.highlighted_item(), Some(5));
     rig.input.nav.confirm = true;
     let (_, activated) = rig.step();
-    assert_eq!(activated, None, "submenus open in a later phase");
-    assert_eq!(rig.state.open_levels(), 1, "and the menu stays open");
+    assert_eq!(activated, None);
+    assert_eq!(rig.state.open_levels(), 2);
+    assert_eq!(rig.state.highlights[1], Some(0));
 }
 
 #[test]
@@ -1083,6 +1187,34 @@ fn left_and_right_switch_menus_without_closing_the_chain() {
     rig.input.nav.left = true;
     rig.step();
     assert_eq!(rig.state.open_menu(), Some(0));
+}
+
+#[test]
+fn right_on_a_deep_leaf_switches_top_level_menu_and_collapses_to_root() {
+    const LEAVES: &[MenuItem<'static>] = &[MenuItem::new("Leaf")];
+    const CHILDREN: &[MenuItem<'static>] = &[MenuItem::new("Child").with_children(LEAVES)];
+    const ROOT: &[MenuItem<'static>] = &[MenuItem::new("Root").with_children(CHILDREN)];
+    const DEEP_MENUS: &[Menu<'static>] = &[
+        Menu::new("First").with_items(ROOT),
+        Menu::new("Disabled").enabled(false).with_items(ROOT),
+        Menu::new("Next").with_items(&[MenuItem::new("Next leaf")]),
+    ];
+
+    let mut state = MenuBarState::new();
+    state.open_menu_at(DEEP_MENUS, 0);
+    assert!(state.set_open_path(DEEP_MENUS, &[0, 0]));
+    assert_eq!(state.open_levels(), 3);
+    state.right = true;
+    let theme = Theme::default();
+    let input = InputState::default();
+    let mut focus = FocusState::new();
+    let mut list = DrawList::new();
+    let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, W, H);
+    MenuBar::new(BAR, DEEP_MENUS).draw(strip(), &mut state, &mut ctx);
+
+    assert_eq!(state.open_menu(), Some(2));
+    assert_eq!(state.open_levels(), 1);
+    assert_eq!(state.highlighted_item(), Some(0));
 }
 
 #[test]
@@ -1120,6 +1252,32 @@ fn the_press_that_opens_a_menu_does_not_select_a_row() {
 }
 
 // -------------------------------------------------------- pointer integration
+
+#[test]
+fn timed_row_hover_opens_a_menubar_submenu() {
+    let mut rig = Rig::new();
+    rig.theme.menu_hover_delay = 0.05;
+    rig.state.open_menu_at(MENUS, 0);
+    rig.settle();
+    let rect = rig.column_rect();
+    let parent = rig.state.columns[0]
+        .rows
+        .iter()
+        .find(|row| row.item_index == 5)
+        .expect("submenu row");
+    rig.move_pointer(
+        rect.x + 20.0,
+        rect.y + rig.state.columns[0].sheet_padding + parent.y + parent.height * 0.5,
+    );
+
+    // One frame registers the moved pointer against retained regions; the next
+    // starts dwell, and only enough subsequent sanitized dt opens the child.
+    rig.step_with_dt(0.03);
+    rig.step_with_dt(0.03);
+    assert_eq!(rig.state.open_levels(), 1);
+    rig.step_with_dt(0.05);
+    assert_eq!(rig.state.open_levels(), 2);
+}
 
 #[test]
 fn hovering_a_label_while_open_switches_menus() {
@@ -1283,7 +1441,7 @@ fn a_row_outranks_the_column_blocker_under_the_pointer() {
     rig.step();
 
     let row = row_id(BAR, 0, None, 0, 0);
-    let blocker = column_blocker_id(BAR, 0, 0);
+    let blocker = column_blocker_id(BAR, 0, &[], 0);
     let candidates = rig.scene.candidates();
     let row_rank = candidates
         .iter()
@@ -1305,18 +1463,99 @@ fn a_row_outranks_the_column_blocker_under_the_pointer() {
 }
 
 #[test]
-fn the_chain_keeps_its_geometry_buffers_across_frames() {
+fn the_max_depth_chain_keeps_every_levels_geometry_buffer_across_frames() {
+    const L8: &[MenuItem<'static>] = &[
+        MenuItem::new("Level eight wide leaf label"),
+        MenuItem::new("Level eight sibling"),
+    ];
+    const L7: &[MenuItem<'static>] = &[
+        MenuItem::new("Level seven wide parent").with_children(L8),
+        MenuItem::new("Level seven sibling"),
+    ];
+    const L6: &[MenuItem<'static>] = &[
+        MenuItem::new("Level six wide parent").with_children(L7),
+        MenuItem::new("Level six sibling"),
+    ];
+    const L5: &[MenuItem<'static>] = &[
+        MenuItem::new("Level five wide parent").with_children(L6),
+        MenuItem::new("Level five sibling"),
+    ];
+    const L4: &[MenuItem<'static>] = &[
+        MenuItem::new("Level four wide parent").with_children(L5),
+        MenuItem::new("Level four sibling"),
+    ];
+    const L3: &[MenuItem<'static>] = &[
+        MenuItem::new("Level three wide parent").with_children(L4),
+        MenuItem::new("Level three sibling"),
+    ];
+    const L2: &[MenuItem<'static>] = &[
+        MenuItem::new("Level two wide parent").with_children(L3),
+        MenuItem::new("Level two sibling"),
+    ];
+    const ROOT: &[MenuItem<'static>] = &[
+        MenuItem::new("Level one wide parent").with_children(L2),
+        MenuItem::new("Level one sibling"),
+    ];
+    const DEEP: &[Menu<'static>] = &[Menu::new("Deep").with_items(ROOT)];
+
     let mut rig = Rig::new();
-    rig.state.open_menu_at(MENUS, 0);
-    rig.settle();
+    rig.state.open_menu_at(DEEP, 0);
+    assert!(rig.state.set_open_path(DEEP, &[0; MAX_MENU_DEPTH - 1]));
+    // This test needs its own static tree, so run the same frame contract as Rig
+    // while substituting DEEP for its default MENUS.
+    let step = |rig: &mut Rig| {
+        rig.layers.clear();
+        rig.state.begin_frame(&mut rig.input);
+        rig.scene.begin_frame(&rig.input);
+        rig.focus.begin_frame(&rig.input);
+        let slots = rig.state.push_open_layers(&mut rig.layers);
+        let base = rig.layers.input_for_base(&rig.input);
+        {
+            let mut ctx = DrawContext::new(
+                rig.layers.base_mut(),
+                &mut rig.focus,
+                &rig.theme,
+                &base,
+                W,
+                H,
+            )
+            .with_interactions(&mut rig.scene);
+            MenuBar::new(BAR, DEEP).draw(strip(), &mut rig.state, &mut ctx);
+        }
+        let mut env = MenuDrawEnv {
+            theme: &rig.theme,
+            style: None,
+            input: &rig.input,
+            focus: &mut rig.focus,
+            interactions: &mut rig.scene,
+            animations: None,
+            cursor: None,
+            screen_width: W,
+            screen_height: H,
+        };
+        rig.state
+            .draw_open_layers(&mut rig.layers, slots, DEEP, &mut env);
+        rig.state.end_frame(&mut rig.focus);
+        rig.scene.end_frame();
+        rig.focus.end_frame(None);
+        rig.input.end_frame();
+    };
+    step(&mut rig);
+    step(&mut rig);
+
     let first = rig.state.scratch_capacities();
-    assert!(first.1 > 0, "rows were measured");
+    assert!(first.0 >= MAX_MENU_DEPTH, "all columns were retained");
+    assert!(
+        first.1.iter().all(|&capacity| capacity >= 2),
+        "every level measured and retained both rows: {:?}",
+        first.1
+    );
     for _ in 0..3 {
-        rig.step();
+        step(&mut rig);
         assert_eq!(
             rig.state.scratch_capacities(),
             first,
-            "the geometry path must reuse its buffers rather than regrow them"
+            "every level must reuse its row buffer rather than regrow it"
         );
     }
 }
@@ -1402,8 +1641,8 @@ fn the_bar_measures_as_one_row_tall() {
         crate::WrapMode::None,
     );
     let measured = bar().measure(&mut cx);
-    assert_eq!(measured.preferred[1], theme.menu_row_height);
-    assert_eq!(measured.max[1], Some(theme.menu_row_height));
+    assert_eq!(measured.preferred[1], theme.menu_bar_height);
+    assert_eq!(measured.max[1], Some(theme.menu_bar_height));
     assert!(
         measured.preferred[0] > 0.0,
         "the strip is as wide as its labels"

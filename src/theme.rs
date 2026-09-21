@@ -93,7 +93,11 @@ pub struct Theme {
     pub button_height: f32,
     /// Default text-input height, in pixels.
     pub input_height: f32,
-    /// Height of one menubar strip or menu-item row, in pixels. Read by
+    /// Height of the menu bar strip, in pixels (26px in the Forge design).
+    /// Read by [`AppShell`](crate::AppShell) and [`MenuBar`](crate::MenuBar)
+    /// via [`StyleKey::MenuBarHeight`](crate::StyleKey::MenuBarHeight).
+    pub menu_bar_height: f32,
+    /// Height of one menu-item row inside a dropdown sheet, in pixels. Read by
     /// [`MenuBar`](crate::MenuBar) via
     /// [`StyleKey::MenuRowHeight`](crate::StyleKey::MenuRowHeight).
     pub menu_row_height: f32,
@@ -102,6 +106,9 @@ pub struct Theme {
     pub menu_item_min_width: f32,
     /// Gap between a menu item's label and its accelerator hint, in pixels.
     pub menu_accel_gap: f32,
+    /// Seconds a pointer must rest on a submenu parent before opening or replacing
+    /// its child column.
+    pub menu_hover_delay: f32,
 
     /// Side length of one toolbar tool button, in pixels. Read by
     /// [`Toolbar`](crate::Toolbar) via
@@ -225,12 +232,12 @@ impl Default for Theme {
             // plinth, accent (teal, oklch hue 200) reserved for state.
             // Theme and draw-list colors are linear RGBA. Decode CSS/sRGB
             // palette values here so the sRGB render target encodes them exactly
-            // once. The backdrop is the first design stop (#10171c); apps wanting
-            // the exact #10171c→#060809 ramp blend the remaining stops behind UI.
+            // once. The clear colour is #0a0d0f — all opaque resolved values
+            // in the design spec are composited against this backdrop.
             background: srgb_to_linear([
-                0x10 as f32 / 255.0,
-                0x17 as f32 / 255.0,
-                0x1c as f32 / 255.0,
+                0x0a as f32 / 255.0,
+                0x0d as f32 / 255.0,
+                0x0f as f32 / 255.0,
                 1.0,
             ]),
             // Pause/menu screens dim the world by half. Black keeps the dim
@@ -329,12 +336,14 @@ impl Default for Theme {
             font_size_title: 15.0,
             button_height: 24.0,
             input_height: 24.0,
-            // Forge menu geometry is literal: 22px rows inside a 3px-padded,
+            // Forge menu geometry: 26px bar, 22px rows inside a 3px-padded,
             // 218px-minimum sheet. Title/row text uses its own 11.5px scale rather
             // than the 13px body font; see the menubar paint/measure paths.
+            menu_bar_height: 26.0,
             menu_row_height: 22.0,
             menu_item_min_width: 218.0,
             menu_accel_gap: 7.0,
+            menu_hover_delay: 0.20,
             toolbar_button_size: 24.0,
             toolbar_padding: 3.0,
             dock_tab_height: 24.0,
@@ -346,14 +355,14 @@ impl Default for Theme {
             travel: 2.0,
             inner_shadow_depth: 6.0,
             face_top: [1.0, 1.0, 1.0, 0.16],
-            face_top_hover: [1.0, 1.0, 1.0, 0.22],
+            face_top_hover: [1.0, 1.0, 1.0, 0.24],
             face_top_pressed: [1.0, 1.0, 1.0, 0.09],
             face_bottom: [1.0, 1.0, 1.0, 0.06],
-            face_bottom_hover: [1.0, 1.0, 1.0, 0.10],
+            face_bottom_hover: [1.0, 1.0, 1.0, 0.11],
             face_bottom_pressed: [1.0, 1.0, 1.0, 0.035],
             edge_highlight: [1.0, 1.0, 1.0, 0.18],
-            edge_highlight_hover: [1.0, 1.0, 1.0, 0.26],
-            edge_highlight_pressed: [1.0, 1.0, 1.0, 0.07],
+            edge_highlight_hover: [1.0, 1.0, 1.0, 0.28],
+            edge_highlight_pressed: [1.0, 1.0, 1.0, 0.06],
             inner_shadow: [0.0, 0.0, 0.0, 0.6],
             edge_shadow: [1.0, 1.0, 1.0, 0.07],
             accent_face_top: srgb_to_linear([0.4211, 0.8464, 0.8689, 1.0]),
@@ -420,7 +429,7 @@ mod tests {
 
         close(
             theme.background,
-            srgb_to_linear([16.0 / 255.0, 23.0 / 255.0, 28.0 / 255.0, 1.0]),
+            srgb_to_linear([10.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1.0]),
         );
         close(
             theme.panel,
@@ -440,9 +449,11 @@ mod tests {
     #[test]
     fn default_menu_metrics_match_the_forge_handoff() {
         let theme = Theme::default();
+        assert_eq!(theme.menu_bar_height, 26.0);
         assert_eq!(theme.menu_row_height, 22.0);
         assert_eq!(theme.menu_item_min_width, 218.0);
         assert_eq!(theme.menu_accel_gap, 7.0);
+        assert_eq!(theme.menu_hover_delay, 0.20);
     }
 
     #[test]
@@ -598,9 +609,11 @@ impl Theme {
             ButtonHeight => StyleValue::Scalar(self.button_height),
             InputHeight => StyleValue::Scalar(self.input_height),
             AnimationDuration => StyleValue::Scalar(self.animation_duration),
+            MenuBarHeight => StyleValue::Scalar(self.menu_bar_height),
             MenuRowHeight => StyleValue::Scalar(self.menu_row_height),
             MenuItemMinWidth => StyleValue::Scalar(self.menu_item_min_width),
             MenuAccelGap => StyleValue::Scalar(self.menu_accel_gap),
+            MenuHoverDelay => StyleValue::Scalar(self.menu_hover_delay),
             ToolbarButtonSize => StyleValue::Scalar(self.toolbar_button_size),
             ToolbarPadding => StyleValue::Scalar(self.toolbar_padding),
             DockTabHeight => StyleValue::Scalar(self.dock_tab_height),
@@ -689,9 +702,11 @@ impl Theme {
             (ButtonHeight, StyleValue::Scalar(s)) => self.button_height = s,
             (InputHeight, StyleValue::Scalar(s)) => self.input_height = s,
             (AnimationDuration, StyleValue::Scalar(s)) => self.animation_duration = s,
+            (MenuBarHeight, StyleValue::Scalar(s)) => self.menu_bar_height = s,
             (MenuRowHeight, StyleValue::Scalar(s)) => self.menu_row_height = s,
             (MenuItemMinWidth, StyleValue::Scalar(s)) => self.menu_item_min_width = s,
             (MenuAccelGap, StyleValue::Scalar(s)) => self.menu_accel_gap = s,
+            (MenuHoverDelay, StyleValue::Scalar(s)) => self.menu_hover_delay = s,
             (ToolbarButtonSize, StyleValue::Scalar(s)) => self.toolbar_button_size = s,
             (ToolbarPadding, StyleValue::Scalar(s)) => self.toolbar_padding = s,
             (DockTabHeight, StyleValue::Scalar(s)) => self.dock_tab_height = s,

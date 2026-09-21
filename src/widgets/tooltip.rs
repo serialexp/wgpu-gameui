@@ -344,7 +344,7 @@ fn draw_tooltip_body(
         chrome.surface.corner_radii,
         chrome.surface,
         std::slice::from_ref(&chrome.shadow),
-        &[],
+        &chrome.lines,
     );
     surface.paint_pre_content();
     {
@@ -368,6 +368,7 @@ fn draw_tooltip_body(
                             (highlight[1] * 255.0) as u8,
                             (highlight[2] * 255.0) as u8,
                         )
+                        .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(font.clone());
                     list.text(title_block);
                     cursor_y += title_height;
@@ -379,6 +380,7 @@ fn draw_tooltip_body(
                         (text_color[1] * 255.0) as u8,
                         (text_color[2] * 255.0) as u8,
                     )
+                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_max_width(width - padding * 2.0)
                     .with_font_opt(font.clone());
                 list.text(body_block);
@@ -392,6 +394,7 @@ fn draw_tooltip_body(
                             (highlight[1] * 255.0) as u8,
                             (highlight[2] * 255.0) as u8,
                         )
+                        .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(font.clone());
                     list.text(title_block);
                     cursor_y += title_height;
@@ -404,6 +407,7 @@ fn draw_tooltip_body(
                             (text_color[1] * 255.0) as u8,
                             (text_color[2] * 255.0) as u8,
                         )
+                        .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(font.clone());
                     list.text(line_block);
                     cursor_y += line_height;
@@ -421,6 +425,7 @@ fn draw_tooltip_body(
                         (highlight[1] * 255.0) as u8,
                         (highlight[2] * 255.0) as u8,
                     )
+                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_font_opt(font.clone());
                 list.text(title_block);
                 cursor_y += title_height;
@@ -432,6 +437,7 @@ fn draw_tooltip_body(
                         (text_color[1] * 255.0) as u8,
                         (text_color[2] * 255.0) as u8,
                     )
+                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_max_width(width - padding * 2.0)
                     .with_font_opt(font.clone());
                 list.text(desc_block);
@@ -449,6 +455,7 @@ fn draw_tooltip_body(
                                 (text_dim[1] * 255.0) as u8,
                                 (text_dim[2] * 255.0) as u8,
                             )
+                            .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                             .with_font_opt(font.clone());
                         list.text(detail_block);
                         cursor_y += line_height;

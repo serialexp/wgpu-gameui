@@ -237,6 +237,9 @@ pub struct FloatingSurfaceChrome {
     pub surface: QuadStyle,
     /// Authored elevation.
     pub shadow: BoxShadow,
+    /// Structural edge lines (e.g. a top inset highlight). Up to two;
+    /// unused slots have zero-alpha color and are effectively no-ops.
+    pub lines: [StructuralLine; 2],
 }
 
 /// All finite component chrome families in the default design language.
@@ -368,7 +371,13 @@ impl Default for ChromeTheme {
             end: opaque_srgb8(bottom),
             axis: GradientAxis::Vertical,
         };
-        let quad = |background, border| QuadStyle {
+        let quad = |background| QuadStyle {
+            background,
+            border_widths: EdgeWidths::default(),
+            border_color: [0.0; 4],
+            corner_radii: CornerRadii::uniform(1.0),
+        };
+        let bordered = |background, border| QuadStyle {
             background,
             border_widths: EdgeWidths::uniform(1.0),
             border_color: border,
@@ -389,11 +398,30 @@ impl Default for ChromeTheme {
             color,
             inset,
         };
+        let no_lines: [StructuralLine; 2] = [
+            StructuralLine {
+                edge: Edge::Top,
+                offset: 0.0,
+                style: EdgeStyle {
+                    thickness: 0.0,
+                    color: [0.0; 4],
+                },
+            },
+            StructuralLine {
+                edge: Edge::Bottom,
+                offset: 0.0,
+                style: EdgeStyle {
+                    thickness: 0.0,
+                    color: [0.0; 4],
+                },
+            },
+        ];
         let floating = |surface, y, blur, alpha| FloatingSurfaceChrome {
             surface,
             shadow: shadow(y, blur, [0.0, 0.0, 0.0, alpha], false),
+            lines: no_lines,
         };
-        let panel = quad(
+        let panel = bordered(
             Background::Solid(crate::color::srgb_to_linear([
                 0x16 as f32 / 255.0,
                 0x19 as f32 / 255.0,
@@ -402,13 +430,13 @@ impl Default for ChromeTheme {
             ])),
             [0.0, 0.0, 0.0, 0.7],
         );
-        let menu_sheet = quad(
+        let menu_sheet = bordered(
             gradient([0x1d, 0x22, 0x27], [0x14, 0x18, 0x1c]),
             opaque_srgb8([0x03, 0x04, 0x05]),
         );
         Self {
             menu_bar: MenuBarChrome {
-                surface: quad(gradient([0x25, 0x2b, 0x31], [0x17, 0x1b, 0x1f]), [0.0; 4]),
+                surface: quad(gradient([0x25, 0x2b, 0x31], [0x17, 0x1b, 0x1f])),
                 shadows: [shadow(2.0, 8.0, [0.0, 0.0, 0.0, 0.4], false)],
                 lines: [
                     line(Edge::Top, 0.0, opaque_srgb8([0x3d, 0x42, 0x47])),
@@ -452,19 +480,19 @@ impl Default for ChromeTheme {
                 // Direction is supplied by the widget from the dock edge; this
                 // token preserves the authored 2px elevation and 8px blur.
                 rail_shadow: shadow(2.0, 8.0, [0.0, 0.0, 0.0, 0.35], false),
-                tool_idle: quad(
-                    gradient([0x41, 0x44, 0x49], [0x2a, 0x2e, 0x33]),
+                tool_idle: bordered(
+                    gradient([0x41, 0x44, 0x48], [0x2a, 0x2e, 0x33]),
                     opaque_srgb8([0x10, 0x12, 0x15]),
                 ),
-                tool_hover: quad(
+                tool_hover: bordered(
                     gradient([0x53, 0x56, 0x5a], [0x35, 0x39, 0x3e]),
                     opaque_srgb8([0x10, 0x12, 0x15]),
                 ),
-                tool_pressed: quad(
+                tool_pressed: bordered(
                     gradient([0x31, 0x35, 0x39], [0x24, 0x29, 0x2d]),
                     opaque_srgb8([0x0b, 0x0d, 0x0f]),
                 ),
-                tool_latched: quad(
+                tool_latched: bordered(
                     gradient([0x4a, 0x8a, 0x9c], [0x5f, 0xa3, 0xb6]),
                     opaque_srgb8([0x0b, 0x0d, 0x0f]),
                 ),
@@ -488,7 +516,7 @@ impl Default for ChromeTheme {
                 ],
                 grip_colors: [
                     [1.0, 1.0, 1.0, 0.28],
-                    [1.0, 1.0, 1.0, 0.4],
+                    [1.0, 1.0, 1.0, 0.55],
                     opaque_srgb8([0x65, 0xbd, 0xca]),
                 ],
                 grip_counter_edge: EdgeStyle {
@@ -528,14 +556,14 @@ impl Default for ChromeTheme {
                 ],
             },
             dock: DockChrome {
-                body: quad(gradient([0x15, 0x19, 0x1d], [0x0f, 0x12, 0x15]), [0.0; 4]),
-                header: quad(gradient([0x23, 0x27, 0x2b], [0x18, 0x1c, 0x20]), [0.0; 4]),
+                body: quad(gradient([0x15, 0x19, 0x1d], [0x0f, 0x12, 0x15])),
+                header: quad(gradient([0x23, 0x27, 0x2b], [0x18, 0x1c, 0x20])),
                 lines: [
                     line(Edge::Top, 0.0, opaque_srgb8([0x37, 0x3b, 0x3e])),
                     line(Edge::Bottom, 0.0, opaque_srgb8([0x0a, 0x0b, 0x0d])),
                     line(Edge::Bottom, 1.0, opaque_srgb8([0x21, 0x25, 0x29])),
                 ],
-                active_tab: quad(
+                active_tab: bordered(
                     gradient([0x40, 0x43, 0x46], [0x2a, 0x2e, 0x31]),
                     opaque_srgb8([0x0f, 0x11, 0x13]),
                 ),
@@ -548,32 +576,43 @@ impl Default for ChromeTheme {
                 active_tab_inset: shadow(1.0, 0.0, opaque_srgb8([0x6a, 0x6c, 0x6f]), true),
             },
             splitter: SplitterChrome {
-                track_colors: [[1.0, 1.0, 1.0, 0.05], [1.0, 1.0, 1.0, 0.015]],
+                track_colors: [
+                    opaque_srgb8([0x16, 0x19, 0x1b]),
+                    opaque_srgb8([0x0e, 0x11, 0x13]),
+                ],
                 outer_edges: EdgeStyle {
                     thickness: 1.0,
-                    color: [0.0, 0.0, 0.0, 0.55],
+                    color: opaque_srgb8([0x08, 0x09, 0x0a]),
                 },
                 inner_highlight: EdgeStyle {
                     thickness: 1.0,
-                    color: [1.0, 1.0, 1.0, 0.05],
+                    color: opaque_srgb8([0x1e, 0x21, 0x22]),
                 },
-                grip_idle: [1.0, 1.0, 1.0, 0.26],
-                grip_hover: [1.0, 1.0, 1.0, 0.55],
-                grip_dragging: [0.148_148_57, 0.685_537_1, 0.727_276_3, 1.0],
+                grip_idle: opaque_srgb8([0x50, 0x52, 0x53]),
+                grip_hover: opaque_srgb8([0x94, 0x96, 0x97]),
+                grip_dragging: opaque_srgb8([0x8f, 0xd6, 0xe4]),
                 grip_counter_edge: EdgeStyle {
                     thickness: 1.0,
-                    color: [0.0, 0.0, 0.0, 0.5],
+                    color: opaque_srgb8([0x08, 0x09, 0x0a]),
                 },
-                dragging_glow: BoxShadow {
-                    offset: [0.0, 0.0],
-                    blur: 7.0,
-                    spread: 0.0,
-                    color: [0.047_850_87, 0.523_957_55, 0.565_140_5, 0.65],
-                    inset: false,
+                dragging_glow: {
+                    let [r, g, b, _] = crate::color::srgb_to_linear([
+                        0x79 as f32 / 255.0,
+                        0xc6 as f32 / 255.0,
+                        0xd8 as f32 / 255.0,
+                        1.0,
+                    ]);
+                    BoxShadow {
+                        offset: [0.0, 0.0],
+                        blur: 7.0,
+                        spread: 0.0,
+                        color: [r, g, b, 0.65],
+                        inset: false,
+                    }
                 },
             },
             status_bar: StatusBarChrome {
-                surface: quad(gradient([0x1e, 0x23, 0x28], [0x13, 0x17, 0x1b]), [0.0; 4]),
+                surface: quad(gradient([0x1e, 0x23, 0x28], [0x13, 0x17, 0x1b])),
                 lines: [
                     line(Edge::Top, 0.0, opaque_srgb8([0x04, 0x06, 0x08])),
                     line(Edge::Top, 1.0, opaque_srgb8([0x2f, 0x34, 0x38])),
@@ -588,7 +627,7 @@ impl Default for ChromeTheme {
                         color: opaque_srgb8([0x26, 0x2a, 0x2f]),
                     },
                 ],
-                latched_inset: shadow(2.0, 4.0, [0.0, 0.0, 0.0, 0.4], true),
+                latched_inset: shadow(2.0, 3.0, opaque_srgb8([0x1c, 0x46, 0x53]), true),
             },
             dropdown: floating(panel, 10.0, 26.0, 0.6),
             popover: floating(
@@ -600,18 +639,14 @@ impl Default for ChromeTheme {
                 44.0,
                 0.6,
             ),
-            tooltip: floating(
-                QuadStyle {
-                    corner_radii: CornerRadii::uniform(3.0),
-                    ..quad(
-                        Background::Solid([0.10, 0.10, 0.15, 0.95]),
-                        [0.0, 0.0, 0.0, 0.55],
-                    )
-                },
-                6.0,
-                18.0,
-                0.6,
-            ),
+            tooltip: FloatingSurfaceChrome {
+                surface: bordered(
+                    Background::Solid(opaque_srgb8([0x1b, 0x20, 0x25])),
+                    [0.0, 0.0, 0.0, 0.7],
+                ),
+                shadow: shadow(6.0, 18.0, [0.0, 0.0, 0.0, 0.6], false),
+                lines: [line(Edge::Top, 1.0, [1.0, 1.0, 1.0, 0.11]), no_lines[1]],
+            },
             toast: floating(
                 QuadStyle {
                     corner_radii: CornerRadii::uniform(3.0),

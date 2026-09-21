@@ -297,7 +297,7 @@ impl ToastStack {
                 chrome.surface.corner_radii,
                 chrome.surface,
                 std::slice::from_ref(&chrome.shadow),
-                &[],
+                &chrome.lines,
             );
             surface.paint_pre_content();
             banner.draw(toast_rect, surface.draw_list(), style);

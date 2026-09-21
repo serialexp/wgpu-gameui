@@ -153,12 +153,17 @@ pub enum StyleKey {
     /// [`AnimationState`](crate::AnimationState)). `0.0` disables animation
     /// (instant color switches).
     AnimationDuration,
-    /// Height of one menubar strip or menu-item row, in pixels.
+    /// Height of the menu bar strip, in pixels (26px in the Forge design).
+    MenuBarHeight,
+    /// Height of one menu-item row inside a dropdown sheet, in pixels.
     MenuRowHeight,
     /// Floor for a menu column's width, in pixels.
     MenuItemMinWidth,
     /// Gap between a menu item's label and its accelerator hint, in pixels.
     MenuAccelGap,
+    /// Seconds a pointer must rest on a submenu parent before it opens or replaces
+    /// the currently-open child column.
+    MenuHoverDelay,
     // --- 4a material keys (colors) ---
     /// Plinth fill beneath a raised face (see [`Theme::plinth`]).
     Plinth,
@@ -747,9 +752,11 @@ pub(crate) const SCALAR_KEYS: &[StyleKey] = &[
     StyleKey::ButtonHeight,
     StyleKey::InputHeight,
     StyleKey::AnimationDuration,
+    StyleKey::MenuBarHeight,
     StyleKey::MenuRowHeight,
     StyleKey::MenuItemMinWidth,
     StyleKey::MenuAccelGap,
+    StyleKey::MenuHoverDelay,
     StyleKey::Travel,
     StyleKey::InnerShadowDepth,
 ];

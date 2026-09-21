@@ -381,10 +381,15 @@ fn render_widget_gallery() {
     // open menu highlighted and the dropped column: accelerators, a submenu
     // chevron, a check mark, a separator and a disabled row.
     const MENU_BAR_ID: u64 = 300;
+    const RECENT_GROUPS: &[MenuItem<'static>] = &[
+        MenuItem::new("Today")
+            .with_children(&[MenuItem::new("spaceship.gui"), MenuItem::new("terrain.gui")]),
+        MenuItem::new("Earlier").with_children(&[MenuItem::new("prototype.gui")]),
+    ];
     const FILE_ITEMS: &[MenuItem<'static>] = &[
         MenuItem::new("New").accel(Accelerator::primary(Key::Char('N'))),
         MenuItem::new("Open…").shortcut("Ctrl+O"),
-        MenuItem::new("Open Recent").with_children(&[MenuItem::new("project.gui")]),
+        MenuItem::new("Open Recent").with_children(RECENT_GROUPS),
         MenuItem::separator(),
         MenuItem::new("Auto-save").checked(true),
         MenuItem::new("Locked").enabled(false),
@@ -399,8 +404,13 @@ fn render_widget_gallery() {
     ];
     let menu_bar = MenuBar::new(MENU_BAR_ID, MENUS);
     let mut menu_state = MenuBarState::new();
+    const CONTEXT_CREATE: &[MenuItem<'static>] = &[
+        MenuItem::new("Mesh").with_children(&[MenuItem::new("Cube"), MenuItem::new("Sphere")]),
+        MenuItem::new("Light"),
+    ];
     const CONTEXT_ITEMS: &[MenuItem<'static>] = &[
         MenuItem::new("Frame Selection").shortcut("F"),
+        MenuItem::new("Create").with_children(CONTEXT_CREATE),
         MenuItem::separator(),
         MenuItem::new("Copy").shortcut("Ctrl C"),
         MenuItem::new("Duplicate").shortcut("Ctrl D"),
@@ -497,7 +507,26 @@ fn render_widget_gallery() {
         // Frame 2: the staged chain is promoted, and this frame re-measures it for
         // the next one.
         menu_state.begin_frame(&mut menu_input);
-        menu_state.set_highlighted_item(MENUS, Some(1));
+        menu_state.set_highlighted_item(MENUS, Some(2));
+        menu_state.set_open_path(MENUS, &[2, 0]);
+        // Re-measure after seeding the recursive path, then promote all three
+        // columns before the real gallery draw.
+        {
+            let mut scratch = DrawList::new();
+            menu_bar.draw(
+                menu_rect,
+                &mut menu_state,
+                &mut DrawContext::new(
+                    &mut scratch,
+                    &mut focus,
+                    &theme,
+                    &menu_input,
+                    W as f32,
+                    600.0,
+                ),
+            );
+        }
+        menu_state.begin_frame(&mut menu_input);
         menu_bar.draw(
             menu_rect,
             &mut menu_state,
@@ -1604,13 +1633,14 @@ fn render_widget_gallery() {
 
         // Context menu state, shown over a viewport swatch. Its modal layer is
         // drawn after the base scope, matching the production integration path.
-        let context_area = flow.cell(list, "Context menu (cursor anchored)", 260.0, 150.0);
+        let context_area = flow.cell(list, "Context menu (cursor anchored)", 700.0, 150.0);
         list.vertical_gradient(
             context_area,
             [0.03, 0.12, 0.16, 1.0],
             [0.08, 0.24, 0.28, 1.0],
         );
         context_state.open_at(context_area.x + 18.0, context_area.y + 14.0);
+        assert!(context_state.set_open_path(&context_menu, &[1, 0]));
         flow.reserve(170.0);
 
         // Dropdown, seeded open: the floating list (drawn after the base scope)
