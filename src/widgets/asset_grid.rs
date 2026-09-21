@@ -239,7 +239,7 @@ mod tests {
             &mut ctx(&mut plain_list, &mut focus, &theme, &idle),
         );
         assert!(
-            sel_list.chrome_instances.len() > plain_list.chrome_instances.len(),
+            sel_list.chrome_instance_count() > plain_list.chrome_instance_count(),
             "selection ring adds a stroke instance"
         );
     }
@@ -262,7 +262,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
         // 3 thumbnail plates (chrome gradient instances).
-        assert!(list.chrome_instances.len() >= 3);
+        assert!(list.chrome_instance_count() >= 3);
         // 3 glyphs + 3 labels.
         assert_eq!(list.texts.len(), 6);
     }
@@ -281,8 +281,7 @@ mod tests {
         );
 
         let first_plate = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|instance| instance.rect[2] == 86.0 && instance.rect[3] == 58.0)
             .expect("the first thumbnail plate is emitted");
         assert_eq!(first_plate.rect[0], 10.0 + theme.padding.max(2.0));

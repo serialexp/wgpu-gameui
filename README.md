@@ -22,6 +22,13 @@ framing, per-subtree styling, and a Teardown-style immediate-mode verb API.
   them (off-screen, overflowing its container, clipped away, misaligned), as
   text or JSON, with `assert_clean()` to guard a layout in a test. See
   [Debugging & layout inspection](#debugging--layout-inspection).
+- **GPU-native chrome.** Fixed-size `QuadStyle` and `BoxShadow` values render
+  composable gradients, unequal rounded borders, structural edge lines, and
+  CSS-compatible inset/outset shadows. `SurfacePainter` supplies the standard
+  shadow → background → content → border/line ordering. Chrome and shadows share
+  one ordered tagged GPU instance stream, so arbitrary alternation remains one
+  upload and one draw; `RenderStats` exposes batching, upload, draw-call, and
+  buffer-growth counters.
 
 Dual-licensed MIT OR Apache-2.0.
 
@@ -36,9 +43,9 @@ Add the crate to your `Cargo.toml`:
 wgpu-gameui = "0.1"
 ```
 
-The default features bundle Noto Sans (so the UI renders identically everywhere
-without system fonts) and the Phosphor icon font. Disable them to slim the
-binary:
+The default features bundle IBM Plex Sans as the deterministic UI default,
+IBM Plex Mono as its technical companion, and the Phosphor icon font. Disable
+them to slim the binary:
 
 ```toml
 wgpu-gameui = { version = "0.1", default-features = false }
@@ -146,6 +153,8 @@ A headless render of the full widget set is checked into the test suite:
 ```
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
 # writes test_output/widget_gallery.png
+#      + test_output/widget_gallery/*.png (one focused image per section)
+#      + test_output/widget_gallery/components/*.png (one per labeled preview)
 #      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 ```
 
@@ -312,6 +321,13 @@ subtree can be restyled without cloning the theme. `UiContext::set_style_color`
 transitions via `AnimationState` (eased, with a `0.0`-duration fast path that
 is byte-identical to the instant path).
 
+With the default `bundled-font` feature, unstyled text resolves to IBM Plex Sans
+(regardless of host fonts). `bundled_mono_font(&font_system)` returns the already
+registered IBM Plex Mono handle for technical UI such as coordinates, shortcuts,
+and status readouts; apply it per `TextBlock::with_font` or a scoped
+`UiContext::font`. Both unmodified families are distributed under OFL-1.1; the
+notice is included in `assets/fonts/ibm-plex/OFL-1.1.txt`.
+
 ### Input & focus
 
 The app fills an `InputState` struct (mouse position/buttons, scroll delta,
@@ -465,7 +481,7 @@ write_png("frame.png", &rgba, (800, 600))?;
 
 | Feature | Default | Description |
 |---|---|---|
-| `bundled-font` | ✅ | Embed Noto Sans (regular/bold/italic) as the default sans-serif. Drop ~1.5 MB if you supply your own fonts. |
+| `bundled-font` | ✅ | Embed IBM Plex Sans (regular/bold/italic) as the default sans-serif plus IBM Plex Mono as its technical companion. Drop ~1.5 MB if you supply your own fonts. |
 | `phosphor-icons` | ✅ | Embed the Phosphor (MIT) icon font and expose the `PhosphorIcon` enum + `Icon` widget. Drop ~0.5 MB if unused. |
 | `headless` | ✅ | `HeadlessGpu` — offscreen device + renderer for screenshot capture in tests. Pulls in `pollster`. The dependency-free half (`capture_draw_list`, `write_png`) is always available. |
 | `tracy` | ❌ | Emit `tracing` spans around the render path for Tracy profiling. |
@@ -478,9 +494,12 @@ write_png("frame.png", &rgba, (800, 600))?;
 # Unit tests (791 tests, headless, no GPU)
 cargo test --lib
 
-# Widget gallery (headless GPU render → PNG + layout dump)
+# Widget gallery (headless GPU render → full, section, and component PNGs + layout dump)
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery.png, .debug.txt, .debug.json
+# writes test_output/widget_gallery.png
+#      + test_output/widget_gallery/*.png (one focused image per section)
+#      + test_output/widget_gallery/components/*.png (one per labeled preview)
+#      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 
 # Benchmarks (CPU-only groups need no GPU; render groups do)
 DISPLAY=:0 cargo bench --bench ui_stress

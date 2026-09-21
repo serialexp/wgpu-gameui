@@ -4,7 +4,9 @@
 //! ```
 //! cargo test -p wgpu-gameui --test widget_gallery -- --ignored --nocapture
 //! ```
-//! Writes `test_output/widget_gallery.png`.
+//! Writes `test_output/widget_gallery.png`, one focused image per section under
+//! `test_output/widget_gallery/`, and one image per labeled component preview
+//! under `test_output/widget_gallery/components/`.
 //!
 //! Layout is driven by [`Flow`] — a left-to-right, wrapping grid of labeled
 //! cells. Each preview reserves a cell (which draws its label) and gets back a
@@ -15,16 +17,16 @@ use wgpu_gameui::debug::DebugReport;
 use wgpu_gameui::layout::{Flow as LayoutFlow, HStack, LayoutNode, MainAlign, Rect};
 use wgpu_gameui::{
     Accelerator, AssetGrid, Backdrop, Banner, BlurParams, Breadcrumb, Button, Checkbox,
-    ColorPicker, ColumnWidth, Corner, DocTab, DragCapture, DragHandle, DrawContext, DrawList,
-    Dropdown, DropdownState, Easing, FocusState, GradientStop, Group, HitZone, Hsva, ImageButton,
-    ImageFit, InputState, InteractionScene, Key, LayerStack, List, ListItem, ListState,
-    MeasureBuffer, MeasureConstraints, MeasuredChild, Menu, MenuBar, MenuBarState, MenuDrawEnv,
-    MenuItem, NavInput, NumberInput, Pager, Popover, PopoverSide, ProgressBar, ProgressFill,
-    RadioGroup, ScrollState, ScrollView, SelectionMode, Separator, Severity, Slider, StatusCell,
-    StyleKey, StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign,
-    TextBlock, TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack, Toggle, Tone,
-    TooltipContent, TooltipLayer, TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState,
-    Underline, VectorField, VectorScrub, ease, lerp_color,
+    ColorPicker, ColumnWidth, ContextMenu, ContextMenuState, Corner, DocTab, DragCapture,
+    DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState, GradientStop,
+    Group, HitZone, Hsva, ImageButton, ImageFit, InputState, InteractionScene, Key, LayerStack,
+    List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu, MenuBar,
+    MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, Pager, Popover, PopoverSide,
+    ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode, Separator,
+    Severity, Slider, Splitter, StatusCell, StyleKey, StyleOverlay, StyleResolver, Table,
+    TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection, TextInput, TextSpan, Theme,
+    Toast, ToastStack, Toggle, Tone, TooltipContent, TooltipLayer, TreeAction, TreeNode, TreeState,
+    UiContext, UiRenderer, UiState, Underline, VectorField, VectorScrub, ease, lerp_color,
 };
 use wgpu_gameui::{
     EmptyState, STATUS_BAR_HEIGHT, badge, chip, dots, draw_combo_trigger, draw_curve_editor,
@@ -65,6 +67,9 @@ struct Flow {
     row_h: f32,
     col_gap: f32,
     row_gap: f32,
+    current_section: Option<String>,
+    sections: Vec<GallerySection>,
+    components: Vec<GalleryComponent>,
 }
 
 impl Flow {
@@ -78,11 +83,14 @@ impl Flow {
             row_h: 0.0,
             col_gap: 22.0,
             row_gap: 16.0,
+            current_section: None,
+            sections: Vec::new(),
+            components: Vec::new(),
         }
     }
 
     /// Break to a new row and draw a section header.
-    fn section(&mut self, list: &mut DrawList, title: &str) {
+    fn section(&mut self, list: &mut DrawList, title: &'static str) -> f32 {
         if self.cur_x > self.x0 {
             self.cur_y += self.row_h;
         }
@@ -97,7 +105,23 @@ impl Flow {
                 .with_size(15.0)
                 .with_color(120, 180, 255),
         );
+        let section_top = self.cur_y;
+        if let Some(previous) = self.sections.last_mut() {
+            previous.bottom = section_top - self.row_gap * 1.5;
+        }
+        let file_stem = section_file_stem(title);
+        self.sections
+            .push(GallerySection::new(file_stem.clone(), section_top));
+        self.current_section = Some(file_stem);
         self.cur_y += 24.0;
+        section_top
+    }
+
+    fn finish_sections(&mut self) {
+        let bottom = self.bottom();
+        if let Some(last) = self.sections.last_mut() {
+            last.bottom = bottom;
+        }
     }
 
     /// Reserve a labeled `w`×`h` content cell; returns the content rect.
@@ -116,6 +140,14 @@ impl Flow {
                 .with_color(150, 160, 180),
         );
         let content = Rect::new(self.cur_x, self.cur_y + LABEL_H, w, h);
+        if !label.is_empty() {
+            let section = self
+                .current_section
+                .as_deref()
+                .expect("gallery cells must belong to a section");
+            self.components
+                .push(GalleryComponent::new(section, label, content));
+        }
         self.cur_x += cell_w + self.col_gap;
         self.row_h = self.row_h.max(LABEL_H + h);
         content
@@ -128,12 +160,145 @@ impl Flow {
     /// row starts below it instead of underneath it.
     fn reserve(&mut self, content_h: f32) {
         self.row_h = self.row_h.max(LABEL_H + content_h);
+        if let Some(component) = self.components.last_mut() {
+            component.rect.height = component.rect.height.max(LABEL_H + content_h);
+        }
     }
 
     /// The y just below all content drawn so far.
     fn bottom(&self) -> f32 {
         self.cur_y + self.row_h
     }
+}
+
+#[derive(Clone)]
+struct GallerySection {
+    file_stem: String,
+    top: f32,
+    bottom: f32,
+}
+
+struct GalleryComponent {
+    section: String,
+    file_stem: String,
+    rect: Rect,
+}
+
+impl GalleryComponent {
+    fn new(section: &str, label: &str, content: Rect) -> Self {
+        Self {
+            section: section.to_owned(),
+            file_stem: section_file_stem(label),
+            rect: Rect::new(
+                content.x,
+                content.y - LABEL_H,
+                content.width,
+                content.height + LABEL_H,
+            ),
+        }
+    }
+}
+
+impl GallerySection {
+    fn new(file_stem: String, top: f32) -> Self {
+        Self {
+            file_stem,
+            top,
+            bottom: top,
+        }
+    }
+}
+
+fn section_file_stem(title: &str) -> String {
+    let mut stem = String::with_capacity(title.len());
+    let mut needs_separator = false;
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if needs_separator && !stem.is_empty() {
+                stem.push('-');
+            }
+            stem.push(ch.to_ascii_lowercase());
+            needs_separator = false;
+        } else {
+            needs_separator = true;
+        }
+    }
+    stem
+}
+
+fn crop_with_margin(img: &image::RgbaImage, rect: Rect, margin: u32) -> image::RgbaImage {
+    let left = (rect.x.floor().max(0.0) as u32).saturating_sub(margin);
+    let top = (rect.y.floor().max(0.0) as u32).saturating_sub(margin);
+    let right = (rect.right().ceil().max(0.0) as u32 + margin).min(img.width());
+    let bottom = (rect.bottom().ceil().max(0.0) as u32 + margin).min(img.height());
+    assert!(right > left && bottom > top, "gallery crop is empty");
+    image::imageops::crop_imm(img, left, top, right - left, bottom - top).to_image()
+}
+
+fn save_gallery_images(
+    img: &image::RgbaImage,
+    sections: &[GallerySection],
+    components: &[GalleryComponent],
+) {
+    let output_dir = "test_output/widget_gallery";
+    let component_dir = format!("{output_dir}/components");
+    std::fs::create_dir_all(&component_dir).expect("create gallery image directories");
+    for entry in std::fs::read_dir(&component_dir).expect("read gallery component directory") {
+        let entry = entry.expect("read gallery component entry");
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "png")
+        {
+            std::fs::remove_file(entry.path()).expect("remove stale gallery component PNG");
+        }
+    }
+
+    for section in sections {
+        assert!(
+            section.bottom > section.top,
+            "gallery section {} is empty",
+            section.file_stem
+        );
+        let section_img = crop_with_margin(
+            img,
+            Rect::new(
+                20.0,
+                section.top,
+                (img.width() - 40) as f32,
+                section.bottom - section.top,
+            ),
+            10,
+        );
+        let path = format!("{output_dir}/{}.png", section.file_stem);
+        section_img.save(&path).expect("save gallery section PNG");
+        eprintln!(
+            "wrote {path} ({}x{})",
+            section_img.width(),
+            section_img.height()
+        );
+    }
+
+    let mut file_stem_counts = std::collections::BTreeMap::new();
+    for component in components {
+        let component_img = crop_with_margin(img, component.rect, 6);
+        let base = format!("{}--{}", component.section, component.file_stem);
+        let count = file_stem_counts.entry(base.clone()).or_insert(0usize);
+        *count += 1;
+        let file_stem = if *count == 1 {
+            base
+        } else {
+            format!("{base}-{}", *count)
+        };
+        let path = format!("{component_dir}/{file_stem}.png");
+        component_img
+            .save(&path)
+            .expect("save gallery component PNG");
+    }
+    eprintln!(
+        "wrote {} focused component images under {component_dir}",
+        components.len()
+    );
 }
 
 fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) -> Vec<u8> {
@@ -197,6 +362,8 @@ fn render_widget_gallery() {
     let mut layers = LayerStack::new();
     let theme = Theme::default();
     let mut input = InputState::default();
+    let gallery_sections;
+    let gallery_components;
 
     // Focus owner for the text inputs. Seed the first as focused so the rendered
     // PNG shows a caret; `begin_frame`/`end_frame` bracket the draws below.
@@ -232,6 +399,16 @@ fn render_widget_gallery() {
     ];
     let menu_bar = MenuBar::new(MENU_BAR_ID, MENUS);
     let mut menu_state = MenuBarState::new();
+    const CONTEXT_ITEMS: &[MenuItem<'static>] = &[
+        MenuItem::new("Frame Selection").shortcut("F"),
+        MenuItem::separator(),
+        MenuItem::new("Copy").shortcut("Ctrl C"),
+        MenuItem::new("Duplicate").shortcut("Ctrl D"),
+        MenuItem::separator(),
+        MenuItem::new("Delete").shortcut("Del"),
+    ];
+    let context_menu = ContextMenu::new(CONTEXT_ITEMS);
+    let mut context_state = ContextMenuState::new();
     // The frame-2 input (and the one the chain is drawn with): no edges, so nothing
     // the gallery did to open the menu is replayed.
     let mut menu_input = InputState::default();
@@ -269,8 +446,37 @@ fn render_widget_gallery() {
         // list to stage the chain, then for real with that geometry promoted. The
         // open menu comes from the real input path — an Alt tap plus Down — so the
         // PNG exercises arming and opening rather than a seam.
-        flow.section(list, "Menubar");
-        let menu_rect = flow.cell(list, "Menu bar (File open)", 220.0, 26.0);
+        flow.section(list, "Menubar — 01-menu-bar.html states");
+
+        let resting_rect = flow.cell(list, "Resting", 220.0, 26.0);
+        let mut resting_state = MenuBarState::new();
+        menu_bar.draw(
+            resting_rect,
+            &mut resting_state,
+            &mut DrawContext::new(
+                list,
+                &mut focus,
+                &theme,
+                &InputState::default(),
+                W as f32,
+                600.0,
+            ),
+        );
+
+        let armed_rect = flow.cell(list, "Title hover / armed", 220.0, 26.0);
+        let mut armed_state = MenuBarState::new();
+        let mut armed_input = InputState {
+            alt_pressed: true,
+            ..InputState::default()
+        };
+        armed_state.begin_frame(&mut armed_input);
+        menu_bar.draw(
+            armed_rect,
+            &mut armed_state,
+            &mut DrawContext::new(list, &mut focus, &theme, &armed_input, W as f32, 600.0),
+        );
+
+        let menu_rect = flow.cell(list, "Title open + menu sheet", 220.0, 26.0);
         {
             let mut scratch = DrawList::new();
             let mut opening = InputState {
@@ -291,6 +497,7 @@ fn render_widget_gallery() {
         // Frame 2: the staged chain is promoted, and this frame re-measures it for
         // the next one.
         menu_state.begin_frame(&mut menu_input);
+        menu_state.set_highlighted_item(MENUS, Some(1));
         menu_bar.draw(
             menu_rect,
             &mut menu_state,
@@ -299,7 +506,7 @@ fn render_widget_gallery() {
         // The column paints taller than the 26px strip, so the flow has to know how
         // far it drops or the next row would sit underneath it.
         if let Some((column, _, _)) = menu_state.debug_geometry() {
-            flow.reserve(column.bottom() - menu_rect.y + 8.0);
+            flow.reserve(column.bottom() - menu_rect.y + 22.0);
         }
 
         // ---- Primitives -------------------------------------------------
@@ -732,7 +939,7 @@ fn render_widget_gallery() {
             .font
             .as_ref()
             .map(|f| f.family().to_string())
-            .unwrap_or_else(|| "default sans (Noto Sans)".to_string());
+            .unwrap_or_else(|| "default sans (IBM Plex Sans)".to_string());
         let m = list.font_vmetrics(theme.font.as_ref());
         let r = flow.cell(list, "resolved ratios", 440.0, 36.0);
         list.text(
@@ -749,7 +956,7 @@ fn render_widget_gallery() {
         );
 
         // ---- Fonts ------------------------------------------------------
-        // The bundled Noto Sans family (registered by `shared_font_system`)
+        // The bundled IBM Plex Sans family (registered by `shared_font_system`)
         // resolves the default sans-serif and provides real bold/italic faces.
         flow.section(list, "Fonts");
 
@@ -1395,6 +1602,17 @@ fn render_widget_gallery() {
             }
         }
 
+        // Context menu state, shown over a viewport swatch. Its modal layer is
+        // drawn after the base scope, matching the production integration path.
+        let context_area = flow.cell(list, "Context menu (cursor anchored)", 260.0, 150.0);
+        list.vertical_gradient(
+            context_area,
+            [0.03, 0.12, 0.16, 1.0],
+            [0.08, 0.24, 0.28, 1.0],
+        );
+        context_state.open_at(context_area.x + 18.0, context_area.y + 14.0);
+        flow.reserve(170.0);
+
         // Dropdown, seeded open: the floating list (drawn after the base scope)
         // renders above whatever cells sit below it.
         let r = flow.cell(list, "Dropdown (open)", 160.0, 28.0);
@@ -1874,6 +2092,44 @@ fn render_widget_gallery() {
             list.text(TextBlock::new("R", r.x + r.width - 28.0, r.y + 16.0).with_size(13.0));
         }
 
+        // --- Splitter ------------------------------------------------------
+        flow.section(list, "Splitter — Forge dark chrome states");
+        {
+            // Vertical idle / hover / captured-drag states plus the rotated
+            // horizontal variant. The pointer leaves the dragging strip to
+            // exercise capture-persistent feedback in the static gallery.
+            for (index, label) in ["Vertical idle", "Vertical hover", "Vertical dragging"]
+                .iter()
+                .enumerate()
+            {
+                let r = flow.cell(list, label, 72.0, 80.0);
+                let strip = Rect::new(r.x + 33.0, r.y, 6.0, r.height);
+                let mut splitter_input = InputState::default();
+                let mut capture = DragCapture::new();
+                if index == 1 {
+                    splitter_input.mouse_x = strip.x + 3.0;
+                    splitter_input.mouse_y = strip.y + 40.0;
+                } else if index == 2 {
+                    capture.try_begin(0x5A10 + index as u64);
+                    splitter_input.mouse_x = strip.right() + 20.0;
+                    splitter_input.mouse_y = strip.y + 40.0;
+                    splitter_input.mouse_down = true;
+                    splitter_input.is_dragging = true;
+                }
+                let mut sctx =
+                    DrawContext::new(list, &mut focus, &theme, &splitter_input, W as f32, 600.0);
+                Splitter::vertical(6.0).draw(0x5A10 + index as u64, &mut capture, strip, &mut sctx);
+            }
+
+            let r = flow.cell(list, "Horizontal idle", 80.0, 72.0);
+            let strip = Rect::new(r.x, r.y + 33.0, r.width, 6.0);
+            let mut capture = DragCapture::new();
+            let splitter_input = InputState::default();
+            let mut sctx =
+                DrawContext::new(list, &mut focus, &theme, &splitter_input, W as f32, 600.0);
+            Splitter::horizontal(6.0).draw(0x5A20, &mut capture, strip, &mut sctx);
+        }
+
         // --- Color picker --------------------------------------------------
         // SV square (white→hue across, →black down) + vertical hue spectrum,
         // optionally an alpha bar (checkerboard under an opaque→transparent
@@ -2268,7 +2524,51 @@ fn render_widget_gallery() {
         }
 
         // --- Toolbar ---------------------------------------------------------
-        flow.section(list, "Toolbar (vertical + horizontal)");
+        flow.section(list, "Toolbar — 03-toolbar.html key states");
+        {
+            use wgpu_gameui::render::PhosphorIcon;
+            use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
+
+            let state_item = [ToolbarItem::tool(
+                1,
+                Icon::new(PhosphorIcon::ArrowClockwise),
+                "Move",
+                "W",
+            )];
+            let state_toolbar = Toolbar::new(&state_item);
+            let state_width = 72.0;
+            let state_height =
+                state_toolbar.preferred_cross(theme.toolbar_button_size, theme.toolbar_padding);
+
+            // Render the handoff's interaction states side by side. Each short
+            // rail is deliberately wider than its natural content so the
+            // trailing overflow control does not displace the key under test.
+            for (index, label) in ["Idle", "Hover", "Pressed", "Latched"].iter().enumerate() {
+                let r = flow.cell(list, label, state_width, state_height);
+                let mut state = ToolbarState::new(ToolbarEdge::Top);
+                if index == 3 {
+                    state.active_tool = Some(1);
+                }
+                let mut state_input = InputState::default();
+                if index == 1 || index == 2 {
+                    state_input.mouse_x = r.x + 25.0;
+                    state_input.mouse_y = r.y + state_height * 0.5;
+                    state_input.mouse_down = index == 2;
+                }
+                let mut capture = DragCapture::new();
+                let mut tctx =
+                    DrawContext::new(list, &mut focus, &theme, &state_input, W as f32, 600.0);
+                state_toolbar.draw(
+                    r,
+                    &mut state,
+                    &mut capture,
+                    0x7A00 + index as u64,
+                    &mut tctx,
+                );
+            }
+        }
+
+        flow.section(list, "Toolbar — docked rails from 03-toolbar.html");
         {
             use wgpu_gameui::render::PhosphorIcon;
             use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
@@ -2279,24 +2579,33 @@ fn render_widget_gallery() {
                 ToolbarItem::separator(),
                 ToolbarItem::tool(3, Icon::new(PhosphorIcon::Cube), "Box", "B"),
                 ToolbarItem::tool(4, Icon::new(PhosphorIcon::PaintBrush), "Paint", "P"),
-                ToolbarItem::tool(5, Icon::new(PhosphorIcon::Eraser), "Erase", "X"),
+                ToolbarItem::toggle(5, Icon::new(PhosphorIcon::Eraser), "Snap", "Shift+G"),
             ];
             let mut state = ToolbarState::new(ToolbarEdge::Left);
             state.active_tool = Some(2);
+            state.active_toggles.push(5);
             let mut capture = DragCapture::new();
             let toolbar = Toolbar::new(&items);
             let btn_size = theme.toolbar_button_size;
             let pad = theme.toolbar_padding;
             let cross = toolbar.preferred_cross(btn_size, pad);
-            let extent = toolbar.preferred_extent(btn_size, pad);
+            let vertical_extent =
+                toolbar.preferred_extent_for_edge(btn_size, pad, ToolbarEdge::Left);
+            let horizontal_extent =
+                toolbar.preferred_extent_for_edge(btn_size, pad, ToolbarEdge::Top);
 
             // Vertical toolbar.
-            let r = flow.cell(list, "Vertical", cross, extent);
+            let r = flow.cell(
+                list,
+                "Docked left — Move latched, Snap held",
+                cross,
+                vertical_extent,
+            );
             let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             toolbar.draw(r, &mut state, &mut capture, 0x7B01, &mut tctx);
 
             // Horizontal toolbar.
-            let r2 = flow.cell(list, "Horizontal", extent, cross);
+            let r2 = flow.cell(list, "Docked top — same tools", horizontal_extent, cross);
             state.edge = ToolbarEdge::Top;
             let mut tctx2 = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             toolbar.draw(r2, &mut state, &mut capture, 0x7B02, &mut tctx2);
@@ -2381,19 +2690,25 @@ fn render_widget_gallery() {
         }
 
         // --- Dock panel -----------------------------------------------------
-        flow.section(list, "Dock panel (tabbed header + body)");
+        flow.section(list, "DockPanel — 04-dock-panel.html tabs");
         {
             use wgpu_gameui::{DockPanel, DockPanelState, DockSide, DockTab as DPanelTab};
 
+            // These are the handoff's sidebar-tab states, not generic Tabs or
+            // editor DocTabs. A synthetic pointer keeps Hover visible in the
+            // static gallery alongside Active and Idle.
             let tabs = vec![
-                DPanelTab { label: "Outliner" },
-                DPanelTab { label: "Layers" },
-                DPanelTab { label: "Assets" },
+                DPanelTab { label: "Active" },
+                DPanelTab { label: "Hover" },
+                DPanelTab { label: "Idle" },
             ];
-            let mut state = DockPanelState::new(200.0);
-            state.active_tab = 1;
-            let r = flow.cell(list, "Left dock (closable)", 200.0, 130.0);
-            let mut dctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+            let mut state = DockPanelState::new(240.0);
+            state.active_tab = 0;
+            let r = flow.cell(list, "Active / Hover / Idle (closable)", 240.0, 130.0);
+            let mut dock_input = InputState::default();
+            dock_input.mouse_x = r.x + 120.0;
+            dock_input.mouse_y = r.y + theme.dock_tab_height * 0.5;
+            let mut dctx = DrawContext::new(list, &mut focus, &theme, &dock_input, W as f32, 600.0);
             let out = DockPanel::new(DockSide::Left, &tabs)
                 .closable()
                 .draw(r, &mut state, &mut dctx);
@@ -2458,13 +2773,34 @@ fn render_widget_gallery() {
         );
         tooltip_rect = r;
 
-        // Leave headroom below the last row for the tooltip popup.
+        // Leave headroom below the last row for the tooltip popup. Finalize the
+        // section map before moving it out for per-section image generation.
         content_bottom = flow.bottom() + 70.0;
+        flow.finish_sections();
+        gallery_sections = flow.sections;
+        gallery_components = flow.components;
     }
 
     // Size the target to the laid-out content first, so the tooltip layer
     // knows the real screen height (it flips the popup up/left near the edges).
     let h = (content_bottom.ceil() as u32).max(64);
+
+    // Cursor-anchored context menu (modal layer: outside clicks close without
+    // reaching the base UI).
+    {
+        let styles = StyleResolver::new(&theme);
+        let viewport = Rect::new(0.0, 0.0, W as f32, h as f32);
+        let popup = context_state.push_open_layer(&mut layers, &context_menu, &styles, viewport);
+        context_state.draw_open_layer(
+            &mut layers,
+            popup,
+            &context_menu,
+            &styles,
+            &InputState::default(),
+            &mut focus,
+            viewport,
+        );
+    }
 
     // Floating dropdown list (Popup layer above the base content).
     {
@@ -2671,10 +3007,10 @@ fn render_widget_gallery() {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.05,
-                        g: 0.06,
-                        b: 0.08,
-                        a: 1.0,
+                        r: theme.background[0] as f64,
+                        g: theme.background[1] as f64,
+                        b: theme.background[2] as f64,
+                        a: theme.background[3] as f64,
                     }),
                     store: wgpu::StoreOp::Store,
                 },
@@ -2792,9 +3128,10 @@ fn render_widget_gallery() {
     img.save("test_output/widget_gallery.png")
         .expect("save png");
     eprintln!("wrote test_output/widget_gallery.png ({W}x{h})");
+    save_gallery_images(&img, &gallery_sections, &gallery_components);
 
-    // Sanity: at least some pixels are not the clear color.
-    let clear = [13u8, 15, 20];
+    // Sanity: at least some pixels are not the sRGB-encoded theme clear color.
+    let clear = [16u8, 23, 28];
     let drew = img.pixels().any(|p| {
         let d = (p.0[0] as i32 - clear[0] as i32).abs()
             + (p.0[1] as i32 - clear[1] as i32).abs()

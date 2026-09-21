@@ -1,8 +1,9 @@
 //! Toolbar widget — a strip of tool buttons with separators and a grip handle.
 //!
-//! The toolbar docks to an edge of the viewport (left/right/top/bottom). It is
-//! purely draw-time: no popup layers, no navigation intent claiming, no
-//! frame-deferred geometry. The grip handle's drag is arbitrated through a
+//! The toolbar docks to an edge of the viewport (left/right/top/bottom). Tool
+//! clicks and hover are resolved inline; its dock chooser and overflow sheet
+//! follow the crate's deferred popup-layer protocol so they paint above the base
+//! UI and block it correctly. The grip handle's drag is arbitrated through a
 //! caller-owned [`DragCapture`]; tooltips are reported via the output for the
 //! caller's own [`TooltipLayer`](crate::TooltipLayer).
 //!
@@ -10,7 +11,11 @@
 //!
 //! [`ToolbarState`] is caller-owned and persists across frames — the same
 //! contract as [`MenuBarState`](crate::MenuBarState). It is *not* a field of
-//! `UiState` because `active_tool` is application state, not UI plumbing.
+//! `UiState` because `active_tool` and `active_toggles` are application state,
+//! not UI plumbing. For popup support, each frame calls
+//! [`ToolbarState::begin_frame`], [`ToolbarState::push_open_layer`], base
+//! [`Toolbar::draw_with_id`], [`ToolbarState::draw_open_layer`], then
+//! [`ToolbarState::end_frame`], mirroring [`DropdownState`](crate::DropdownState).
 //!
 //! # Example
 //!
@@ -25,14 +30,17 @@
 //! if let Some(id) = out.clicked { state.active_tool = Some(id); }
 //! ```
 
+use crate::chrome::{Background, Edge, QuadStyle, StructuralLine, SurfacePainter};
+use crate::color::srgb_to_linear;
 use crate::layout::Rect;
-use crate::style::StyleKey;
+use crate::shadow::{BoxShadow, CornerRadii};
+use crate::style::{StyleKey, StyleResolver};
 use crate::widgets::drag::{DragCapture, DragId};
 use crate::widgets::icon::Icon;
 use crate::widgets::material::{self, Material, Tone};
-use crate::widgets::separator::Separator;
+use crate::{InputState, LayerStack};
 
-use super::DrawContext;
+use super::{DrawContext, DrawList};
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -73,18 +81,47 @@ pub struct ToolDef<'a> {
     pub enabled: bool,
 }
 
-/// A toolbar item: either a tool button or a visual separator.
+/// Stable identity for a toolbar within one UI surface.
+pub type ToolbarId = u64;
+
+/// An interaction the toolbar resolved this frame. Application state remains
+/// caller-owned: apply this event to the selected tool or toggle value yourself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolbarEvent {
+    /// A modal tool was activated.
+    ToolActivated(u64),
+    /// A toggle tool was activated.
+    ToggleActivated(u64),
+    /// The dock sheet selected a new edge.
+    DockChanged(ToolbarEdge),
+}
+
+/// A toolbar item: a modal tool, independently-held toggle, or group separator.
 pub enum ToolbarItem<'a> {
-    /// A tool button.
+    /// A modal tool button, highlighted by [`ToolbarState::active_tool`].
     Tool(ToolDef<'a>),
+    /// An independently-held tool button, highlighted by [`ToolDef::enabled`] and
+    /// the caller-supplied active id in [`ToolbarState::active_tool`].
+    Toggle(ToolDef<'a>),
     /// A thin separator line between tool button groups.
     Separator,
 }
 
 impl<'a> ToolbarItem<'a> {
-    /// Shorthand for a tool item.
+    /// Shorthand for a modal tool item.
     pub fn tool(id: u64, icon: Icon, label: &'a str, shortcut: &'a str) -> Self {
         Self::Tool(ToolDef {
+            id,
+            icon,
+            label,
+            shortcut,
+            enabled: true,
+        })
+    }
+
+    /// Shorthand for an independently-held toggle item.
+    pub fn toggle(id: u64, icon: Icon, label: &'a str, shortcut: &'a str) -> Self {
+        Self::Toggle(ToolDef {
             id,
             icon,
             label,
@@ -103,22 +140,94 @@ impl<'a> ToolbarItem<'a> {
 // State
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug)]
+struct PopupGeometry {
+    anchor: Rect,
+    viewport: Rect,
+    kind: PopupKind,
+    /// First item that did not fit in the inline rail. Meaningful only for
+    /// [`PopupKind::Overflow`]; dock sheets set this to zero.
+    overflow_start: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PopupKind {
+    Dock,
+    Overflow,
+}
+
 /// Caller-owned toolbar state, persisted across frames.
 pub struct ToolbarState {
     /// Which edge the toolbar currently docks to.
     pub edge: ToolbarEdge,
-    /// Which tool id is currently active/held. The toolbar highlights this tool
-    /// with the accent material.
+    /// Which modal tool id is currently active.
     pub active_tool: Option<u64>,
+    /// Independently-held toggle ids. The application owns and updates this
+    /// collection after receiving [`ToolbarEvent::ToggleActivated`].
+    pub active_toggles: Vec<u64>,
+    popup: Option<PopupKind>,
+    geom: Option<PopupGeometry>,
+    next_geom: Option<PopupGeometry>,
+    escape: bool,
+    mouse_clicked: bool,
+    click_claimed: bool,
 }
 
 impl ToolbarState {
-    /// Create a new toolbar state docked to `edge` with no active tool.
+    /// Create a new toolbar state docked to `edge` with no active tools.
     pub fn new(edge: ToolbarEdge) -> Self {
         Self {
             edge,
             active_tool: None,
+            active_toggles: Vec::new(),
+            popup: None,
+            geom: None,
+            next_geom: None,
+            escape: false,
+            mouse_clicked: false,
+            click_claimed: false,
         }
+    }
+
+    /// Promote last frame's popup geometry and claim Escape for an open sheet.
+    /// Call before deriving base-layer input from [`LayerStack`].
+    pub fn begin_frame(&mut self, input: &mut InputState) {
+        self.geom = self.next_geom.take();
+        self.escape = self.popup.is_some() && input.nav.cancel;
+        if self.popup.is_some() {
+            input.nav.cancel = false;
+        }
+        self.mouse_clicked = input.mouse_clicked;
+        self.click_claimed = false;
+    }
+
+    /// Push the popup sheet from last frame's geometry before drawing base UI.
+    pub fn push_open_layer(&mut self, layers: &mut LayerStack) -> Option<usize> {
+        let geometry = self.geom?;
+        if self.popup != Some(geometry.kind) {
+            return None;
+        }
+        let index = layers.push_popup(popup_rect(geometry));
+        layers.pop_layer();
+        Some(index)
+    }
+
+    /// Close any open toolbar sheet.
+    pub fn close_popup(&mut self) {
+        self.popup = None;
+        self.geom = None;
+        self.next_geom = None;
+    }
+
+    /// Apply dismissal after [`draw_open_layer`](Self::draw_open_layer).
+    pub fn end_frame(&mut self) {
+        if self.escape || (self.mouse_clicked && !self.click_claimed) {
+            self.close_popup();
+        }
+    }
+
+    fn toggle_is_active(&self, id: u64) -> bool {
+        self.active_toggles.contains(&id)
     }
 }
 
@@ -142,28 +251,60 @@ impl<'a> Toolbar<'a> {
     /// For a vertical toolbar this is the height; for horizontal, the width.
     /// Cross-axis size is `button_size + 2 * padding`.
     pub fn preferred_extent(&self, button_size: f32, padding: f32) -> f32 {
-        let grip = GRIP_SIZE;
-        let sep_thick = SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0;
-        let mut extent = grip;
-        for item in self.items {
-            match item {
-                ToolbarItem::Tool(_) => extent += button_size,
-                ToolbarItem::Separator => extent += sep_thick,
-            }
-        }
-        extent + padding * 2.0
+        self.preferred_extent_for_edge(button_size, padding, ToolbarEdge::Left)
     }
 
-    /// Compute the preferred cross-axis size.
-    pub fn preferred_cross(&self, button_size: f32, padding: f32) -> f32 {
-        button_size + padding * 2.0
-    }
-
-    /// Draw the toolbar into `rect`, returning the output.
+    /// Compute the preferred main-axis size for a particular dock edge.
     ///
-    /// `state.edge` determines orientation. The caller is responsible for
-    /// placing `rect` at the correct edge of the viewport (or using
-    /// [`AppShell`](crate::AppShell) which does this automatically).
+    /// The 2px plinth travel contributes to a vertical toolbar's item height,
+    /// but remains on the cross axis when the toolbar is horizontal.
+    pub fn preferred_extent_for_edge(
+        &self,
+        button_size: f32,
+        padding: f32,
+        edge: ToolbarEdge,
+    ) -> f32 {
+        let travel = 2.0;
+        let vertical = edge.is_vertical();
+        let sep_thick = SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0;
+        let mut extent = grip_main_extent(vertical);
+        let mut children = 1;
+        for item in self.items {
+            extent += match item {
+                ToolbarItem::Tool(_) | ToolbarItem::Toggle(_) => {
+                    tool_main_extent(button_size, travel, vertical)
+                }
+                ToolbarItem::Separator => sep_thick,
+            };
+            children += 1;
+        }
+        extent + ITEM_GAP * (children - 1) as f32 + padding * 2.0
+    }
+
+    /// Compute the preferred cross-axis size for a vertical toolbar.
+    pub fn preferred_cross(&self, button_size: f32, padding: f32) -> f32 {
+        self.preferred_cross_for_edge(button_size, padding, ToolbarEdge::Left)
+    }
+
+    /// Compute the preferred cross-axis size for a particular dock edge.
+    ///
+    /// The dock-edge border participates in the rail's outer size rather than
+    /// consuming one side of its centered content area. Horizontal rails also
+    /// include the key plinth's travel on their cross axis.
+    pub fn preferred_cross_for_edge(
+        &self,
+        button_size: f32,
+        padding: f32,
+        edge: ToolbarEdge,
+    ) -> f32 {
+        button_size
+            + padding * 2.0
+            + RAIL_EDGE_THICKNESS
+            + if edge.is_vertical() { 0.0 } else { 2.0 }
+    }
+
+    /// Draw the toolbar using id `0`. Prefer [`draw_with_id`](Self::draw_with_id)
+    /// when a surface has more than one toolbar or uses its popup sheets.
     pub fn draw(
         &self,
         rect: Rect,
@@ -172,46 +313,61 @@ impl<'a> Toolbar<'a> {
         grip_drag_id: DragId,
         ctx: &mut DrawContext,
     ) -> ToolbarOutput {
+        self.draw_with_id(0, rect, state, drag_capture, grip_drag_id, ctx)
+    }
+
+    /// Draw the toolbar into `rect`, returning interaction intents and staging
+    /// popup geometry for the next frame.
+    pub fn draw_with_id(
+        &self,
+        id: ToolbarId,
+        rect: Rect,
+        state: &mut ToolbarState,
+        drag_capture: &mut DragCapture,
+        grip_drag_id: DragId,
+        ctx: &mut DrawContext,
+    ) -> ToolbarOutput {
         let s = ctx.styles();
+        let toolbar_chrome = s.toolbar();
         let button_size = s.scalar(StyleKey::ToolbarButtonSize);
         let padding = s.scalar(StyleKey::ToolbarPadding);
-        let border_radius = s.scalar(StyleKey::BorderRadius);
+        let travel = s.scalar(StyleKey::Travel);
         let vertical = state.edge.is_vertical();
 
         ctx.push_debug_scope_rect("Toolbar", rect);
+        self.draw_rail(rect, state.edge, toolbar_chrome, ctx.draw_list);
 
-        // --- Background ---
-        let panel_bg = s.color(StyleKey::Panel);
-        let panel_border = s.color(StyleKey::PanelBorder);
-        ctx.draw_list.rounded_rect(rect, border_radius, panel_bg);
-        ctx.draw_list
-            .rounded_rect_outline(rect, border_radius, 1.0, panel_border);
-
-        // --- Walk the items ---
+        // The grip's layout slot follows the compact mark and its orientation-
+        // specific design margins. Vertical rails have 2px before / 4px after;
+        // horizontal rails have no leading margin and 2px after the 3px mark.
         let mut cursor = if vertical {
             rect.y + padding
         } else {
             rect.x + padding
         };
-        let cross_start = if vertical {
-            rect.x + padding
-        } else {
-            rect.y + padding
-        };
+        // CSS `align-items: center` keeps keys centered across the rail even when
+        // the caller gives the toolbar more than its preferred cross extent.
+        // The theme padding determines the preferred extent, not a fixed inset.
+        let cross_start = centered_cross_start(rect, state.edge, button_size, travel);
 
         let mut output = ToolbarOutput {
+            id,
             clicked: None,
+            event: None,
             hovered: None,
             grip_dragging: false,
             grip_delta: [0.0, 0.0],
+            overflowed: 0,
             rect,
         };
 
         // --- Grip handle ---
+        // The design's mark is 14×3 with 2px before and 4px after it. Keep the
+        // full cross-axis rail as its hit target without inflating that layout slot.
         let grip_rect = if vertical {
-            Rect::new(rect.x, cursor, rect.width, GRIP_SIZE)
+            Rect::new(rect.x, cursor, rect.width, grip_main_extent(true))
         } else {
-            Rect::new(cursor, rect.y, GRIP_SIZE, rect.height)
+            Rect::new(cursor, rect.y, grip_main_extent(false), rect.height)
         };
         self.draw_grip(
             grip_rect,
@@ -221,57 +377,158 @@ impl<'a> Toolbar<'a> {
             &mut output,
             ctx,
         );
-        cursor += GRIP_SIZE;
+        if !ctx.input.mouse_consumed
+            && ctx.input.mouse_clicked
+            && ctx.input.drag_delta == [0.0, 0.0]
+            && grip_rect.contains(ctx.input.mouse_x, ctx.input.mouse_y)
+        {
+            state.popup = match state.popup {
+                Some(PopupKind::Dock) => None,
+                _ => Some(PopupKind::Dock),
+            };
+            state.click_claimed = true;
+        }
+        cursor += grip_main_extent(vertical) + ITEM_GAP;
 
-        // --- Tool buttons and separators ---
-        for item in self.items {
+        // Reserve the trailing overflow control only when the complete strip does
+        // not fit. An always-reserved key changes the handoff's composition even
+        // for roomy rails and can manufacture overflow that did not exist before.
+        let main_extent = if vertical { rect.height } else { rect.width };
+        let needs_overflow = self.preferred_extent_for_edge(button_size, padding, state.edge)
+            > main_extent + f32::EPSILON;
+        let overflow_rect = trailing_button_rect(rect, state.edge, padding, button_size, travel);
+        let main_limit = if needs_overflow {
+            if vertical {
+                overflow_rect.y - padding
+            } else {
+                overflow_rect.x - padding
+            }
+        } else if vertical {
+            rect.bottom() - padding
+        } else {
+            rect.right() - padding
+        };
+        let mut overflow_started = false;
+        let mut overflow_start = self.items.len();
+        for (item_index, item) in self.items.iter().enumerate() {
+            let item_extent = match item {
+                ToolbarItem::Tool(_) | ToolbarItem::Toggle(_) => {
+                    tool_main_extent(button_size, travel, vertical)
+                }
+                ToolbarItem::Separator => SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0,
+            };
+            if cursor + item_extent > main_limit {
+                overflow_started = true;
+                overflow_start = overflow_start.min(item_index);
+            }
+            if overflow_started {
+                if !matches!(item, ToolbarItem::Separator) {
+                    output.overflowed += 1;
+                }
+                continue;
+            }
             match item {
-                ToolbarItem::Tool(tool) => {
+                ToolbarItem::Tool(tool) | ToolbarItem::Toggle(tool) => {
                     let tool_rect = if vertical {
-                        Rect::new(cross_start, cursor, button_size, button_size)
+                        Rect::new(
+                            cross_start,
+                            cursor,
+                            button_size,
+                            tool_extent(button_size, travel),
+                        )
                     } else {
-                        Rect::new(cursor, cross_start, button_size, button_size)
+                        Rect::new(
+                            cursor,
+                            cross_start,
+                            button_size,
+                            tool_extent(button_size, travel),
+                        )
                     };
-                    // Clamp to available space.
-                    if vertical && tool_rect.y + tool_rect.height > rect.y + rect.height {
-                        break;
-                    }
-                    if !vertical && tool_rect.x + tool_rect.width > rect.x + rect.width {
-                        break;
-                    }
-                    self.draw_tool_button(tool, tool_rect, state, &mut output, ctx);
-                    cursor += button_size;
+                    let kind = if matches!(item, ToolbarItem::Toggle(_)) {
+                        ToolKind::Toggle
+                    } else {
+                        ToolKind::Modal
+                    };
+                    self.draw_tool_button(tool, kind, tool_rect, state, &mut output, ctx);
+                    cursor += tool_main_extent(button_size, travel, vertical) + ITEM_GAP;
                 }
                 ToolbarItem::Separator => {
                     cursor += SEPARATOR_GAP;
+                    let inset = padding + 2.0;
                     let sep_rect = if vertical {
-                        let inset = padding + 2.0;
                         Rect::new(
                             rect.x + inset,
                             cursor,
-                            rect.width - inset * 2.0,
+                            (rect.width - inset * 2.0).max(0.0),
                             SEPARATOR_THICKNESS,
                         )
                     } else {
-                        let inset = padding + 2.0;
                         Rect::new(
                             cursor,
                             rect.y + inset,
                             SEPARATOR_THICKNESS,
-                            rect.height - inset * 2.0,
+                            (rect.height - inset * 2.0).max(0.0),
                         )
                     };
-                    let sep = if vertical {
-                        Separator::horizontal()
+                    let separator = toolbar_chrome.separator;
+                    let rule = separator[0];
+                    let counter = separator[1];
+                    if vertical {
+                        ctx.draw_list
+                            .edge_line(sep_rect, Edge::Top, rule.thickness, rule.color);
+                        ctx.draw_list.edge_line(
+                            Rect::new(
+                                sep_rect.x,
+                                sep_rect.y + rule.thickness,
+                                sep_rect.width,
+                                counter.thickness,
+                            ),
+                            Edge::Top,
+                            counter.thickness,
+                            counter.color,
+                        );
                     } else {
-                        Separator::vertical()
-                    };
-                    sep.draw(sep_rect, ctx.draw_list, &s);
-                    cursor += SEPARATOR_THICKNESS + SEPARATOR_GAP;
+                        ctx.draw_list
+                            .edge_line(sep_rect, Edge::Left, rule.thickness, rule.color);
+                        ctx.draw_list.edge_line(
+                            Rect::new(
+                                sep_rect.x + rule.thickness,
+                                sep_rect.y,
+                                counter.thickness,
+                                sep_rect.height,
+                            ),
+                            Edge::Left,
+                            counter.thickness,
+                            counter.color,
+                        );
+                    }
+                    cursor += SEPARATOR_THICKNESS + SEPARATOR_GAP + ITEM_GAP;
                 }
             }
         }
 
+        if output.overflowed > 0 {
+            self.draw_overflow_button(overflow_rect, state, &mut output, ctx);
+        }
+        let viewport = Rect::new(
+            0.0,
+            0.0,
+            ctx.screen_width.max(0.0),
+            ctx.screen_height.max(0.0),
+        );
+        if state.popup.is_some() {
+            let anchor = if state.popup == Some(PopupKind::Dock) {
+                grip_rect
+            } else {
+                overflow_rect
+            };
+            state.next_geom = Some(PopupGeometry {
+                anchor,
+                viewport,
+                kind: state.popup.unwrap(),
+                overflow_start,
+            });
+        }
         ctx.pop_debug_scope();
         output
     }
@@ -306,28 +563,56 @@ impl<'a> Toolbar<'a> {
             output.grip_delta = input.drag_delta;
         }
 
-        // Draw grip dots.
-        let dot_color = if dragging {
-            ctx.styles().color(StyleKey::Accent)
+        // Compact repeating ridge mark, matching the docked rail design. The
+        // resting ridges are a translucent white material, not theme text; the
+        // dark counter-edge makes the three-pixel mark read against either end
+        // of the rail gradient.
+        let chrome = ctx.styles().toolbar();
+        let ridge_color = chrome.grip_colors[if dragging {
+            2
         } else if hovered {
-            ctx.styles().color(StyleKey::TextHighlight)
+            1
         } else {
-            ctx.styles().color(StyleKey::TextDim)
-        };
-
+            0
+        }];
         let cx = rect.x + rect.width * 0.5;
         let cy = rect.y + rect.height * 0.5;
-
         if vertical {
-            // Three dots in a horizontal row.
-            for dx in [-3.0_f32, 0.0, 3.0] {
-                ctx.draw_list.circle((cx + dx, cy), 1.0, dot_color);
+            let x = cx - 7.0;
+            let y = rect.y + GRIP_VERTICAL_MARGIN_START;
+            for offset in [0.0_f32, 3.0, 6.0, 9.0, 12.0] {
+                ctx.draw_list
+                    .quad(x + offset, y, 1.0, GRIP_THICKNESS, ridge_color);
             }
+            ctx.draw_list.edge_line(
+                Rect::new(
+                    x,
+                    y,
+                    14.0,
+                    GRIP_THICKNESS + chrome.grip_counter_edge.thickness,
+                ),
+                Edge::Bottom,
+                chrome.grip_counter_edge.thickness,
+                chrome.grip_counter_edge.color,
+            );
         } else {
-            // Three dots in a vertical column.
-            for dy in [-3.0_f32, 0.0, 3.0] {
-                ctx.draw_list.circle((cx, cy + dy), 1.0, dot_color);
+            let x = rect.x;
+            let y = cy - 7.0;
+            for offset in [0.0_f32, 3.0, 6.0, 9.0, 12.0] {
+                ctx.draw_list
+                    .quad(x, y + offset, GRIP_THICKNESS, 1.0, ridge_color);
             }
+            ctx.draw_list.edge_line(
+                Rect::new(
+                    x,
+                    y,
+                    GRIP_THICKNESS + chrome.grip_counter_edge.thickness,
+                    14.0,
+                ),
+                Edge::Right,
+                chrome.grip_counter_edge.thickness,
+                chrome.grip_counter_edge.color,
+            );
         }
 
         // Cursor.
@@ -344,6 +629,7 @@ impl<'a> Toolbar<'a> {
     fn draw_tool_button(
         &self,
         tool: &ToolDef<'_>,
+        kind: ToolKind,
         rect: Rect,
         state: &ToolbarState,
         output: &mut ToolbarOutput,
@@ -351,38 +637,49 @@ impl<'a> Toolbar<'a> {
     ) {
         let input = ctx.input;
         let s = ctx.styles();
-        let radius = s.scalar(StyleKey::BorderRadius);
 
-        let is_active = state.active_tool == Some(tool.id);
+        let is_active = match kind {
+            ToolKind::Modal => state.active_tool == Some(tool.id),
+            ToolKind::Toggle => state.toggle_is_active(tool.id),
+        };
         let hovered =
             tool.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
         let pressed = hovered && input.mouse_down;
         let clicked = hovered && input.mouse_clicked;
 
-        // Determine tone.
-        let tone = if is_active { Tone::Accent } else { Tone::Ghost };
+        let face = draw_tool_face(
+            ctx.draw_list,
+            &s,
+            rect,
+            is_active,
+            hovered,
+            pressed,
+            tool.enabled,
+        );
 
-        let mat = Material::new(tone)
-            .enabled(tool.enabled)
-            .hovered(hovered)
-            .pressed(pressed);
-
-        let face = material::draw_with_radius(ctx.draw_list, &s, rect, radius, &mat);
-
-        // Draw the icon centered in the face.
-        let icon_inset = 3.0;
+        // The handoff specifies a 12px glyph. Phosphor's MSDF tiles include
+        // intrinsic font padding, so a 14px destination produces that visible
+        // footprint while preserving each glyph's aspect ratio.
+        const ICON_BOX: f32 = 14.0;
+        let icon_size = ICON_BOX.min(face.width).min(face.height);
         let icon_rect = Rect::new(
-            face.x + icon_inset,
-            face.y + icon_inset,
-            (face.width - icon_inset * 2.0).max(0.0),
-            (face.height - icon_inset * 2.0).max(0.0),
+            face.x + (face.width - icon_size) * 0.5,
+            face.y + (face.height - icon_size) * 0.5,
+            icon_size,
+            icon_size,
         );
         let icon_tint = if is_active {
-            s.color(StyleKey::OnAccent)
-        } else if tool.enabled {
-            s.color(StyleKey::Text)
+            srgb_to_linear([234.0 / 255.0, 250.0 / 255.0, 1.0, 1.0])
+        } else if !tool.enabled {
+            let mut color = srgb_to_linear([182.0 / 255.0, 190.0 / 255.0, 197.0 / 255.0, 1.0]);
+            color[3] *= 0.45;
+            color
+        } else if pressed {
+            srgb_to_linear([183.0 / 255.0, 191.0 / 255.0, 198.0 / 255.0, 1.0])
+        } else if hovered {
+            srgb_to_linear([238.0 / 255.0, 242.0 / 255.0, 246.0 / 255.0, 1.0])
         } else {
-            s.color(StyleKey::TextDim)
+            srgb_to_linear([182.0 / 255.0, 190.0 / 255.0, 197.0 / 255.0, 1.0])
         };
         tool.icon.tint(icon_tint).draw(icon_rect, ctx.draw_list);
 
@@ -393,8 +690,235 @@ impl<'a> Toolbar<'a> {
         }
         if clicked && tool.enabled {
             output.clicked = Some(tool.id);
+            output.event = Some(match kind {
+                ToolKind::Modal => ToolbarEvent::ToolActivated(tool.id),
+                ToolKind::Toggle => ToolbarEvent::ToggleActivated(tool.id),
+            });
         }
     }
+
+    fn draw_rail(
+        &self,
+        rect: Rect,
+        edge: ToolbarEdge,
+        chrome: crate::ToolbarChrome,
+        list: &mut DrawList,
+    ) {
+        let outward = match edge {
+            ToolbarEdge::Left => [1.0, 0.0],
+            ToolbarEdge::Right => [-1.0, 0.0],
+            ToolbarEdge::Top => [0.0, 1.0],
+            ToolbarEdge::Bottom => [0.0, -1.0],
+        };
+        let shadow = BoxShadow {
+            offset: [
+                outward[0] * chrome.rail_shadow.offset[1],
+                outward[1] * chrome.rail_shadow.offset[1],
+            ],
+            ..chrome.rail_shadow
+        };
+        let dock_edge = match edge {
+            ToolbarEdge::Left => Edge::Right,
+            ToolbarEdge::Right => Edge::Left,
+            ToolbarEdge::Top => Edge::Bottom,
+            ToolbarEdge::Bottom => Edge::Top,
+        };
+        let style = QuadStyle {
+            background: Background::LinearGradient {
+                start: chrome.rail_colors[0],
+                end: chrome.rail_colors[1],
+                axis: if edge.is_vertical() {
+                    crate::GradientAxis::Horizontal
+                } else {
+                    crate::GradientAxis::Vertical
+                },
+            },
+            ..Default::default()
+        };
+        let lines = [
+            StructuralLine {
+                edge: dock_edge,
+                offset: 0.0,
+                style: chrome.dock_edge,
+            },
+            StructuralLine {
+                edge: dock_edge,
+                offset: chrome.dock_edge.thickness,
+                style: chrome.dock_highlight,
+            },
+        ];
+        let mut painter = SurfacePainter::new(
+            list,
+            rect,
+            rect,
+            CornerRadii::default(),
+            style,
+            std::slice::from_ref(&shadow),
+            &lines,
+        );
+        painter.paint_pre_content();
+        painter.paint_post_content();
+    }
+
+    fn draw_overflow_button(
+        &self,
+        rect: Rect,
+        state: &mut ToolbarState,
+        output: &mut ToolbarOutput,
+        ctx: &mut DrawContext,
+    ) {
+        let hovered =
+            !ctx.input.mouse_consumed && rect.contains(ctx.input.mouse_x, ctx.input.mouse_y);
+        let material = Material::new(Tone::Ghost)
+            .hovered(hovered)
+            .pressed(hovered && ctx.input.mouse_down);
+        let face = material::draw_with_radius(
+            ctx.draw_list,
+            &ctx.styles(),
+            rect,
+            ctx.styles().scalar(StyleKey::BorderRadius),
+            &material,
+        );
+        let color = if hovered {
+            ctx.styles().color(StyleKey::Text)
+        } else {
+            ctx.styles().color(StyleKey::TextDim)
+        };
+        let y =
+            ctx.draw_list
+                .vcentered_text_y(face.y, face.height, 12.0, ctx.theme.font.as_ref(), "…");
+        ctx.draw_list.text(
+            ctx.styles()
+                .text_block("…", face.x + (face.width - 8.0) * 0.5, y)
+                .with_size(12.0)
+                .with_color(
+                    (color[0] * 255.0) as u8,
+                    (color[1] * 255.0) as u8,
+                    (color[2] * 255.0) as u8,
+                ),
+        );
+        if hovered {
+            ctx.request_cursor(crate::CursorIcon::Pointer);
+        }
+        if hovered && ctx.input.mouse_clicked {
+            state.popup = match state.popup {
+                Some(PopupKind::Overflow) => None,
+                _ => Some(PopupKind::Overflow),
+            };
+            state.click_claimed = true;
+            output.event = None;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ToolKind {
+    Modal,
+    Toggle,
+}
+
+/// Draw one toolbar face from the toolbar-specific values in the design source.
+/// Unlike the reusable material helper, an idle toolbar key has a translucent
+/// neutral face rather than becoming fully transparent.
+#[allow(clippy::too_many_arguments)]
+fn draw_tool_face(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    rect: Rect,
+    active: bool,
+    hovered: bool,
+    pressed: bool,
+    enabled: bool,
+) -> Rect {
+    if !active {
+        return draw_neutral_tool(list, s, rect, hovered, pressed, enabled);
+    }
+    let travel = s.scalar(StyleKey::Travel);
+    let face = Rect::new(
+        rect.x,
+        rect.y + travel,
+        rect.width,
+        (rect.height - travel).max(0.0),
+    );
+    paint_tool_surface(
+        list,
+        face,
+        s.toolbar().tool_latched,
+        &s.toolbar().tool_insets[3],
+        enabled,
+    );
+    face
+}
+
+fn draw_neutral_tool(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    rect: Rect,
+    hovered: bool,
+    pressed: bool,
+    enabled: bool,
+) -> Rect {
+    let chrome = s.toolbar();
+    let dropped = enabled && pressed;
+    let state = if dropped {
+        2
+    } else if hovered {
+        1
+    } else {
+        0
+    };
+    let style = [chrome.tool_idle, chrome.tool_hover, chrome.tool_pressed][state];
+    let travel = s.scalar(StyleKey::Travel);
+    let face = Rect::new(
+        rect.x,
+        rect.y + if dropped { travel } else { 0.0 },
+        rect.width,
+        (rect.height - travel).max(0.0),
+    );
+    paint_tool_surface(list, face, style, &chrome.tool_insets[state], enabled);
+    face
+}
+
+fn paint_tool_surface(
+    list: &mut DrawList,
+    rect: Rect,
+    mut style: QuadStyle,
+    authored_shadows: &[BoxShadow],
+    enabled: bool,
+) {
+    let mut shadows = [BoxShadow::default(); 2];
+    shadows.copy_from_slice(authored_shadows);
+    if !enabled {
+        const DISABLED_ALPHA: f32 = 0.45;
+        let dim = |mut color: [f32; 4]| {
+            color[3] *= DISABLED_ALPHA;
+            color
+        };
+        style.background = match style.background {
+            Background::Solid(color) => Background::Solid(dim(color)),
+            Background::LinearGradient { start, end, axis } => Background::LinearGradient {
+                start: dim(start),
+                end: dim(end),
+                axis,
+            },
+        };
+        style.border_color = dim(style.border_color);
+        for shadow in &mut shadows {
+            shadow.color = dim(shadow.color);
+        }
+    }
+    let padding = rect.inset(style.border_widths.left.max(style.border_widths.top));
+    let mut painter = SurfacePainter::new(
+        list,
+        rect,
+        padding,
+        style.corner_radii,
+        style,
+        &shadows,
+        &[],
+    );
+    painter.paint_pre_content();
+    painter.paint_post_content();
 }
 
 // ---------------------------------------------------------------------------
@@ -404,30 +928,320 @@ impl<'a> Toolbar<'a> {
 /// Outcome of drawing a [`Toolbar`].
 #[derive(Debug, Clone, Copy)]
 pub struct ToolbarOutput {
-    /// Tool that was clicked this frame, if any.
+    /// Stable identity of the toolbar that produced this output.
+    pub id: ToolbarId,
+    /// Backward-compatible id of the tool activated this frame, if any.
     pub clicked: Option<u64>,
-    /// Tool that is hovered this frame (for external tooltip display).
+    /// Typed toolbar intent. Apply it to caller-owned application state.
+    pub event: Option<ToolbarEvent>,
+    /// Tool that is hovered this frame (for external [`TooltipLayer`](crate::TooltipLayer)).
     pub hovered: Option<u64>,
     /// Whether the grip handle is being dragged.
     pub grip_dragging: bool,
     /// Drag delta from the grip handle this frame.
     pub grip_delta: [f32; 2],
+    /// Number of non-separator items available from the overflow sheet.
+    pub overflowed: usize,
     /// The rect consumed by the toolbar.
     pub rect: Rect,
+}
+
+fn centered_cross_start(rect: Rect, edge: ToolbarEdge, size: f32, travel: f32) -> f32 {
+    let vertical = edge.is_vertical();
+    let (cross_origin, cross_extent) = if vertical {
+        (rect.x, rect.width)
+    } else {
+        (rect.y, rect.height)
+    };
+    let content_extent = if vertical {
+        size
+    } else {
+        tool_extent(size, travel)
+    };
+    let interior_origin = if matches!(edge, ToolbarEdge::Right | ToolbarEdge::Bottom) {
+        cross_origin + RAIL_EDGE_THICKNESS
+    } else {
+        cross_origin
+    };
+    let interior_extent = (cross_extent - RAIL_EDGE_THICKNESS).max(0.0);
+    interior_origin + (interior_extent - content_extent) * 0.5
+}
+
+fn trailing_button_rect(
+    rect: Rect,
+    edge: ToolbarEdge,
+    padding: f32,
+    size: f32,
+    travel: f32,
+) -> Rect {
+    if edge.is_vertical() {
+        Rect::new(
+            centered_cross_start(rect, edge, size, travel),
+            (rect.bottom() - padding - size).max(rect.y),
+            size.min((rect.width - RAIL_EDGE_THICKNESS).max(0.0)),
+            size,
+        )
+    } else {
+        Rect::new(
+            (rect.right() - padding - size).max(rect.x),
+            centered_cross_start(rect, edge, size, travel),
+            size,
+            size.min((rect.height - RAIL_EDGE_THICKNESS).max(0.0)),
+        )
+    }
+}
+
+fn popup_rect(geometry: PopupGeometry) -> Rect {
+    let size = match geometry.kind {
+        PopupKind::Dock => [124.0, 108.0],
+        PopupKind::Overflow => [160.0, 240.0],
+    };
+    let mut x = geometry.anchor.right() + 7.0;
+    let mut y = geometry.anchor.y;
+    if x + size[0] > geometry.viewport.right() {
+        x = geometry.anchor.x - size[0] - 7.0;
+    }
+    if x < geometry.viewport.x {
+        x = geometry.viewport.x;
+    }
+    if y + size[1] > geometry.viewport.bottom() {
+        y = geometry.viewport.bottom() - size[1];
+    }
+    Rect::new(x, y.max(geometry.viewport.y), size[0], size[1])
+}
+
+impl ToolbarState {
+    /// Draw the open dock or overflow sheet into its popup layer. `items` must be
+    /// the same borrowed item sequence passed to the toolbar's base draw.
+    pub fn draw_open_layer(
+        &mut self,
+        layers: &mut LayerStack,
+        popup: Option<usize>,
+        items: &[ToolbarItem<'_>],
+        style: &StyleResolver,
+        input: &InputState,
+    ) -> Option<ToolbarEvent> {
+        let geometry = self.geom?;
+        if self.popup != Some(geometry.kind) {
+            return None;
+        }
+        let rect = popup_rect(geometry);
+        let index = match popup {
+            Some(index) => index,
+            None => {
+                let index = layers.push_popup(rect);
+                layers.pop_layer();
+                index
+            }
+        };
+        let layer_input = layers.input_for_layer(index, input);
+        let mut event = None;
+        {
+            let list = &mut layers.layers_mut()[index].list;
+            list.push_debug_scope_rect(
+                "Toolbar popup",
+                Rect::new(
+                    rect.x - 12.0,
+                    rect.y - 12.0,
+                    rect.width + 24.0,
+                    rect.height + 24.0,
+                ),
+            );
+            let chrome = style.toolbar().popup;
+            let border = chrome.surface.border_widths;
+            let padding = Rect::new(
+                rect.x + border.left,
+                rect.y + border.top,
+                (rect.width - border.left - border.right).max(0.0),
+                (rect.height - border.top - border.bottom).max(0.0),
+            );
+            let mut painter = SurfacePainter::new(
+                list,
+                rect,
+                padding,
+                chrome.surface.corner_radii,
+                chrome.surface,
+                &chrome.shadows,
+                &chrome.lines,
+            );
+            painter.paint_pre_content();
+            painter.paint_post_content();
+            let title = match geometry.kind {
+                PopupKind::Dock => "Dock toolbar",
+                PopupKind::Overflow => "More tools",
+            };
+            let title_y =
+                list.vcentered_text_y(rect.y + 3.0, 18.0, 10.0, style.theme().font.as_ref(), title);
+            list.text(
+                style
+                    .text_block(title, rect.x + 8.0, title_y)
+                    .with_size(10.0)
+                    .with_color(220, 225, 230),
+            );
+            match geometry.kind {
+                PopupKind::Dock => {
+                    for (i, edge) in [
+                        ToolbarEdge::Top,
+                        ToolbarEdge::Right,
+                        ToolbarEdge::Bottom,
+                        ToolbarEdge::Left,
+                    ]
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    {
+                        let row = Rect::new(
+                            rect.x + 4.0,
+                            rect.y + 24.0 + i as f32 * 20.0,
+                            rect.width - 8.0,
+                            18.0,
+                        );
+                        let hovered = !layer_input.mouse_consumed
+                            && row.contains(layer_input.mouse_x, layer_input.mouse_y);
+                        if hovered {
+                            list.quad(
+                                row.x,
+                                row.y,
+                                row.width,
+                                row.height,
+                                style.color(StyleKey::Accent),
+                            );
+                        }
+                        let label = match edge {
+                            ToolbarEdge::Top => "Top",
+                            ToolbarEdge::Right => "Right",
+                            ToolbarEdge::Bottom => "Bottom",
+                            ToolbarEdge::Left => "Left",
+                        };
+                        let mark = if self.edge == edge { "•" } else { " " };
+                        let y = list.vcentered_text_y(
+                            row.y,
+                            row.height,
+                            11.0,
+                            style.theme().font.as_ref(),
+                            label,
+                        );
+                        list.text(
+                            style
+                                .text_block(mark, row.x + 4.0, y)
+                                .with_size(11.0)
+                                .with_color(140, 210, 215),
+                        );
+                        list.text(
+                            style
+                                .text_block(label, row.x + 18.0, y)
+                                .with_size(11.0)
+                                .with_color(225, 230, 235),
+                        );
+                        if hovered && layer_input.mouse_clicked {
+                            event = Some(ToolbarEvent::DockChanged(edge));
+                            self.click_claimed = true;
+                            self.close_popup();
+                        }
+                    }
+                }
+                PopupKind::Overflow => {
+                    let mut row_index = 0;
+                    for item in items.iter().skip(geometry.overflow_start) {
+                        let tool = match item {
+                            ToolbarItem::Tool(tool) | ToolbarItem::Toggle(tool) => tool,
+                            ToolbarItem::Separator => continue,
+                        };
+                        let row = Rect::new(
+                            rect.x + 4.0,
+                            rect.y + 24.0 + row_index as f32 * 20.0,
+                            rect.width - 8.0,
+                            18.0,
+                        );
+                        row_index += 1;
+                        if row.bottom() > rect.bottom() - 4.0 {
+                            break;
+                        }
+                        let hovered = tool.enabled
+                            && !layer_input.mouse_consumed
+                            && row.contains(layer_input.mouse_x, layer_input.mouse_y);
+                        if hovered {
+                            list.quad(
+                                row.x,
+                                row.y,
+                                row.width,
+                                row.height,
+                                style.color(StyleKey::ButtonHover),
+                            );
+                        }
+                        let y = list.vcentered_text_y(
+                            row.y,
+                            row.height,
+                            11.0,
+                            style.theme().font.as_ref(),
+                            tool.label,
+                        );
+                        list.text(
+                            style
+                                .text_block(tool.label, row.x + 7.0, y)
+                                .with_size(11.0)
+                                .with_color(225, 230, 235),
+                        );
+                        if hovered && layer_input.mouse_clicked {
+                            event = Some(match item {
+                                ToolbarItem::Tool(_) => ToolbarEvent::ToolActivated(tool.id),
+                                ToolbarItem::Toggle(_) => ToolbarEvent::ToggleActivated(tool.id),
+                                ToolbarItem::Separator => unreachable!(),
+                            });
+                            self.click_claimed = true;
+                            self.close_popup();
+                        }
+                    }
+                }
+            }
+            list.pop_debug_scope();
+        }
+        if layer_input.mouse_clicked && rect.contains(layer_input.mouse_x, layer_input.mouse_y) {
+            self.click_claimed = true;
+        }
+        event
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Height (or width) of the grip handle zone.
-const GRIP_SIZE: f32 = 16.0;
+/// Main-axis dimensions copied from the toolbar mockup's grip and flex gap.
+const GRIP_THICKNESS: f32 = 3.0;
+const GRIP_VERTICAL_MARGIN_START: f32 = 2.0;
+const GRIP_VERTICAL_MARGIN_END: f32 = 4.0;
+const GRIP_HORIZONTAL_MARGIN_END: f32 = 2.0;
+const ITEM_GAP: f32 = 2.0;
+
+/// Dock-edge rule painted inside the toolbar's outer rectangle.
+const RAIL_EDGE_THICKNESS: f32 = 1.0;
 
 /// Thickness of a separator line.
 const SEPARATOR_THICKNESS: f32 = 1.0;
 
 /// Gap on each side of a separator.
 const SEPARATOR_GAP: f32 = 3.0;
+
+fn grip_main_extent(vertical: bool) -> f32 {
+    if vertical {
+        GRIP_VERTICAL_MARGIN_START + GRIP_THICKNESS + GRIP_VERTICAL_MARGIN_END
+    } else {
+        GRIP_THICKNESS + GRIP_HORIZONTAL_MARGIN_END
+    }
+}
+
+fn tool_extent(button_size: f32, travel: f32) -> f32 {
+    button_size + travel
+}
+
+fn tool_main_extent(button_size: f32, travel: f32, vertical: bool) -> f32 {
+    if vertical {
+        tool_extent(button_size, travel)
+    } else {
+        button_size
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -437,7 +1251,9 @@ const SEPARATOR_GAP: f32 = 3.0;
 mod tests {
     use super::*;
     use crate::Theme;
+    use crate::color::opaque_srgb8;
     use crate::layout::Rect;
+    use crate::style::StyleOverlay;
     use crate::widgets::DrawList;
     use crate::widgets::drag::DragCapture;
     use crate::widgets::focus::FocusState;
@@ -480,8 +1296,8 @@ mod tests {
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
 
-        // The first tool button starts after grip (16px) + padding (2px).
-        let tool_y = 2.0 + GRIP_SIZE + 12.0; // midpoint of first 24px button
+        // The first tool button follows the 9px grip slot and 2px flex gap.
+        let tool_y = 2.0 + grip_main_extent(true) + ITEM_GAP + 13.0;
         let tool_x = 14.0;
 
         let mut input = crate::InputState::default();
@@ -496,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn active_tool_draws_accent_material() {
+    fn active_tool_uses_the_designs_held_face_in_dropped_position() {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
@@ -508,13 +1324,85 @@ mod tests {
         let input = crate::InputState::default();
 
         let mut cx = ctx(&mut list, &mut focus, &theme, &input);
-        let _out = Toolbar::new(&items).draw(rect, &mut state, &mut capture, 99, &mut cx);
+        Toolbar::new(&items).draw(rect, &mut state, &mut capture, 99, &mut cx);
 
-        // The accent material draws chrome instances (plinth + face per button).
-        // Verify that at least some chrome was emitted.
+        let held_top = opaque_srgb8([0x4a, 0x8a, 0x9c]);
+        let held = list
+            .chrome_instances()
+            .find(|instance| instance.bg == held_top)
+            .expect("selected tool should use the toolbar-specific held gradient");
+        let second_tool_y = theme.toolbar_padding
+            + grip_main_extent(true)
+            + ITEM_GAP
+            + tool_extent(theme.toolbar_button_size, theme.travel)
+            + ITEM_GAP;
+        assert_eq!(held.rect[1], second_tool_y + theme.travel);
+        assert_eq!(held.rect[3], theme.toolbar_button_size);
+    }
+
+    #[test]
+    fn grip_uses_design_material_and_black_counter_edge() {
+        let items = sample_items();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let input = crate::InputState::default();
+
+        Toolbar::new(&items).draw(
+            Rect::new(0.0, 0.0, 28.0, 200.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+
+        let ridge_instances = list
+            .chrome_instances()
+            .filter(|instance| instance.bg == [1.0, 1.0, 1.0, 0.28])
+            .count();
+        assert_eq!(
+            ridge_instances, 5,
+            "five grip ridges use the 28% white material"
+        );
         assert!(
-            !list.chrome_instances.is_empty(),
-            "toolbar should emit chrome instances"
+            list.chrome_instances()
+                .any(|instance| instance.bg == [0.0, 0.0, 0.0, 0.5]),
+            "grip has the design's solid-black counter-edge"
+        );
+    }
+
+    #[test]
+    fn idle_tool_keeps_the_designs_neutral_face() {
+        let items = sample_items();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let input = crate::InputState::default();
+
+        Toolbar::new(&items).draw(
+            Rect::new(0.0, 0.0, 28.0, 200.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+
+        let top = opaque_srgb8([0x41, 0x44, 0x49]);
+        let bottom = opaque_srgb8([0x2a, 0x2e, 0x33]);
+        let border = opaque_srgb8([0x10, 0x12, 0x15]);
+        assert!(
+            list.chrome_instances()
+                .any(|instance| instance.bg == top && instance.bg2 == bottom),
+            "resting tools use the typed handoff face gradient"
+        );
+        assert!(
+            list.chrome_instances()
+                .any(|instance| instance.border == border && instance.widths == [1.0; 4]),
+            "resting tools use the typed handoff border"
         );
     }
 
@@ -534,7 +1422,7 @@ mod tests {
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
 
-        let tool_y = 2.0 + GRIP_SIZE + 12.0;
+        let tool_y = 2.0 + grip_main_extent(true) + ITEM_GAP + 13.0;
         let mut input = crate::InputState::default();
         input.mouse_x = 14.0;
         input.mouse_y = tool_y;
@@ -556,7 +1444,7 @@ mod tests {
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
 
-        let tool_y = 2.0 + GRIP_SIZE + 12.0;
+        let tool_y = 2.0 + grip_main_extent(true) + ITEM_GAP + 13.0;
         let mut input = crate::InputState::default();
         input.mouse_x = 14.0;
         input.mouse_y = tool_y;
@@ -577,9 +1465,8 @@ mod tests {
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 300.0, 28.0);
 
-        // The first tool button starts after padding (2px) + grip (16px).
-        // Click the midpoint of the first 24px tool button.
-        let tool_x = 2.0 + GRIP_SIZE + 12.0;
+        // Click the midpoint of the first tool face after the compact grip slot.
+        let tool_x = 2.0 + grip_main_extent(false) + ITEM_GAP + 13.0;
         let tool_y = 14.0;
 
         let mut input = crate::InputState::default();
@@ -610,7 +1497,7 @@ mod tests {
         // Click in the grip zone.
         let mut input = crate::InputState::default();
         input.mouse_x = 14.0;
-        input.mouse_y = 2.0 + GRIP_SIZE * 0.5;
+        input.mouse_y = 2.0 + grip_main_extent(true) * 0.5;
         input.mouse_clicked = true;
         input.mouse_down = true;
         input.drag_delta = [5.0, 3.0];
@@ -627,13 +1514,325 @@ mod tests {
         let toolbar = Toolbar::new(&items);
         let btn = 24.0;
         let pad = 2.0;
-        // 3 tools + 1 separator + grip
-        let expected =
-            GRIP_SIZE + 3.0 * btn + (SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0) + pad * 2.0;
+        // 9px vertical grip + four 2px flex gaps + three 26px plinth boxes + separator.
+        let expected = grip_main_extent(true)
+            + 4.0 * ITEM_GAP
+            + 3.0 * tool_extent(btn, 2.0)
+            + (SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0)
+            + pad * 2.0;
         let actual = toolbar.preferred_extent(btn, pad);
         assert!(
             (actual - expected).abs() < 0.01,
             "expected {expected}, got {actual}"
         );
+
+        let horizontal_expected = grip_main_extent(false)
+            + 4.0 * ITEM_GAP
+            + 3.0 * btn
+            + (SEPARATOR_THICKNESS + SEPARATOR_GAP * 2.0)
+            + pad * 2.0;
+        let horizontal = toolbar.preferred_extent_for_edge(btn, pad, ToolbarEdge::Top);
+        assert!(
+            (horizontal - horizontal_expected).abs() < 0.01,
+            "expected horizontal {horizontal_expected}, got {horizontal}"
+        );
+    }
+
+    #[test]
+    fn horizontal_tool_face_is_centered_in_a_tall_rail() {
+        let items = sample_items();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Top);
+        let mut capture = DragCapture::new();
+        let input = crate::InputState::default();
+        let rail = Rect::new(0.0, 0.0, 200.0, 36.0);
+
+        Toolbar::new(&items).draw(
+            rail,
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+
+        let idle_top = opaque_srgb8([0x41, 0x44, 0x49]);
+        let face = list
+            .chrome_instances()
+            .find(|instance| instance.bg == idle_top)
+            .expect("idle horizontal tool face");
+        assert_eq!(face.rect[2], theme.toolbar_button_size);
+        assert_eq!(face.rect[3], theme.toolbar_button_size);
+        assert_eq!(
+            face.rect[1],
+            (rail.height - RAIL_EDGE_THICKNESS - (theme.toolbar_button_size + theme.travel)) * 0.5
+        );
+        assert_eq!(list.icons_msdf[0].local.width, 14.0);
+        assert_eq!(list.icons_msdf[0].local.height, 14.0);
+        assert_eq!(list.icons_msdf[0].local.x, face.rect[0] + 5.0);
+        assert_eq!(list.icons_msdf[0].local.y, face.rect[1] + 5.0);
+    }
+
+    #[test]
+    fn vertical_tool_face_is_centered_in_a_wide_rail() {
+        let items = sample_items();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        state.active_tool = Some(1);
+        let mut capture = DragCapture::new();
+        let input = crate::InputState::default();
+        let rail = Rect::new(0.0, 0.0, 36.0, 200.0);
+
+        Toolbar::new(&items).draw(
+            rail,
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+
+        let held_top = opaque_srgb8([0x4a, 0x8a, 0x9c]);
+        let held = list
+            .chrome_instances()
+            .find(|instance| instance.bg == held_top)
+            .expect("selected vertical tool face");
+        assert_eq!(
+            held.rect[0],
+            (rail.width - RAIL_EDGE_THICKNESS - theme.toolbar_button_size) * 0.5
+        );
+        assert_eq!(held.rect[2], theme.toolbar_button_size);
+    }
+
+    #[test]
+    fn overflow_button_is_centered_across_an_oversized_rail() {
+        let vertical = trailing_button_rect(
+            Rect::new(10.0, 20.0, 36.0, 100.0),
+            ToolbarEdge::Left,
+            3.0,
+            24.0,
+            2.0,
+        );
+        assert_eq!(vertical.x, 15.5);
+        assert_eq!(vertical.width, 24.0);
+
+        let horizontal = trailing_button_rect(
+            Rect::new(10.0, 20.0, 100.0, 36.0),
+            ToolbarEdge::Top,
+            3.0,
+            24.0,
+            2.0,
+        );
+        assert_eq!(horizontal.y, 24.5);
+        assert_eq!(horizontal.height, 24.0);
+    }
+
+    #[test]
+    fn fitting_rail_does_not_draw_or_reserve_an_overflow_key() {
+        let items = sample_items();
+        let toolbar = Toolbar::new(&items);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Top);
+        let mut capture = DragCapture::new();
+        let input = crate::InputState::default();
+        let width = toolbar.preferred_extent_for_edge(
+            theme.toolbar_button_size,
+            theme.toolbar_padding,
+            ToolbarEdge::Top,
+        );
+
+        let output = toolbar.draw(
+            Rect::new(0.0, 0.0, width, 30.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+
+        assert_eq!(output.overflowed, 0);
+        assert!(
+            list.texts.iter().all(|text| text.content != "…"),
+            "a fitting rail must match the handoff and end after its final tool"
+        );
+    }
+
+    #[test]
+    fn small_rail_reserves_overflow_button_instead_of_silently_losing_tools() {
+        let items = sample_items();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let input = crate::InputState::default();
+        let mut cx = ctx(&mut list, &mut focus, &theme, &input);
+        let output = Toolbar::new(&items).draw(
+            Rect::new(0.0, 0.0, 28.0, 70.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut cx,
+        );
+        assert_eq!(output.overflowed, 2);
+        assert!(
+            list.chrome_instance_count() != 0,
+            "rail gradient should use composable quad geometry"
+        );
+    }
+
+    #[test]
+    fn toggle_reports_typed_event_without_mutating_caller_state() {
+        let items = [ToolbarItem::toggle(
+            9,
+            Icon::new(crate::render::PhosphorIcon::Plus),
+            "Snap",
+            "G",
+        )];
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let theme = Theme::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let mut input = crate::InputState::default();
+        input.mouse_x = 14.0;
+        input.mouse_y = 30.0;
+        input.mouse_clicked = true;
+        let mut cx = ctx(&mut list, &mut focus, &theme, &input);
+        let output = Toolbar::new(&items).draw(
+            Rect::new(0.0, 0.0, 28.0, 100.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut cx,
+        );
+        assert_eq!(output.event, Some(ToolbarEvent::ToggleActivated(9)));
+        assert!(
+            state.active_toggles.is_empty(),
+            "caller applies toggle state"
+        );
+    }
+
+    #[test]
+    fn rail_shadow_uses_authored_elevation_in_each_dock_direction() {
+        let theme = Theme::default();
+        for (edge, expected) in [
+            (ToolbarEdge::Left, [2.0, 0.0]),
+            (ToolbarEdge::Right, [-2.0, 0.0]),
+            (ToolbarEdge::Top, [0.0, 2.0]),
+            (ToolbarEdge::Bottom, [0.0, -2.0]),
+        ] {
+            let mut list = DrawList::new();
+            Toolbar::new(&[]).draw_rail(
+                Rect::new(10.0, 20.0, 30.0, 40.0),
+                edge,
+                theme.chrome.toolbar,
+                &mut list,
+            );
+            let shadow = &list.shadow_instance(0).unwrap();
+            let source = shadow.shadow_rect;
+            assert_eq!(
+                [
+                    source[0] - shadow.element_rect[0],
+                    source[1] - shadow.element_rect[1]
+                ],
+                expected
+            );
+            assert_eq!(
+                shadow.params[0],
+                theme.chrome.toolbar.rail_shadow.blur * 0.5
+            );
+        }
+    }
+
+    #[test]
+    fn typed_overlay_reaches_toolbar_rail_tools_and_popup() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.toolbar;
+        chrome.rail_colors = [[0.11, 0.12, 0.13, 1.0], [0.21, 0.22, 0.23, 1.0]];
+        chrome.tool_idle.background = Background::Solid([0.31, 0.32, 0.33, 1.0]);
+        chrome.popup.surface.background = Background::Solid([0.41, 0.42, 0.43, 1.0]);
+        let mut overlay = StyleOverlay::new();
+        overlay.set_toolbar(chrome);
+        let items = sample_items();
+        let input = crate::InputState::default();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::default();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        Toolbar::new(&items).draw(
+            Rect::new(0.0, 0.0, 28.0, 200.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay),
+        );
+        assert_eq!(list.chrome_instance(0).unwrap().bg, chrome.rail_colors[0]);
+        assert!(
+            list.chrome_instances()
+                .any(|quad| quad.bg == [0.31, 0.32, 0.33, 1.0])
+        );
+
+        state.popup = Some(PopupKind::Dock);
+        state.geom = Some(PopupGeometry {
+            anchor: Rect::new(0.0, 0.0, 10.0, 10.0),
+            viewport: Rect::new(0.0, 0.0, 300.0, 300.0),
+            kind: PopupKind::Dock,
+            overflow_start: 0,
+        });
+        let mut layers = LayerStack::new();
+        state.draw_open_layer(
+            &mut layers,
+            None,
+            &items,
+            &StyleResolver::with_overlay(&theme, &overlay),
+            &input,
+        );
+        assert!(
+            layers.layers()[0]
+                .list
+                .chrome_instances()
+                .any(|quad| quad.bg == [0.41, 0.42, 0.43, 1.0])
+        );
+        assert_eq!(layers.layers()[0].list.shadow_instance_count(), 2);
+    }
+
+    #[test]
+    fn dock_popup_selects_edge_through_popup_layer() {
+        let items = sample_items();
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let mut focus = FocusState::default();
+        let mut first_input = crate::InputState::default();
+        first_input.mouse_x = 14.0;
+        first_input.mouse_y = 10.0;
+        first_input.mouse_clicked = true;
+        let mut base = DrawList::new();
+        Toolbar::new(&items).draw_with_id(
+            7,
+            Rect::new(0.0, 0.0, 28.0, 180.0),
+            &mut state,
+            &mut capture,
+            99,
+            &mut ctx(&mut base, &mut focus, &theme, &first_input),
+        );
+        let mut next_input = crate::InputState::default();
+        state.begin_frame(&mut next_input);
+        let mut layers = LayerStack::new();
+        let popup = state
+            .push_open_layer(&mut layers)
+            .expect("dock popup layer");
+        let popup_bounds = layers.layers()[popup].rect;
+        next_input.mouse_x = popup_bounds.x + 20.0;
+        next_input.mouse_y = popup_bounds.y + 33.0;
+        next_input.mouse_clicked = true;
+        let event = state.draw_open_layer(&mut layers, Some(popup), &items, &styles, &next_input);
+        assert_eq!(event, Some(ToolbarEvent::DockChanged(ToolbarEdge::Top)));
+        state.end_frame();
     }
 }

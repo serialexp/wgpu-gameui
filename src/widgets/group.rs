@@ -188,7 +188,7 @@ mod tests {
         // Panel body + border + header lighten + separator → several chrome
         // instances; exactly one text block (the title).
         assert!(
-            !list.chrome_instances.is_empty(),
+            list.chrome_instance_count() != 0,
             "body/border/header drawn"
         );
         assert_eq!(list.texts.len(), 1, "title text drawn");

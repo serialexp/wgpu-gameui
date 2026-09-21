@@ -5,6 +5,7 @@
 //! through a caller-provided `DrawList` (usually a popup layer's) because the
 //! popover floats above the base layer.
 
+use crate::chrome::SurfacePainter;
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
@@ -76,125 +77,134 @@ pub fn draw_sheet(
     list: &mut DrawList,
     s: &StyleResolver,
 ) -> Rect {
-    // Drop shadow: the design floats the sheet on `0 14px 44px` black; blur
-    // extends ~half its radius, so the falloff margin is 22px.
-    list.drop_shadow(
-        body,
-        14.0,
-        22.0,
-        s.scalar(StyleKey::BorderRadius),
-        [0.0, 0.0, 0.0, 0.6],
-    );
-    // Declared scope covers body + arrow + the shadow skirt that pokes past
-    // them (so debug lints don't flag the intentional overspray).
+    let chrome = s.popover();
+    let shadow_margin = chrome.shadow.blur * 1.5;
+    // Declared scope covers body + arrow + the analytic shadow skirt.
     list.push_debug_scope_rect(
         "Popover",
         match side {
             PopoverSide::Above => Rect::new(
-                body.x - 22.0,
-                body.y - 22.0,
-                body.width + 44.0,
-                body.height + 6.0 + 22.0,
+                body.x - shadow_margin,
+                body.y - shadow_margin + chrome.shadow.offset[1],
+                body.width + shadow_margin * 2.0,
+                body.height + 6.0 + shadow_margin * 2.0,
             ),
             PopoverSide::Below => Rect::new(
-                body.x - 22.0,
-                body.y - 6.0 - 22.0,
-                body.width + 44.0,
-                body.height + 6.0 + 22.0,
+                body.x - shadow_margin,
+                body.y - 6.0 - shadow_margin + chrome.shadow.offset[1],
+                body.width + shadow_margin * 2.0,
+                body.height + 6.0 + shadow_margin * 2.0,
             ),
         },
     );
-    let radius = s.scalar(StyleKey::BorderRadius);
 
-    // Arrow: a small rotated square behind the body edge (drawn as a triangle)
-    // that pokes 6px past the body.
+    // Keep the authored order: body elevation, arrow behind the sheet, sheet,
+    // content, and finally the sheet border.
+    list.box_shadow_outset(body, chrome.surface.corner_radii, chrome.shadow);
     let ax = body.x + body.width * 0.5;
     let (ay0, ay1) = match side {
         PopoverSide::Above => (body.bottom() - 1.0, body.bottom() + 6.0),
         PopoverSide::Below => (body.y + 1.0, body.y - 6.0),
     };
-    let panel = s.color(StyleKey::Panel);
+    let panel = match chrome.surface.background {
+        crate::Background::Solid(color) => color,
+        crate::Background::LinearGradient { start, .. } => start,
+    };
     list.triangle((ax - 5.0, ay0), (ax + 5.0, ay0), (ax, ay1), panel);
 
-    // Sheet: the raised panel, near-black with a strong edge.
-    list.chrome_rect(body, radius, 1.0, panel, [0.0, 0.0, 0.0, 0.75]);
-    // 1px inset highlight under the top edge.
-    let hl = s.color(StyleKey::EdgeHighlight);
-    list.quad(
-        body.x + 1.0,
-        body.y + 1.0,
-        (body.width - 2.0).max(0.0),
-        1.0,
-        hl,
+    let padding_box = body.inset(chrome.surface.border_widths.left);
+    let mut surface = SurfacePainter::new(
+        list,
+        body,
+        padding_box,
+        chrome.surface.corner_radii,
+        chrome.surface,
+        &[],
+        &[],
     );
+    surface.paint_pre_content();
+    let close;
+    {
+        let list = surface.draw_list();
+        let radius = chrome.surface.corner_radii.top_left;
+        // 1px inset highlight under the top edge.
+        let hl = s.color(StyleKey::EdgeHighlight);
+        list.quad(
+            body.x + 1.0,
+            body.y + 1.0,
+            (body.width - 2.0).max(0.0),
+            1.0,
+            hl,
+        );
 
-    // Title + close key.
-    let font_size = s.scalar(StyleKey::FontSize);
-    let title_color = s.color(StyleKey::Text);
-    let ty = list.vcentered_text_y(
-        body.y + 4.0,
-        18.0,
-        font_size,
-        s.theme().font.as_ref(),
-        title,
-    );
-    list.text(
-        TextBlock::new(title, body.x + 8.0, ty)
-            .with_size(font_size)
-            .with_color(
-                (title_color[0] * 255.0) as u8,
-                (title_color[1] * 255.0) as u8,
-                (title_color[2] * 255.0) as u8,
-            )
-            .with_ellipsis()
-            .with_max_width(body.width - 16.0 - 18.0)
-            .with_font_opt(s.theme().font.clone()),
-    );
-
-    // Close key: a small ghost square top-right.
-    let close = Rect::new(body.right() - 18.0, body.y + 4.0, 14.0, 14.0);
-    let base = s.color(StyleKey::Button);
-    let top = material::sheen_over(base, s.color(StyleKey::FaceTop));
-    let bottom = material::sheen_over(base, s.color(StyleKey::FaceBottom));
-    list.chrome_rect_gradient(close, radius, 1.0, top, bottom, [0.0, 0.0, 0.0, 0.5]);
-    let xc = s.color(StyleKey::TextDim);
-    let xty = list.vcentered_text_y(close.y, close.height, 9.0, s.theme().font.as_ref(), "✕");
-    list.text(
-        TextBlock::new("✕", close.x + 3.0, xty)
-            .with_size(9.0)
-            .with_color(
-                (xc[0] * 255.0) as u8,
-                (xc[1] * 255.0) as u8,
-                (xc[2] * 255.0) as u8,
-            )
-            .with_font_opt(s.theme().font.clone()),
-    );
-
-    // Body lines.
-    let dim = s.color(StyleKey::TextDim);
-    let mut y = body.y + 24.0;
-    for line in lines {
-        let (tw, th) = {
-            // Wrap into the body width.
-            let m = list.measure_text(line, font_size, Some(body.width - 16.0));
-            m
-        };
-        let _ = tw;
-        let ly = list.vcentered_text_y(y, th, font_size, s.theme().font.as_ref(), line);
+        // Title + close key.
+        let font_size = s.scalar(StyleKey::FontSize);
+        let title_color = s.color(StyleKey::Text);
+        let ty = list.vcentered_text_y(
+            body.y + 4.0,
+            18.0,
+            font_size,
+            s.theme().font.as_ref(),
+            title,
+        );
         list.text(
-            TextBlock::new(*line, body.x + 8.0, ly)
+            TextBlock::new(title, body.x + 8.0, ty)
                 .with_size(font_size)
                 .with_color(
-                    (dim[0] * 255.0) as u8,
-                    (dim[1] * 255.0) as u8,
-                    (dim[2] * 255.0) as u8,
+                    (title_color[0] * 255.0) as u8,
+                    (title_color[1] * 255.0) as u8,
+                    (title_color[2] * 255.0) as u8,
                 )
-                .with_max_width(body.width - 16.0)
+                .with_ellipsis()
+                .with_max_width(body.width - 16.0 - 18.0)
                 .with_font_opt(s.theme().font.clone()),
         );
-        y += th + 4.0;
-    }
 
+        // Close key: a small ghost square top-right.
+        close = Rect::new(body.right() - 18.0, body.y + 4.0, 14.0, 14.0);
+        let base = s.color(StyleKey::Button);
+        let top = material::sheen_over(base, s.color(StyleKey::FaceTop));
+        let bottom = material::sheen_over(base, s.color(StyleKey::FaceBottom));
+        list.chrome_rect_gradient(close, radius, 1.0, top, bottom, [0.0, 0.0, 0.0, 0.5]);
+        let xc = s.color(StyleKey::TextDim);
+        let xty = list.vcentered_text_y(close.y, close.height, 9.0, s.theme().font.as_ref(), "✕");
+        list.text(
+            TextBlock::new("✕", close.x + 3.0, xty)
+                .with_size(9.0)
+                .with_color(
+                    (xc[0] * 255.0) as u8,
+                    (xc[1] * 255.0) as u8,
+                    (xc[2] * 255.0) as u8,
+                )
+                .with_font_opt(s.theme().font.clone()),
+        );
+
+        // Body lines.
+        let dim = s.color(StyleKey::TextDim);
+        let mut y = body.y + 24.0;
+        for line in lines {
+            let (tw, th) = {
+                // Wrap into the body width.
+                let m = list.measure_text(line, font_size, Some(body.width - 16.0));
+                m
+            };
+            let _ = tw;
+            let ly = list.vcentered_text_y(y, th, font_size, s.theme().font.as_ref(), line);
+            list.text(
+                TextBlock::new(*line, body.x + 8.0, ly)
+                    .with_size(font_size)
+                    .with_color(
+                        (dim[0] * 255.0) as u8,
+                        (dim[1] * 255.0) as u8,
+                        (dim[2] * 255.0) as u8,
+                    )
+                    .with_max_width(body.width - 16.0)
+                    .with_font_opt(s.theme().font.clone()),
+            );
+            y += th + 4.0;
+        }
+    }
+    surface.paint_post_content();
     list.pop_debug_scope();
     close
 }
@@ -285,6 +295,32 @@ mod tests {
             body.height - (24.0 + line_h + 4.0) >= BOTTOM_INSET,
             "measured popover leaves a visible bottom inset after wrapped body text"
         );
+    }
+
+    #[test]
+    fn typed_overlay_reaches_sheet_surface_and_shadow() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.popover;
+        chrome.surface.background = crate::Background::Solid([0.2, 0.3, 0.4, 1.0]);
+        chrome.shadow.color = [0.5, 0.1, 0.2, 0.7];
+        let mut overlay = crate::StyleOverlay::new();
+        overlay.set_popover(chrome);
+        let styles = StyleResolver::with_overlay(&theme, &overlay);
+        let mut list = DrawList::new();
+        draw_sheet(
+            Rect::new(20.0, 20.0, 160.0, 80.0),
+            PopoverSide::Below,
+            "Title",
+            &["line"],
+            &mut list,
+            &styles,
+        );
+        assert!(
+            list.chrome_instances()
+                .any(|i| i.bg == [0.2, 0.3, 0.4, 1.0])
+        );
+        assert_eq!(list.shadow_instance_count(), 1);
+        assert_eq!(list.shadow_instance(0).unwrap().color, chrome.shadow.color);
     }
 
     #[test]

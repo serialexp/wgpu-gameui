@@ -6,6 +6,7 @@
 //! inserts. `x` must stay sorted — the widget keeps order when a drag would
 //! cross a neighbor.
 
+use crate::chrome::{Background, SurfacePainter};
 use crate::layout::Rect;
 use crate::style::StyleKey;
 
@@ -174,14 +175,6 @@ pub fn draw(
         let active = i == selected || Some(i) == *drag;
         let hovered = hit == Some(i);
         let r = if active { 4.5 } else { 3.5 };
-        // Drop shadow under the key plate (`0 1px 3px` in the design).
-        list.drop_shadow(
-            Rect::new(sp[0] - r, sp[1] - r, 2.0 * r, 2.0 * r),
-            1.0,
-            1.5,
-            r,
-            [0.0, 0.0, 0.0, 0.6],
-        );
         let fill_c = if active {
             s.color(StyleKey::TextHighlight)
         } else if hovered {
@@ -189,8 +182,22 @@ pub fn draw(
         } else {
             s.color(StyleKey::Accent)
         };
-        list.circle((sp[0], sp[1]), r, fill_c);
-        list.circle_outline((sp[0], sp[1]), r, 1.0, [0.0, 0.0, 0.0, 0.65]);
+        let chrome = s.curve_key();
+        let mut key_surface = chrome.surface;
+        key_surface.background = Background::Solid(fill_c);
+        key_surface.corner_radii = r.into();
+        let key_rect = Rect::new(sp[0] - r, sp[1] - r, 2.0 * r, 2.0 * r);
+        let mut surface = SurfacePainter::new(
+            list,
+            key_rect,
+            key_rect.inset(key_surface.border_widths.left),
+            r.into(),
+            key_surface,
+            std::slice::from_ref(&chrome.shadow),
+            &[],
+        );
+        surface.paint_pre_content();
+        surface.paint_post_content();
         if hovered && input.mouse_clicked && capture.is_free() {
             capture.try_begin(id);
             *drag = Some(i);
@@ -229,7 +236,7 @@ pub fn draw(
 mod tests {
     use super::*;
     use crate::widgets::DrawList;
-    use crate::{FocusState, InputState, Theme};
+    use crate::{FocusState, InputState, StyleOverlay, Theme};
 
     fn ctx<'a>(
         list: &'a mut DrawList,
@@ -357,6 +364,40 @@ mod tests {
     }
 
     #[test]
+    fn typed_overlay_reaches_key_surface_and_shadow() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.curve_key;
+        chrome.surface.border_color = [0.2, 0.3, 0.4, 1.0];
+        chrome.shadow.color = [0.5, 0.1, 0.2, 0.7];
+        let mut overlay = StyleOverlay::new();
+        overlay.set_curve_key(chrome);
+        let input = InputState::default();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let mut capture = DragCapture::new();
+        let mut drag = None;
+        let mut context = ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay);
+        draw(
+            Rect::new(0.0, 0.0, 150.0, 150.0),
+            &keys(),
+            0,
+            &mut drag,
+            &mut capture,
+            1,
+            &mut context,
+        );
+        assert!(
+            list.chrome_instances()
+                .any(|i| i.border == chrome.surface.border_color)
+        );
+        assert_eq!(list.shadow_instance_count(), 3);
+        assert!(
+            list.shadow_instances()
+                .all(|i| i.color == chrome.shadow.color)
+        );
+    }
+
+    #[test]
     fn plot_paints_grid_fill_and_keys() {
         let theme = Theme::default();
         let mut capture = DragCapture::new();
@@ -378,9 +419,12 @@ mod tests {
             1,
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
-        // 6 grid quads + 2 fill triangles per segment + keys as circles.
-        assert!(list.chrome_instances.len() >= 2, "well + shadow");
-        assert!(list.circle_instances.len() >= 3, "three key handles");
+        // 6 grid quads + 2 fill triangles per segment + retained key surfaces.
+        assert!(
+            list.chrome_instance_count() >= 5,
+            "well + three key handles"
+        );
+        assert_eq!(list.shadow_instance_count(), 3, "one shadow per key");
         assert!(!list.vertices.is_empty(), "grid, fills, chords");
     }
 }

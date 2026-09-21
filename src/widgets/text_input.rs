@@ -1927,7 +1927,7 @@ mod tests {
         draw_input(&mut plain, 0, &mut focus, &mut l0, &theme, &fake_input());
         // Filled quads take the instanced-chrome fast path under a translate-only
         // transform, so the selection rectangle lands in `chrome_instances`.
-        let base = l0.chrome_instances.len();
+        let base = l0.chrome_instance_count();
 
         let mut sel = make_input("hello");
         sel.cursor_pos = 4;
@@ -1936,9 +1936,9 @@ mod tests {
         focus.begin_frame(&fake_input());
         draw_input(&mut sel, 0, &mut focus, &mut l1, &theme, &fake_input());
         assert!(
-            l1.chrome_instances.len() > base,
+            l1.chrome_instance_count() > base,
             "an active selection adds at least one fill quad ({} vs {})",
-            l1.chrome_instances.len(),
+            l1.chrome_instance_count(),
             base
         );
     }
@@ -1963,8 +1963,7 @@ mod tests {
         // The selection fill is the only accent-`bg` chrome quad (the focused
         // frame outline carries accent in `border`, never `bg`).
         let sel = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|c| c.bg == theme.accent)
             .expect("a focused selection draws an accent-filled quad");
         let box_centre = ti.y + ti.height / 2.0;

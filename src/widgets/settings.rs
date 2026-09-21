@@ -1105,8 +1105,7 @@ mod tests {
         let _ = SettingsForm::new(&spec).draw(&mut values, rect, &mut state, &mut ctx);
         // The deepest drawn chrome bottom must not exceed the announced height.
         let max_y = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .map(|c| c.rect[1] + c.rect[3])
             .fold(0.0f32, f32::max);
         assert!(

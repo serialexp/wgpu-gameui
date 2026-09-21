@@ -288,7 +288,7 @@ mod tests {
         );
 
         assert!(
-            !list.chrome_instances.iter().any(|instance| {
+            !list.chrome_instances().any(|instance| {
                 instance.rect[1] == theme.padding + 3.0
                     && instance.rect[3] == 1.0
                     && instance.rect[2] > 10.0

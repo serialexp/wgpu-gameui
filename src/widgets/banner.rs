@@ -15,6 +15,7 @@
 //! # }
 //! ```
 
+use crate::color::srgb_to_linear;
 use crate::layout::Rect;
 use crate::{StyleKey, StyleResolver};
 
@@ -53,12 +54,13 @@ impl Severity {
     /// without a [`StyleResolver`] still get the canonical colors; the rendered
     /// path resolves through [`style_key`](Self::style_key) so themes/overlays win.
     pub fn accent(self) -> [f32; 4] {
-        match self {
+        let srgb = match self {
             Severity::Info => [0.3692, 0.6736, 0.92, 1.0],
             Severity::Success => [0.3799, 0.7093, 0.3977, 1.0],
             Severity::Warning => [0.9084, 0.6684, 0.3042, 1.0],
             Severity::Error => [0.8413, 0.2796, 0.2724, 1.0],
-        }
+        };
+        srgb_to_linear(srgb)
     }
 
     /// The resolved accent color for this severity under `style`.
@@ -248,7 +250,7 @@ mod tests {
         let mut list = DrawList::new();
         Banner::success("Saved").draw(Rect::new(0.0, 0.0, 200.0, 40.0), &mut list, &s);
         // The accent bar is the second chrome instance; its color follows the overlay.
-        let bar = list.chrome_instances[1];
+        let bar = list.chrome_instance(1).unwrap();
         assert_eq!(
             bar.bg, custom,
             "accent bar resolves through the style system"
@@ -309,7 +311,7 @@ mod tests {
             &s,
         );
         // background + accent bar → 2 chrome instances; title + message → 2 texts.
-        assert_eq!(list.chrome_instances.len(), 2);
+        assert_eq!(list.chrome_instance_count(), 2);
         assert_eq!(list.texts.len(), 2);
         assert_eq!(list.texts[0].content, "Error");
         assert_eq!(list.texts[1].content, "Disk full");

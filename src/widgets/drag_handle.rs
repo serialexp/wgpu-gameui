@@ -301,7 +301,7 @@ mod tests {
         // Filled rects/rounded-rects emit `chrome_instances` (not vertex soup)
         // under the identity transform; the grip is plain quads through the
         // same path. Count all geometry buffers so the metric is path-agnostic.
-        let geom = list.chrome_instances.len() + list.vertices.len() + list.texts.len();
+        let geom = list.chrome_instance_count() + list.vertices.len() + list.texts.len();
         (out, geom)
     }
 

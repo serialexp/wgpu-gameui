@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "fixture": "gpu-chrome-and-shadows",
+  "source": "reference.html",
+  "purpose": "Phase-0 Chromium reference captures for CSS box-shadow alpha coverage and known-backdrop composites.",
+  "capture": {
+    "engine": "Chromium via Playwright",
+    "viewport_css_px": { "width": 1440, "height": 1400 },
+    "device_scale_factors": [1, 1.5, 2],
+    "backdrops": ["alpha", "black", "white"],
+    "alpha_mode": "transparent page with source fill and border removed",
+    "crop_css_px": { "width": 288, "height": 280 },
+    "output_pattern": "captures/{case}/{backdrop}@{dpr}x.png"
+  },
+  "browser_metadata": {
+    "product": "chromium",
+    "channel": "Playwright bundled Chromium",
+    "version": "written at capture time to captures/capture-metadata.json",
+    "headless": true,
+    "color_space": "browser CSS/sRGB compositing; compare alpha separately from final RGB"
+  },
+  "cases": [
+    { "id": "outset-blur-0", "crop": [0, 0, 288, 280], "shadow": "0 0 0 0 rgba(0,0,0,.7)", "notes": "zero-blur crisp outset" },
+    { "id": "outset-blur-2", "crop": [288, 0, 288, 280], "shadow": "0 0 2px rgba(0,0,0,.7)", "radius": "1px" },
+    { "id": "outset-blur-6", "crop": [576, 0, 288, 280], "shadow": "0 0 6px rgba(0,0,0,.7)" },
+    { "id": "outset-blur-8", "crop": [864, 0, 288, 280], "shadow": "0 0 8px rgba(0,0,0,.7)" },
+    { "id": "outset-blur-18", "crop": [1152, 0, 288, 280], "shadow": "0 0 18px rgba(0,0,0,.7)" },
+    { "id": "outset-blur-26", "crop": [0, 280, 288, 280], "shadow": "0 0 26px rgba(0,0,0,.7)" },
+    { "id": "outset-blur-40", "crop": [288, 280, 288, 280], "shadow": "0 0 40px rgba(0,0,0,.7)" },
+    { "id": "outset-blur-44", "crop": [576, 280, 288, 280], "shadow": "0 0 44px rgba(0,0,0,.7)" },
+    { "id": "offset-positive-xy", "crop": [864, 280, 288, 280], "shadow": "13px 17px 18px rgba(0,0,0,.7)" },
+    { "id": "offset-negative-xy", "crop": [1152, 280, 288, 280], "shadow": "-13px -17px 18px rgba(0,0,0,.7)" },
+    { "id": "offset-negative-x", "crop": [0, 560, 288, 280], "shadow": "-18px 0 8px rgba(0,0,0,.7)" },
+    { "id": "offset-negative-y", "crop": [288, 560, 288, 280], "shadow": "0 -18px 8px rgba(0,0,0,.7)" },
+    { "id": "spread-negative-asymmetric", "crop": [576, 560, 288, 280], "shadow": "5px -4px 18px -2px rgba(0,0,0,.7)", "radius": "2px 18px 7px 26px" },
+    { "id": "spread-positive-asymmetric", "crop": [864, 560, 288, 280], "shadow": "-5px 4px 18px 4px rgba(0,0,0,.7)", "radius": "2px 18px 7px 26px" },
+    { "id": "inset-basic", "crop": [1152, 560, 288, 280], "shadow": "inset 0 4px 8px rgba(0,0,0,.7)" },
+    { "id": "inset-hole-collapse", "crop": [0, 840, 288, 280], "shadow": "inset 0 0 18px 8px rgba(0,0,0,.7)", "notes": "positive inset spread collapses 8px source hole" },
+    { "id": "cyan-glow", "crop": [288, 840, 288, 280], "shadow": "0 0 26px 4px rgba(0,220,255,.65)" },
+    { "id": "mixed-multi-shadow", "crop": [576, 840, 288, 280], "notes": "four shadows in CSS declaration order" },
+    { "id": "thin-blur-40", "crop": [864, 840, 288, 280], "source": "2x26px", "shadow": "0 0 40px rgba(0,0,0,.7)" },
+    { "id": "thin-blur-44", "crop": [1152, 840, 288, 280], "source": "2x26px", "shadow": "0 0 44px rgba(0,0,0,.7)" },
+    { "id": "transform-rotate", "crop": [0, 1120, 288, 280], "transform": "rotate(27deg)" },
+    { "id": "transform-nonuniform-scale", "crop": [288, 1120, 288, 280], "transform": "scale(1.35,.65)" },
+    { "id": "transform-skew", "crop": [576, 1120, 288, 280], "transform": "skewX(24deg)" },
+    { "id": "transform-reflect-asymmetric", "crop": [864, 1120, 288, 280], "transform": "matrix(-1,.22,.18,1,0,0)", "radius": "2px 18px 7px 26px" }
+  ]
+}

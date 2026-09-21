@@ -22,6 +22,7 @@
 //! ```
 
 use crate::StyleResolver;
+use crate::chrome::SurfacePainter;
 use crate::layout::Rect;
 
 use super::{Banner, DrawList, Severity};
@@ -271,19 +272,36 @@ impl ToastStack {
 
             let alpha = fade_alpha(a.elapsed, a.toast.ttl, self.fade);
             let toast_rect = Rect::new(x, y, self.width, h);
+            let chrome = style.toast();
+            let shadow_margin = chrome.shadow.blur * 1.5;
             // Scoped per toast rather than per stack: the stack has no
-            // allocation of its own, each toast does. Includes the drop
-            // shadow's skirt (`0 12px 30px` design shadow → 15px falloff).
+            // allocation of its own, each toast does.
             list.push_debug_scope_rect(
                 "Toast",
-                Rect::new(x - 15.0, y - 15.0, self.width + 30.0, h + 30.0 + 12.0),
+                Rect::new(
+                    x - shadow_margin,
+                    y - shadow_margin + chrome.shadow.offset[1],
+                    self.width + shadow_margin * 2.0,
+                    h + shadow_margin * 2.0,
+                ),
             );
+            // Tint is established before every retained instance so the analytic
+            // shadow, themed surface, banner content, and border fade together.
             list.push_tint();
             list.multiply_tint([1.0, 1.0, 1.0, alpha]);
-            // Drop shadow first, under the banner chrome; both fade with the
-            // toast via the tint multiply.
-            list.drop_shadow(toast_rect, 12.0, 15.0, 3.0, [0.0, 0.0, 0.0, 0.6]);
-            banner.draw(toast_rect, list, style);
+            let padding_box = toast_rect.inset(chrome.surface.border_widths.left);
+            let mut surface = SurfacePainter::new(
+                list,
+                toast_rect,
+                padding_box,
+                chrome.surface.corner_radii,
+                chrome.surface,
+                std::slice::from_ref(&chrome.shadow),
+                &[],
+            );
+            surface.paint_pre_content();
+            banner.draw(toast_rect, surface.draw_list(), style);
+            surface.paint_post_content();
             list.pop_tint();
             list.pop_debug_scope();
         }
@@ -351,17 +369,12 @@ mod tests {
             s.push(Toast::info(format!("toast {i}")));
         }
         s.draw(800.0, 600.0, &mut list, &s_style);
-        // Each banner paints a fill quad + accent bar (2 chrome rects per
-        // toast, at the toast rect's origin); the drop shadow adds its own 3
-        // chrome instances per toast, so count banner plates only.
         assert_eq!(s.len(), 3, "all three stay queued");
-        let w = 300.0;
-        let plates = list
-            .chrome_instances
-            .iter()
-            .filter(|c| c.rect[2] == w && c.border[3] > 0.0)
-            .count();
-        assert_eq!(plates, 2, "only 2 banner plates rendered");
+        assert_eq!(
+            list.shadow_instance_count(),
+            2,
+            "only 2 toast elevations rendered"
+        );
     }
 
     #[test]
@@ -375,8 +388,7 @@ mod tests {
         // First banner-plate chrome instance (the drop shadow skirts are
         // wider than the toast); its left edge.
         let right_x = right
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
             .unwrap()
             .rect[0];
@@ -394,8 +406,7 @@ mod tests {
         let mut left = DrawList::new();
         s.draw(800.0, 600.0, &mut left, &s_style);
         let left_x = left
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
             .unwrap()
             .rect[0];
@@ -414,8 +425,7 @@ mod tests {
         let mut tlist = DrawList::new();
         top.draw(800.0, 600.0, &mut tlist, &s_style);
         let top_y = tlist
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
             .unwrap()
             .rect[1];
@@ -429,8 +439,7 @@ mod tests {
         let mut blist = DrawList::new();
         bot.draw(800.0, 600.0, &mut blist, &s_style);
         let r = blist
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|c| c.rect[2] == 300.0 && c.border[3] > 0.0)
             .unwrap()
             .rect;
@@ -442,11 +451,35 @@ mod tests {
     }
 
     #[test]
+    fn typed_overlay_and_fade_tint_reach_toast_surface_and_shadow() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.toast;
+        chrome.surface.background = crate::Background::Solid([0.2, 0.3, 0.4, 1.0]);
+        chrome.shadow.color = [0.5, 0.1, 0.2, 0.8];
+        let mut overlay = crate::StyleOverlay::new();
+        overlay.set_toast(chrome);
+        let styles = StyleResolver::with_overlay(&theme, &overlay);
+        let mut stack = ToastStack::new();
+        stack.push(Toast::info("toast").with_ttl(1.0));
+        stack.tick(0.8);
+        let alpha = fade_alpha(0.8, 1.0, stack.fade);
+        let mut list = DrawList::new();
+        stack.draw(800.0, 600.0, &mut list, &styles);
+        let surface = list.chrome_instances().find(|i| i.bg[0] == 0.2).unwrap();
+        assert_eq!(surface.bg[3], alpha);
+        assert_eq!(list.shadow_instance_count(), 1);
+        assert!(
+            (list.shadow_instance(0).unwrap().color[3] - chrome.shadow.color[3] * alpha).abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
     fn empty_stack_draws_nothing() {
         let s_style = style();
         let mut list = DrawList::new();
         let s = ToastStack::new();
         s.draw(800.0, 600.0, &mut list, &s_style);
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
     }
 }

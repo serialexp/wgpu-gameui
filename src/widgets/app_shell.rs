@@ -70,6 +70,7 @@ use crate::style::{StyleKey, StyleResolver};
 use crate::widgets::dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
 use crate::widgets::drag::{DragCapture, DragId};
 use crate::widgets::splitter::Splitter;
+#[cfg(feature = "phosphor-icons")]
 use crate::widgets::toolbar::{Toolbar, ToolbarEdge, ToolbarItem, ToolbarOutput, ToolbarState};
 
 use super::DrawContext;
@@ -85,7 +86,11 @@ pub const SHELL_DRAG_RIGHT_SPLITTER: DragId = 0xA551_0002;
 /// [`DragId`] for the bottom dock's resize splitter.
 pub const SHELL_DRAG_BOTTOM_SPLITTER: DragId = 0xA551_0003;
 /// [`DragId`] for the toolbar's grip handle.
+#[cfg(feature = "phosphor-icons")]
 pub const SHELL_DRAG_TOOLBAR_GRIP: DragId = 0xA551_0004;
+/// Stable identity for the toolbar hosted by [`AppShell`].
+#[cfg(feature = "phosphor-icons")]
+pub const SHELL_TOOLBAR_ID: u64 = 0xA551_0004;
 
 // ---------------------------------------------------------------------------
 // ShellLayout — pure geometry output
@@ -111,6 +116,7 @@ pub struct ShellLayout {
     /// Bottom resize splitter rect.
     pub bottom_splitter: Option<Rect>,
     /// Toolbar strip rect. `None` when no toolbar.
+    #[cfg(feature = "phosphor-icons")]
     pub toolbar: Option<Rect>,
     /// The viewport — the remaining area after all chrome is subtracted.
     pub viewport: Rect,
@@ -138,6 +144,7 @@ pub struct ShellChromeOutput {
     /// Bottom dock panel output.
     pub bottom_dock: Option<DockPanelOutput>,
     /// Toolbar output.
+    #[cfg(feature = "phosphor-icons")]
     pub toolbar: Option<ToolbarOutput>,
 }
 
@@ -203,7 +210,7 @@ impl AppShell {
         left: Option<&DockPanelState>,
         right: Option<&DockPanelState>,
         bottom: Option<&DockPanelState>,
-        toolbar: Option<&ToolbarState>,
+        #[cfg(feature = "phosphor-icons")] toolbar: Option<&ToolbarState>,
         styles: &StyleResolver,
     ) -> ShellLayout {
         let mut out = ShellLayout::default();
@@ -291,11 +298,22 @@ impl AppShell {
         }
 
         // --- Toolbar: peel from the toolbar's edge of the viewport ---
+        #[cfg(feature = "phosphor-icons")]
         if self.has_toolbar {
             if let Some(ts) = toolbar {
                 let btn_size = styles.scalar(StyleKey::ToolbarButtonSize);
                 let pad = styles.scalar(StyleKey::ToolbarPadding);
-                let cross = btn_size + pad * 2.0;
+                // The handoff rail uses content-box sizing: its 1px dock-edge
+                // rule is outside the padded content area. Horizontal rails
+                // also carry the key's travel slot on their cross axis.
+                let cross = btn_size
+                    + pad * 2.0
+                    + 1.0
+                    + if ts.edge.is_vertical() {
+                        0.0
+                    } else {
+                        styles.scalar(StyleKey::Travel)
+                    };
                 match ts.edge {
                     ToolbarEdge::Left => {
                         let tw = cross.min(rem.width);
@@ -341,7 +359,7 @@ impl AppShell {
         left: Option<(&[DockTab<'t>], &mut DockPanelState)>,
         right: Option<(&[DockTab<'t>], &mut DockPanelState)>,
         bottom: Option<(&[DockTab<'t>], &mut DockPanelState)>,
-        toolbar: Option<(&[ToolbarItem<'t>], &mut ToolbarState)>,
+        #[cfg(feature = "phosphor-icons")] toolbar: Option<(&[ToolbarItem<'t>], &mut ToolbarState)>,
         drag_capture: &mut DragCapture,
         ctx: &mut DrawContext,
     ) -> ShellChromeOutput {
@@ -355,8 +373,12 @@ impl AppShell {
                 sp_rect,
                 ctx,
             );
-            dock_state.size =
-                (dock_state.size + sp.delta).clamp(dock_state.min_size, dock_state.max_size);
+            if sp.dragging
+                && let Some(dock_rect) = shell.left_dock
+            {
+                dock_state.size = (ctx.input.mouse_x - dock_rect.x)
+                    .clamp(dock_state.min_size, dock_state.max_size);
+            }
             out.left_splitter = Some(sp);
 
             if let Some(dock_rect) = shell.left_dock {
@@ -375,9 +397,12 @@ impl AppShell {
                 sp_rect,
                 ctx,
             );
-            // Right splitter: dragging left (negative delta) increases right dock width.
-            dock_state.size =
-                (dock_state.size - sp.delta).clamp(dock_state.min_size, dock_state.max_size);
+            if sp.dragging
+                && let Some(dock_rect) = shell.right_dock
+            {
+                dock_state.size = (dock_rect.right() - ctx.input.mouse_x)
+                    .clamp(dock_state.min_size, dock_state.max_size);
+            }
             out.right_splitter = Some(sp);
 
             if let Some(dock_rect) = shell.right_dock {
@@ -396,9 +421,12 @@ impl AppShell {
                 sp_rect,
                 ctx,
             );
-            // Bottom splitter: dragging up (negative delta) increases bottom dock height.
-            dock_state.size =
-                (dock_state.size - sp.delta).clamp(dock_state.min_size, dock_state.max_size);
+            if sp.dragging
+                && let Some(dock_rect) = shell.bottom_dock
+            {
+                dock_state.size = (dock_rect.bottom() - ctx.input.mouse_y)
+                    .clamp(dock_state.min_size, dock_state.max_size);
+            }
             out.bottom_splitter = Some(sp);
 
             if let Some(dock_rect) = shell.bottom_dock {
@@ -410,9 +438,11 @@ impl AppShell {
         }
 
         // --- Toolbar ---
+        #[cfg(feature = "phosphor-icons")]
         if let (Some(tb_rect), Some((items, tb_state))) = (shell.toolbar, toolbar) {
             let tb = Toolbar::new(items);
-            let tb_out = tb.draw(
+            let tb_out = tb.draw_with_id(
+                SHELL_TOOLBAR_ID,
                 tb_rect,
                 tb_state,
                 drag_capture,
@@ -442,6 +472,7 @@ mod tests {
     use crate::Theme;
     use crate::style::StyleResolver;
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn all_zones_visible() {
         let theme = Theme::default();
@@ -482,6 +513,49 @@ mod tests {
     }
 
     #[test]
+    fn captured_left_splitter_recomputes_size_from_pointer_after_clamping() {
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let shell = AppShell::new();
+        let mut dock = DockPanelState::new(180.0).with_range(120.0, 460.0);
+        let layout = shell.layout(
+            Rect::new(40.0, 0.0, 760.0, 600.0),
+            Some(&dock),
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &styles,
+        );
+        let mut capture = DragCapture::new();
+        capture.try_begin(SHELL_DRAG_LEFT_SPLITTER);
+        let input = crate::InputState {
+            mouse_x: 300.0,
+            mouse_y: 100.0,
+            mouse_down: true,
+            is_dragging: true,
+            drag_delta: [-300.0, 0.0],
+            ..Default::default()
+        };
+        let mut list = crate::DrawList::new();
+        let mut focus = crate::FocusState::new();
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
+
+        shell.draw_chrome(
+            &layout,
+            Some((&[], &mut dock)),
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &mut capture,
+            &mut ctx,
+        );
+
+        assert_eq!(dock.size, 260.0);
+    }
+
+    #[test]
     fn hidden_dock_expands_viewport() {
         let theme = Theme::default();
         let s = StyleResolver::new(&theme);
@@ -490,11 +564,27 @@ mod tests {
         let shell = AppShell::new();
 
         // No docks, no toolbar.
-        let layout_none = shell.layout(screen, None, None, None, None, &s);
+        let layout_none = shell.layout(
+            screen,
+            None,
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &s,
+        );
 
         // Left dock visible.
         let left = DockPanelState::new(180.0);
-        let layout_left = shell.layout(screen, Some(&left), None, None, None, &s);
+        let layout_left = shell.layout(
+            screen,
+            Some(&left),
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &s,
+        );
 
         assert!(
             layout_none.viewport.width > layout_left.viewport.width,
@@ -504,7 +594,15 @@ mod tests {
         // Hidden dock (visible = false).
         let mut left_hidden = DockPanelState::new(180.0);
         left_hidden.visible = false;
-        let layout_hidden = shell.layout(screen, Some(&left_hidden), None, None, None, &s);
+        let layout_hidden = shell.layout(
+            screen,
+            Some(&left_hidden),
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &s,
+        );
 
         assert!(
             (layout_none.viewport.width - layout_hidden.viewport.width).abs() < 0.01,
@@ -512,6 +610,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn rects_do_not_overlap() {
         let theme = Theme::default();
@@ -588,6 +687,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn toolbar_edge_placement() {
         let theme = Theme::default();
@@ -605,6 +705,19 @@ mod tests {
             let toolbar = ToolbarState::new(edge);
             let layout = shell.layout(screen, None, None, None, Some(&toolbar), &s);
             let tb = layout.toolbar.expect("toolbar should be present");
+            let expected_cross = theme.toolbar_button_size
+                + theme.toolbar_padding * 2.0
+                + 1.0
+                + if edge.is_vertical() {
+                    0.0
+                } else {
+                    theme.travel
+                };
+            if edge.is_vertical() {
+                assert_eq!(tb.width, expected_cross);
+            } else {
+                assert_eq!(tb.height, expected_cross);
+            }
 
             match edge {
                 ToolbarEdge::Left => {
@@ -640,10 +753,15 @@ mod tests {
         let theme = Theme::default();
         let s = StyleResolver::new(&theme);
         let screen = Rect::new(0.0, 0.0, 800.0, 600.0);
-        let layout = AppShell::new()
-            .with_menu_bar()
-            .with_status_bar()
-            .layout(screen, None, None, None, None, &s);
+        let layout = AppShell::new().with_menu_bar().with_status_bar().layout(
+            screen,
+            None,
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &s,
+        );
 
         let menu = layout.menu_bar.unwrap();
         assert!((menu.height - theme.menu_row_height).abs() < 0.01);
@@ -662,7 +780,15 @@ mod tests {
         let theme = Theme::default();
         let s = StyleResolver::new(&theme);
         let screen = Rect::new(0.0, 0.0, 800.0, 600.0);
-        let layout = AppShell::new().layout(screen, None, None, None, None, &s);
+        let layout = AppShell::new().layout(
+            screen,
+            None,
+            None,
+            None,
+            #[cfg(feature = "phosphor-icons")]
+            None,
+            &s,
+        );
 
         assert!((layout.viewport.x - screen.x).abs() < 0.01);
         assert!((layout.viewport.y - screen.y).abs() < 0.01);

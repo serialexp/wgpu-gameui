@@ -261,6 +261,23 @@ harden those foundations rather than create parallel replacements.
       radius_px)`; backed by `TextOutline`/`TextShadow`/`TextGlow` (all exported).
       Rendered by the back-to-front glyph sweep in `src/text.rs` (not feature-
       gated); gallery has Outline/Shadow/Glow demo rows.
+- [x] **P1 — GPU-native component chrome and analytic box shadows.** Fixed-size
+      `Background`/`QuadStyle`/`EdgeStyle` values and `SurfacePainter` compose
+      gradients, unequal rounded borders, structural lines, CSS-ordered shadows,
+      and explicit padding-box insets. `BoxShadow` + `CornerRadii` support crisp
+      or blurred outset/inset rendering, spread, asymmetric corners, clipping,
+      and nonsingular full-affine transforms through one retained GPU instance
+      per shadow. Chrome and shadows share one ordered tagged instance stream, so
+      arbitrary alternation preserves source-over order in one direct upload and
+      one instanced draw. Renderer-owned arenas and warm `DrawList::clear()`
+      rebuilds allocate nothing, and `RenderStats` exposes runs/draws/uploads/
+      reallocations. Chromium
+      153 fixtures cover 24 cases at DPR 1/1.5/2, deterministic GPU tests cover
+      geometry/ordering/transforms, and migrated component rows are present in
+      the widget and menu galleries. API: `BoxShadow`, `CornerRadii`,
+      `ShadowInstance`, `Background`, `GradientAxis`, `EdgeWidths`, `EdgeStyle`,
+      `QuadStyle`, `StructuralLine`, `SurfacePainter`, `ChromeTheme`, and
+      `RenderStats`.
 
 ---
 
@@ -635,9 +652,10 @@ harden those foundations rather than create parallel replacements.
       `load_font_bytes` → `FontHandle`), per-`TextBlock` font selection
       (`with_font`/`with_font_opt`), bold/italic/weight (`TextBlock::bold()`/
       `italic()`/`with_weight()`/`with_style()`, threaded through the shape
-      cache + measurement), a bundled default font (Noto Sans, behind the
-      default-on `bundled-font` feature → deterministic `Family::SansSerif` via
-      `register_bundled_fonts`), `Theme.font` driving every widget, and the
+      cache + measurement), the design's IBM Plex Sans bundled as the default
+      `Family::SansSerif` plus IBM Plex Mono as its technical companion behind
+      default-on `bundled-font` (`register_bundled_fonts` / `bundled_mono_font`),
+      `Theme.font` driving every widget, and the
       Teardown `UiFont(family,size)` push/pop font stack on `UiContext`
       (`font`/`font_size`/`font_family`/`bold`/`italic`/`text_line`).
       cosmic-text's script/glyph fallback is automatic. (Synthetic bold/oblique
@@ -1215,9 +1233,11 @@ designed components we didn't have. Fantasy Theme sheet intentionally ignored.
       list = raised sheet), Tabs & menu sheets (held-key active tab, translucent
       accent row highlight), ScrollView bars (docked plinth track + material
       thumb), ProgressBar (sunken track + gradient fill + highlight).
-- [x] **Fonts:** design leans on IBM Plex Sans/Mono from Google Fonts — *not*
-      bundled. Kept Noto Sans as the default (`bundled-font`); theming to Plex
-      is `theme.font = Some(load_font_file(..)?)`. Flagged for Bart.
+- [x] **Fonts:** `bundled-font` now embeds the design's IBM Plex Sans regular,
+      bold, italic, and bold-italic faces as deterministic default sans-serif,
+      plus the matching IBM Plex Mono family for technical UI via
+      `bundled_mono_font(&font_system)`. Both unmodified font families and their
+      OFL-1.1 license notice are vendored under `assets/fonts/ibm-plex/`.
 
 ### New widgets from the design sheets
 
@@ -1235,8 +1255,10 @@ and rendered in new `4a:*` gallery sections.
       or `.numeric()` page keys for small totals.
 - [x] **Status bar** (`status_bar.rs`) — 26px strip; first cell stretches,
       hairline dividers between cells, `StatusCell::text/spacer/highlight`.
-- [x] **Splitter** (`splitter.rs`) — pane divider (vertical/horizontal) through
-      `DragCapture`; reports `drag_delta` along the axis while owned.
+- [x] **Splitter** (`splitter.rs`) — 6px milled pane groove with centered 2×26px
+      grip (idle/hover/captured accent-glow states), vertical/horizontal through
+      `DragCapture`; reports `drag_delta` along the axis while owned. `AppShell`
+      recomputes dock size from the captured pointer position so clamps do not drift.
 - [x] **Tag input** (`tag_input.rs`) — well with removable chips + inline draft
       field; Enter commits, ✕ reports removal; all state caller-owned.
 - [x] **Combo box** (`combo_box.rs`) — `draw_combo_trigger` (well + chevron key,
@@ -1313,16 +1335,24 @@ new systems designed to compose with it and the existing widgets.
 ### New widgets
 
 - [x] **Toolbar** (`src/widgets/toolbar.rs`) — edge-dockable strip of tool
-      buttons with grip handle, group separators, and active-tool accent
-      highlighting. `Toolbar::new(items).draw(rect, &mut state, &mut capture,
-      grip_id, &mut ctx) -> ToolbarOutput`. Tool buttons use the plinth+face
-      material (`Tone::Ghost` idle, `Tone::Accent` active). Icon via `Icon`
-      widget (PhosphorIcon or custom font). Grip via `DragCapture` protocol
-      (same as `Splitter`/`DragHandle`). Hovered tool reported in output for
-      external `TooltipLayer`. No popup, no frame-deferred state. State is
-      caller-owned `ToolbarState { edge, active_tool }`. 7 unit tests.
-      API: `ToolbarEdge` (`Left`/`Right`/`Top`/`Bottom`), `ToolDef`, `ToolbarItem`
-      (`Tool`/`Separator`), `ToolbarState`, `Toolbar`, `ToolbarOutput`.
+      buttons with compact ridged grip, group separators, active-tool accent
+      highlighting, a flush edge-attached gradient rail, and a trailing overflow
+      key. `Toolbar::new(items).draw_with_id(id, rect, &mut state, &mut capture,
+      grip_id, &mut ctx) -> ToolbarOutput`; default `draw` uses id 0. Tool
+      buttons use plinth+face material (raised neutral idle, accent active).
+      The grip opens a deferred popup dock chooser (Top/Right/Bottom/Left); the
+      overflow key exposes items that do not fit instead of silently truncating.
+      Drive `ToolbarState::begin_frame` → `push_open_layer` → base draw →
+      `draw_open_layer` → `end_frame` around `LayerStack`; popup actions return
+      `ToolbarEvent` and application selection/toggles remain caller-owned.
+      Icons use `Icon` (PhosphorIcon or custom font); hover remains output for an
+      external `TooltipLayer`. State is caller-owned `ToolbarState { edge,
+      active_tool, active_toggles, .. }`. Headless tests cover interaction,
+      orientation-aware geometry, overflow, popup selection, key materials, and
+      the grip's translucent-white ridges/black counter-edge.
+      API: `ToolbarId`, `ToolbarEdge` (`Left`/`Right`/`Top`/`Bottom`), `ToolDef`,
+      `ToolbarItem` (`Tool`/`Toggle`/`Separator`), `ToolbarEvent`, `ToolbarState`,
+      `Toolbar`, `ToolbarOutput`.
 
 - [x] **Dock panel** (`src/widgets/dock_panel.rs`) — tabbed, closable panel
       chrome for left/right/bottom docks. `DockPanel::new(side, tabs).closable()

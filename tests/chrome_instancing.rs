@@ -17,7 +17,10 @@
 //! ```
 
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{DrawList, FontSystemHandle, UiRenderer};
+use wgpu_gameui::{
+    Background, CornerRadii, DrawList, EdgeWidths, FontSystemHandle, GradientAxis, QuadStyle,
+    UiRenderer,
+};
 
 const W: u32 = 480;
 const H: u32 = 320;
@@ -214,4 +217,62 @@ fn instanced_chrome_matches_immediate() {
         frac * 100.0,
         6.0
     );
+}
+
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn composable_quad_renders_affine_unequal_rounded_border_gradient_and_clip() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter (run under DISPLAY=:0)");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("composable quad device"),
+            ..Default::default()
+        },
+        None,
+    ))
+    .expect("request device");
+    let font_system = wgpu_gameui::shared_font_system();
+    let mut ui = UiRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        font_system.clone(),
+    );
+    let mut list = DrawList::with_font_system(font_system);
+    list.push_clip(Rect::new(80.0, 55.0, 95.0, 85.0));
+    list.translate(120.0, 95.0);
+    list.rotate(0.35);
+    list.set_tint([0.8, 1.0, 0.7, 1.0]);
+    list.paint_quad(
+        Rect::new(-55.0, -35.0, 130.0, 80.0),
+        QuadStyle {
+            background: Background::LinearGradient {
+                start: [0.9, 0.15, 0.1, 1.0],
+                end: [0.1, 0.2, 0.9, 1.0],
+                axis: GradientAxis::Horizontal,
+            },
+            border_widths: EdgeWidths::new(3.0, 12.0, 7.0, 18.0),
+            border_color: [0.9, 0.9, 0.2, 1.0],
+            corner_radii: CornerRadii::new(24.0, 6.0, 18.0, 10.0),
+        },
+    );
+    let image = render_list(&device, &queue, &mut ui, &list);
+    let pixel = |x: u32, y: u32| -> &[u8] {
+        let start = ((y * W + x) * 4) as usize;
+        &image[start..start + 4]
+    };
+    assert!(pixel(110, 90)[3] > 100, "quad interior was not painted");
+    assert_eq!(pixel(180, 90), &[0, 0, 0, 255], "clip leaked to the right");
+    assert_eq!(pixel(100, 45), &[0, 0, 0, 255], "clip leaked above");
+    let colored = image
+        .chunks_exact(4)
+        .filter(|rgba| rgba[0] > 20 || rgba[1] > 20 || rgba[2] > 20)
+        .count();
+    assert!(colored > 1_000, "too few composable quad pixels: {colored}");
 }

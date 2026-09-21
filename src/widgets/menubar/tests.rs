@@ -1,10 +1,11 @@
 //! Headless tests: pure geometry, the activation state machine, pointer
 //! integration, and the layer/hit-region plumbing. No GPU needed.
 
+use crate::color::opaque_srgb8;
 use crate::layout::Rect;
 use crate::{
-    DrawContext, DrawList, FocusState, InputState, InteractionScene, LayerStack, Menu, MenuBar,
-    MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, Theme,
+    Background, DrawContext, DrawList, FocusState, InputState, InteractionScene, LayerStack, Menu,
+    MenuBar, MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, StyleOverlay, Theme,
 };
 
 use super::model::{
@@ -62,6 +63,57 @@ fn viewport() -> Rect {
     Rect::new(0.0, 0.0, W, H)
 }
 
+#[test]
+fn strip_paints_the_handoff_gradient_highlights_edge_and_shadow() {
+    let theme = Theme::default();
+    let input = InputState::default();
+    let mut state = MenuBarState::new();
+    let mut list = DrawList::new();
+    let mut focus = FocusState::new();
+    let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, W, H);
+
+    bar().draw(strip(), &mut state, &mut ctx);
+
+    let strip = strip();
+    assert!(
+        ctx.draw_list.chrome_instance_count() >= 3,
+        "surface gradient and paired top/bottom hairlines use composable chrome"
+    );
+    assert_eq!(ctx.draw_list.shadow_instance_count(), 1);
+    assert_eq!(
+        ctx.draw_list.shadow_instance(0).unwrap().element_rect,
+        [strip.x, strip.y, strip.width, strip.height]
+    );
+    assert_eq!(ctx.draw_list.shadow_instance(0).unwrap().params[0], 4.0);
+    assert!(
+        ctx.draw_list.chrome_instances().any(|instance| {
+            instance.rect == [strip.x, strip.y + strip.height - 1.0, strip.width, 1.0]
+                && instance.bg == opaque_srgb8([0x03, 0x05, 0x06])
+        }),
+        "resolved opaque bottom edge is present"
+    );
+}
+
+#[test]
+fn strip_uses_typed_menu_bar_overlay() {
+    let theme = Theme::default();
+    let mut chrome = theme.chrome.menu_bar;
+    let override_color = [0.7, 0.2, 0.1, 1.0];
+    chrome.surface.background = Background::Solid(override_color);
+    let mut overlay = StyleOverlay::new();
+    overlay.set_menu_bar(chrome);
+    let input = InputState::default();
+    let mut state = MenuBarState::new();
+    let mut list = DrawList::new();
+    let mut focus = FocusState::new();
+    let mut ctx =
+        DrawContext::new(&mut list, &mut focus, &theme, &input, W, H).with_style(&overlay);
+
+    bar().draw(strip(), &mut state, &mut ctx);
+
+    assert_eq!(ctx.draw_list.chrome_instance(0).unwrap().bg, override_color);
+}
+
 /// A whole bar-only frame: no popup layers, no scene teardown. Enough for the
 /// state machine, which resolves at the bar level.
 ///
@@ -106,6 +158,9 @@ impl Rig {
 
     /// Run one frame. Returns the bar's output and the activation id, if any.
     fn step(&mut self) -> (MenuBarOutput, Option<u64>) {
+        // Keep the just-painted lists available for assertions until the next
+        // frame starts, when their transient layers are discarded.
+        self.layers.clear();
         self.state.begin_frame(&mut self.input);
         self.scene.begin_frame(&self.input);
         // Focus runs *after* the menu, which is the order the crate documents: the
@@ -145,7 +200,6 @@ impl Rig {
         self.state.end_frame(&mut self.focus);
         self.scene.end_frame();
         self.focus.end_frame(None);
-        self.layers.clear();
         self.input.end_frame();
         (output, activated)
     }
@@ -190,6 +244,14 @@ impl Rig {
     fn row_height(&self) -> f32 {
         self.state.debug_geometry().expect("a chain is promoted").1
     }
+
+    fn column_list(&self) -> &DrawList {
+        self.layers
+            .layers()
+            .last()
+            .map(|layer| &layer.list)
+            .expect("an open column layer")
+    }
 }
 
 // ---------------------------------------------------------------- pure geometry
@@ -200,7 +262,11 @@ fn a_column_drops_below_its_label_left_aligned() {
     let (rect, side) = place_popup(anchor, [120.0, 100.0], viewport(), SubmenuSide::Auto);
     assert_eq!(side, SubmenuSide::Right, "Auto extends right when it fits");
     assert_eq!(rect.x, 20.0, "left edges align");
-    assert_eq!(rect.y, anchor.bottom() + 2.0, "drops below the label");
+    assert_eq!(
+        rect.y,
+        anchor.bottom(),
+        "the sheet attaches directly below the label"
+    );
     assert_eq!(rect.width, 120.0);
     assert_eq!(rect.height, 100.0);
 }
@@ -212,8 +278,8 @@ fn a_bottom_docked_bar_flips_the_column_above_its_label() {
     let (rect, _) = place_popup(anchor, [120.0, 200.0], viewport(), SubmenuSide::Auto);
     assert_eq!(
         rect.bottom(),
-        anchor.y - 2.0,
-        "the column flips above rather than covering the strip"
+        anchor.y,
+        "the attached column flips above rather than covering the strip"
     );
     assert!(rect.y >= 0.0);
 }
@@ -738,6 +804,20 @@ fn an_open_chain_claims_the_navigation_intents_but_never_tab() {
 // ------------------------------------------------------------ chain behaviour
 
 #[test]
+fn preview_highlight_rejects_disabled_separators_and_out_of_range_rows() {
+    let mut state = MenuBarState::new();
+    state.open_menu_at(MENUS, 0);
+
+    state.set_highlighted_item(MENUS, Some(1));
+    assert_eq!(state.highlighted_item(), Some(1));
+
+    for invalid in [Some(2), Some(4), Some(99), None] {
+        state.set_highlighted_item(MENUS, invalid);
+        assert_eq!(state.highlighted_item(), None);
+    }
+}
+
+#[test]
 fn row_navigation_skips_separators_and_disabled_items_and_wraps() {
     let mut rig = Rig::new();
     rig.state.open_menu_at(MENUS, 0);
@@ -761,6 +841,81 @@ fn row_navigation_skips_separators_and_disabled_items_and_wraps() {
     rig.input.nav.up = true;
     rig.step();
     assert_eq!(rig.state.highlighted_item(), Some(0), "up wraps backwards");
+}
+
+#[test]
+fn open_sheet_uses_compact_separators_handoff_text_and_two_outer_shadows() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 0);
+    rig.settle();
+
+    let rect = rig.column_rect();
+    let (_, row_h, content_h) = rig.state.debug_geometry().expect("painted geometry");
+    assert_eq!(row_h, 22.0);
+    assert_eq!(rect.width, 218.0);
+    assert_eq!(content_h, row_h * 6.0 + 7.0);
+    assert_eq!(rect.height, content_h + 6.0, "3px sheet inset per side");
+
+    let list = rig.column_list();
+    assert_eq!(list.shadow_instance_count(), 2);
+    assert_eq!(
+        list.shadow_instance(0).unwrap().color,
+        rig.theme.chrome.menu_sheet.shadows[1].color,
+        "CSS declarations paint back-to-front"
+    );
+    assert_eq!(
+        list.shadow_instance(1).unwrap().color,
+        rig.theme.chrome.menu_sheet.shadows[0].color
+    );
+    assert!(list.shadow_instances().all(|shadow| {
+        shadow.element_rect == [rect.x, rect.y, rect.width, rect.height]
+            && shadow.translation[2] == 0.0
+    }));
+    assert!(
+        list.shadow_instance(1).unwrap().raster_rect[0] < rect.x
+            && list.shadow_instance(1).unwrap().raster_rect[1] < rect.y
+            && list.shadow_instance(1).unwrap().raster_rect[1]
+                + list.shadow_instance(1).unwrap().raster_rect[3]
+                > rect.bottom(),
+        "analytic falloff extends beyond the sheet without the row clip"
+    );
+    let quit = list
+        .texts
+        .iter()
+        .find(|block| block.content == "Quit")
+        .expect("idle Quit label");
+    assert_eq!(quit.font_size, 11.5);
+    assert_eq!(quit.color.as_rgba(), [0xdb, 0xe1, 0xe7, 0xff]);
+    assert!(quit.shadow.is_some(), "idle labels use carved text shadow");
+    let shortcut = list
+        .texts
+        .iter()
+        .find(|block| block.content == "Ctrl+Shift+Q")
+        .expect("idle shortcut hint");
+    assert_eq!(shortcut.font_size, 10.0);
+    assert_eq!(
+        shortcut.font.as_ref().map(|font| font.family()),
+        Some("IBM Plex Mono")
+    );
+}
+
+#[test]
+fn selected_row_uses_dark_ink_without_a_text_shadow() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 0);
+    rig.settle();
+    rig.state.set_highlighted_item(MENUS, Some(1));
+    rig.step();
+
+    let open = rig
+        .column_list()
+        .texts
+        .iter()
+        .find(|block| block.content == "Open…")
+        .expect("selected label");
+    assert_eq!(open.font_size, 11.5);
+    assert_eq!(open.color.as_rgba(), [4, 20, 24, 0xff]);
+    assert!(open.shadow.is_none(), "selected dark ink is not carved");
 }
 
 #[test]
@@ -1000,9 +1155,10 @@ fn hovering_a_label_while_open_switches_menus() {
         );
         out.bar_rect
     };
-    // The Edit label sits right after the File label.
+    // The Edit label sits after the strip's 4px inset, the File label, and the
+    // handoff's 1px inter-title gap.
     let file_w = rig.state.debug_label_widths()[0];
-    rig.move_pointer(edit_rect.x + file_w + 2.0, edit_rect.y + 5.0);
+    rig.move_pointer(edit_rect.x + 4.0 + file_w + 1.0 + 2.0, edit_rect.y + 5.0);
     rig.step();
     assert_eq!(
         rig.state.open_menu(),
@@ -1019,9 +1175,10 @@ fn a_press_on_the_column_but_not_a_row_is_claimed_for_focus() {
     rig.settle();
     let rect = rig.column_rect();
     let row_h = rig.row_height();
-    // FILE_ITEMS: 0 New, 1 Open…, 2 *separator*. The separator band belongs to the
-    // column — no row is registered over it — so the press is the menu's.
-    rig.click(rect.x + 4.0, rect.y + row_h * 2.5);
+    // FILE_ITEMS: 0 New, 1 Open…, 2 *separator*. After the two 22px rows, the
+    // separator is a compact 7px band inside the sheet's 3px outer inset. It
+    // belongs to the column but has no row hit region, so the press is the menu's.
+    rig.click(rect.x + 4.0, rect.y + 3.0 + row_h * 2.0 + 3.5);
     rig.step();
     assert_eq!(rig.state.open_levels(), 1, "the menu stays open");
     assert!(
@@ -1097,7 +1254,7 @@ fn the_viewport_blocker_excludes_the_bar_strip() {
 
     // Inside the strip, no blocker region may cover it: the labels have to stay
     // live for hover-to-switch.
-    rig.move_pointer(strip.x + 2.0, strip.y + 2.0);
+    rig.move_pointer(strip.x + 5.0, strip.y + 2.0);
     rig.step();
     assert!(
         !(0..4).any(|index| rig

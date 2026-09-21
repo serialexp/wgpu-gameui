@@ -4,8 +4,8 @@
 // also bind the atlas (group 1):
 //   - `vs_color`/`fs_color`: colored quads (DrawList vertices); supports per-vertex
 //     scissor via the (clip, clip_enabled) attributes.
-//   - `vs_chrome`/`fs_chrome`: instanced SDF rounded-rect chrome (button +
-//     rect/rounded-rect fills and outlines).
+//   - `vs_analytic`/`fs_analytic`: one tagged, ordered instance stream for SDF
+//     rounded-rect chrome and full-affine analytic shadows.
 //   - `vs_circle`/`fs_circle`: instanced SDF circle (filled disc + ring outline).
 //   - `vs_icon`/`fs_icon`: instanced textured quads (icons, sprites, images);
 //     corners baked per-instance, bilinearly interpolated, atlas × tint.
@@ -68,78 +68,113 @@ fn fs_color(in: ColorVsOut) -> @location(0) vec4<f32> {
 // Replaces re-tessellating identical button geometry into the vertex soup every
 // frame (see benches/ui_stress.rs / the instancing work).
 
-struct ChromeVsIn {
-    // Base mesh: unit-quad corner in [0,1]^2.
+struct AnalyticVsIn {
     @location(0) corner: vec2<f32>,
-    // Per-instance:
-    @location(1) rect: vec4<f32>,    // x, y, w, h  (post-transform world space)
-    @location(2) bg: vec4<f32>,      // fill color (gradient top)
-    @location(3) bg2: vec4<f32>,     // fill color (gradient bottom)
-    @location(4) border: vec4<f32>,  // border color
-    @location(5) clip: vec4<f32>,    // clip rect x, y, w, h
-    @location(6) params: vec4<f32>,  // radius, thickness, clip_enabled, _pad
+    @location(1) p0: vec4<f32>, @location(2) p1: vec4<f32>,
+    @location(3) p2: vec4<f32>, @location(4) p3: vec4<f32>,
+    @location(5) p4: vec4<f32>, @location(6) p5: vec4<f32>,
+    @location(7) p6: vec4<f32>, @location(8) p7: vec4<f32>,
+    @location(9) p8: vec4<f32>, @location(10) p9: vec4<f32>,
+    @location(11) kind: u32,
 };
 
-struct ChromeVsOut {
+struct AnalyticVsOut {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) local: vec2<f32>,   // px from the rect's top-left
-    @location(1) size: vec2<f32>,
-    @location(2) bg: vec4<f32>,
-    @location(3) bg2: vec4<f32>,
-    @location(4) border: vec4<f32>,
-    @location(5) clip: vec4<f32>,
-    @location(6) params: vec4<f32>,
-    @location(7) frag_pos: vec2<f32>,
+    @location(0) local: vec2<f32>,
+    @location(1) world: vec2<f32>,
+    @location(2) @interpolate(flat) p0: vec4<f32>,
+    @location(3) @interpolate(flat) p1: vec4<f32>,
+    @location(4) @interpolate(flat) p2: vec4<f32>,
+    @location(5) @interpolate(flat) p3: vec4<f32>,
+    @location(6) @interpolate(flat) p4: vec4<f32>,
+    @location(7) @interpolate(flat) p5: vec4<f32>,
+    @location(8) @interpolate(flat) p6: vec4<f32>,
+    @location(9) @interpolate(flat) p7: vec4<f32>,
+    @location(10) @interpolate(flat) p8: vec4<f32>,
+    @location(11) @interpolate(flat) p9: vec4<f32>,
+    @location(12) @interpolate(flat) kind: u32,
 };
 
 @vertex
-fn vs_chrome(in: ChromeVsIn) -> ChromeVsOut {
-    var out: ChromeVsOut;
-    let world = in.rect.xy + in.corner * in.rect.zw;
+fn vs_analytic(in: AnalyticVsIn) -> AnalyticVsOut {
+    var out: AnalyticVsOut;
+    let local = in.p2.xy + in.corner * in.p2.zw;
+    var world: vec2<f32>;
+    if (in.kind == 0u) {
+        world = vec2<f32>(in.p0.x * local.x + in.p0.z * local.y + in.p1.x,
+                          in.p0.y * local.x + in.p0.w * local.y + in.p1.y);
+        out.local = in.corner * in.p2.zw;
+    } else {
+        world = vec2<f32>(in.p0.x * local.x + in.p0.y * local.y + in.p1.x,
+                          in.p0.z * local.x + in.p0.w * local.y + in.p1.y);
+        out.local = local;
+    }
     out.clip_position = uniforms.view_proj * vec4<f32>(world, 0.0, 1.0);
-    out.local = in.corner * in.rect.zw;
-    out.size = in.rect.zw;
-    out.bg = in.bg;
-    out.bg2 = in.bg2;
-    out.border = in.border;
-    out.clip = in.clip;
-    out.params = in.params;
-    out.frag_pos = world;
+    out.world = world;
+    out.p0 = in.p0; out.p1 = in.p1; out.p2 = in.p2; out.p3 = in.p3;
+    out.p4 = in.p4; out.p5 = in.p5; out.p6 = in.p6; out.p7 = in.p7;
+    out.p8 = in.p8; out.p9 = in.p9; out.kind = in.kind;
     return out;
 }
 
-@fragment
-fn fs_chrome(in: ChromeVsOut) -> @location(0) vec4<f32> {
-    // Per-pixel scissor (same convention as fs_color).
-    if (in.params.z > 0.5) {
-        let pc = in.frag_pos;
-        if (pc.x < in.clip.x || pc.x > in.clip.x + in.clip.z
-            || pc.y < in.clip.y || pc.y > in.clip.y + in.clip.w) {
-            discard;
-        }
+fn corner_radius(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    if (p.y < size.y * 0.5) {
+        return select(radii.y, radii.x, p.x < size.x * 0.5);
     }
+    return select(radii.z, radii.w, p.x < size.x * 0.5);
+}
 
-    let half = in.size * 0.5;
-    let max_r = min(half.x, half.y);
-    let radius = clamp(in.params.x, 0.0, max_r);
-    let thickness = clamp(in.params.y, 0.0, max_r);
+fn chrome_rounded_rect_distance(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    let half = size * 0.5;
+    let radius = corner_radius(p, size, radii);
+    let q = abs(p - half) - half + vec2<f32>(radius);
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
 
-    // Signed distance to the rounded rect (negative inside).
-    let p = in.local - half;
-    let q = abs(p) - half + vec2<f32>(radius);
-    let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+// Distance to a rectangle whose corner arcs may be elliptical. This is used for
+// the padding edge: unequal adjacent border widths turn a circular outer corner
+// into an elliptical inner corner rather than overlapping rectangular bands.
+fn inner_distance(p: vec2<f32>, size: vec2<f32>, outer_radii: vec4<f32>, widths: vec4<f32>) -> f32 {
+    let clamped_size = max(size, vec2<f32>(0.0));
+    let half = clamped_size * 0.5;
+    let left = p.x < half.x;
+    let top = p.y < half.y;
+    var outer_radius: f32;
+    var inset: vec2<f32>;
+    if (top) {
+        outer_radius = select(outer_radii.y, outer_radii.x, left);
+        inset = vec2<f32>(select(widths.y, widths.w, left), widths.x);
+    } else {
+        outer_radius = select(outer_radii.z, outer_radii.w, left);
+        inset = vec2<f32>(select(widths.y, widths.w, left), widths.z);
+    }
+    let radius = max(vec2<f32>(outer_radius) - inset, vec2<f32>(0.0));
+    let q = abs(p - half) - half + radius;
+    let outside = max(q, vec2<f32>(0.0));
+    let safe_radius = max(radius, vec2<f32>(1e-4));
+    let ellipse = (length(outside / safe_radius) - 1.0) * min(safe_radius.x, safe_radius.y);
+    let square = length(outside) + min(max(q.x, q.y), 0.0);
+    return select(ellipse, square, radius.x <= 1e-4 || radius.y <= 1e-4);
+}
 
-    let aa = max(fwidth(d), 1e-4);
-    let outer = 1.0 - smoothstep(-aa, aa, d);              // coverage inside outer edge
-    let inner = 1.0 - smoothstep(-aa, aa, d + thickness);  // coverage inside the fill region
-    // Vertical gradient fill: `bg` at the top edge → `bg2` at the bottom edge.
-    let t = clamp(in.local.y / max(in.size.y, 1e-4), 0.0, 1.0);
-    let fill = mix(in.bg, in.bg2, vec4<f32>(t));
-    var color = mix(in.border, fill, inner);
+fn shade_chrome(in: AnalyticVsOut) -> vec4<f32> {
+    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
+        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    let size = in.p2.zw;
+    let outer_d = chrome_rounded_rect_distance(in.local, size, in.p6);
+    let outer_aa = max(fwidth(outer_d), 1e-4);
+    let outer = 1.0 - smoothstep(-outer_aa, outer_aa, outer_d);
+    let inner_origin = vec2<f32>(in.p7.w, in.p7.x);
+    let inner_size = size - vec2<f32>(in.p7.w + in.p7.y, in.p7.x + in.p7.z);
+    let inner_d = inner_distance(in.local - inner_origin, inner_size, in.p6, in.p7);
+    let inner_aa = max(fwidth(inner_d), 1e-4);
+    var inner = 1.0 - smoothstep(-inner_aa, inner_aa, inner_d);
+    if (inner_size.x <= 0.0 || inner_size.y <= 0.0) { inner = 0.0; }
+    let gradient_coord = select(in.local.y / max(size.y, 1e-4), in.local.x / max(size.x, 1e-4), in.p1.w > 0.5);
+    let fill = mix(in.p3, in.p4, vec4<f32>(clamp(gradient_coord, 0.0, 1.0)));
+    let color = mix(in.p5, fill, inner);
     let alpha = outer * color.a;
-    if (alpha <= 0.0) {
-        discard;
-    }
+    if (alpha <= 0.0) { discard; }
     return vec4<f32>(color.rgb, alpha);
 }
 
@@ -191,7 +226,7 @@ fn vs_circle(in: CircleVsIn) -> CircleVsOut {
 
 @fragment
 fn fs_circle(in: CircleVsOut) -> @location(0) vec4<f32> {
-    // Per-pixel scissor (same convention as fs_color / fs_chrome).
+    // Per-pixel scissor (same convention as fs_color / analytic chrome).
     if (in.params.x > 0.5) {
         let p = in.frag_pos;
         if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
@@ -223,6 +258,151 @@ fn fs_circle(in: CircleVsOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4<f32>(in.color.rgb, a);
+}
+
+// ---- Full-affine analytic rounded-rectangle shadows -----------------------
+
+fn pick_radius(p: vec2<f32>, center: vec2<f32>, radii: vec4<f32>) -> f32 {
+    if (p.y < center.y) { return select(radii.x, radii.y, p.x >= center.x); }
+    return select(radii.w, radii.z, p.x >= center.x);
+}
+
+fn rounded_rect_distance(p: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>) -> f32 {
+    let half = rect.zw * 0.5;
+    let center = rect.xy + half;
+    let radius = pick_radius(p, center, radii);
+    let q = abs(p - center) - half + vec2<f32>(radius);
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+// Integrate the rounded-rectangle indicator over the screen pixel instead of
+// treating its SDF as locally linear.  The derivative vectors pull the fixed
+// screen-space 4x4 sample grid back through any affine transform, so tiny and
+// highly curved shapes retain their area and transformed clips do not acquire
+// an axis-aligned approximation.  Keep this fixed-size: it is also used by the
+// zero-sigma path, where identical source and element evaluations must cancel
+// bit-for-bit.
+fn rounded_rect_pixel_coverage(p: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>) -> f32 {
+    let pixel_x = dpdx(p);
+    let pixel_y = dpdy(p);
+    let center_distance = rounded_rect_distance(p, rect, radii);
+    // The SDF is 1-Lipschitz. Skip the 16 evaluations whenever the whole
+    // pulled-back pixel is provably on one side of the edge; broad shadows then
+    // pay supersampling cost only in their narrow clipping boundary band.
+    let pixel_radius = 0.5 * (length(pixel_x) + length(pixel_y));
+    if (center_distance <= -pixel_radius) { return 1.0; }
+    if (center_distance > pixel_radius) { return 0.0; }
+    var covered = 0.0;
+    for (var iy = 0; iy < 4; iy += 1) {
+        let oy = (f32(iy) + 0.5) * 0.25 - 0.5;
+        for (var ix = 0; ix < 4; ix += 1) {
+            let ox = (f32(ix) + 0.5) * 0.25 - 0.5;
+            let sample = p + ox * pixel_x + oy * pixel_y;
+            covered += select(0.0, 1.0, rounded_rect_distance(sample, rect, radii) <= 0.0);
+        }
+    }
+    return covered * 0.0625;
+}
+
+fn shadow_erf(v: vec2<f32>) -> vec2<f32> {
+    let s = sign(v);
+    let a = abs(v);
+    let r1 = 1.0 + (0.278393 + (0.230389 + (0.000972 + 0.078108 * a) * a) * a) * a;
+    let r2 = r1 * r1;
+    return s - s / (r2 * r2);
+}
+
+fn shadow_gaussian(x: f32, sigma: f32) -> f32 {
+    return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.50662827463 * sigma);
+}
+
+fn shadow_side_extent(y: f32, radius: f32, half: vec2<f32>) -> f32 {
+    let delta = min(half.y - radius - abs(y), 0.0);
+    return half.x - radius + sqrt(max(0.0, radius * radius - delta * delta));
+}
+
+fn blur_shadow_x(x: f32, y: f32, sigma: f32, radii: vec4<f32>, half: vec2<f32>) -> f32 {
+    // Radii are TL, TR, BR, BL. A horizontal source slice can intersect two
+    // different corner arcs, so derive each endpoint from its own radius. The
+    // sampled source y (not the fragment's quadrant) chooses top versus bottom.
+    let left_radius = select(radii.w, radii.x, y < 0.0);
+    let right_radius = select(radii.z, radii.y, y < 0.0);
+    let left_extent = shadow_side_extent(y, left_radius, half);
+    let right_extent = shadow_side_extent(y, right_radius, half);
+    let integral = 0.5 + 0.5 * shadow_erf(
+        (x + vec2<f32>(-right_extent, left_extent)) * (0.70710678118 / sigma)
+    );
+    return integral.y - integral.x;
+}
+
+fn shade_shadow(in: AnalyticVsOut) -> vec4<f32> {
+    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
+        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+
+    let sigma_y = in.p9.x;
+    let sigma_x_conditional = in.p9.z;
+    let conditional_slope = in.p9.w;
+    let inset = in.p1.w > 0.5;
+    let collapsed = in.p9.y > 0.5;
+    var coverage: f32;
+    if (sigma_y <= 1e-5 || sigma_x_conditional <= 1e-5) {
+        coverage = rounded_rect_pixel_coverage(in.local, in.p3, in.p6);
+    } else if (collapsed) {
+        coverage = 0.0;
+    } else {
+        let half = in.p3.zw * 0.5;
+        let center = in.p3.xy + half;
+        let point = in.local - center;
+        let low = point.y - half.y;
+        let high = point.y + half.y;
+        let start = clamp(-3.0 * sigma_y, low, high);
+        let end = clamp(3.0 * sigma_y, low, high);
+        let step_size = (end - start) * 0.25;
+        coverage = 0.0;
+        // For local covariance Σ = sigma² A⁻¹A⁻ᵀ, integrate the y marginal
+        // N(0, Σyy). Conditioned on y, x is Gaussian with mean
+        // Σxy/Σyy*y and variance Σxx-Σxy²/Σyy. This preserves a fixed loop
+        // while making the resulting blur isotropic in browser/screen space.
+        for (var i = 0; i < 4; i += 1) {
+            let y = start + (f32(i) + 0.5) * step_size;
+            coverage += blur_shadow_x(
+                point.x - conditional_slope * y,
+                point.y - y,
+                sigma_x_conditional,
+                in.p6,
+                half,
+            ) * shadow_gaussian(y, sigma_y) * step_size;
+        }
+    }
+
+    let element_coverage = rounded_rect_pixel_coverage(in.local, in.p4, in.p7);
+    if (inset) {
+        // The padding-box clips the inverse blurred hole. A collapsed hole is
+        // fully covered; otherwise both independently antialiased coverages
+        // participate, matching Chromium's inset edge behavior.
+        coverage = select(1.0 - coverage, 1.0, collapsed) * element_coverage;
+    } else if (sigma_y <= 1e-5 || sigma_x_conditional <= 1e-5) {
+        // CSS clips crisp outset shadows by subtracting the border-box shape.
+        // In particular, identical zero-blur source and element coverages must
+        // cancel exactly rather than leave a multiplied AA fringe.
+        coverage = max(coverage - element_coverage, 0.0);
+    } else {
+        // Chromium's blurred outset edge behaves as independently antialiased
+        // shadow coverage clipped by the border box, rather than subtracting
+        // the element's fractional edge coverage from the whole blur field.
+        coverage *= 1.0 - element_coverage;
+    }
+    let alpha = clamp(coverage, 0.0, 1.0) * in.p5.a;
+    if (alpha <= 0.0) { discard; }
+    return vec4<f32>(in.p5.rgb, alpha);
+}
+
+@fragment
+fn fs_analytic(in: AnalyticVsOut) -> @location(0) vec4<f32> {
+    // The kind is flat, so every 2x2 derivative quad follows one uniform branch;
+    // fwidth/dpdx/dpdy remain well-defined in both analytic implementations.
+    if (in.kind == 0u) { return shade_chrome(in); }
+    return shade_shadow(in);
 }
 
 // ---- Atlas bindings (shared by the icon + nine-slice paths) --------------

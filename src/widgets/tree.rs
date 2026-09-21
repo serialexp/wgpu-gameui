@@ -18,6 +18,8 @@
 //!   branch only if [`TreeNode::with_toggle_on_label`] is set — the default for
 //!   the no-icon collapsing-header verbs).
 //! - Clicking a **leading/trailing action icon** fires that action alone.
+//! - Right-clicking anywhere on a row selects and focuses that row, reports
+//!   [`TreeNodeOutput::right_clicked`], and never toggles or invokes an action.
 //!
 //! ## Two ways to use it
 //!
@@ -385,9 +387,16 @@ pub struct TreeNodeOutput {
     pub expanded: bool,
     /// The disclosure was toggled this frame (branch only).
     pub toggled: bool,
+    /// The pointer is over the row and pointer input is not consumed by a
+    /// higher layer.
+    pub hovered: bool,
     /// The row body (label area) was clicked this frame — it became the
     /// selection. `false` when an action icon or the disclosure was clicked.
     pub clicked: bool,
+    /// The secondary button was clicked anywhere on the row this frame. A
+    /// right-click selects and focuses the row, but never toggles disclosure or
+    /// invokes an action icon.
+    pub right_clicked: bool,
     /// A leading/trailing action icon was clicked this frame; carries its
     /// [`TreeAction::id`]. Mutually exclusive with `clicked`/`toggled`.
     pub action: Option<u32>,
@@ -504,6 +513,7 @@ impl<'a> TreeNode<'a> {
         let mx = input.mouse_x;
         let my = input.mouse_y;
         let mouse_clicked = input.mouse_clicked;
+        let mouse_right_clicked = input.mouse_right_clicked;
         let row_hovered = mouse_in && rect.contains(mx, my);
         let selected = state.is_selected(id);
 
@@ -579,7 +589,7 @@ impl<'a> TreeNode<'a> {
             let s = leading_slot(i);
             let hov = mouse_in && s.contains(mx, my);
             draw_action(list, s, &a.icon, a.tint, hov);
-            if hov && mouse_clicked && action.is_none() {
+            if hov && mouse_clicked && !mouse_right_clicked && action.is_none() {
                 action = Some(a.id);
             }
         }
@@ -587,7 +597,7 @@ impl<'a> TreeNode<'a> {
             let s = trailing_slot(i);
             let hov = mouse_in && s.contains(mx, my);
             draw_action(list, s, &a.icon, a.tint, hov);
-            if hov && mouse_clicked && action.is_none() {
+            if hov && mouse_clicked && !mouse_right_clicked && action.is_none() {
                 action = Some(a.id);
             }
         }
@@ -612,9 +622,15 @@ impl<'a> TreeNode<'a> {
         );
 
         // ---- interaction precedence: action > disclosure > body -----------
+        // Secondary clicks deliberately bypass that precedence: regardless of
+        // which visual subregion they land on, they select/focus the row and do
+        // not invoke the primary action associated with that subregion.
+        let right_clicked = mouse_right_clicked && row_hovered;
         let mut toggled = false;
         let mut body_clicked = false;
-        if mouse_clicked && row_hovered && action.is_none() {
+        if right_clicked {
+            state.select(id);
+        } else if mouse_clicked && row_hovered && action.is_none() {
             let in_disclosure = mx >= disclosure_left && mx < disclosure_right;
             if !self.leaf && in_disclosure {
                 state.toggle(id);
@@ -631,8 +647,8 @@ impl<'a> TreeNode<'a> {
 
         // Any interaction focuses the tree (if a focus id is wired), so arrow-key
         // navigation activates after a click. Safe here: the `ctx.input` borrow
-        // ended above (we snapshot `mouse_clicked`), so `&mut ctx` is free.
-        if body_clicked || toggled || action.is_some() {
+        // ended above (we snapshot the click edges), so `&mut ctx` is free.
+        if body_clicked || right_clicked || toggled || action.is_some() {
             state
                 .focus_id
                 .into_iter()
@@ -644,7 +660,9 @@ impl<'a> TreeNode<'a> {
         TreeNodeOutput {
             expanded,
             toggled,
+            hovered: row_hovered,
             clicked: body_clicked,
+            right_clicked,
             action,
         }
     }
@@ -753,6 +771,16 @@ mod tests {
         click_at(90.0, 10.0)
     }
 
+    fn right_click_at(x: f32, y: f32) -> InputState {
+        InputState {
+            mouse_x: x,
+            mouse_y: y,
+            mouse_right_down: true,
+            mouse_right_clicked: true,
+            ..InputState::default()
+        }
+    }
+
     #[test]
     fn fresh_state_is_empty() {
         let s = TreeState::new();
@@ -776,10 +804,60 @@ mod tests {
         let mut s = TreeState::new();
         let node = TreeNode::new("branch");
         let (_, out) = draw_node(&node, 1, row(), &mut s, &click_body());
+        assert!(out.hovered);
         assert!(out.clicked, "body click selects");
+        assert!(!out.right_clicked);
         assert!(!out.toggled, "default does NOT toggle on body click");
         assert!(!out.expanded);
         assert!(s.is_selected(1));
+    }
+
+    #[test]
+    fn right_click_selects_without_toggle_or_action() {
+        let mut s = TreeState::new();
+        let actions = [TreeAction::key(9, "eye")];
+        let node = TreeNode::new("branch")
+            .with_toggle_on_label(true)
+            .with_leading(&actions);
+        // Right-click the action slot: secondary clicks always belong to the
+        // row body and never invoke primary action/disclosure behavior.
+        let mut input = right_click_at(28.0, 10.0);
+        // Some window integrations report both press edges for a secondary
+        // click; secondary semantics must still win deterministically.
+        input.mouse_clicked = true;
+        let (_, out) = draw_node(&node, 1, row(), &mut s, &input);
+        assert!(out.hovered);
+        assert!(out.right_clicked);
+        assert!(!out.clicked);
+        assert!(!out.toggled);
+        assert_eq!(out.action, None);
+        assert!(s.is_selected(1));
+        assert!(!out.expanded);
+    }
+
+    #[test]
+    fn consumed_right_click_is_ignored() {
+        let mut s = TreeState::new();
+        let mut input = right_click_at(90.0, 10.0);
+        input.mouse_consumed = true;
+        let (_, out) = draw_node(&TreeNode::leaf("leaf"), 1, row(), &mut s, &input);
+        assert!(!out.hovered);
+        assert!(!out.right_clicked);
+        assert_eq!(s.selected(), None);
+    }
+
+    #[test]
+    fn right_click_requests_configured_tree_focus() {
+        let mut state = TreeState::new();
+        state.set_focus_id(77);
+        let input = right_click_at(90.0, 10.0);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let theme = theme();
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
+        let out = TreeNode::leaf("leaf").draw(1, row(), &mut state, &mut ctx);
+        assert!(out.right_clicked);
+        assert_eq!(focus.focused(), Some(77));
     }
 
     #[test]

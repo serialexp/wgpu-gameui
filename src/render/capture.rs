@@ -280,15 +280,36 @@ impl HeadlessGpu {
         self.capture_on(list, size, wgpu::Color::TRANSPARENT)
     }
 
+    /// [`capture`](Self::capture) with a logical-to-physical scale factor.
+    pub fn capture_scaled(
+        &mut self,
+        list: &DrawList,
+        size: (u32, u32),
+        scale_factor: f32,
+    ) -> Vec<u8> {
+        self.capture_scaled_on(list, size, scale_factor, wgpu::Color::TRANSPARENT)
+    }
+
     /// [`capture`](Self::capture) with an explicit clear colour.
     pub fn capture_on(&mut self, list: &DrawList, size: (u32, u32), clear: wgpu::Color) -> Vec<u8> {
+        self.capture_scaled_on(list, size, 1.0, clear)
+    }
+
+    /// [`capture_scaled`](Self::capture_scaled) with an explicit clear colour.
+    pub fn capture_scaled_on(
+        &mut self,
+        list: &DrawList,
+        size: (u32, u32),
+        scale_factor: f32,
+        clear: wgpu::Color,
+    ) -> Vec<u8> {
         capture_draw_list(
             &self.device,
             &self.queue,
             &mut self.ui,
             list,
             size,
-            1.0,
+            scale_factor,
             clear,
         )
     }

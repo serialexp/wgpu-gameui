@@ -6,6 +6,7 @@
 //! the tooltip only appears once the cursor has rested over the same hover
 //! region for that many milliseconds.
 
+use crate::chrome::SurfacePainter;
 use crate::layer::LayerStack;
 use crate::layout::Rect;
 use crate::text::TextBlock;
@@ -322,137 +323,141 @@ fn draw_tooltip_body(
     // here. Both public entry points funnel through this function, so scoping it
     // once covers them and skips their "not visible" early returns entirely —
     // an unhovered tooltip has no allocation to declare.
+    let chrome = style.tooltip();
+    let shadow_margin = chrome.shadow.blur * 1.5;
     list.push_debug_scope_rect(
         "Tooltip",
-        Rect::new(x - 9.0, y - 9.0, width + 18.0, height + 18.0 + 6.0),
+        Rect::new(
+            x - shadow_margin,
+            y - shadow_margin + chrome.shadow.offset[1],
+            width + shadow_margin * 2.0,
+            height + shadow_margin * 2.0,
+        ),
     );
 
-    // Drop shadow: the design floats tooltips on `0 6px 18px` black (falloff
-    // margin = half the CSS blur = 9px); the scope above includes its skirt.
-    list.drop_shadow(
-        Rect::new(x, y, width, height),
-        6.0,
-        9.0,
-        3.0,
-        [0.0, 0.0, 0.0, 0.6],
+    let rect = Rect::new(x, y, width, height);
+    let padding_box = rect.inset(chrome.surface.border_widths.left);
+    let mut surface = SurfacePainter::new(
+        list,
+        rect,
+        padding_box,
+        chrome.surface.corner_radii,
+        chrome.surface,
+        std::slice::from_ref(&chrome.shadow),
+        &[],
     );
+    surface.paint_pre_content();
+    {
+        let list = surface.draw_list();
 
-    let bg_color = [0.10, 0.10, 0.15, 0.95];
-    let border_color = style.color(StyleKey::PanelBorder);
-    list.quad(x, y, width, height, bg_color);
+        let content_x = x + padding;
+        let mut cursor_y = y + padding;
 
-    let border = 1.0;
-    list.quad(x, y, width, border, border_color);
-    list.quad(x, y + height - border, width, border, border_color);
-    list.quad(x, y, border, height, border_color);
-    list.quad(x + width - border, y, border, height, border_color);
+        let highlight = style.color(StyleKey::TextHighlight);
+        let text_color = style.color(StyleKey::Text);
+        let text_dim = style.color(StyleKey::TextDim);
+        let font = style.theme().font.clone();
 
-    let content_x = x + padding;
-    let mut cursor_y = y + padding;
-
-    let highlight = style.color(StyleKey::TextHighlight);
-    let text_color = style.color(StyleKey::Text);
-    let text_dim = style.color(StyleKey::TextDim);
-    let font = style.theme().font.clone();
-
-    match &region.content {
-        TooltipContent::Text { title, body } => {
-            if let Some(t) = title {
-                let title_block = TextBlock::new(t, content_x, cursor_y)
-                    .with_size(title_size)
-                    .with_color(
-                        (highlight[0] * 255.0) as u8,
-                        (highlight[1] * 255.0) as u8,
-                        (highlight[2] * 255.0) as u8,
-                    )
-                    .with_font_opt(font.clone());
-                list.text(title_block);
-                cursor_y += title_height;
-            }
-            let body_block = TextBlock::new(body, content_x, cursor_y)
-                .with_size(body_size)
-                .with_color(
-                    (text_color[0] * 255.0) as u8,
-                    (text_color[1] * 255.0) as u8,
-                    (text_color[2] * 255.0) as u8,
-                )
-                .with_max_width(width - padding * 2.0)
-                .with_font_opt(font.clone());
-            list.text(body_block);
-        }
-        TooltipContent::Lines { title, lines } => {
-            if let Some(t) = title {
-                let title_block = TextBlock::new(t, content_x, cursor_y)
-                    .with_size(title_size)
-                    .with_color(
-                        (highlight[0] * 255.0) as u8,
-                        (highlight[1] * 255.0) as u8,
-                        (highlight[2] * 255.0) as u8,
-                    )
-                    .with_font_opt(font.clone());
-                list.text(title_block);
-                cursor_y += title_height;
-            }
-            for line in lines {
-                let line_block = TextBlock::new(line, content_x, cursor_y)
+        match &region.content {
+            TooltipContent::Text { title, body } => {
+                if let Some(t) = title {
+                    let title_block = TextBlock::new(t, content_x, cursor_y)
+                        .with_size(title_size)
+                        .with_color(
+                            (highlight[0] * 255.0) as u8,
+                            (highlight[1] * 255.0) as u8,
+                            (highlight[2] * 255.0) as u8,
+                        )
+                        .with_font_opt(font.clone());
+                    list.text(title_block);
+                    cursor_y += title_height;
+                }
+                let body_block = TextBlock::new(body, content_x, cursor_y)
                     .with_size(body_size)
                     .with_color(
                         (text_color[0] * 255.0) as u8,
                         (text_color[1] * 255.0) as u8,
                         (text_color[2] * 255.0) as u8,
                     )
+                    .with_max_width(width - padding * 2.0)
                     .with_font_opt(font.clone());
-                list.text(line_block);
-                cursor_y += line_height;
+                list.text(body_block);
             }
-        }
-        TooltipContent::Rich {
-            title,
-            description,
-            details,
-        } => {
-            let title_block = TextBlock::new(title, content_x, cursor_y)
-                .with_size(title_size)
-                .with_color(
-                    (highlight[0] * 255.0) as u8,
-                    (highlight[1] * 255.0) as u8,
-                    (highlight[2] * 255.0) as u8,
-                )
-                .with_font_opt(font.clone());
-            list.text(title_block);
-            cursor_y += title_height;
-
-            let desc_block = TextBlock::new(description, content_x, cursor_y)
-                .with_size(body_size)
-                .with_color(
-                    (text_color[0] * 255.0) as u8,
-                    (text_color[1] * 255.0) as u8,
-                    (text_color[2] * 255.0) as u8,
-                )
-                .with_max_width(width - padding * 2.0)
-                .with_font_opt(font.clone());
-            list.text(desc_block);
-
-            cursor_y += rich_desc_h;
-
-            if !details.is_empty() {
-                cursor_y += 8.0;
-                for (key, value) in details {
-                    let detail_text = format!("{}: {}", key, value);
-                    let detail_block = TextBlock::new(&detail_text, content_x, cursor_y)
-                        .with_size(body_size)
+            TooltipContent::Lines { title, lines } => {
+                if let Some(t) = title {
+                    let title_block = TextBlock::new(t, content_x, cursor_y)
+                        .with_size(title_size)
                         .with_color(
-                            (text_dim[0] * 255.0) as u8,
-                            (text_dim[1] * 255.0) as u8,
-                            (text_dim[2] * 255.0) as u8,
+                            (highlight[0] * 255.0) as u8,
+                            (highlight[1] * 255.0) as u8,
+                            (highlight[2] * 255.0) as u8,
                         )
                         .with_font_opt(font.clone());
-                    list.text(detail_block);
+                    list.text(title_block);
+                    cursor_y += title_height;
+                }
+                for line in lines {
+                    let line_block = TextBlock::new(line, content_x, cursor_y)
+                        .with_size(body_size)
+                        .with_color(
+                            (text_color[0] * 255.0) as u8,
+                            (text_color[1] * 255.0) as u8,
+                            (text_color[2] * 255.0) as u8,
+                        )
+                        .with_font_opt(font.clone());
+                    list.text(line_block);
                     cursor_y += line_height;
+                }
+            }
+            TooltipContent::Rich {
+                title,
+                description,
+                details,
+            } => {
+                let title_block = TextBlock::new(title, content_x, cursor_y)
+                    .with_size(title_size)
+                    .with_color(
+                        (highlight[0] * 255.0) as u8,
+                        (highlight[1] * 255.0) as u8,
+                        (highlight[2] * 255.0) as u8,
+                    )
+                    .with_font_opt(font.clone());
+                list.text(title_block);
+                cursor_y += title_height;
+
+                let desc_block = TextBlock::new(description, content_x, cursor_y)
+                    .with_size(body_size)
+                    .with_color(
+                        (text_color[0] * 255.0) as u8,
+                        (text_color[1] * 255.0) as u8,
+                        (text_color[2] * 255.0) as u8,
+                    )
+                    .with_max_width(width - padding * 2.0)
+                    .with_font_opt(font.clone());
+                list.text(desc_block);
+
+                cursor_y += rich_desc_h;
+
+                if !details.is_empty() {
+                    cursor_y += 8.0;
+                    for (key, value) in details {
+                        let detail_text = format!("{}: {}", key, value);
+                        let detail_block = TextBlock::new(&detail_text, content_x, cursor_y)
+                            .with_size(body_size)
+                            .with_color(
+                                (text_dim[0] * 255.0) as u8,
+                                (text_dim[1] * 255.0) as u8,
+                                (text_dim[2] * 255.0) as u8,
+                            )
+                            .with_font_opt(font.clone());
+                        list.text(detail_block);
+                        cursor_y += line_height;
+                    }
                 }
             }
         }
     }
+    surface.paint_post_content();
     list.pop_debug_scope();
 }
 
@@ -509,6 +514,29 @@ mod tests {
         assert!(!tt.is_visible(), "moving off should hide tooltip");
         tt.tick(0.05, &input_at(10.0, 10.0)); // re-enter
         assert!(!tt.is_visible(), "re-enter should restart delay");
+    }
+
+    #[test]
+    fn typed_overlay_reaches_tooltip_surface_and_shadow() {
+        let theme = crate::Theme::default();
+        let mut chrome = theme.chrome.tooltip;
+        chrome.surface.background = crate::Background::Solid([0.2, 0.3, 0.4, 1.0]);
+        chrome.shadow.color = [0.5, 0.1, 0.2, 0.7];
+        let mut overlay = crate::StyleOverlay::new();
+        overlay.set_tooltip(chrome);
+        let styles = StyleResolver::with_overlay(&theme, &overlay);
+        let mut layer = TooltipLayer::new();
+        layer.register(Rect::new(0.0, 0.0, 40.0, 40.0), TooltipContent::text("tip"));
+        let input = input_at(10.0, 10.0);
+        layer.tick(0.0, &input);
+        let mut list = DrawList::new();
+        layer.draw(&input, &mut list, &styles, 400.0, 300.0);
+        assert!(
+            list.chrome_instances()
+                .any(|i| i.bg == [0.2, 0.3, 0.4, 1.0])
+        );
+        assert_eq!(list.shadow_instance_count(), 1);
+        assert_eq!(list.shadow_instance(0).unwrap().color, chrome.shadow.color);
     }
 
     #[test]

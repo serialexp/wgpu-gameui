@@ -318,14 +318,23 @@ impl StyleKey {
 #[derive(Clone, Debug, Default)]
 pub struct StyleOverlay {
     entries: Vec<(StyleKey, StyleValue)>,
+    menu_bar: Option<crate::MenuBarChrome>,
+    menu_sheet: Option<crate::MenuSheetChrome>,
+    toolbar: Option<crate::ToolbarChrome>,
+    dock: Option<crate::DockChrome>,
+    splitter: Option<crate::SplitterChrome>,
+    status_bar: Option<crate::StatusBarChrome>,
+    dropdown: Option<crate::FloatingSurfaceChrome>,
+    popover: Option<crate::FloatingSurfaceChrome>,
+    tooltip: Option<crate::FloatingSurfaceChrome>,
+    toast: Option<crate::FloatingSurfaceChrome>,
+    curve_key: Option<crate::FloatingSurfaceChrome>,
 }
 
 impl StyleOverlay {
     /// An empty overlay (resolves to the theme for every key).
     pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Override `key` with `value`. Replaces any existing entry for `key`.
@@ -357,14 +366,137 @@ impl StyleOverlay {
             .map(|(_, v)| *v)
     }
 
-    /// Whether the overlay has no entries.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    /// Override menu-bar chrome.
+    pub fn set_menu_bar(&mut self, value: crate::MenuBarChrome) -> &mut Self {
+        self.menu_bar = Some(value);
+        self
+    }
+    /// Return the menu-bar override.
+    pub fn menu_bar(&self) -> Option<crate::MenuBarChrome> {
+        self.menu_bar
+    }
+    /// Override menu-sheet chrome.
+    pub fn set_menu_sheet(&mut self, value: crate::MenuSheetChrome) -> &mut Self {
+        self.menu_sheet = Some(value);
+        self
+    }
+    /// Return the menu-sheet override.
+    pub fn menu_sheet(&self) -> Option<crate::MenuSheetChrome> {
+        self.menu_sheet
+    }
+    /// Override toolbar chrome.
+    pub fn set_toolbar(&mut self, value: crate::ToolbarChrome) -> &mut Self {
+        self.toolbar = Some(value);
+        self
+    }
+    /// Return the toolbar override.
+    pub fn toolbar(&self) -> Option<crate::ToolbarChrome> {
+        self.toolbar
+    }
+    /// Override dock-panel chrome.
+    pub fn set_dock(&mut self, value: crate::DockChrome) -> &mut Self {
+        self.dock = Some(value);
+        self
+    }
+    /// Return the dock-panel override.
+    pub fn dock(&self) -> Option<crate::DockChrome> {
+        self.dock
+    }
+    /// Override splitter chrome.
+    pub fn set_splitter(&mut self, value: crate::SplitterChrome) -> &mut Self {
+        self.splitter = Some(value);
+        self
+    }
+    /// Return the splitter override.
+    pub fn splitter(&self) -> Option<crate::SplitterChrome> {
+        self.splitter
+    }
+    /// Override status-bar chrome.
+    pub fn set_status_bar(&mut self, value: crate::StatusBarChrome) -> &mut Self {
+        self.status_bar = Some(value);
+        self
+    }
+    /// Return the status-bar override.
+    pub fn status_bar(&self) -> Option<crate::StatusBarChrome> {
+        self.status_bar
+    }
+    /// Override dropdown chrome.
+    pub fn set_dropdown(&mut self, value: crate::FloatingSurfaceChrome) -> &mut Self {
+        self.dropdown = Some(value);
+        self
+    }
+    /// Return the dropdown override.
+    pub fn dropdown(&self) -> Option<crate::FloatingSurfaceChrome> {
+        self.dropdown
+    }
+    /// Override popover chrome.
+    pub fn set_popover(&mut self, value: crate::FloatingSurfaceChrome) -> &mut Self {
+        self.popover = Some(value);
+        self
+    }
+    /// Return the popover override.
+    pub fn popover(&self) -> Option<crate::FloatingSurfaceChrome> {
+        self.popover
+    }
+    /// Override tooltip chrome.
+    pub fn set_tooltip(&mut self, value: crate::FloatingSurfaceChrome) -> &mut Self {
+        self.tooltip = Some(value);
+        self
+    }
+    /// Return the tooltip override.
+    pub fn tooltip(&self) -> Option<crate::FloatingSurfaceChrome> {
+        self.tooltip
+    }
+    /// Override toast chrome.
+    pub fn set_toast(&mut self, value: crate::FloatingSurfaceChrome) -> &mut Self {
+        self.toast = Some(value);
+        self
+    }
+    /// Return the toast override.
+    pub fn toast(&self) -> Option<crate::FloatingSurfaceChrome> {
+        self.toast
+    }
+    /// Override curve-editor key chrome.
+    pub fn set_curve_key(&mut self, value: crate::FloatingSurfaceChrome) -> &mut Self {
+        self.curve_key = Some(value);
+        self
+    }
+    /// Return the curve-editor key override.
+    pub fn curve_key(&self) -> Option<crate::FloatingSurfaceChrome> {
+        self.curve_key
     }
 
-    /// Drop all overrides.
+    /// Whether the overlay has no scalar, color, or component overrides.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+            && self.menu_bar.is_none()
+            && self.menu_sheet.is_none()
+            && self.toolbar.is_none()
+            && self.dock.is_none()
+            && self.splitter.is_none()
+            && self.status_bar.is_none()
+            && self.dropdown.is_none()
+            && self.popover.is_none()
+            && self.tooltip.is_none()
+            && self.toast.is_none()
+            && self.curve_key.is_none()
+    }
+
+    /// Drop all scalar, color, and typed component overrides while retaining
+    /// the scalar/color entry allocation for reuse.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.menu_bar = None;
+        self.menu_sheet = None;
+        self.toolbar = None;
+        self.dock = None;
+        self.splitter = None;
+        self.status_bar = None;
+        self.dropdown = None;
+        self.popover = None;
+        self.tooltip = None;
+        self.toast = None;
+        self.curve_key = None;
     }
 }
 
@@ -444,6 +576,73 @@ impl<'a> StyleResolver<'a> {
         self.get(key)
             .and_then(StyleValue::as_scalar)
             .unwrap_or(default)
+    }
+
+    /// Resolve menu-bar chrome in O(1).
+    pub fn menu_bar(&self) -> crate::MenuBarChrome {
+        self.overlay
+            .and_then(StyleOverlay::menu_bar)
+            .unwrap_or(self.theme.chrome.menu_bar)
+    }
+    /// Resolve menu-sheet chrome in O(1).
+    pub fn menu_sheet(&self) -> crate::MenuSheetChrome {
+        self.overlay
+            .and_then(StyleOverlay::menu_sheet)
+            .unwrap_or(self.theme.chrome.menu_sheet)
+    }
+    /// Resolve toolbar chrome in O(1).
+    pub fn toolbar(&self) -> crate::ToolbarChrome {
+        self.overlay
+            .and_then(StyleOverlay::toolbar)
+            .unwrap_or(self.theme.chrome.toolbar)
+    }
+    /// Resolve dock-panel chrome in O(1).
+    pub fn dock(&self) -> crate::DockChrome {
+        self.overlay
+            .and_then(StyleOverlay::dock)
+            .unwrap_or(self.theme.chrome.dock)
+    }
+    /// Resolve splitter chrome in O(1).
+    pub fn splitter(&self) -> crate::SplitterChrome {
+        self.overlay
+            .and_then(StyleOverlay::splitter)
+            .unwrap_or(self.theme.chrome.splitter)
+    }
+    /// Resolve status-bar chrome in O(1).
+    pub fn status_bar(&self) -> crate::StatusBarChrome {
+        self.overlay
+            .and_then(StyleOverlay::status_bar)
+            .unwrap_or(self.theme.chrome.status_bar)
+    }
+    /// Resolve dropdown chrome in O(1).
+    pub fn dropdown(&self) -> crate::FloatingSurfaceChrome {
+        self.overlay
+            .and_then(StyleOverlay::dropdown)
+            .unwrap_or(self.theme.chrome.dropdown)
+    }
+    /// Resolve popover chrome in O(1).
+    pub fn popover(&self) -> crate::FloatingSurfaceChrome {
+        self.overlay
+            .and_then(StyleOverlay::popover)
+            .unwrap_or(self.theme.chrome.popover)
+    }
+    /// Resolve tooltip chrome in O(1).
+    pub fn tooltip(&self) -> crate::FloatingSurfaceChrome {
+        self.overlay
+            .and_then(StyleOverlay::tooltip)
+            .unwrap_or(self.theme.chrome.tooltip)
+    }
+    /// Resolve toast chrome in O(1).
+    pub fn toast(&self) -> crate::FloatingSurfaceChrome {
+        self.overlay
+            .and_then(StyleOverlay::toast)
+            .unwrap_or(self.theme.chrome.toast)
+    }
+    /// Resolve curve-editor key chrome in O(1).
+    pub fn curve_key(&self) -> crate::FloatingSurfaceChrome {
+        self.overlay
+            .and_then(StyleOverlay::curve_key)
+            .unwrap_or(self.theme.chrome.curve_key)
     }
 
     /// A body [`TextBlock`] styled through the resolver: [`FontSize`](StyleKey::FontSize)
@@ -626,5 +825,54 @@ mod tests {
         let key = StyleKey::custom("missing");
         assert_eq!(r.color_or(key, [0.5, 0.5, 0.5, 1.0]), [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(r.scalar_or(key, 3.0), 3.0);
+    }
+
+    #[test]
+    fn typed_component_override_resolves_and_clear_covers_it() {
+        let theme = Theme::default();
+        let mut override_value = theme.chrome.splitter;
+        override_value.grip_idle = [0.1, 0.2, 0.3, 0.4];
+        let mut overlay = StyleOverlay::new();
+        overlay.set_splitter(override_value);
+
+        assert!(!overlay.is_empty());
+        assert_eq!(
+            StyleResolver::with_overlay(&theme, &overlay)
+                .splitter()
+                .grip_idle,
+            [0.1, 0.2, 0.3, 0.4]
+        );
+        assert_eq!(StyleResolver::new(&theme).splitter(), theme.chrome.splitter);
+
+        overlay.clear();
+        assert!(overlay.is_empty());
+        assert_eq!(overlay.splitter(), None);
+    }
+
+    #[test]
+    fn overlay_component_reaches_surface_painter() {
+        use crate::{CornerRadii, DrawList, SurfacePainter, layout::Rect};
+
+        let theme = Theme::default();
+        let mut menu = theme.chrome.menu_bar;
+        menu.surface.background = crate::Background::Solid([0.7, 0.6, 0.5, 1.0]);
+        let mut overlay = StyleOverlay::new();
+        overlay.set_menu_bar(menu);
+        let resolved = StyleResolver::with_overlay(&theme, &overlay).menu_bar();
+        let mut list = DrawList::new();
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let mut painter = SurfacePainter::new(
+            &mut list,
+            rect,
+            rect.inset(1.0),
+            CornerRadii::default(),
+            resolved.surface,
+            &resolved.shadows,
+            &resolved.lines,
+        );
+        painter.paint_pre_content();
+        painter.paint_post_content();
+
+        assert_eq!(list.chrome_instance(0).unwrap().bg, [0.7, 0.6, 0.5, 1.0]);
     }
 }

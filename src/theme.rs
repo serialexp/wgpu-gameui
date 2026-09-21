@@ -1,5 +1,7 @@
 //! UI theming - colors, fonts, spacing.
 
+use crate::chrome::ChromeTheme;
+use crate::color::srgb_to_linear;
 use crate::style::{CustomStyles, StyleKey, StyleValue};
 use crate::text::{FontHandle, TextBlock};
 
@@ -191,8 +193,11 @@ pub struct Theme {
     /// Text/icon color drawn on top of danger faces.
     pub on_danger: [f32; 4],
 
+    /// Finite, typed chrome materials for component families.
+    pub chrome: ChromeTheme,
+
     /// UI-wide default font. `None` resolves to the default sans-serif (the
-    /// bundled Noto Sans when the `bundled-font` feature is on, else the system
+    /// bundled IBM Plex Sans when the `bundled-font` feature is on, else the system
     /// sans-serif). Set to a loaded [`FontHandle`] to theme all widget text in a
     /// custom family; every widget that builds text through this `Theme` picks it
     /// up. Per-block `TextBlock::with_font` still overrides it.
@@ -218,56 +223,101 @@ impl Default for Theme {
             // The "4a" design language: near-black neutral surfaces, controls
             // painted as a subtle white-sheen gradient face resting on a dark
             // plinth, accent (teal, oklch hue 200) reserved for state.
-            // Backdrop gradient stop from the design body (#10171c→#060809);
-            // apps wanting the exact ramp blend these behind the UI.
-            background: [0.0627, 0.0902, 0.1098, 1.0], // #10171c
+            // Theme and draw-list colors are linear RGBA. Decode CSS/sRGB
+            // palette values here so the sRGB render target encodes them exactly
+            // once. The backdrop is the first design stop (#10171c); apps wanting
+            // the exact #10171c→#060809 ramp blend the remaining stops behind UI.
+            background: srgb_to_linear([
+                0x10 as f32 / 255.0,
+                0x17 as f32 / 255.0,
+                0x1c as f32 / 255.0,
+                1.0,
+            ]),
             // Pause/menu screens dim the world by half. Black keeps the dim
             // neutral; apps wanting a color cast retune it per theme.
             scrim: [0.0, 0.0, 0.0, 0.55],
-            // Raised surface = the design's rgba(16,19,22,0.72) sheet over the
-            // backdrop.
-            panel: [0.0863, 0.098, 0.1137, 0.95], // #16191d
+            // Raised surface = #16191d at the design's panel opacity.
+            panel: srgb_to_linear([
+                0x16 as f32 / 255.0,
+                0x19 as f32 / 255.0,
+                0x1d as f32 / 255.0,
+                0.95,
+            ]),
             panel_border: [0.0, 0.0, 0.0, 0.55],
             // Resting face fill. The widgets paint raised controls as a gradient
             // from `ButtonHover`-strength sheen down to this tone; see
             // `ButtonTop`/`ButtonPressed` and the widget material helper.
-            button: [0.1216, 0.1412, 0.1608, 1.0], // #1f2429
-            button_hover: [0.1294, 0.149, 0.1686, 1.0], // #21262b
-            button_pressed: [0.0784, 0.0941, 0.1098, 1.0], // #14181c
+            button: srgb_to_linear([
+                0x1f as f32 / 255.0,
+                0x24 as f32 / 255.0,
+                0x29 as f32 / 255.0,
+                1.0,
+            ]),
+            button_hover: srgb_to_linear([
+                0x21 as f32 / 255.0,
+                0x26 as f32 / 255.0,
+                0x2b as f32 / 255.0,
+                1.0,
+            ]),
+            button_pressed: srgb_to_linear([
+                0x14 as f32 / 255.0,
+                0x18 as f32 / 255.0,
+                0x1c as f32 / 255.0,
+                1.0,
+            ]),
             button_border: [0.0, 0.0, 0.0, 0.5],
             input_background: [0.0, 0.0, 0.0, 0.42],
             input_border: [0.0, 0.0, 0.0, 0.6],
-            input_focus_border: [0.2423, 0.7509, 0.7767, 1.0], // oklch(0.74 0.11 200)
+            input_focus_border: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
             // Design body text #eef2f5.
-            text: [0.9333, 0.949, 0.9608, 1.0],
-            text_dim: [0.6784, 0.7137, 0.7451, 1.0], // #adb6bd
+            text: srgb_to_linear([
+                0xee as f32 / 255.0,
+                0xf2 as f32 / 255.0,
+                0xf5 as f32 / 255.0,
+                1.0,
+            ]),
+            text_dim: srgb_to_linear([
+                0xad as f32 / 255.0,
+                0xb6 as f32 / 255.0,
+                0xbd as f32 / 255.0,
+                1.0,
+            ]),
             // The design's "held/active" face tone #f4f7fa — the brightest
             // neutral, used for active tab/tool labels.
-            text_highlight: [0.9569, 0.9686, 0.9804, 1.0],
+            text_highlight: srgb_to_linear([
+                0xf4 as f32 / 255.0,
+                0xf7 as f32 / 255.0,
+                0xfa as f32 / 255.0,
+                1.0,
+            ]),
             // Accent = teal oklch(0.74 0.11 200), state only (selection, focus,
-            // toggle-on fills), never for resting chrome.
-            accent: [0.2423, 0.7509, 0.7767, 1.0],
-            // Severity palette in the design hues (info sky, success green,
-            // warning amber, error red — oklch-derived sRGB).
-            info: [0.3692, 0.6736, 0.92, 1.0],
-            success: [0.3799, 0.7093, 0.3977, 1.0],
-            warning: [0.9084, 0.6684, 0.3042, 1.0],
-            error: [0.8413, 0.2796, 0.2724, 1.0],
-            focus_ring: [0.2423, 0.7509, 0.7767, 1.0],
+            // toggle-on fills), never for resting chrome. These resolved sRGB
+            // values are decoded just like the hex palette above.
+            accent: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
+            info: srgb_to_linear([0.3692, 0.6736, 0.92, 1.0]),
+            success: srgb_to_linear([0.3799, 0.7093, 0.3977, 1.0]),
+            warning: srgb_to_linear([0.9084, 0.6684, 0.3042, 1.0]),
+            error: srgb_to_linear([0.8413, 0.2796, 0.2724, 1.0]),
+            focus_ring: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
 
             // Tab colors — the design's document/in-set tabs: inactive reads as
             // a sunken well, active as a raised face, border is the black edge.
             tab_inactive: [0.0, 0.0, 0.0, 0.22],
-            tab_active: [0.1294, 0.149, 0.1686, 1.0],
+            tab_active: srgb_to_linear([
+                0x21 as f32 / 255.0,
+                0x26 as f32 / 255.0,
+                0x2b as f32 / 255.0,
+                1.0,
+            ]),
             tab_hover: [1.0, 1.0, 1.0, 0.07],
             tab_border: [0.0, 0.0, 0.0, 0.45],
 
             // Progress bar colors
             progress_background: [0.0, 0.0, 0.0, 0.55],
             // Progress/slider fills are the accent gradient.
-            progress_fill: [0.2423, 0.7509, 0.7767, 1.0],
-            progress_fill_low: [0.8413, 0.2796, 0.2724, 1.0],
-            progress_fill_medium: [0.9084, 0.6684, 0.3042, 1.0],
+            progress_fill: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
+            progress_fill_low: srgb_to_linear([0.8413, 0.2796, 0.2724, 1.0]),
+            progress_fill_medium: srgb_to_linear([0.9084, 0.6684, 0.3042, 1.0]),
 
             // Sizing — the design is compact: 13px text, 24px control rows,
             // 2px "plinth travel" press motion, radius 1.
@@ -279,13 +329,14 @@ impl Default for Theme {
             font_size_title: 15.0,
             button_height: 24.0,
             input_height: 24.0,
-            // Menus: a row is one text line plus the standard inset; a column is
-            // floored at ten characters wide so short labels still read as menu.
-            menu_row_height: font_size + padding * 2.0 + 6.0,
-            menu_item_min_width: font_size * 10.0,
-            menu_accel_gap: 14.0,
+            // Forge menu geometry is literal: 22px rows inside a 3px-padded,
+            // 218px-minimum sheet. Title/row text uses its own 11.5px scale rather
+            // than the 13px body font; see the menubar paint/measure paths.
+            menu_row_height: 22.0,
+            menu_item_min_width: 218.0,
+            menu_accel_gap: 7.0,
             toolbar_button_size: 24.0,
-            toolbar_padding: 2.0,
+            toolbar_padding: 3.0,
             dock_tab_height: 24.0,
             dock_splitter_width: 6.0,
             animation_duration: 0.12,
@@ -305,21 +356,32 @@ impl Default for Theme {
             edge_highlight_pressed: [1.0, 1.0, 1.0, 0.07],
             inner_shadow: [0.0, 0.0, 0.0, 0.6],
             edge_shadow: [1.0, 1.0, 1.0, 0.07],
-            accent_face_top: [0.4211, 0.8464, 0.8689, 1.0],
-            accent_face_top_hover: [0.5211, 0.8911, 0.9106, 1.0],
-            accent_face_top_pressed: [0.2518, 0.6942, 0.7171, 1.0],
-            accent_face_bottom: [0.0, 0.6817, 0.7111, 1.0],
-            accent_face_bottom_hover: [0.0772, 0.732, 0.7611, 1.0],
-            accent_face_bottom_pressed: [0.0, 0.5774, 0.6039, 1.0],
-            on_accent: [0.0157, 0.0902, 0.1137, 1.0], // #04171d
-            danger_face_top: [0.7841, 0.2609, 0.2536, 1.0],
-            danger_face_top_hover: [0.8692, 0.306, 0.2953, 1.0],
-            danger_face_top_pressed: [0.6884, 0.1648, 0.1749, 1.0],
-            danger_face_bottom: [0.6612, 0.1341, 0.1522, 1.0],
-            danger_face_bottom_hover: [0.7304, 0.1668, 0.1811, 1.0],
-            danger_face_bottom_pressed: [0.6071, 0.0579, 0.1056, 1.0],
-            on_danger: [0.9922, 0.9176, 0.9176, 1.0], // #fdeaea
+            accent_face_top: srgb_to_linear([0.4211, 0.8464, 0.8689, 1.0]),
+            accent_face_top_hover: srgb_to_linear([0.5211, 0.8911, 0.9106, 1.0]),
+            accent_face_top_pressed: srgb_to_linear([0.2518, 0.6942, 0.7171, 1.0]),
+            accent_face_bottom: srgb_to_linear([0.0, 0.6817, 0.7111, 1.0]),
+            accent_face_bottom_hover: srgb_to_linear([0.0772, 0.732, 0.7611, 1.0]),
+            accent_face_bottom_pressed: srgb_to_linear([0.0, 0.5774, 0.6039, 1.0]),
+            on_accent: srgb_to_linear([
+                0x04 as f32 / 255.0,
+                0x17 as f32 / 255.0,
+                0x1d as f32 / 255.0,
+                1.0,
+            ]),
+            danger_face_top: srgb_to_linear([0.7841, 0.2609, 0.2536, 1.0]),
+            danger_face_top_hover: srgb_to_linear([0.8692, 0.306, 0.2953, 1.0]),
+            danger_face_top_pressed: srgb_to_linear([0.6884, 0.1648, 0.1749, 1.0]),
+            danger_face_bottom: srgb_to_linear([0.6612, 0.1341, 0.1522, 1.0]),
+            danger_face_bottom_hover: srgb_to_linear([0.7304, 0.1668, 0.1811, 1.0]),
+            danger_face_bottom_pressed: srgb_to_linear([0.6071, 0.0579, 0.1056, 1.0]),
+            on_danger: srgb_to_linear([
+                0xfd as f32 / 255.0,
+                0xea as f32 / 255.0,
+                0xea as f32 / 255.0,
+                1.0,
+            ]),
 
+            chrome: ChromeTheme::default(),
             font: None,
             custom: CustomStyles::default(),
         }
@@ -347,20 +409,40 @@ mod tests {
         assert!(theme.font_size_title > theme.font_size);
     }
 
-    /// The menu metrics are derived from the base sizing values, not duplicated
-    /// literals: retuning `padding`/`font_size`/`spacing` in the default moves
-    /// them together.
     #[test]
-    fn menu_metrics_follow_the_base_sizing_values() {
+    fn default_css_palette_is_stored_in_linear_light() {
         let theme = Theme::default();
-        assert_eq!(
-            theme.menu_row_height,
-            theme.font_size + theme.padding * 2.0 + 6.0,
-            "a menu row is one text line, the standard inset, and 3px breathing room per side"
+        let close = |actual: [f32; 4], expected: [f32; 4]| {
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+            }
+        };
+
+        close(
+            theme.background,
+            srgb_to_linear([16.0 / 255.0, 23.0 / 255.0, 28.0 / 255.0, 1.0]),
         );
-        assert_eq!(theme.menu_item_min_width, theme.font_size * 10.0);
-        assert_eq!(theme.menu_accel_gap, 14.0);
-        assert_eq!(theme.menu_row_height, 27.0);
+        close(
+            theme.panel,
+            srgb_to_linear([22.0 / 255.0, 25.0 / 255.0, 29.0 / 255.0, 0.95]),
+        );
+        close(
+            theme.text,
+            srgb_to_linear([238.0 / 255.0, 242.0 / 255.0, 245.0 / 255.0, 1.0]),
+        );
+        assert!(
+            theme.background[0] < 0.01,
+            "dark CSS colors must not be stored as raw sRGB"
+        );
+        assert_eq!(theme.panel[3], 0.95, "alpha remains linear and unchanged");
+    }
+
+    #[test]
+    fn default_menu_metrics_match_the_forge_handoff() {
+        let theme = Theme::default();
+        assert_eq!(theme.menu_row_height, 22.0);
+        assert_eq!(theme.menu_item_min_width, 218.0);
+        assert_eq!(theme.menu_accel_gap, 7.0);
     }
 
     #[test]
@@ -430,14 +512,14 @@ mod tests {
     #[test]
     fn theme_font_applies_to_text_and_title() {
         let mut theme = Theme::default();
-        theme.font = Some(FontHandle("Noto Sans".to_string()));
+        theme.font = Some(FontHandle("IBM Plex Sans".to_string()));
         assert_eq!(
             theme.text("hi", 0.0, 0.0).font.as_ref().unwrap().family(),
-            "Noto Sans"
+            "IBM Plex Sans"
         );
         assert_eq!(
             theme.title("hi", 0.0, 0.0).font.as_ref().unwrap().family(),
-            "Noto Sans"
+            "IBM Plex Sans"
         );
     }
 }

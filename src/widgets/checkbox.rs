@@ -414,7 +414,7 @@ mod tests {
         // Box fill + outline are translate-only rounded rects, so they record
         // chrome instances rather than soup geometry.
         assert!(
-            !list.chrome_instances.is_empty(),
+            list.chrome_instance_count() != 0,
             "vector unchecked box must emit geometry (box fill + outline)"
         );
         assert!(list.icons.is_empty(), "vector path must not queue any icon");
@@ -561,7 +561,7 @@ mod tests {
         focus.focus(1);
         let (focused, _) = draw_focused(&cb, &mut focus, &idle);
         assert!(
-            focused.chrome_instances.len() > unfocused.chrome_instances.len(),
+            focused.chrome_instance_count() > unfocused.chrome_instance_count(),
             "focus ring should add outline geometry when focused"
         );
     }
@@ -588,8 +588,7 @@ mod tests {
     /// Find the box-fill chrome instance (the first translate-only rounded rect
     /// at the box origin).
     fn box_fill(list: &DrawList) -> [f32; 4] {
-        list.chrome_instances
-            .iter()
+        list.chrome_instances()
             .find(|c| c.rect[0] == 0.0 && c.rect[1] == 0.0)
             .map(|c| c.bg)
             .expect("vector box should emit a fill chrome instance at the origin")
@@ -665,7 +664,7 @@ mod tests {
                 .animated(1)
                 .draw(false, "", rect(), &mut ctx);
         }
-        let base_quads = l1.chrome_instances.len();
+        let base_quads = l1.chrome_instance_count();
 
         // Tick then hover: overlay quad appears (a translate-only quad records an
         // extra chrome instance).
@@ -681,7 +680,7 @@ mod tests {
                 .draw(false, "", rect(), &mut ctx);
         }
         assert!(
-            l2.chrome_instances.len() > base_quads,
+            l2.chrome_instance_count() > base_quads,
             "fading-in hover overlay should add quad geometry"
         );
     }

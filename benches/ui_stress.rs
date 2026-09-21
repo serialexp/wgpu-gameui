@@ -30,11 +30,11 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 
 use wgpu_gameui::layout::{Anchor, LayoutResult, Positioned, Rect, Size, VStack};
 use wgpu_gameui::{
-    AnimSlot, AnimationState, Button, Checkbox, ColumnWidth, DragCapture, DrawContext, DrawList,
-    Easing, FocusState, FontSystemHandle, Frame, InputState, KeyboardNav, List, ListItem,
-    ListState, MeasureBuffer, MeasuredChild, Measurement, NumberInput, ScrollState, ScrollView,
-    Slider, StyleResolver, Table, TableCell, TableColumn, TextBlock, TextInput, TextMeasurer,
-    Theme, UiRenderer, UiState,
+    AnimSlot, AnimationState, BoxShadow, Button, Checkbox, ColumnWidth, CornerRadii, DragCapture,
+    DrawContext, DrawList, Easing, FocusState, FontSystemHandle, Frame, InputState, KeyboardNav,
+    List, ListItem, ListState, MeasureBuffer, MeasuredChild, Measurement, NumberInput, ScrollState,
+    ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn, TextBlock, TextInput,
+    TextMeasurer, Theme, UiRenderer, UiState,
 };
 #[cfg(feature = "syntax-lua")]
 use wgpu_gameui::{SyntaxHighlighting, SyntaxTheme};
@@ -270,6 +270,87 @@ fn bench_drawlist_build(c: &mut Criterion) {
                 std::hint::black_box(&list);
             });
         });
+    }
+    group.finish();
+}
+
+fn build_shadows(list: &mut DrawList, count: usize, alternate_with_chrome: bool) {
+    let cols = cols_for(count);
+    let shadow = BoxShadow {
+        offset: [0.0, 3.0],
+        blur: 12.0,
+        spread: 0.0,
+        color: [0.0, 0.0, 0.0, 0.55],
+        inset: false,
+    };
+    for i in 0..count {
+        let rect = grid_rect(i, cols);
+        list.box_shadow_outset(rect, CornerRadii::uniform(4.0), shadow);
+        if alternate_with_chrome {
+            list.chrome_rect(
+                rect,
+                4.0,
+                1.0,
+                [0.12, 0.15, 0.18, 1.0],
+                [0.0, 0.0, 0.0, 0.8],
+            );
+        }
+    }
+}
+
+fn bench_shadow_build(c: &mut Criterion) {
+    let harness = Harness::new();
+    let mut list = harness.draw_list();
+    let mut group = c.benchmark_group("shadow_build");
+    for &count in BUILD_COUNTS {
+        for alternate in [false, true] {
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(
+                BenchmarkId::new(
+                    if alternate {
+                        "alternating"
+                    } else {
+                        "contiguous"
+                    },
+                    count,
+                ),
+                &count,
+                |b, &count| {
+                    b.iter(|| {
+                        list.clear();
+                        build_shadows(&mut list, count, alternate);
+                        std::hint::black_box(&list);
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn bench_shadow_render(c: &mut Criterion) {
+    let mut harness = Harness::new();
+    let mut group = c.benchmark_group("shadow_render");
+    group.sample_size(30);
+    for &count in RENDER_COUNTS {
+        for alternate in [false, true] {
+            let mut list = harness.draw_list();
+            build_shadows(&mut list, count, alternate);
+            harness.render_frame(&list);
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(
+                BenchmarkId::new(
+                    if alternate {
+                        "alternating"
+                    } else {
+                        "contiguous"
+                    },
+                    count,
+                ),
+                &count,
+                |b, _| b.iter(|| harness.render_frame(&list)),
+            );
+        }
     }
     group.finish();
 }
@@ -1047,6 +1128,8 @@ fn bench_animation(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_drawlist_build,
+    bench_shadow_build,
+    bench_shadow_render,
     bench_frame_render,
     bench_render_text_only,
     bench_nine_slice,

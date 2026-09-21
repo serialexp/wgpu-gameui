@@ -70,11 +70,11 @@ pub use syntax::{HighlightConfiguration, SyntaxHighlighting, SyntaxTheme};
 pub use text::{
     CaretPos, FontHandle, FontSystemHandle, FontVMetrics, SelRect, TextAlign, TextBlock,
     TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
-    TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, byte_at_point,
-    byte_on_adjacent_line, caret_for_byte, load_font_bytes, load_font_file, register_bundled_fonts,
-    resolve_range_color, resolve_span_color, selection_rects, shared_font_system,
-    text_caret_layout, text_cursor_positions, text_visual_layout, vcentered_line_y,
-    visual_caret_neighbor, visual_caret_pos,
+    TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
+    byte_at_point, byte_on_adjacent_line, caret_for_byte, load_font_bytes, load_font_file,
+    register_bundled_fonts, resolve_range_color, resolve_span_color, selection_rects,
+    shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
+    vcentered_line_y, visual_caret_neighbor, visual_caret_pos,
 };
 
 /// Font weight and style selectors (re-exported from `glyphon`/`cosmic-text`)
@@ -83,6 +83,7 @@ pub use cosmic_text::{Style, Weight};
 
 pub mod affine;
 mod animation;
+mod chrome;
 mod click_tracker;
 pub mod color;
 mod cursor;
@@ -97,6 +98,7 @@ mod measure;
 mod nav;
 pub mod projection;
 pub mod render;
+mod shadow;
 mod style;
 mod theme;
 mod ui_context;
@@ -104,6 +106,11 @@ mod widgets;
 
 pub use affine::Affine2;
 pub use animation::{AnimSlot, AnimationState, Easing, ease, lerp, lerp_color};
+pub use chrome::{
+    Background, ChromeTheme, DockChrome, Edge, EdgeStyle, EdgeWidths, FloatingSurfaceChrome,
+    GradientAxis, MenuBarChrome, MenuSheetChrome, QuadStyle, SplitterChrome, StatusBarChrome,
+    StructuralLine, SurfacePainter, ToolbarChrome,
+};
 pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};
 pub use color::Hsva;
 pub use cursor::{CursorIcon, CursorState};
@@ -134,6 +141,7 @@ pub use render::{
 pub use render::{
     IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
 };
+pub use shadow::{BoxShadow, CornerRadii, ShadowInstance};
 pub use style::{StyleKey, StyleOverlay, StyleResolver, StyleValue};
 pub use theme::Theme;
 pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};

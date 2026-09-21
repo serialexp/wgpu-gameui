@@ -53,6 +53,7 @@
 
 #[cfg(feature = "phosphor-icons")]
 use crate::PhosphorIcon;
+use crate::chrome::SurfacePainter;
 use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{InputState, LayerStack, StyleKey, StyleResolver};
@@ -305,6 +306,8 @@ impl DropdownState {
         let font = style.theme().font.clone();
         let accent = style.color(StyleKey::Accent);
         let hover = style.color(StyleKey::ButtonHover);
+        let chrome = style.dropdown();
+        let shadow_margin = chrome.shadow.blur * 1.5;
 
         {
             let l = &mut layers.layers_mut()[idx].list;
@@ -313,76 +316,73 @@ impl DropdownState {
             l.push_debug_scope_rect(
                 "Dropdown popup",
                 Rect::new(
-                    list_rect.x - 13.0,
-                    list_rect.y - 13.0,
-                    list_rect.width + 26.0,
-                    list_rect.height + 13.0 + 23.0, // shadow: 13px side/top skirt + 10px offset
+                    list_rect.x - shadow_margin,
+                    list_rect.y - shadow_margin + chrome.shadow.offset[1],
+                    list_rect.width + shadow_margin * 2.0,
+                    list_rect.height + shadow_margin * 2.0,
                 ),
             );
-            // Drop shadow: the design floats the option list on `0 10px 26px`
-            // black (falloff margin = half the CSS blur ≈ 13px).
-            l.drop_shadow(
-                list_rect,
-                10.0,
-                13.0,
-                style.scalar(StyleKey::BorderRadius),
-                [0.0, 0.0, 0.0, 0.6],
-            );
-            // List background + border — the raised sheet (near-black panel,
-            // 1px black edge).
-            l.chrome_rect(
-                list_rect,
-                style.scalar(StyleKey::BorderRadius),
-                style.scalar(StyleKey::BorderWidth),
-                style.color(StyleKey::Panel),
-                [0.0, 0.0, 0.0, 0.7],
-            );
-            // Rows are clipped to the panel's interior so highlights cannot
-            // overpaint the sheet edge on the first or last visible option.
-            let border = style.scalar(StyleKey::BorderWidth).max(1.0);
+            let border = chrome.surface.border_widths.left.max(1.0);
             let content_rect = list_rect.inset(border);
-            l.push_clip_viewport(content_rect);
-            for (i, item) in geom.items.iter().enumerate() {
-                let iy = list_rect.y + i as f32 * geom.item_h - scroll;
-                // Cull rows fully outside the viewport.
-                if iy + geom.item_h <= list_rect.y || iy >= list_rect.y + list_rect.height {
-                    continue;
-                }
-                let hovered = list_rect.contains(li.mouse_x, li.mouse_y)
-                    && li.mouse_y >= iy
-                    && li.mouse_y < iy + geom.item_h
-                    && !li.mouse_consumed;
-                let is_selected = i == geom.selected;
-                let is_highlighted = self.highlighted == i;
-                if is_selected {
-                    l.quad(list_rect.x, iy, list_rect.width, geom.item_h, accent);
-                } else if is_highlighted {
-                    // Keyboard highlight: a brighter/stronger hover.
-                    l.quad(list_rect.x, iy, list_rect.width, geom.item_h, hover);
-                } else if hovered {
-                    // Mouse hover only when keyboard isn't already highlighting
-                    // a different item (to avoid fighting the user).
-                    if !self.key_up && !self.key_down {
-                        self.highlighted = i;
+            let mut surface = SurfacePainter::new(
+                l,
+                list_rect,
+                content_rect,
+                chrome.surface.corner_radii,
+                chrome.surface,
+                std::slice::from_ref(&chrome.shadow),
+                &[],
+            );
+            surface.paint_pre_content();
+            {
+                let l = surface.draw_list();
+                // Rows are clipped to the panel's interior so highlights cannot
+                // overpaint the sheet edge on the first or last visible option.
+                l.push_clip_viewport(content_rect);
+                for (i, item) in geom.items.iter().enumerate() {
+                    let iy = list_rect.y + i as f32 * geom.item_h - scroll;
+                    // Cull rows fully outside the viewport.
+                    if iy + geom.item_h <= list_rect.y || iy >= list_rect.y + list_rect.height {
+                        continue;
                     }
-                    l.quad(list_rect.x, iy, list_rect.width, geom.item_h, hover);
+                    let hovered = list_rect.contains(li.mouse_x, li.mouse_y)
+                        && li.mouse_y >= iy
+                        && li.mouse_y < iy + geom.item_h
+                        && !li.mouse_consumed;
+                    let is_selected = i == geom.selected;
+                    let is_highlighted = self.highlighted == i;
+                    if is_selected {
+                        l.quad(list_rect.x, iy, list_rect.width, geom.item_h, accent);
+                    } else if is_highlighted {
+                        // Keyboard highlight: a brighter/stronger hover.
+                        l.quad(list_rect.x, iy, list_rect.width, geom.item_h, hover);
+                    } else if hovered {
+                        // Mouse hover only when keyboard isn't already highlighting
+                        // a different item (to avoid fighting the user).
+                        if !self.key_up && !self.key_down {
+                            self.highlighted = i;
+                        }
+                        l.quad(list_rect.x, iy, list_rect.width, geom.item_h, hover);
+                    }
+                    let (r, g, b) = if is_selected {
+                        (sel_r, sel_g, sel_b)
+                    } else {
+                        (txt_r, txt_g, txt_b)
+                    };
+                    let text_y =
+                        l.vcentered_text_y(iy, geom.item_h, font_size, font.as_ref(), item);
+                    l.text(
+                        TextBlock::new(item.clone(), list_rect.x + pad, text_y)
+                            .with_size(font_size)
+                            .with_color(r, g, b)
+                            .with_max_width((list_rect.width - pad * 2.0).max(0.0))
+                            .with_ellipsis()
+                            .with_font_opt(font.clone()),
+                    );
                 }
-                let (r, g, b) = if is_selected {
-                    (sel_r, sel_g, sel_b)
-                } else {
-                    (txt_r, txt_g, txt_b)
-                };
-                let text_y = l.vcentered_text_y(iy, geom.item_h, font_size, font.as_ref(), item);
-                l.text(
-                    TextBlock::new(item.clone(), list_rect.x + pad, text_y)
-                        .with_size(font_size)
-                        .with_color(r, g, b)
-                        .with_max_width((list_rect.width - pad * 2.0).max(0.0))
-                        .with_ellipsis()
-                        .with_font_opt(font.clone()),
-                );
+                l.pop_clip();
             }
-            l.pop_clip();
+            surface.paint_post_content();
             l.pop_debug_scope();
         }
 
@@ -845,6 +845,31 @@ mod tests {
                 .any(|clip| *clip == panel.inset(theme.border_width.max(1.0))),
             "row paints are clipped to the panel interior and preserve its border"
         );
+    }
+
+    #[test]
+    fn typed_overlay_reaches_popup_surface_and_shadow() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.dropdown;
+        chrome.surface.background = crate::Background::Solid([0.2, 0.3, 0.4, 1.0]);
+        chrome.shadow.color = [0.5, 0.1, 0.2, 0.7];
+        let mut overlay = crate::StyleOverlay::new();
+        overlay.set_dropdown(chrome);
+        let styles = StyleResolver::with_overlay(&theme, &overlay);
+        let mut input = InputState::default();
+        let mut state = DropdownState::new();
+        let mut layers = LayerStack::new();
+        state.open_for_test(1, rect_a(), &ITEMS, 0);
+        state.begin_frame(&mut input);
+        let popup = state.push_open_layer(&mut layers).unwrap();
+        state.draw_open_layer(&mut layers, Some(popup), &styles, &input);
+        let list = &layers.layers_mut()[popup].list;
+        assert!(
+            list.chrome_instances()
+                .any(|i| i.bg == [0.2, 0.3, 0.4, 1.0])
+        );
+        assert_eq!(list.shadow_instance_count(), 1);
+        assert_eq!(list.shadow_instance(0).unwrap().color, chrome.shadow.color);
     }
 
     #[test]

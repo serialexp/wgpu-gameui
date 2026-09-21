@@ -472,7 +472,7 @@ mod tests {
         // bands by y, take each band's max width — that's the row
         // allocation — and assert the row-level invariants.
         let mut rows: Vec<(f32, f32, f32)> = Vec::new(); // (top_y, max_w, max_h)
-        for c in &list.chrome_instances {
+        for c in list.chrome_instances() {
             let (y, w, h) = (c.rect[1], c.rect[2], c.rect[3]);
             if let Some(row) = rows.iter_mut().find(|(ry, _, _)| (*ry - y).abs() < 0.5) {
                 row.1 = row.1.max(w);
@@ -537,7 +537,7 @@ mod tests {
         let out = MenuList::new(&[]).draw(Rect::new(0.0, 0.0, 200.0, 200.0), &mut sel, &mut ctx);
         assert_eq!(out.activated, None);
         assert_eq!(out.intrinsic_width, 0.0);
-        assert!(list.icons.is_empty() && list.chrome_instances.is_empty());
+        assert!(list.icons.is_empty() && list.chrome_instance_count() == 0);
     }
 
     #[test]
@@ -551,8 +551,8 @@ mod tests {
             draw_scrim(rect, &mut list, &s);
         }
         // `quad` collapses to an instanced chrome rect (radius 0, flat fill).
-        assert_eq!(list.chrome_instances.len(), 1, "scrim emits one quad");
-        let inst = &list.chrome_instances[0];
+        assert_eq!(list.chrome_instance_count(), 1, "scrim emits one quad");
+        let inst = &list.chrome_instance(0).unwrap();
         assert_eq!(inst.bg, [1.0, 0.0, 0.0, 0.5]);
         assert_eq!(inst.rect, [0.0, 0.0, 100.0, 80.0]);
     }

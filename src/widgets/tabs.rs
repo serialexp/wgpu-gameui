@@ -241,8 +241,7 @@ mod tests {
     /// active tabs are full height, inactive drop 2px short of the bar line).
     fn tab_bg(list: &DrawList, i: usize, tab_width: f32) -> [f32; 4] {
         let tab_x = 2.0 + i as f32 * (tab_width + 3.0);
-        list.chrome_instances
-            .iter()
+        list.chrome_instances()
             .find(|c| {
                 (c.rect[0] - tab_x).abs() < 0.01
                     && (c.rect[2] - tab_width).abs() < 0.01
@@ -262,15 +261,13 @@ mod tests {
         Tabs::new(&labels).draw(rect(), 0, &mut list, &style, &idle(), None);
 
         let strip = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .find(|c| c.rect == [0.0, 0.0, W, TAB_H])
             .expect("tabs should paint their shared sunken container");
         assert_eq!(strip.bg, theme.input_background);
         let tab_w = (W - 4.0 - 6.0) / 3.0;
         let faces: Vec<_> = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .filter(|c| (c.rect[2] - tab_w).abs() < 0.01)
             .collect();
         assert_eq!(faces.len(), 3);

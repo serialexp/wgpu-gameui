@@ -1,8 +1,8 @@
 //! Color helpers: HSV(A) ↔ RGB(A) conversion.
 //!
-//! The crate works in linear-ish `[f32; 4]` RGBA throughout (the same shape the
-//! draw list and theme use). This module adds an [`Hsva`] color and the
-//! conversions a color picker needs.
+//! The crate works in linear `[f32; 4]` RGBA throughout (the same shape the draw
+//! list and theme use). This module adds explicit sRGB conversion helpers plus an
+//! [`Hsva`] color and the conversions a color picker needs.
 //!
 //! **Why a dedicated HSV type?** An interactive color picker must keep HSV as
 //! its source of truth: HSV→RGB is total, but RGB→HSV is *lossy* at the
@@ -11,6 +11,45 @@
 //! RGB and re-derived HSV each frame, the hue/saturation cursors would snap to
 //! zero the instant you dragged value or saturation to an edge. Storing [`Hsva`]
 //! avoids that round-trip entirely.
+
+/// Convert one normalized sRGB channel to linear light.
+///
+/// Use this at palette boundaries when copying a CSS/hex color into a draw-list
+/// or theme color. Alpha is not gamma encoded and must not pass through this
+/// function.
+pub fn srgb_channel_to_linear(channel: f32) -> f32 {
+    if channel <= 0.04045 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Convert straight normalized sRGB RGBA to straight linear RGBA.
+///
+/// RGB channels are decoded with the standard sRGB transfer function; alpha is
+/// retained unchanged.
+pub fn srgb_to_linear(rgba: [f32; 4]) -> [f32; 4] {
+    [
+        srgb_channel_to_linear(rgba[0]),
+        srgb_channel_to_linear(rgba[1]),
+        srgb_channel_to_linear(rgba[2]),
+        rgba[3],
+    ]
+}
+
+/// Decode an opaque 8-bit sRGB color into the renderer's linear RGBA space.
+///
+/// Useful for copying resolved design-system hex values without repeating the
+/// channel normalization at every call site.
+pub fn opaque_srgb8(rgb: [u8; 3]) -> [f32; 4] {
+    srgb_to_linear([
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+        1.0,
+    ])
+}
 
 /// A color in HSVA space.
 ///
@@ -126,6 +165,23 @@ mod tests {
 
     fn rgb_close(a: [f32; 3], b: [f32; 3]) -> bool {
         close(a[0], b[0]) && close(a[1], b[1]) && close(a[2], b[2])
+    }
+
+    #[test]
+    fn srgb_conversion_decodes_rgb_and_preserves_alpha() {
+        let converted = srgb_to_linear([0.5, 0.04045, 0.0, 0.37]);
+        assert!(close(converted[0], 0.214_041_14));
+        assert!(close(converted[1], 0.003_130_805));
+        assert_eq!(converted[2], 0.0);
+        assert_eq!(converted[3], 0.37);
+    }
+
+    #[test]
+    fn opaque_srgb8_decodes_hex_channels_and_sets_opaque_alpha() {
+        assert_eq!(
+            opaque_srgb8([0x10, 0x80, 0xff]),
+            srgb_to_linear([16.0 / 255.0, 128.0 / 255.0, 1.0, 1.0])
+        );
     }
 
     #[test]

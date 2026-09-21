@@ -80,14 +80,21 @@ pub use model::{
 pub use placement::{blocker_regions, place_popup};
 pub use state::{MenuBarState, MenuDrawEnv, MenuLayers};
 
+use crate::color::opaque_srgb8;
 use crate::layout::{Constraint, Rect};
 use crate::text::{TextBlock, WrapMode};
 use crate::{
-    DrawContext, MeasureConstraints, MeasureContext, Measurement, StyleKey, StyleResolver,
+    CornerRadii, DrawContext, MeasureConstraints, MeasureContext, Measurement, StyleKey,
+    StyleResolver, SurfacePainter,
 };
 
 use model::{MenuBarId as BarId, bar_label_id};
 use state::ChainGeometry;
+
+const MENU_TITLE_FONT_SIZE: f32 = 11.5;
+const MENU_BAR_SIDE_PADDING: f32 = 4.0;
+const MENU_TITLE_PADDING: f32 = 9.0;
+const MENU_TITLE_GAP: f32 = 1.0;
 
 /// A horizontal strip of menus, drawn into a caller-supplied [`Rect`].
 ///
@@ -151,16 +158,16 @@ impl<'a> MenuBar<'a> {
     /// as wide as the sum of the labels plus their insets.
     pub fn measure(&self, cx: &mut MeasureContext<'_>) -> Measurement {
         let styles = cx.styles();
-        let pad = styles.scalar(StyleKey::Padding).max(0.0);
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
-        let mut width = 0.0;
+        let mut width = MENU_BAR_SIDE_PADDING * 2.0;
         let mut baseline = row_h * 0.5;
         for menu in self.menus {
             let block = styles
                 .text_block(menu.label(), 0.0, 0.0)
+                .with_size(MENU_TITLE_FONT_SIZE)
                 .with_wrap(WrapMode::None);
             let text = cx.measure_text_with(block, MeasureConstraints::UNBOUNDED);
-            width += text.metrics.size[0] + pad * 2.0;
+            width += text.metrics.size[0] + MENU_TITLE_PADDING * 2.0 + MENU_TITLE_GAP;
             baseline = (row_h * 0.5 - text.metrics.visual_center + text.metrics.baseline)
                 .clamp(0.0, row_h);
         }
@@ -186,10 +193,10 @@ impl<'a> MenuBar<'a> {
     /// highlight, down/confirm open the highlighted menu) because this is the only
     /// place that has both the menus and their label rects.
     ///
-    /// The strip paints **no background of its own** — it composes over whatever
-    /// chrome the host drew, as [`crate::Tabs`] does. A label is filled only when
-    /// hovered, armed-highlighted, or when its menu is open (`Accent`, so menu
-    /// mode is never invisible).
+    /// The strip paints its own panel background and bottom border, so it remains
+    /// visually complete when placed directly over application content. A label is
+    /// filled only when hovered, armed-highlighted, or when its menu is open
+    /// (`Accent`, so menu mode is never invisible).
     pub fn draw(
         &self,
         rect: Rect,
@@ -199,7 +206,6 @@ impl<'a> MenuBar<'a> {
         let theme = ctx.theme;
         let overlay = ctx.style;
         let styles = StyleResolver::with_overlay_opt(theme, overlay);
-        let pad = styles.scalar(StyleKey::Padding).max(0.0);
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
         let height = if rect.height > 0.0 {
             rect.height
@@ -219,6 +225,7 @@ impl<'a> MenuBar<'a> {
 
         if self.menus.is_empty() {
             state.next_geom = None;
+            self.paint_strip_background(strip, ctx);
             return self.output(state, None);
         }
 
@@ -229,9 +236,11 @@ impl<'a> MenuBar<'a> {
         {
             let list = &mut *ctx.draw_list;
             for menu in self.menus {
-                let block = styles.text_block(menu.label(), 0.0, 0.0);
+                let block = styles
+                    .text_block(menu.label(), 0.0, 0.0)
+                    .with_size(MENU_TITLE_FONT_SIZE);
                 let (width, _) = list.measure_block(&block);
-                state.label_pool.push(width + pad * 2.0);
+                state.label_pool.push(width + MENU_TITLE_PADDING * 2.0);
             }
         }
 
@@ -240,11 +249,11 @@ impl<'a> MenuBar<'a> {
         // visited is equivalent to collecting them first — and it keeps the pass
         // allocation-free. The press is resolved before the hover, or opening a
         // menu on press would be undone by hover-to-switch in the same frame.
-        let mut label_x = strip.x;
+        let mut label_x = strip.x + MENU_BAR_SIDE_PADDING;
         let mut hovered_menu = None;
         for (index, menu) in self.menus.iter().enumerate() {
             let label_rect = Rect::new(label_x, strip.y, state.label_pool[index], strip.height);
-            label_x = label_rect.right();
+            label_x = label_rect.right() + MENU_TITLE_GAP;
             let response =
                 ctx.interact(bar_label_id(self.id, index), label_rect, menu.is_enabled());
             if response.clicked {
@@ -311,15 +320,14 @@ impl<'a> MenuBar<'a> {
             }
         }
 
-        // Pass 3: paint. Nothing is filled unless it is hovered, highlighted or
-        // open, so the strip leaves the host's own chrome showing through.
-        let (accent, hover, text, dim) = (
-            styles.color(StyleKey::Accent),
-            styles.color(StyleKey::ButtonHover),
-            styles.color(StyleKey::Text),
-            styles.color(StyleKey::TextDim),
-        );
-        let font_size = styles.scalar(StyleKey::FontSize);
+        // Pass 3: paint the strip's owning chrome, then labels. Label fills are
+        // limited to hovered, highlighted, and open states.
+        let accent = opaque_srgb8([0x79, 0xc6, 0xd8]);
+        let hover = opaque_srgb8([0x32, 0x37, 0x3b]);
+        // TextBlock colours are literal 8-bit sRGB, unlike geometry colours.
+        let text = (0xd5, 0xdc, 0xe2);
+        let dim = rgb(styles.color(StyleKey::TextDim));
+        let font_size = MENU_TITLE_FONT_SIZE;
         let font = theme.font.clone();
         let (open_menu, armed, highlighted, hovered) = (
             state.open_menu(),
@@ -327,46 +335,69 @@ impl<'a> MenuBar<'a> {
             state.highlighted_menu,
             state.hovered_menu,
         );
-        let mut label_x = strip.x;
+        let mut label_x = strip.x + MENU_BAR_SIDE_PADDING;
         {
             let list = &mut *ctx.draw_list;
-            list.push_debug_scope_rect("MenuBar strip", strip);
-            for (index, menu) in self.menus.iter().enumerate() {
-                let label_rect = Rect::new(label_x, strip.y, state.label_pool[index], strip.height);
-                label_x = label_rect.right();
+            list.push_debug_scope_rect(
+                "MenuBar strip",
+                Rect::new(strip.x, strip.y, strip.width, strip.height + 8.0),
+            );
+            let chrome = styles.menu_bar();
+            let mut painter = SurfacePainter::new(
+                list,
+                strip,
+                strip,
+                CornerRadii::default(),
+                chrome.surface,
+                &chrome.shadows,
+                &chrome.lines,
+            );
+            painter.paint_pre_content();
+            {
+                let list = painter.draw_list();
+                for (index, menu) in self.menus.iter().enumerate() {
+                    let label_rect =
+                        Rect::new(label_x, strip.y, state.label_pool[index], strip.height);
+                    label_x = label_rect.right() + MENU_TITLE_GAP;
 
-                let fill = if open_menu == Some(index) {
-                    Some(accent)
-                } else if (armed && highlighted == Some(index)) || hovered == Some(index) {
-                    Some(hover)
-                } else {
-                    None
-                };
-                if let Some(fill) = fill {
-                    list.quad(
-                        label_rect.x,
+                    let open = open_menu == Some(index);
+                    if open {
+                        paint_accent_plate(list, label_rect, accent);
+                    } else if (armed && highlighted == Some(index)) || hovered == Some(index) {
+                        list.quad(
+                            label_rect.x,
+                            label_rect.y,
+                            label_rect.width,
+                            label_rect.height,
+                            hover,
+                        );
+                    }
+                    let (r, g, b) = if !menu.is_enabled() {
+                        dim
+                    } else if open {
+                        (4, 20, 24)
+                    } else {
+                        text
+                    };
+                    let ty = list.vcentered_text_y(
                         label_rect.y,
-                        label_rect.width,
                         label_rect.height,
-                        fill,
+                        font_size,
+                        font.as_ref(),
+                        menu.label(),
                     );
-                }
-                let color = if menu.is_enabled() { text } else { dim };
-                let ty = list.vcentered_text_y(
-                    label_rect.y,
-                    label_rect.height,
-                    font_size,
-                    font.as_ref(),
-                    menu.label(),
-                );
-                let (r, g, b) = rgb(color);
-                list.text(
-                    TextBlock::new(menu.label(), label_rect.x + pad, ty)
+                    let block = TextBlock::new(menu.label(), label_rect.x + MENU_TITLE_PADDING, ty)
                         .with_size(font_size)
                         .with_color(r, g, b)
-                        .with_font_opt(font.clone()),
-                );
+                        .with_font_opt(font.clone());
+                    list.text(if open {
+                        block
+                    } else {
+                        block.with_shadow(0, 0, 0, 153, 0.0, -1.0, 0.5)
+                    });
+                }
             }
+            painter.paint_post_content();
             list.pop_debug_scope();
         }
 
@@ -394,15 +425,38 @@ impl<'a> MenuBar<'a> {
         self.output(state, state.hovered_menu)
     }
 
+    fn paint_strip_background(&self, strip: Rect, ctx: &mut DrawContext<'_>) {
+        let chrome = ctx.styles().menu_bar();
+        let list = &mut *ctx.draw_list;
+        list.push_debug_scope_rect(
+            "MenuBar strip",
+            Rect::new(strip.x, strip.y, strip.width, strip.height + 8.0),
+        );
+        let mut painter = SurfacePainter::new(
+            list,
+            strip,
+            strip,
+            CornerRadii::default(),
+            chrome.surface,
+            &chrome.shadows,
+            &chrome.lines,
+        );
+        painter.paint_pre_content();
+        painter.paint_post_content();
+        list.pop_debug_scope();
+    }
+
     /// The rect of label `index` under the current label widths.
     fn label_rect(&self, strip: Rect, state: &MenuBarState, index: usize) -> Option<Rect> {
         let width = *state.label_pool.get(index)?;
         let x = strip.x
+            + MENU_BAR_SIDE_PADDING
             + state
                 .label_pool
                 .iter()
                 .take(index)
-                .fold(0.0, |acc, w| acc + w);
+                .fold(0.0, |acc, w| acc + w)
+            + index as f32 * MENU_TITLE_GAP;
         Some(Rect::new(x, strip.y, width, strip.height))
     }
 
@@ -414,6 +468,24 @@ impl<'a> MenuBar<'a> {
             hovered_menu,
         }
     }
+}
+
+fn paint_accent_plate(list: &mut crate::DrawList, rect: Rect, accent: [f32; 4]) {
+    list.quad(rect.x, rect.y, rect.width, rect.height, accent);
+    list.quad(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height.min(1.0),
+        opaque_srgb8([0xa1, 0xd7, 0xe4]),
+    );
+    list.quad(
+        rect.x,
+        rect.y + (rect.height - 1.0).max(0.0),
+        rect.width,
+        rect.height.min(1.0),
+        opaque_srgb8([0x5b, 0x95, 0xa2]),
+    );
 }
 
 fn rgb(color: [f32; 4]) -> (u8, u8, u8) {

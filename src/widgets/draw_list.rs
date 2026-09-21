@@ -1,11 +1,16 @@
 //! Core drawing types - vertices, draw commands, and the DrawList.
 
 use crate::affine::Affine2;
+use crate::chrome::{Background, Edge, EdgeWidths, GradientAxis, QuadStyle};
 use crate::layout::Rect;
 use crate::render::SpriteId;
 #[cfg(feature = "phosphor-icons")]
 use crate::render::{IconGlyph, PhosphorIcon};
+use crate::shadow::{BoxShadow, CornerRadii, ShadowInstance};
 use crate::text::{FontHandle, FontSystemHandle, FontVMetrics, TextBlock, TextMeasurer, Underline};
+
+const ANALYTIC_KIND_CHROME: u32 = 0;
+const ANALYTIC_KIND_SHADOW: u32 = 1;
 
 pub(crate) const ROUNDED_RECT_CORNER_SEGMENTS: usize = 8;
 
@@ -99,19 +104,115 @@ pub struct IconDraw {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ChromeInstance {
-    /// World-space rect: `[x, y, w, h]` (transform already baked in).
+    /// Forward affine linear part `[a, b, c, d]`.
+    pub linear: [f32; 4],
+    /// `[tx, ty, clip_enabled, horizontal_gradient]`.
+    pub translation: [f32; 4],
+    /// Local-space rect `[x, y, width, height]`.
     pub rect: [f32; 4],
-    /// Fill (background) color, tint already applied.
+    /// Fill (background) color at the gradient's start edge, tint applied.
     pub bg: [f32; 4],
-    /// Gradient partner for `bg`: the fill is a vertical gradient from `bg` at
-    /// the top edge to `bg2` at the bottom edge. Equal to `bg` for a flat fill.
+    /// Fill color at the gradient's end edge; equal to `bg` for a solid fill.
     pub bg2: [f32; 4],
-    /// Border color, tint already applied.
+    /// Shared border color, tint applied.
     pub border: [f32; 4],
-    /// Clip rect `[x, y, w, h]` (ignored unless `params[2] > 0.5`).
+    /// Outer radii in top-left, top-right, bottom-right, bottom-left order.
+    pub radii: [f32; 4],
+    /// Inward border widths in top, right, bottom, left order.
+    pub widths: [f32; 4],
+    /// World-space clip rect `[x, y, width, height]`.
     pub clip: [f32; 4],
-    /// `[corner_radius, border_thickness, clip_enabled, _pad]`.
+    /// Compatibility metadata `[uniform_radius, uniform_width, clip_enabled, _]`.
     pub params: [f32; 4],
+}
+
+/// One ordered analytic GPU instance. The ten `vec4` payload slots are followed
+/// by an explicit integer tag and padding, keeping one upload-ready record for
+/// both chrome and shadows without per-frame conversion.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct AnalyticInstance {
+    /// Kind-specific payload, uploaded directly as ten `vec4<f32>` attributes.
+    pub payload: [[f32; 4]; 10],
+    /// Flat shader tag: zero for chrome, one for shadow.
+    pub kind: u32,
+    /// Explicit alignment padding; keeps the record stride vertex-buffer safe.
+    pub padding: [u32; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<AnalyticInstance>() == 176);
+const _: () = assert!(std::mem::offset_of!(AnalyticInstance, kind) == 160);
+
+impl AnalyticInstance {
+    fn chrome(value: ChromeInstance) -> Self {
+        Self {
+            payload: [
+                value.linear,
+                value.translation,
+                value.rect,
+                value.bg,
+                value.bg2,
+                value.border,
+                value.radii,
+                value.widths,
+                value.clip,
+                value.params,
+            ],
+            kind: ANALYTIC_KIND_CHROME,
+            padding: [0; 3],
+        }
+    }
+
+    fn shadow(value: ShadowInstance) -> Self {
+        Self {
+            payload: [
+                value.linear,
+                value.translation,
+                value.raster_rect,
+                value.shadow_rect,
+                value.element_rect,
+                value.color,
+                value.shadow_radii,
+                value.element_radii,
+                value.clip,
+                value.params,
+            ],
+            kind: ANALYTIC_KIND_SHADOW,
+            padding: [0; 3],
+        }
+    }
+
+    /// Decode this record as chrome, or return `None` for another kind.
+    pub fn as_chrome(&self) -> Option<ChromeInstance> {
+        (self.kind == ANALYTIC_KIND_CHROME).then(|| ChromeInstance {
+            linear: self.payload[0],
+            translation: self.payload[1],
+            rect: self.payload[2],
+            bg: self.payload[3],
+            bg2: self.payload[4],
+            border: self.payload[5],
+            radii: self.payload[6],
+            widths: self.payload[7],
+            clip: self.payload[8],
+            params: self.payload[9],
+        })
+    }
+
+    /// Decode this record as a shadow, or return `None` for another kind.
+    pub fn as_shadow(&self) -> Option<ShadowInstance> {
+        (self.kind == ANALYTIC_KIND_SHADOW).then(|| ShadowInstance {
+            linear: self.payload[0],
+            translation: self.payload[1],
+            raster_rect: self.payload[2],
+            shadow_rect: self.payload[3],
+            element_rect: self.payload[4],
+            color: self.payload[5],
+            shadow_radii: self.payload[6],
+            element_radii: self.payload[7],
+            clip: self.payload[8],
+            params: self.payload[9],
+        })
+    }
 }
 
 /// A single instanced circle (filled disc or ring outline) for the SDF circle
@@ -149,8 +250,8 @@ pub struct CircleInstance {
 pub(crate) enum PaintCmd {
     /// Draw soup index positions `start..end` (absolute into `indices`).
     Soup { indices: std::ops::Range<u32> },
-    /// Draw chrome instances `start..end` (into `chrome_instances`).
-    Chrome { instances: std::ops::Range<u32> },
+    /// Draw ordered heterogeneous chrome/shadow instances `start..end`.
+    Analytic { instances: std::ops::Range<u32> },
     /// Draw circle instances `start..end` (into `circle_instances`).
     Circle { instances: std::ops::Range<u32> },
     /// Draw nine-slice payloads `start..end`.
@@ -238,6 +339,8 @@ pub struct PrimCounts {
     pub chrome_instances: usize,
     /// Instanced circles ([`DrawList::circle_instances`]).
     pub circle_instances: usize,
+    /// Analytic shadows ([`DrawList::shadow_instances`]).
+    pub shadow_instances: usize,
     /// Primitives silently dropped by a non-positive size/radius/thickness
     /// guard. These leave **no trace in any buffer**, so this counter is the
     /// only evidence that an element collapsed — see
@@ -261,6 +364,7 @@ impl PrimCounts {
             + msdf
             + self.chrome_instances
             + self.circle_instances
+            + self.shadow_instances
     }
 
     /// Element-wise `self - earlier`, saturating at zero. Use this to turn a
@@ -280,6 +384,9 @@ impl PrimCounts {
             circle_instances: self
                 .circle_instances
                 .saturating_sub(earlier.circle_instances),
+            shadow_instances: self
+                .shadow_instances
+                .saturating_sub(earlier.shadow_instances),
             dropped_degenerate: self
                 .dropped_degenerate
                 .saturating_sub(earlier.dropped_degenerate),
@@ -362,10 +469,11 @@ pub struct DrawList {
     /// MSDF vector icons (Phosphor), rendered by the text renderer's icon pass.
     #[cfg(feature = "phosphor-icons")]
     pub icons_msdf: Vec<IconMsdf>,
-    /// Instanced chrome rects (button backgrounds/borders, plus rect/rounded-rect
-    /// fills and outlines). Drawn by the chrome pipeline; interleaved with soup
-    /// geometry via `DrawList::paint_cmds`.
-    pub chrome_instances: Vec<ChromeInstance>,
+    /// Ordered upload-ready chrome and shadow records. Their source-over order
+    /// is their vector order, so arbitrary alternation remains one GPU draw.
+    pub analytic_instances: Vec<AnalyticInstance>,
+    analytic_chrome_count: usize,
+    analytic_shadow_count: usize,
     /// Instanced circles (filled discs + ring outlines). Drawn by the circle
     /// SDF pipeline; interleaved with soup/chrome via `DrawList::paint_cmds`.
     pub circle_instances: Vec<CircleInstance>,
@@ -412,7 +520,9 @@ impl Default for DrawList {
             nine_slices: Vec::new(),
             #[cfg(feature = "phosphor-icons")]
             icons_msdf: Vec::new(),
-            chrome_instances: Vec::new(),
+            analytic_instances: Vec::new(),
+            analytic_chrome_count: 0,
+            analytic_shadow_count: 0,
             circle_instances: Vec::new(),
             paint_cmds: Vec::new(),
             soup_committed_indices: 0,
@@ -460,7 +570,9 @@ impl DrawList {
             nine_slices: Vec::new(),
             #[cfg(feature = "phosphor-icons")]
             icons_msdf: Vec::new(),
-            chrome_instances: Vec::new(),
+            analytic_instances: Vec::new(),
+            analytic_chrome_count: 0,
+            analytic_shadow_count: 0,
             circle_instances: Vec::new(),
             paint_cmds: Vec::new(),
             soup_committed_indices: 0,
@@ -500,7 +612,9 @@ impl DrawList {
         self.nine_slices.clear();
         #[cfg(feature = "phosphor-icons")]
         self.icons_msdf.clear();
-        self.chrome_instances.clear();
+        self.analytic_instances.clear();
+        self.analytic_chrome_count = 0;
+        self.analytic_shadow_count = 0;
         self.circle_instances.clear();
         self.paint_cmds.clear();
         self.soup_committed_indices = 0;
@@ -654,7 +768,7 @@ impl DrawList {
     // ---- Debug scopes ----
 
     /// Current buffer lengths, as a [`PrimCounts`] snapshot.
-    pub(crate) fn prim_counts(&self) -> PrimCounts {
+    pub fn prim_counts(&self) -> PrimCounts {
         PrimCounts {
             vertices: self.vertices.len(),
             indices: self.indices.len(),
@@ -663,8 +777,9 @@ impl DrawList {
             nine_slices: self.nine_slices.len(),
             #[cfg(feature = "phosphor-icons")]
             icons_msdf: self.icons_msdf.len(),
-            chrome_instances: self.chrome_instances.len(),
+            chrome_instances: self.analytic_chrome_count,
             circle_instances: self.circle_instances.len(),
+            shadow_instances: self.analytic_shadow_count,
             dropped_degenerate: self.dropped_degenerate as usize,
         }
     }
@@ -1107,113 +1222,6 @@ impl DrawList {
         self.quad_gradient(rect, [top, top, bottom, bottom]);
     }
 
-    /// Draw a soft rectangular **drop shadow** below/around a floating surface
-    /// (the design language's outer `box-shadow`s: dropdown lists, tooltips,
-    /// toasts, popovers, modals).
-    ///
-    /// `offset_y` shifts the **falloff** down (a positive design y-offset);
-    /// `blur` is the CSS-style blur radius. The opaque core always remains
-    /// beneath `rect`: translating it would expose a solid strip below the
-    /// surface whenever `offset_y` is nonzero. The upper/lower skirts instead
-    /// become asymmetrical, which preserves the directional shadow without an
-    /// offset copy of the panel. `radius` rounds the core so a shadow under a
-    /// rounded sheet doesn't poke out square corners.
-    ///
-    /// Built from five butt-joined gradient rects (top skirt, core, bottom
-    /// skirt, left/right skirts) — under a translation-only transform each is
-    /// a cheap instanced SDF rect; under rotation they fall back to soup.
-    /// Paints the shadow only: draw it *before* the surface so the sheet
-    /// covers the opaque center.
-    pub fn drop_shadow(
-        &mut self,
-        rect: Rect,
-        offset_y: f32,
-        blur: f32,
-        radius: f32,
-        color: [f32; 4],
-    ) {
-        if color[3] <= 0.0 || (blur <= 0.0 && offset_y == 0.0) {
-            self.dropped_degenerate += 1;
-            return;
-        }
-        if blur <= 0.0 {
-            // Without a falloff there is no way to express directional shadow
-            // without duplicating the entire surface as an opaque offset rect.
-            self.dropped_degenerate += 1;
-            return;
-        }
-
-        if rect.is_empty() {
-            self.dropped_degenerate += 1;
-            return;
-        }
-
-        let rgb = [color[0], color[1], color[2]];
-        let zero = [rgb[0], rgb[1], rgb[2], 0.0];
-        // CSS blur convolution softens even the part of the shadow touching the
-        // surface edge. Starting our linear skirts at the unblurred alpha made
-        // their first rows read as a dark, offset duplicate of the panel.
-        let edge = [rgb[0], rgb[1], rgb[2], color[3] * 0.35];
-        // The surface covers this core exactly. A positive offset redistributes
-        // the skirt, rather than translating that solid shape below the panel.
-        let core = rect;
-        let top_blur = (blur - offset_y).max(0.0);
-        let bottom_blur = (blur + offset_y).max(0.0);
-
-        // A nine-patch falloff. The previous implementation translated an
-        // opaque core by the offset, visibly extending a shadow surface past
-        // dropdown content. Keep the core coincident with the surface and only
-        // extend the directional falloff below it.
-        self.chrome_rect(core, radius, 0.0, color, [0.0; 4]);
-        if top_blur > 0.0 {
-            self.vertical_gradient(
-                Rect::new(core.x, core.y - top_blur, core.width, top_blur),
-                zero,
-                edge,
-            );
-        }
-        if bottom_blur > 0.0 {
-            self.vertical_gradient(
-                Rect::new(core.x, core.bottom(), core.width, bottom_blur),
-                edge,
-                zero,
-            );
-        }
-        self.horizontal_gradient(
-            Rect::new(core.x - blur, core.y, blur, core.height),
-            zero,
-            edge,
-        );
-        self.horizontal_gradient(
-            Rect::new(core.right(), core.y, blur, core.height),
-            edge,
-            zero,
-        );
-        // Quad-gradient corners connect the side ramps without painting an
-        // opaque square outside a rounded surface. Their one opaque corner is
-        // the corner adjacent to `core`.
-        if top_blur > 0.0 {
-            self.quad_gradient(
-                Rect::new(core.x - blur, core.y - top_blur, blur, top_blur),
-                [zero, zero, edge, zero],
-            );
-            self.quad_gradient(
-                Rect::new(core.right(), core.y - top_blur, blur, top_blur),
-                [zero, zero, zero, edge],
-            );
-        }
-        if bottom_blur > 0.0 {
-            self.quad_gradient(
-                Rect::new(core.x - blur, core.bottom(), blur, bottom_blur),
-                [zero, edge, zero, zero],
-            );
-            self.quad_gradient(
-                Rect::new(core.right(), core.bottom(), blur, bottom_blur),
-                [edge, zero, zero, zero],
-            );
-        }
-    }
-
     /// Fill `rect` with a radial gradient: `inner` at the center fading to
     /// `outer` toward the edges, as a triangle fan of `segments` wedges (clamped
     /// to ≥ 3). The fan radius reaches the rect's farthest corner so the whole
@@ -1543,24 +1551,8 @@ impl DrawList {
         );
     }
 
-    /// Draw a rounded-rect "chrome" panel (button background + border) via the
-    /// **instanced SDF pipeline** when possible, rather than tessellating ~80
-    /// vertices into the soup every frame.
-    ///
-    /// Fast path (active transform is translation-only): records a single
-    /// [`ChromeInstance`] — world rect, tinted `bg`/`border`, current clip,
-    /// `radius`/`thickness` — that the renderer rasterizes from a signed
-    /// distance field. Thousands of same-shape buttons collapse to one base
-    /// mesh + N instances, with anti-aliased corners for free.
-    ///
-    /// Fallback (any rotation/scale/shear in the transform): defers to the
-    /// immediate [`DrawList::rounded_rect`] + [`DrawList::rounded_rect_outline`]
-    /// so a transformed chrome rect still renders correctly. The SDF instance
-    /// carries only an axis-aligned world rect, so non-translation transforms
-    /// can't be expressed as a single instance.
-    ///
-    /// Ordering with surrounding soup geometry is preserved: each call flushes
-    /// any pending soup into a command before recording its instance.
+    /// Draw a rounded-rect chrome panel. This compatibility wrapper records one
+    /// full-affine composable quad with uniform radii and border widths.
     pub fn chrome_rect(
         &mut self,
         rect: Rect,
@@ -1572,14 +1564,8 @@ impl DrawList {
         self.chrome_rect_gradient(rect, radius, thickness, bg, bg, border);
     }
 
-    /// Draw a rounded-rect "chrome" panel whose **fill is a vertical gradient**
-    /// from `bg` (top edge) to `bg2` (bottom edge), plus a border — the same
-    /// instanced SDF fast path as [`Self::chrome_rect`].
-    ///
-    /// The design language this crate ships ("4a") builds every raised control
-    /// from such a face gradient (a subtle white sheen: brightest at the top,
-    /// falling off toward the bottom), so this is the normal entry point for
-    /// themed chrome; [`Self::chrome_rect`] is the flat-fill special case.
+    /// Draw vertically graded rounded chrome. This compatibility wrapper uses
+    /// the composable quad instance path.
     pub fn chrome_rect_gradient(
         &mut self,
         rect: Rect,
@@ -1589,15 +1575,7 @@ impl DrawList {
         bg2: [f32; 4],
         border: [f32; 4],
     ) {
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            self.dropped_degenerate += 1;
-            return;
-        }
-
-        let m = self.current_transform();
-        if !m.is_translate_only() {
-            // Fallback: build it out of the immediate primitives, which already
-            // run every vertex through the active transform.
+        if !self.current_transform().is_translate_only() {
             if radius > 0.0 {
                 self.rounded_rect(rect, radius, bg);
                 self.vertical_gradient(rect, bg, bg2);
@@ -1610,66 +1588,186 @@ impl DrawList {
             }
             return;
         }
-
-        // Fast path: one instance carrying both fill and border.
-        self.push_chrome_instance(rect, radius, thickness, bg, bg2, border);
+        self.push_chrome_instance(
+            rect,
+            Background::LinearGradient {
+                start: bg,
+                end: bg2,
+                axis: GradientAxis::Vertical,
+            },
+            EdgeWidths::uniform(thickness),
+            border,
+            CornerRadii::uniform(radius),
+        );
     }
 
-    /// Record one SDF chrome instance (fill + border) for a translation-only
-    /// rect, preserving draw order: any soup appended since the last command is
-    /// flushed into a `Soup` command first, then this instance extends (or
-    /// starts) the trailing `Chrome` run. The caller must already have checked
-    /// `is_translate_only()`.
+    /// Paint a background and border as one fixed-size retained chrome instance.
+    pub fn paint_quad(&mut self, rect: Rect, style: QuadStyle) {
+        self.push_chrome_instance(
+            rect,
+            style.background,
+            style.border_widths,
+            style.border_color,
+            style.corner_radii,
+        );
+    }
+
+    /// Paint only a quad background, retaining its per-corner outer shape.
+    pub fn paint_quad_background(
+        &mut self,
+        rect: Rect,
+        background: Background,
+        corner_radii: CornerRadii,
+    ) {
+        self.push_chrome_instance(
+            rect,
+            background,
+            EdgeWidths::default(),
+            [0.0; 4],
+            corner_radii,
+        );
+    }
+
+    /// Paint only an inward-growing quad border.
+    pub fn paint_quad_border(
+        &mut self,
+        rect: Rect,
+        widths: EdgeWidths,
+        color: [f32; 4],
+        corner_radii: CornerRadii,
+    ) {
+        self.push_chrome_instance(
+            rect,
+            Background::Solid([color[0], color[1], color[2], 0.0]),
+            widths,
+            color,
+            corner_radii,
+        );
+    }
+
+    /// Paint one structural line flush inside `edge` of `rect`.
+    pub fn edge_line(&mut self, rect: Rect, edge: Edge, thickness: f32, color: [f32; 4]) {
+        if thickness <= 0.0 || !thickness.is_finite() {
+            self.dropped_degenerate += 1;
+            return;
+        }
+        let line = match edge {
+            Edge::Top => Rect::new(rect.x, rect.y, rect.width, thickness.min(rect.height)),
+            Edge::Right => Rect::new(
+                rect.right() - thickness.min(rect.width),
+                rect.y,
+                thickness.min(rect.width),
+                rect.height,
+            ),
+            Edge::Bottom => Rect::new(
+                rect.x,
+                rect.bottom() - thickness.min(rect.height),
+                rect.width,
+                thickness.min(rect.height),
+            ),
+            Edge::Left => Rect::new(rect.x, rect.y, thickness.min(rect.width), rect.height),
+        };
+        self.quad(line.x, line.y, line.width, line.height, color);
+    }
+
     fn push_chrome_instance(
         &mut self,
         rect: Rect,
-        radius: f32,
-        thickness: f32,
-        bg: [f32; 4],
-        bg2: [f32; 4],
+        background: Background,
+        widths: EdgeWidths,
         border: [f32; 4],
+        radii: CornerRadii,
     ) {
-        self.flush_soup();
-
         let m = self.current_transform();
-        let (clip, clip_enabled) = match self.current_clip() {
-            Some(c) => ([c.x, c.y, c.width, c.height], 1.0),
-            None => ([0.0; 4], 0.0),
+        let mut values = [0.0; 30];
+        values[..4].copy_from_slice(&[rect.x, rect.y, rect.width, rect.height]);
+        values[4..8].copy_from_slice(&widths.as_array());
+        values[8..12].copy_from_slice(&radii.as_array());
+        values[12..16].copy_from_slice(&border);
+        values[16..22].copy_from_slice(&[m.a, m.b, m.c, m.d, m.tx, m.ty]);
+        let (bg, bg2, horizontal) = match background {
+            Background::Solid(color) => (color, color, 0.0),
+            Background::LinearGradient { start, end, axis } => {
+                (start, end, (axis == GradientAxis::Horizontal) as u8 as f32)
+            }
         };
-        let inst = ChromeInstance {
-            rect: [rect.x + m.tx, rect.y + m.ty, rect.width, rect.height],
+        values[22..26].copy_from_slice(&bg);
+        values[26..30].copy_from_slice(&bg2);
+        if rect.is_empty()
+            || values.iter().any(|value| !value.is_finite())
+            || m.try_inverse().is_none()
+        {
+            self.dropped_degenerate += 1;
+            return;
+        }
+
+        let current_clip = self.current_clip();
+        self.flush_soup();
+        let (clip, clip_enabled) = current_clip
+            .map(|c| ([c.x, c.y, c.width, c.height], 1.0))
+            .unwrap_or(([0.0; 4], 0.0));
+        let instance = ChromeInstance {
+            linear: if m.is_translate_only() {
+                [1.0, 0.0, 0.0, 1.0]
+            } else {
+                [m.a, m.b, m.c, m.d]
+            },
+            translation: if m.is_translate_only() {
+                [0.0, 0.0, clip_enabled, horizontal]
+            } else {
+                [m.tx, m.ty, clip_enabled, horizontal]
+            },
+            rect: if m.is_translate_only() {
+                [rect.x + m.tx, rect.y + m.ty, rect.width, rect.height]
+            } else {
+                [rect.x, rect.y, rect.width, rect.height]
+            },
             bg: self.apply_tint(bg),
             bg2: self.apply_tint(bg2),
             border: self.apply_tint(border),
+            radii: normalize_shadow_radii(
+                radii.as_array().map(|r| r.max(0.0)),
+                rect.width,
+                rect.height,
+            ),
+            widths: widths.as_array().map(|width| width.max(0.0)),
             clip,
-            params: [radius, thickness, clip_enabled, 0.0],
+            params: [
+                radii.top_left.max(0.0),
+                widths.top.max(0.0),
+                clip_enabled,
+                0.0,
+            ],
         };
-        let idx = self.chrome_instances.len() as u32;
-        self.chrome_instances.push(inst);
-
-        match self.paint_cmds.last_mut() {
-            Some(PaintCmd::Chrome { instances }) if instances.end == idx => {
-                instances.end = idx + 1;
-            }
-            _ => self.paint_cmds.push(PaintCmd::Chrome {
-                instances: idx..idx + 1,
-            }),
-        }
+        let idx = self.analytic_instances.len() as u32;
+        self.analytic_instances
+            .push(AnalyticInstance::chrome(instance));
+        self.analytic_chrome_count += 1;
+        self.push_paint_cmd(PaintCmd::Analytic {
+            instances: idx..idx + 1,
+        });
     }
 
-    /// Record a fill-only SDF rect instance (border == fill so the anti-aliased
-    /// edge stays the fill color, no border ring). Backs the translation-only
-    /// fast path of [`DrawList::quad`] / [`DrawList::rounded_rect`].
+    /// Record a fill-only SDF rect instance. Backs the fast path of rectangle
+    /// and rounded-rectangle fills.
     fn fill_rect_instance(&mut self, rect: Rect, radius: f32, color: [f32; 4]) {
-        self.push_chrome_instance(rect, radius, 0.0, color, color, color);
+        self.push_chrome_instance(
+            rect,
+            Background::Solid(color),
+            EdgeWidths::default(),
+            color,
+            CornerRadii::uniform(radius),
+        );
     }
 
-    /// Record an outline-only SDF rect instance (transparent fill so only the
-    /// border band renders). Backs the translation-only fast path of
-    /// [`DrawList::rect_outline`] / [`DrawList::rounded_rect_outline`].
+    /// Record an outline-only SDF rect instance. Backs rectangle outline helpers.
     fn stroke_rect_instance(&mut self, rect: Rect, radius: f32, thickness: f32, color: [f32; 4]) {
-        let transparent = [color[0], color[1], color[2], 0.0];
-        self.push_chrome_instance(rect, radius, thickness, transparent, transparent, color);
+        self.paint_quad_border(
+            rect,
+            EdgeWidths::uniform(thickness),
+            color,
+            CornerRadii::uniform(radius),
+        );
     }
 
     /// Record one SDF circle instance for a translation-only circle. Same
@@ -1710,9 +1808,269 @@ impl DrawList {
         }
     }
 
+    /// Paint one non-inset shadow around `border_box`.
+    pub fn box_shadow_outset(
+        &mut self,
+        border_box: Rect,
+        border_radii: CornerRadii,
+        shadow: BoxShadow,
+    ) {
+        if !shadow.inset {
+            self.push_box_shadow(border_box, border_radii, shadow, false);
+        }
+    }
+
+    /// Paint one inset shadow inside the explicitly supplied padding box.
+    pub fn box_shadow_inset(
+        &mut self,
+        padding_box: Rect,
+        padding_radii: CornerRadii,
+        shadow: BoxShadow,
+    ) {
+        if shadow.inset {
+            self.push_box_shadow(padding_box, padding_radii, shadow, true);
+        }
+    }
+
+    /// Paint matching outset declarations in reverse CSS declaration order.
+    pub fn box_shadows_outset(
+        &mut self,
+        border_box: Rect,
+        border_radii: CornerRadii,
+        declarations: &[BoxShadow],
+    ) {
+        for shadow in declarations.iter().rev() {
+            self.box_shadow_outset(border_box, border_radii, *shadow);
+        }
+    }
+
+    /// Paint matching inset declarations in reverse CSS declaration order.
+    pub fn box_shadows_inset(
+        &mut self,
+        padding_box: Rect,
+        padding_radii: CornerRadii,
+        declarations: &[BoxShadow],
+    ) {
+        for shadow in declarations.iter().rev() {
+            self.box_shadow_inset(padding_box, padding_radii, *shadow);
+        }
+    }
+
+    fn push_box_shadow(
+        &mut self,
+        element: Rect,
+        radii: CornerRadii,
+        shadow: BoxShadow,
+        inset: bool,
+    ) {
+        if element.is_empty() || shadow.color[3] <= 0.0 {
+            return;
+        }
+        let transform = self.current_transform();
+        let values = [
+            element.x,
+            element.y,
+            element.width,
+            element.height,
+            radii.top_left,
+            radii.top_right,
+            radii.bottom_right,
+            radii.bottom_left,
+            shadow.offset[0],
+            shadow.offset[1],
+            shadow.blur,
+            shadow.spread,
+            shadow.color[0],
+            shadow.color[1],
+            shadow.color[2],
+            shadow.color[3],
+            transform.a,
+            transform.b,
+            transform.c,
+            transform.d,
+            transform.tx,
+            transform.ty,
+        ];
+        if values.iter().any(|v| !v.is_finite()) {
+            self.dropped_degenerate += 1;
+            return;
+        }
+
+        let blur = shadow.blur.max(0.0);
+        let sigma = blur * 0.5;
+        let delta = if inset { -shadow.spread } else { shadow.spread };
+        let mut width = element.width + 2.0 * delta;
+        let mut height = element.height + 2.0 * delta;
+        let mut x = element.x + shadow.offset[0] - delta;
+        let mut y = element.y + shadow.offset[1] - delta;
+        let collapsed = width <= 0.0 || height <= 0.0;
+        if collapsed && !inset {
+            self.dropped_degenerate += 1;
+            return;
+        }
+        if collapsed {
+            x += width * 0.5;
+            y += height * 0.5;
+            width = 0.0;
+            height = 0.0;
+        }
+
+        let element_radii = normalize_shadow_radii(radii.as_array(), element.width, element.height);
+        let adjusted = element_radii.map(|r| css_spread_radius(r, delta));
+        let shadow_radii = normalize_shadow_radii(adjusted, width.max(0.0), height.max(0.0));
+        let shadow_rect = Rect::new(x, y, width, height);
+
+        // Translation is the dominant widget transform. Its inverse linear part
+        // is exactly identity, so avoid determinant/division and five roots per
+        // shadow while producing the same instance bytes and raster bounds.
+        let (sigma_y, sigma_x_conditional, beta, coverage_pad, blur_pad) =
+            if transform.is_translate_only() {
+                (sigma, sigma, 0.0, [0.5, 0.5], [3.0 * sigma, 3.0 * sigma])
+            } else {
+                // CSS blurs after transforming the element, so its Gaussian is
+                // isotropic in screen space. Pull sigma² I back through the
+                // affine. For A^-1 = B, local covariance is sigma² B Bᵀ. The
+                // shader uses its y marginal and x|y conditional.
+                let Some(inverse) = transform.try_inverse() else {
+                    self.dropped_degenerate += 1;
+                    return;
+                };
+                let row_x_norm = inverse.a.hypot(inverse.b);
+                let row_y_norm = inverse.c.hypot(inverse.d);
+                let sigma_y = sigma * row_y_norm;
+                let covariance_xy = sigma * sigma * (inverse.a * inverse.c + inverse.b * inverse.d);
+                let beta = if sigma_y > 1.0e-5 {
+                    covariance_xy / (sigma_y * sigma_y)
+                } else {
+                    0.0
+                };
+                let sigma_x_conditional = if sigma > 1.0e-5 {
+                    let variance_x = sigma * sigma * row_x_norm * row_x_norm;
+                    (variance_x - beta * covariance_xy).max(0.0).sqrt()
+                } else {
+                    0.0
+                };
+                (
+                    sigma_y,
+                    sigma_x_conditional,
+                    beta,
+                    [
+                        0.5 * (inverse.a.abs() + inverse.b.abs()),
+                        0.5 * (inverse.c.abs() + inverse.d.abs()),
+                    ],
+                    [3.0 * sigma * row_x_norm, 3.0 * sigma * row_y_norm],
+                )
+            };
+
+        // A centered one-screen-pixel square pulled through the inverse has
+        // local half-extents equal to half its row L1 norms. The blur support
+        // adds the 3-sigma ellipse AABB (row L2 norms).
+        let raster_base = if inset { element } else { shadow_rect };
+        let raster_pad = if inset {
+            coverage_pad
+        } else {
+            [coverage_pad[0] + blur_pad[0], coverage_pad[1] + blur_pad[1]]
+        };
+        let raster = Rect::new(
+            raster_base.x - raster_pad[0],
+            raster_base.y - raster_pad[1],
+            raster_base.width + 2.0 * raster_pad[0],
+            raster_base.height + 2.0 * raster_pad[1],
+        );
+        let current_clip = self.current_clip();
+        if let Some(clip) = current_clip {
+            let raster_world = if transform.is_translate_only() {
+                Rect::new(
+                    raster.x + transform.tx,
+                    raster.y + transform.ty,
+                    raster.width,
+                    raster.height,
+                )
+            } else {
+                transform.transform_rect_aabb(raster)
+            };
+            if clip.intersection(raster_world).is_none() {
+                return;
+            }
+        }
+
+        self.flush_soup();
+        let (clip, clip_enabled) = current_clip
+            .map(|c| ([c.x, c.y, c.width, c.height], 1.0))
+            .unwrap_or(([0.0; 4], 0.0));
+        let instance = ShadowInstance {
+            linear: [transform.a, transform.b, transform.c, transform.d],
+            translation: [transform.tx, transform.ty, clip_enabled, inset as u8 as f32],
+            raster_rect: [raster.x, raster.y, raster.width, raster.height],
+            shadow_rect: [
+                shadow_rect.x,
+                shadow_rect.y,
+                shadow_rect.width,
+                shadow_rect.height,
+            ],
+            element_rect: [element.x, element.y, element.width, element.height],
+            color: self.apply_tint(shadow.color),
+            shadow_radii,
+            element_radii,
+            clip,
+            params: [sigma_y, collapsed as u8 as f32, sigma_x_conditional, beta],
+        };
+        let idx = self.analytic_instances.len() as u32;
+        self.analytic_instances
+            .push(AnalyticInstance::shadow(instance));
+        self.analytic_shadow_count += 1;
+        self.push_paint_cmd(PaintCmd::Analytic {
+            instances: idx..idx + 1,
+        });
+    }
+
     /// Ordered commands consumed by the renderer and debug report.
     pub(crate) fn paint_commands(&self) -> &[PaintCmd] {
         &self.paint_cmds
+    }
+
+    /// Number of chrome records in the heterogeneous analytic stream.
+    pub fn chrome_instance_count(&self) -> usize {
+        self.analytic_chrome_count
+    }
+
+    /// Iterate chrome payloads without maintaining a duplicate production vector.
+    pub fn chrome_instances(&self) -> impl Iterator<Item = ChromeInstance> + '_ {
+        self.analytic_instances
+            .iter()
+            .filter_map(AnalyticInstance::as_chrome)
+    }
+
+    /// Return the `index`th chrome payload.
+    pub fn chrome_instance(&self, index: usize) -> Option<ChromeInstance> {
+        self.chrome_instances().nth(index)
+    }
+
+    /// Reserved record capacity shared by chrome and shadows.
+    pub fn analytic_instance_capacity(&self) -> usize {
+        self.analytic_instances.capacity()
+    }
+
+    /// Reserve shared chrome/shadow record capacity.
+    pub fn reserve_analytic_instances(&mut self, additional: usize) {
+        self.analytic_instances.reserve(additional);
+    }
+
+    /// Number of shadow records in the heterogeneous analytic stream.
+    pub fn shadow_instance_count(&self) -> usize {
+        self.analytic_shadow_count
+    }
+
+    /// Iterate shadow payloads without maintaining a duplicate production vector.
+    pub fn shadow_instances(&self) -> impl Iterator<Item = ShadowInstance> + '_ {
+        self.analytic_instances
+            .iter()
+            .filter_map(AnalyticInstance::as_shadow)
+    }
+
+    /// Return the `index`th shadow payload.
+    pub fn shadow_instance(&self, index: usize) -> Option<ShadowInstance> {
+        self.shadow_instances().nth(index)
     }
 
     /// Index range for soup not yet represented by an explicit command.
@@ -1731,7 +2089,7 @@ impl DrawList {
             {
                 a.end = b.end
             }
-            (Some(PaintCmd::Chrome { instances: a }), PaintCmd::Chrome { instances: b })
+            (Some(PaintCmd::Analytic { instances: a }), PaintCmd::Analytic { instances: b })
                 if a.end == b.start =>
             {
                 a.end = b.end
@@ -2252,12 +2610,42 @@ fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
+fn css_spread_radius(radius: f32, spread: f32) -> f32 {
+    let radius = radius.max(0.0);
+    if spread > 0.0 && radius < spread {
+        let ratio = radius / spread - 1.0;
+        (radius + spread * (1.0 + ratio * ratio * ratio)).max(0.0)
+    } else {
+        (radius + spread).max(0.0)
+    }
+}
+
+fn normalize_shadow_radii(mut radii: [f32; 4], width: f32, height: f32) -> [f32; 4] {
+    for radius in &mut radii {
+        *radius = radius.max(0.0);
+    }
+    let mut factor: f32 = 1.0;
+    for (extent, sum) in [
+        (width, radii[0] + radii[1]),
+        (width, radii[3] + radii[2]),
+        (height, radii[0] + radii[3]),
+        (height, radii[1] + radii[2]),
+    ] {
+        if sum > 0.0 {
+            factor = factor.min((extent.max(0.0) / sum).min(1.0));
+        }
+    }
+    radii.map(|radius| radius * factor)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::affine::Affine2;
+    use crate::chrome::{Background, Edge, EdgeWidths, GradientAxis, QuadStyle};
     use crate::layout::Rect;
+    use crate::shadow::{BoxShadow, CornerRadii};
 
-    use super::{DrawList, PaintCmd, PrimCounts};
+    use super::{DrawList, PaintCmd, PrimCounts, css_spread_radius, normalize_shadow_radii};
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -2271,8 +2659,8 @@ mod tests {
         list.rounded_rect(Rect::new(0.0, 0.0, 100.0, 40.0), 6.0, [1.0, 1.0, 1.0, 1.0]);
 
         assert!(list.vertices.is_empty());
-        assert_eq!(list.chrome_instances.len(), 1);
-        let inst = list.chrome_instances[0];
+        assert_eq!(list.chrome_instance_count(), 1);
+        let inst = list.chrome_instance(0).unwrap();
         assert_eq!(inst.rect, [0.0, 0.0, 100.0, 40.0]);
         assert!(approx(inst.params[0], 6.0)); // radius
         assert!(approx(inst.params[1], 0.0)); // thickness (fill)
@@ -2283,8 +2671,8 @@ mod tests {
         let mut list = DrawList::new();
         list.rect_outline(Rect::new(0.0, 0.0, 100.0, 40.0), 2.0, [1.0; 4]);
         assert!(list.vertices.is_empty());
-        assert_eq!(list.chrome_instances.len(), 1);
-        let inst = list.chrome_instances[0];
+        assert_eq!(list.chrome_instance_count(), 1);
+        let inst = list.chrome_instance(0).unwrap();
         assert!(approx(inst.params[0], 0.0)); // radius (square corners)
         assert!(approx(inst.params[1], 2.0)); // thickness
         assert!(approx(inst.bg[3], 0.0)); // transparent fill: only the border band draws
@@ -2297,7 +2685,7 @@ mod tests {
         let mut list = DrawList::new();
         list.rotate(std::f32::consts::FRAC_PI_4);
         list.rect_outline(Rect::new(0.0, 0.0, 100.0, 10.0), 50.0, [1.0; 4]);
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
         assert_eq!(list.vertices.len(), 8); // two quads
     }
 
@@ -2306,7 +2694,7 @@ mod tests {
         let mut list = DrawList::new();
         list.rect_outline(Rect::new(0.0, 0.0, 100.0, 40.0), 0.0, [1.0; 4]);
         assert!(list.vertices.is_empty());
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
     }
 
     #[test]
@@ -2314,8 +2702,8 @@ mod tests {
         let mut list = DrawList::new();
         list.rounded_rect_outline(Rect::new(0.0, 0.0, 100.0, 40.0), 8.0, 2.0, [1.0; 4]);
         assert!(list.vertices.is_empty());
-        assert_eq!(list.chrome_instances.len(), 1);
-        let inst = list.chrome_instances[0];
+        assert_eq!(list.chrome_instance_count(), 1);
+        let inst = list.chrome_instance(0).unwrap();
         assert!(approx(inst.params[0], 8.0)); // radius
         assert!(approx(inst.params[1], 2.0)); // thickness
         assert!(approx(inst.bg[3], 0.0)); // transparent fill
@@ -2328,8 +2716,8 @@ mod tests {
         let mut plain = DrawList::new();
         plain.rect_outline(Rect::new(0.0, 0.0, 100.0, 40.0), 2.0, [1.0; 4]);
         // Both produce an identical square-cornered stroke instance.
-        assert_eq!(rounded.chrome_instances.len(), 1);
-        assert_eq!(rounded.chrome_instances, plain.chrome_instances);
+        assert_eq!(rounded.chrome_instance_count(), 1);
+        assert_eq!(rounded.analytic_instances, plain.analytic_instances);
     }
 
     #[test]
@@ -2402,7 +2790,10 @@ mod tests {
         let mut list = DrawList::new();
         list.translate(100.0, 50.0);
         list.rect_outline(Rect::new(0.0, 0.0, 10.0, 10.0), 2.0, [1.0; 4]);
-        assert_eq!(list.chrome_instances[0].rect, [100.0, 50.0, 10.0, 10.0]);
+        assert_eq!(
+            list.chrome_instance(0).unwrap().rect,
+            [100.0, 50.0, 10.0, 10.0]
+        );
     }
 
     #[test]
@@ -2518,13 +2909,16 @@ mod tests {
         list.pop_clip();
         list.quad(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 1.0]);
 
-        assert_eq!(list.chrome_instances[0].params[2], 1.0); // clip_enabled
-        assert_eq!(list.chrome_instances[0].clip, [10.0, 20.0, 30.0, 40.0]);
+        assert_eq!(list.chrome_instance(0).unwrap().params[2], 1.0); // clip_enabled
+        assert_eq!(
+            list.chrome_instance(0).unwrap().clip,
+            [10.0, 20.0, 30.0, 40.0]
+        );
         assert_eq!(list.texts[0].clip, Some(Rect::new(10.0, 20.0, 30.0, 40.0)));
         assert_eq!(list.icons[0].clip, Some(clip));
         assert_eq!(list.icons[0].icon_key, "icon");
         assert_eq!(list.icons[0].tint, [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!(list.chrome_instances[1].params[2], 0.0); // clip disabled
+        assert_eq!(list.chrome_instance(1).unwrap().params[2], 0.0); // clip disabled
     }
 
     #[test]
@@ -2605,7 +2999,7 @@ mod tests {
 
         let block_green = [0.0, 200.0 / 255.0, 0.0, 1.0];
         let has_colour = |want: [f32; 4]| {
-            list.chrome_instances.iter().any(|c| {
+            list.chrome_instances().any(|c| {
                 c.bg.iter()
                     .zip(want.iter())
                     .all(|(a, b)| (a - b).abs() < 1e-3)
@@ -2634,7 +3028,10 @@ mod tests {
         list.translate(100.0, 50.0);
         list.quad(0.0, 0.0, 10.0, 20.0, [1.0; 4]);
         assert!(list.vertices.is_empty());
-        assert_eq!(list.chrome_instances[0].rect, [100.0, 50.0, 10.0, 20.0]);
+        assert_eq!(
+            list.chrome_instance(0).unwrap().rect,
+            [100.0, 50.0, 10.0, 20.0]
+        );
     }
 
     #[test]
@@ -2696,100 +3093,6 @@ mod tests {
         f.triangle((0.0, 0.0), (9.0, 1.0), (4.0, 7.0), c);
         assert_eq!(g.vertices, f.vertices);
         assert_eq!(g.indices, f.indices);
-    }
-
-    #[test]
-    fn drop_shadow_emits_soft_rects_beyond_the_surface() {
-        let mut list = DrawList::new();
-        let shadow = [0.0, 0.0, 0.0, 0.6];
-        let surface = Rect::new(100.0, 50.0, 80.0, 20.0);
-        list.drop_shadow(surface, 4.0, 10.0, 2.0, shadow);
-        // The opaque core stays exactly beneath the surface; offset makes the
-        // lower skirt longer instead of translating a dark panel-shaped copy.
-        assert_eq!(list.chrome_instances.len(), 1);
-        assert_eq!(list.chrome_instances[0].rect, [100.0, 50.0, 80.0, 20.0]);
-        assert_eq!(list.chrome_instances[0].bg, shadow);
-        assert_eq!(list.vertices.len(), 32); // 8 gradient patches
-        // The top ramp ends at the surface edge and starts transparent.
-        assert_eq!(list.vertices[0].position, [100.0, 44.0]);
-        assert_eq!(list.vertices[0].color, [0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(list.vertices[2].position, [180.0, 50.0]);
-        assert_eq!(list.vertices[2].color, [0.0, 0.0, 0.0, shadow[3] * 0.35]);
-    }
-
-    #[test]
-    fn drop_shadow_blur_zero_does_not_duplicate_the_surface() {
-        let mut list = DrawList::new();
-        let shadow = [0.0, 0.0, 0.0, 0.5];
-        let surface = Rect::new(10.0, 10.0, 40.0, 12.0);
-        list.drop_shadow(surface, 3.0, 0.0, 1.0, shadow);
-        assert!(list.chrome_instances.is_empty());
-        assert!(
-            list.vertices.is_empty(),
-            "no falloff means no shadow is emitted"
-        );
-    }
-
-    #[test]
-    fn drop_shadow_short_core_trims_the_skirts_without_degenerates() {
-        let mut list = DrawList::new();
-        // 4px-tall surface with an 8px blur: the core is 20px, so the skirts
-        // clamp toward the middle and the opaque band shrinks to 4px. Nothing
-        // degenerates (a dropped degenerate would trip the debug lints).
-        let before = list.dropped_degenerate;
-        list.drop_shadow(
-            Rect::new(0.0, 0.0, 50.0, 4.0),
-            0.0,
-            8.0,
-            1.0,
-            [0.0, 0.0, 0.0, 0.6],
-        );
-        assert_eq!(list.dropped_degenerate, before);
-        // One opaque core plus eight falloff patches; no degenerates even when
-        // the source surface is much shorter than its blur radius.
-        assert_eq!(list.chrome_instances.len(), 1);
-        assert_eq!(list.chrome_instances[0].rect, [0.0, 0.0, 50.0, 4.0]);
-        assert_eq!(list.vertices.len(), 32);
-    }
-
-    #[test]
-    fn drop_shadow_zero_height_surface_is_a_noop() {
-        let mut list = DrawList::new();
-        // A degenerate surface has no shadow core or meaningful edge to blur.
-        let before = list.dropped_degenerate;
-        list.drop_shadow(
-            Rect::new(0.0, 0.0, 50.0, 0.0),
-            0.0,
-            8.0,
-            1.0,
-            [0.0, 0.0, 0.0, 0.6],
-        );
-        assert_eq!(list.dropped_degenerate, before + 1);
-        assert!(list.chrome_instances.is_empty());
-        assert!(list.vertices.is_empty());
-    }
-
-    #[test]
-    fn drop_shadow_zero_alpha_and_zero_params_are_noops() {
-        let mut list = DrawList::new();
-        let before = list.dropped_degenerate;
-        list.drop_shadow(
-            Rect::new(0.0, 0.0, 40.0, 10.0),
-            0.0,
-            0.0,
-            1.0,
-            [0.0, 0.0, 0.0, 0.0],
-        );
-        list.drop_shadow(
-            Rect::new(0.0, 0.0, 40.0, 10.0),
-            0.0,
-            8.0,
-            1.0,
-            [0.0, 0.0, 0.0, 0.0],
-        );
-        assert!(list.chrome_instances.is_empty());
-        assert!(list.vertices.is_empty());
-        assert_eq!(list.dropped_degenerate, before + 2);
     }
 
     #[test]
@@ -2950,7 +3253,7 @@ mod tests {
         list.set_tint([0.5, 0.5, 0.5, 1.0]);
         list.quad(0.0, 0.0, 10.0, 10.0, [0.4, 0.6, 0.8, 1.0]);
         // Tint is baked into the chrome instance's bg color (fill: border == bg).
-        let inst = list.chrome_instances[0];
+        let inst = list.chrome_instance(0).unwrap();
         assert!(approx(inst.bg[0], 0.2));
         assert!(approx(inst.bg[1], 0.3));
         assert!(approx(inst.bg[2], 0.4));
@@ -3031,13 +3334,13 @@ mod tests {
             [0.4, 0.5, 0.6, 1.0],
         );
         // One instance, one Chrome command, no soup geometry.
-        assert_eq!(list.chrome_instances.len(), 1);
+        assert_eq!(list.chrome_instance_count(), 1);
         assert_eq!(
             list.paint_cmds,
-            vec![super::PaintCmd::Chrome { instances: 0..1 }]
+            vec![super::PaintCmd::Analytic { instances: 0..1 }]
         );
         assert!(list.vertices.is_empty());
-        let inst = list.chrome_instances[0];
+        let inst = list.chrome_instance(0).unwrap();
         assert_eq!(inst.rect, [10.0, 20.0, 80.0, 30.0]);
         assert_eq!(inst.bg, [0.1, 0.2, 0.3, 1.0]);
         assert_eq!(inst.border, [0.4, 0.5, 0.6, 1.0]);
@@ -3055,7 +3358,10 @@ mod tests {
             [1.0; 4],
             [0.0; 4],
         );
-        assert_eq!(list.chrome_instances[0].rect, [105.0, 55.0, 20.0, 10.0]);
+        assert_eq!(
+            list.chrome_instance(0).unwrap().rect,
+            [105.0, 55.0, 20.0, 10.0]
+        );
     }
 
     #[test]
@@ -3070,11 +3376,11 @@ mod tests {
                 [0.0; 4],
             );
         }
-        assert_eq!(list.chrome_instances.len(), 4);
+        assert_eq!(list.chrome_instance_count(), 4);
         // All four collapse into a single contiguous Chrome run.
         assert_eq!(
             list.paint_cmds,
-            vec![super::PaintCmd::Chrome { instances: 0..4 }]
+            vec![super::PaintCmd::Analytic { instances: 0..4 }]
         );
     }
 
@@ -3091,9 +3397,9 @@ mod tests {
             list.paint_cmds,
             vec![
                 super::PaintCmd::Soup { indices: 0..6 },
-                super::PaintCmd::Chrome { instances: 0..1 },
+                super::PaintCmd::Analytic { instances: 0..1 },
                 super::PaintCmd::Soup { indices: 6..12 },
-                super::PaintCmd::Chrome { instances: 1..2 },
+                super::PaintCmd::Analytic { instances: 1..2 },
             ]
         );
         // Trailing soup (after the last command) is implicit: committed cursor
@@ -3111,7 +3417,7 @@ mod tests {
         // indices[committed..total] as the trailing run.
         assert_eq!(
             list.paint_cmds,
-            vec![super::PaintCmd::Chrome { instances: 0..1 }]
+            vec![super::PaintCmd::Analytic { instances: 0..1 }]
         );
         assert_eq!(list.soup_committed_indices, 0);
         assert_eq!(list.indices.len(), 6);
@@ -3129,7 +3435,7 @@ mod tests {
             [0.5; 4],
         );
         // No instance recorded; geometry went into the soup, transformed.
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
         assert!(list.paint_cmds.is_empty());
         assert!(!list.vertices.is_empty());
     }
@@ -3145,9 +3451,76 @@ mod tests {
             [0.4, 0.6, 0.8, 1.0],
             [0.2, 0.2, 0.2, 1.0],
         );
-        let inst = list.chrome_instances[0];
+        let inst = list.chrome_instance(0).unwrap();
         assert!(approx(inst.bg[0], 0.2) && approx(inst.bg[1], 0.3) && approx(inst.bg[2], 0.4));
         assert!(approx(inst.border[0], 0.1));
+    }
+
+    #[test]
+    fn paint_quad_records_affine_gradient_radii_widths_tint_and_order() {
+        let mut list = DrawList::new();
+        list.line([0.0, 0.0], [4.0, 0.0], 1.0, [1.0; 4]);
+        list.set_tint([0.5, 0.25, 1.0, 0.5]);
+        list.rotate(0.25);
+        list.paint_quad(
+            Rect::new(2.0, 3.0, 40.0, 20.0),
+            QuadStyle {
+                background: Background::LinearGradient {
+                    start: [0.8, 0.4, 0.2, 1.0],
+                    end: [0.2, 0.4, 0.8, 0.5],
+                    axis: GradientAxis::Horizontal,
+                },
+                border_widths: EdgeWidths::new(1.0, 2.0, 3.0, 4.0),
+                border_color: [0.6, 0.8, 0.2, 1.0],
+                corner_radii: CornerRadii::new(2.0, 4.0, 6.0, 8.0),
+            },
+        );
+        let inst = list.chrome_instance(0).unwrap();
+        assert_eq!(inst.rect, [2.0, 3.0, 40.0, 20.0]);
+        assert_eq!(inst.widths, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(inst.radii, [2.0, 4.0, 6.0, 8.0]);
+        assert_eq!(inst.translation[3], 1.0);
+        assert_eq!(inst.bg, [0.4, 0.1, 0.2, 0.5]);
+        assert_eq!(inst.border, [0.3, 0.2, 0.2, 0.5]);
+        assert_eq!(
+            list.paint_cmds,
+            vec![
+                PaintCmd::Soup { indices: 0..6 },
+                PaintCmd::Analytic { instances: 0..1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn paint_quad_helpers_and_edge_line_are_fixed_size() {
+        let mut list = DrawList::new();
+        list.reserve_analytic_instances(4);
+        let retained_capacity = list.analytic_instance_capacity();
+        list.paint_quad_background(
+            Rect::new(0.0, 0.0, 20.0, 10.0),
+            Background::Solid([1.0; 4]),
+            CornerRadii::new(1.0, 2.0, 3.0, 4.0),
+        );
+        list.paint_quad_border(
+            Rect::new(0.0, 0.0, 20.0, 10.0),
+            EdgeWidths::new(1.0, 2.0, 3.0, 4.0),
+            [0.5; 4],
+            CornerRadii::uniform(4.0),
+        );
+        list.edge_line(Rect::new(5.0, 6.0, 20.0, 10.0), Edge::Right, 2.0, [1.0; 4]);
+        assert_eq!(list.chrome_instance_count(), 3);
+        assert_eq!(list.chrome_instance(0).unwrap().widths, [0.0; 4]);
+        assert_eq!(
+            list.chrome_instance(1).unwrap().widths,
+            [1.0, 2.0, 3.0, 4.0]
+        );
+        assert_eq!(
+            list.chrome_instance(2).unwrap().rect,
+            [23.0, 6.0, 2.0, 10.0]
+        );
+        assert_eq!(list.analytic_instance_capacity(), retained_capacity);
+        list.clear();
+        assert_eq!(list.analytic_instance_capacity(), retained_capacity);
     }
 
     #[test]
@@ -3161,7 +3534,7 @@ mod tests {
             [1.0; 4],
             [0.0; 4],
         );
-        let inst = list.chrome_instances[0];
+        let inst = list.chrome_instance(0).unwrap();
         assert_eq!(inst.clip, [5.0, 6.0, 30.0, 40.0]);
         assert_eq!(inst.params[2], 1.0); // clip_enabled
     }
@@ -3170,7 +3543,7 @@ mod tests {
     fn chrome_rect_zero_size_draws_nothing() {
         let mut list = DrawList::new();
         list.chrome_rect(Rect::new(0.0, 0.0, 0.0, 10.0), 4.0, 1.0, [1.0; 4], [0.0; 4]);
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
         assert!(list.paint_cmds.is_empty());
     }
 
@@ -3179,10 +3552,10 @@ mod tests {
         let mut list = DrawList::new();
         list.quad(0.0, 0.0, 10.0, 10.0, [1.0; 4]);
         list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
-        assert!(!list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() != 0);
         assert!(!list.paint_cmds.is_empty());
         list.clear();
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
         assert!(list.paint_cmds.is_empty());
         assert_eq!(list.soup_committed_indices, 0);
     }
@@ -3384,7 +3757,7 @@ mod tests {
         // The classic bug: padding ate the whole width.
         list.quad(10.0, 10.0, -4.0, 20.0, [1.0; 4]);
         assert!(list.vertices.is_empty(), "nothing is drawn");
-        assert!(list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() == 0);
         assert_eq!(list.dropped_degenerate(), 1, "but the drop is recorded");
     }
 
@@ -3486,6 +3859,247 @@ mod tests {
     }
 
     #[test]
+    fn css_spread_radius_matches_positive_and_negative_numeric_cases() {
+        assert!(approx(css_spread_radius(12.0, 4.0), 16.0));
+        assert!(approx(css_spread_radius(2.0, 4.0), 5.5));
+        assert!(approx(css_spread_radius(0.0, 4.0), 0.0));
+        assert!(approx(css_spread_radius(12.0, -4.0), 8.0));
+        assert!(approx(css_spread_radius(2.0, -4.0), 0.0));
+    }
+
+    #[test]
+    fn shadow_radius_overlap_normalization_scales_asymmetric_corners() {
+        let expanded = [2.0, 12.0, 4.0, 8.0].map(|radius| css_spread_radius(radius, 4.0));
+        assert_eq!(expanded, [5.5, 16.0, 8.0, 12.0]);
+        assert_eq!(normalize_shadow_radii(expanded, 48.0, 28.0), expanded);
+
+        let radii = normalize_shadow_radii([80.0, 40.0, 20.0, 10.0], 100.0, 40.0);
+        // The left-side overlap (80 + 10 over a 40px height) is limiting, so
+        // the CSS overlap factor is 4/9 and applies uniformly to every corner.
+        let expected = [320.0 / 9.0, 160.0 / 9.0, 80.0 / 9.0, 40.0 / 9.0];
+        for (actual, expected) in radii.into_iter().zip(expected) {
+            assert!(approx(actual, expected), "{actual} != {expected}");
+        }
+
+        let contracted = [
+            css_spread_radius(radii[0], -8.0),
+            css_spread_radius(radii[1], -8.0),
+            css_spread_radius(radii[2], -8.0),
+            css_spread_radius(radii[3], -8.0),
+        ];
+        let contracted = normalize_shadow_radii(contracted, 84.0, 24.0);
+        // After -8 spread the left-side sum is limiting; 27/31 overlap scale.
+        let expected = [24.0, 264.0 / 31.0, 24.0 / 31.0, 0.0];
+        for (actual, expected) in contracted.into_iter().zip(expected) {
+            assert!(approx(actual, expected), "{actual} != {expected}");
+        }
+    }
+
+    #[test]
+    fn analytic_shadow_normalizes_geometry_and_affine() {
+        let mut dl = DrawList::new();
+        dl.push_transform();
+        dl.translate(7.0, 9.0);
+        dl.rotate(0.25);
+        dl.box_shadow_outset(
+            Rect::new(10.0, 20.0, 100.0, 40.0),
+            CornerRadii::new(80.0, 40.0, 20.0, 10.0),
+            BoxShadow {
+                offset: [3.0, -2.0],
+                blur: 8.0,
+                spread: 4.0,
+                color: [0.2, 0.3, 0.4, 0.5],
+                inset: false,
+            },
+        );
+        let s = dl.shadow_instance(0).unwrap();
+        assert_eq!(s.shadow_rect, [9.0, 14.0, 108.0, 48.0]);
+        // Rotation preserves an isotropic sigma=blur/2 kernel.
+        assert!(approx(s.params[0], 4.0));
+        assert!(approx(s.params[2], 4.0));
+        assert!(approx(s.params[3], 0.0));
+        assert_eq!(s.translation[3], 0.0);
+        assert_eq!(
+            s.linear,
+            [
+                0.25_f32.cos(),
+                -0.25_f32.sin(),
+                0.25_f32.sin(),
+                0.25_f32.cos()
+            ]
+        );
+        assert!(s.shadow_radii[0] > s.shadow_radii[3]);
+        assert_eq!(dl.prim_counts().shadow_instances, 1);
+    }
+
+    #[test]
+    fn analytic_shadow_pulls_screen_gaussian_through_nonuniform_scale() {
+        let mut dl = DrawList::new();
+        dl.scale(2.0, 0.5);
+        dl.box_shadow_outset(
+            Rect::new(10.0, 20.0, 100.0, 40.0),
+            CornerRadii::uniform(4.0),
+            BoxShadow {
+                blur: 8.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Default::default()
+            },
+        );
+        let s = dl.shadow_instance(0).unwrap();
+        // A^-1=diag(1/2,2): a screen-isotropic sigma=4 becomes local
+        // sigma_x|y=2 and sigma_y=8, with no conditional mean shift.
+        assert!(approx(s.params[0], 8.0));
+        assert!(approx(s.params[2], 2.0));
+        assert!(approx(s.params[3], 0.0));
+        // Three local sigmas plus the inverse image of one screen pixel.
+        assert_eq!(s.raster_rect, [3.75, -5.0, 112.5, 90.0]);
+    }
+
+    #[test]
+    fn analytic_inset_raster_is_conservatively_inflated() {
+        let mut dl = DrawList::new();
+        dl.scale(2.0, 0.5);
+        dl.box_shadow_inset(
+            Rect::new(10.0, 20.0, 100.0, 40.0),
+            CornerRadii::uniform(4.0),
+            BoxShadow {
+                blur: 8.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                inset: true,
+                ..Default::default()
+            },
+        );
+        // The inverse image of a centered one-screen-pixel square has local
+        // half-extents (0.25, 1). Fragment SDF coverage still clips the inset.
+        assert_eq!(
+            dl.shadow_instance(0).unwrap().raster_rect,
+            [9.75, 19.0, 100.5, 42.0]
+        );
+    }
+
+    #[test]
+    fn analytic_shadow_pulls_screen_gaussian_through_shear() {
+        let mut dl = DrawList::new();
+        dl.compose_top(&Affine2::new(1.0, 0.5, 0.0, 0.0, 1.0, 0.0));
+        dl.box_shadow_outset(
+            Rect::new(0.0, 0.0, 20.0, 10.0),
+            CornerRadii::default(),
+            BoxShadow {
+                blur: 8.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Default::default()
+            },
+        );
+        let params = dl.shadow_instance(0).unwrap().params;
+        assert!(approx(params[0], 4.0));
+        assert!(approx(params[2], 4.0));
+        assert!(approx(params[3], -0.5));
+    }
+
+    #[test]
+    fn analytic_shadow_inset_collapse_and_css_order() {
+        let mut dl = DrawList::new();
+        let outset = BoxShadow {
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        };
+        let inset_a = BoxShadow {
+            spread: 100.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            inset: true,
+            ..Default::default()
+        };
+        let inset_b = BoxShadow {
+            color: [0.0, 0.0, 1.0, 1.0],
+            inset: true,
+            ..Default::default()
+        };
+        dl.box_shadows_inset(
+            Rect::new(0.0, 0.0, 20.0, 10.0),
+            CornerRadii::uniform(2.0),
+            &[outset, inset_a, inset_b],
+        );
+        assert_eq!(dl.shadow_instance_count(), 2);
+        assert_eq!(dl.shadow_instance(0).unwrap().color, inset_b.color);
+        assert_eq!(dl.shadow_instance(1).unwrap().color, inset_a.color);
+        assert_eq!(dl.shadow_instance(1).unwrap().shadow_rect[2..], [0.0, 0.0]);
+        assert_eq!(dl.shadow_instance(1).unwrap().params[1], 1.0);
+        assert!(
+            matches!(&dl.paint_cmds[0], PaintCmd::Analytic { instances } if instances == &(0..2))
+        );
+    }
+
+    #[test]
+    fn analytic_shadow_culls_clip_and_diagnoses_invalid() {
+        let mut dl = DrawList::new();
+        dl.push_clip(Rect::new(200.0, 200.0, 20.0, 20.0));
+        let visible = BoxShadow {
+            color: [0.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        };
+        dl.box_shadow_outset(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            CornerRadii::default(),
+            visible,
+        );
+        assert!(dl.shadow_instance_count() == 0);
+        dl.pop_clip();
+        dl.box_shadow_outset(
+            Rect::new(f32::NAN, 0.0, 10.0, 10.0),
+            CornerRadii::default(),
+            visible,
+        );
+        assert_eq!(dl.dropped_degenerate(), 1);
+    }
+
+    #[test]
+    fn clear_retains_shadow_capacity_and_resets_count() {
+        let mut dl = DrawList::new();
+        dl.reserve_analytic_instances(8);
+        let capacity = dl.analytic_instance_capacity();
+        dl.box_shadow_outset(
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            CornerRadii::default(),
+            BoxShadow {
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Default::default()
+            },
+        );
+        dl.clear();
+        assert!(dl.shadow_instance_count() == 0);
+        assert_eq!(dl.analytic_instance_capacity(), capacity);
+        assert_eq!(dl.prim_counts().shadow_instances, 0);
+    }
+
+    #[test]
+    fn alternating_chrome_and_shadow_share_one_ordered_run() {
+        let mut d = DrawList::new();
+        for i in 0..10_000 {
+            d.box_shadow_outset(
+                Rect::new(i as f32, 0.0, 1.0, 1.0),
+                CornerRadii::default(),
+                BoxShadow {
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    ..Default::default()
+                },
+            );
+            d.quad(i as f32, 0.0, 1.0, 1.0, [1.0; 4]);
+        }
+        assert_eq!(d.analytic_instances.len(), 20_000);
+        assert_eq!(d.shadow_instance_count(), 10_000);
+        assert_eq!(d.chrome_instance_count(), 10_000);
+        assert_eq!(
+            d.paint_cmds,
+            vec![PaintCmd::Analytic {
+                instances: 0..20_000
+            }]
+        );
+        for (index, instance) in d.analytic_instances.iter().enumerate() {
+            assert_eq!(instance.kind, (index % 2 == 0) as u32);
+        }
+    }
+
+    #[test]
     fn paint_stream_records_and_coalesces_all_payload_kinds() {
         let mut d = DrawList::new();
         d.nine_slice_id(7, 0.0, 0.0, 10.0, 10.0, [1.0; 4]);
@@ -3498,6 +4112,8 @@ mod tests {
         assert!(matches!(&d.paint_cmds[0], PaintCmd::NineSlice { draws } if draws == &(0..2)));
         assert!(matches!(&d.paint_cmds[1], PaintCmd::Icon { draws } if draws == &(0..2)));
         assert!(matches!(&d.paint_cmds[2], PaintCmd::Soup { indices } if indices == &(0..3)));
-        assert!(matches!(&d.paint_cmds[3], PaintCmd::Chrome { instances } if instances == &(0..1)));
+        assert!(
+            matches!(&d.paint_cmds[3], PaintCmd::Analytic { instances } if instances == &(0..1))
+        );
     }
 }

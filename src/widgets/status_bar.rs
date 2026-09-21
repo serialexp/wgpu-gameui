@@ -2,9 +2,10 @@
 //!
 //! Hairline-separated zones: the first zone stretches, later zones size to
 //! their content and read as hairline-divided cells. Callers compose text,
-//! badges, or progress cells per frame; the widget only owns the strip
-//! geometry, the divider hairlines, and cursor flow.
+//! badges, or progress cells per frame; the widget owns the strip background,
+//! border hairlines, divider hairlines, and cursor flow.
 
+use crate::chrome::Edge;
 use crate::layout::Rect;
 use crate::style::StyleKey;
 
@@ -53,28 +54,27 @@ impl<'a> StatusCell<'a> {
 
 /// Draw the status strip across `rect` with `cells` laid out left to right.
 ///
-/// The **first** cell stretches to absorb the remaining width; the rest size
-/// to their content. Each boundary gets the design's hairline divider (dark
-/// line with a light line beneath — the 4a inset read).
+/// The status bar paints its own sunken panel background and border hairlines;
+/// callers only provide its rect and cells. The **first** cell stretches to
+/// absorb the remaining width; the rest size to their content. Each boundary
+/// gets the design's hairline divider (dark line with a light line beneath —
+/// the 4a inset read).
 pub fn draw(rect: Rect, cells: &[StatusCell<'_>], ctx: &mut DrawContext) {
     ctx.push_debug_scope_rect("StatusBar", rect);
     let s = ctx.styles();
     let list = &mut *ctx.draw_list;
 
-    // The strip: a sunken panel hairline — top edge dark line, bottom light.
-    list.quad(rect.x, rect.y, rect.width, 1.0, [0.0, 0.0, 0.0, 0.6]);
-    let bg = s.color(StyleKey::Panel);
-    let mut fill = bg;
-    fill[3] *= 0.6;
-    list.quad(
-        rect.x,
-        rect.y + 1.0,
-        rect.width,
-        (rect.height - 2.0).max(0.0),
-        fill,
-    );
-    let under = s.color(StyleKey::EdgeShadow);
-    list.quad(rect.x, rect.y + rect.height - 1.0, rect.width, 1.0, under);
+    let chrome = s.status_bar();
+    list.paint_quad_background(rect, chrome.surface.background, chrome.surface.corner_radii);
+    for line in chrome.lines {
+        let line_rect = Rect::new(
+            rect.x,
+            rect.y + line.offset,
+            rect.width,
+            (rect.height - line.offset).max(0.0),
+        );
+        list.edge_line(line_rect, line.edge, line.style.thickness, line.style.color);
+    }
 
     let font_size = s.scalar(StyleKey::FontSize) * 0.85;
     let pad = s.scalar(StyleKey::Padding) + 2.0;
@@ -102,12 +102,26 @@ pub fn draw(rect: Rect, cells: &[StatusCell<'_>], ctx: &mut DrawContext) {
         let w = if i == 0 { first_w } else { *w };
         // Divider hairline before every cell but the first.
         if i > 0 {
-            list.quad(x, rect.y + 2.0, 1.0, inner_h - 4.0, [0.0, 0.0, 0.0, 0.55]);
-            list.quad(x + 1.0, rect.y + 2.0, 1.0, inner_h - 4.0, {
-                let u = s.color(StyleKey::EdgeShadow);
-                [u[0], u[1], u[2], u[3] * 0.5]
-            });
-            x += 2.0;
+            let divider_rect = Rect::new(x, rect.y + 2.0, 2.0, inner_h - 4.0);
+            list.edge_line(
+                divider_rect,
+                Edge::Left,
+                chrome.divider[0].thickness,
+                chrome.divider[0].color,
+            );
+            let highlight_rect = Rect::new(
+                x + chrome.divider[0].thickness,
+                divider_rect.y,
+                chrome.divider[1].thickness,
+                divider_rect.height,
+            );
+            list.edge_line(
+                highlight_rect,
+                Edge::Left,
+                chrome.divider[1].thickness,
+                chrome.divider[1].color,
+            );
+            x += chrome.divider[0].thickness + chrome.divider[1].thickness;
         }
 
         if !cell.text.is_empty() {
@@ -144,7 +158,7 @@ pub fn draw(rect: Rect, cells: &[StatusCell<'_>], ctx: &mut DrawContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DrawList, FocusState, InputState, Theme};
+    use crate::{Background, DrawList, FocusState, InputState, StyleOverlay, Theme};
 
     #[test]
     fn first_cell_stretches_and_dividers_land_between_cells() {
@@ -164,8 +178,58 @@ mod tests {
         );
         // Text blocks for the two text cells; spacer contributes none.
         assert_eq!(ctx.draw_list.texts.len(), 2);
-        // Divider hairlines: 2 (before cell 1 and cell 2), each 2 quads.
-        assert!(ctx.draw_list.chrome_instances.len() > 0);
+        // Surface, top pair, and two divider pairs are retained quad instances.
+        assert_eq!(ctx.draw_list.chrome_instance_count(), 7);
+        let Background::LinearGradient { start, end, .. } =
+            theme.chrome.status_bar.surface.background
+        else {
+            panic!("default status surface must be a gradient");
+        };
+        assert_eq!(ctx.draw_list.chrome_instance(0).unwrap().bg, start);
+        assert_eq!(ctx.draw_list.chrome_instance(0).unwrap().bg2, end);
+        assert_eq!(
+            ctx.draw_list.chrome_instance(1).unwrap().bg,
+            theme.chrome.status_bar.lines[0].style.color
+        );
+        assert_eq!(
+            ctx.draw_list.chrome_instance(3).unwrap().bg,
+            theme.chrome.status_bar.divider[0].color
+        );
+    }
+
+    #[test]
+    fn typed_overlay_reaches_status_surface_lines_and_dividers() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.status_bar;
+        chrome.surface.background = Background::Solid([0.12, 0.23, 0.34, 1.0]);
+        chrome.lines[0].style.color = [0.21, 0.32, 0.43, 1.0];
+        chrome.divider[0].color = [0.31, 0.42, 0.53, 1.0];
+        let mut overlay = StyleOverlay::new();
+        overlay.set_status_bar(chrome);
+        let input = InputState::default();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
+            .with_style(&overlay);
+
+        draw(
+            Rect::new(0.0, 0.0, 200.0, STATUS_BAR_HEIGHT),
+            &[StatusCell::text("Ready"), StatusCell::text("60 fps")],
+            &mut ctx,
+        );
+
+        assert_eq!(
+            ctx.draw_list.chrome_instance(0).unwrap().bg,
+            [0.12, 0.23, 0.34, 1.0]
+        );
+        assert_eq!(
+            ctx.draw_list.chrome_instance(1).unwrap().bg,
+            chrome.lines[0].style.color
+        );
+        assert_eq!(
+            ctx.draw_list.chrome_instance(3).unwrap().bg,
+            chrome.divider[0].color
+        );
     }
 
     #[test]

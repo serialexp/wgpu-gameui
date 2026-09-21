@@ -980,8 +980,7 @@ mod tests {
         let cx = viewport.x + viewport.width - bar;
         let cy = viewport.y + viewport.height - bar;
         let found = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .any(|i| (i.rect[0] - cx).abs() < 1e-3 && (i.rect[1] - cy).abs() < 1e-3);
         assert!(found, "expected a quad at corner ({}, {})", cx, cy);
     }
@@ -1010,8 +1009,7 @@ mod tests {
             },
         );
         let found = list
-            .chrome_instances
-            .iter()
+            .chrome_instances()
             .any(|i| i.rect == [0.0, 50.0, 10.0, 10.0]);
         assert!(found, "content quad should be translated to world (0, 50)");
     }

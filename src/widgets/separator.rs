@@ -157,11 +157,11 @@ mod tests {
     /// path under the identity transform, recording fill-only chrome instances.
     fn only_quad(list: &DrawList) -> (f32, f32, f32, f32) {
         assert_eq!(
-            list.chrome_instances.len(),
+            list.chrome_instance_count(),
             2,
             "dark rule + light counter-edge"
         );
-        let r = list.chrome_instances[0].rect;
+        let r = list.chrome_instance(0).unwrap().rect;
         (r[0], r[1], r[2], r[3])
     }
 
@@ -219,10 +219,16 @@ mod tests {
             &mut list,
             &s,
         );
-        assert_eq!(list.chrome_instances[0].rect, [14.0, 20.0, 2.0, 40.0]);
-        assert_eq!(list.chrome_instances[1].rect, [16.0, 20.0, 1.0, 40.0]);
         assert_eq!(
-            list.chrome_instances[1].bg,
+            list.chrome_instance(0).unwrap().rect,
+            [14.0, 20.0, 2.0, 40.0]
+        );
+        assert_eq!(
+            list.chrome_instance(1).unwrap().rect,
+            [16.0, 20.0, 1.0, 40.0]
+        );
+        assert_eq!(
+            list.chrome_instance(1).unwrap().bg,
             s.color(StyleKey::EdgeHighlight)
         );
     }
@@ -243,13 +249,14 @@ mod tests {
         let expected = s.color(StyleKey::PanelBorder);
         let mut list = DrawList::new();
         Separator::horizontal().draw(Rect::new(0.0, 0.0, 50.0, 4.0), &mut list, &s);
-        assert_eq!(list.chrome_instances.len(), 2);
+        assert_eq!(list.chrome_instance_count(), 2);
         assert_eq!(
-            list.chrome_instances[0].bg, expected,
+            list.chrome_instance(0).unwrap().bg,
+            expected,
             "primary rule uses the theme panel-border color"
         );
         assert_eq!(
-            list.chrome_instances[1].bg,
+            list.chrome_instance(1).unwrap().bg,
             s.color(StyleKey::EdgeHighlight)
         );
     }
@@ -264,6 +271,6 @@ mod tests {
             &mut list,
             &s,
         );
-        assert!(list.chrome_instances.is_empty(), "no rule when length ≤ 0");
+        assert!(list.chrome_instance_count() == 0, "no rule when length ≤ 0");
     }
 }

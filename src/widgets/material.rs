@@ -531,11 +531,14 @@ mod tests {
         let mut list = DrawList::new();
         draw(&mut list, &s, rect, &Material::new(Tone::Default));
         // [0] plinth (flat dark), [1] face gradient = sheen over the state base.
-        assert_eq!(list.chrome_instances[0].bg, s.color(StyleKey::Plinth));
+        assert_eq!(
+            list.chrome_instance(0).unwrap().bg,
+            s.color(StyleKey::Plinth)
+        );
         let expected_top = sheen_over(s.color(StyleKey::Button), s.color(StyleKey::FaceTop));
-        assert_eq!(list.chrome_instances[1].bg, expected_top);
+        assert_eq!(list.chrome_instance(1).unwrap().bg, expected_top);
         let expected_bot = sheen_over(s.color(StyleKey::Button), s.color(StyleKey::FaceBottom));
-        assert_eq!(list.chrome_instances[1].bg2, expected_bot);
+        assert_eq!(list.chrome_instance(1).unwrap().bg2, expected_bot);
         // Hovered composites the sheen over the hover base instead.
         let mut hov = DrawList::new();
         draw(
@@ -548,7 +551,7 @@ mod tests {
             s.color(StyleKey::ButtonHover),
             s.color(StyleKey::FaceTopHover),
         );
-        assert_eq!(hov.chrome_instances[1].bg, expected_hover);
+        assert_eq!(hov.chrome_instance(1).unwrap().bg, expected_hover);
     }
 
     #[test]
@@ -563,7 +566,7 @@ mod tests {
         let mut list = DrawList::new();
         draw(&mut list, &styled, rect, &Material::new(Tone::Default));
         let expected = sheen_over([0.7, 0.1, 0.2, 1.0], s.color(StyleKey::FaceTop));
-        assert_eq!(list.chrome_instances[1].bg, expected);
+        assert_eq!(list.chrome_instance(1).unwrap().bg, expected);
     }
 
     #[test]
@@ -572,9 +575,10 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
         let mut list = DrawList::new();
         draw(&mut list, &s, rect, &Material::new(Tone::Ghost));
-        assert_eq!(list.chrome_instances.len(), 1, "no plinth instance");
+        assert_eq!(list.chrome_instance_count(), 1, "no plinth instance");
         assert_eq!(
-            list.chrome_instances[0].bg[3], 0.0,
+            list.chrome_instance(0).unwrap().bg[3],
+            0.0,
             "idle ghost face is fully transparent"
         );
     }
@@ -586,7 +590,7 @@ mod tests {
         let mut list = DrawList::new();
         draw(&mut list, &s, rect, &Material::new(Tone::Accent));
         assert_eq!(
-            list.chrome_instances[1].bg,
+            list.chrome_instance(1).unwrap().bg,
             s.color(StyleKey::AccentFaceTop)
         );
 
@@ -597,7 +601,7 @@ mod tests {
             rect,
             &Material::new(Tone::Accent).enabled(false),
         );
-        let face = off.chrome_instances[1].bg;
+        let face = off.chrome_instance(1).unwrap().bg;
         let full = s.color(StyleKey::AccentFaceTop);
         assert!(
             (face[3] - full[3] * DISABLED_ALPHA).abs() < 1e-4,
@@ -612,7 +616,7 @@ mod tests {
         let mut list = DrawList::new();
         draw(&mut list, &s, rect, &Material::new(Tone::Sunken));
         assert_eq!(
-            list.chrome_instances[0].bg,
+            list.chrome_instance(0).unwrap().bg,
             s.color(StyleKey::InputBackground)
         );
     }
@@ -626,7 +630,7 @@ mod tests {
         let mut focus = DrawList::new();
         draw_well(&mut focus, &s, rect, true, false);
         assert!(
-            focus.chrome_instances.len() > idle.chrome_instances.len(),
+            focus.chrome_instance_count() > idle.chrome_instance_count(),
             "the focus ring is an extra stroke instance"
         );
     }

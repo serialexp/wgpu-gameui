@@ -219,7 +219,7 @@ mod tests {
         let mut b = DrawList::new();
         let mut focus = FocusState::new();
         Toggle::new().draw(true, rect(), &mut ctx(&mut b, &mut focus, &theme, &input));
-        assert_eq!(a.chrome_instances.len(), b.chrome_instances.len());
+        assert_eq!(a.chrome_instance_count(), b.chrome_instance_count());
     }
 
     #[test]
@@ -241,15 +241,17 @@ mod tests {
             &mut ctx(&mut off_list, &mut focus, &theme, &input),
         );
         assert_eq!(
-            on_list.chrome_instances[0].bg, on_list.chrome_instances[0].bg,
+            on_list.chrome_instance(0).unwrap().bg,
+            on_list.chrome_instance(0).unwrap().bg,
             "sanity"
         );
         assert_ne!(
-            on_list.chrome_instances[0].bg, off_list.chrome_instances[0].bg,
+            on_list.chrome_instance(0).unwrap().bg,
+            off_list.chrome_instance(0).unwrap().bg,
             "on trough is the accent face, off is the sunken well"
         );
         assert!(
-            off_list.chrome_instances.len() > on_list.chrome_instances.len(),
+            off_list.chrome_instance_count() > on_list.chrome_instance_count(),
             "off draws the extra inset-shadow band"
         );
     }

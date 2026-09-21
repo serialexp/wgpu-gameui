@@ -15,7 +15,7 @@ use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba
 use crate::render::uniform_arena::UniformArena;
 use crate::text::FontSystemHandle;
 use crate::widgets::{
-    ChromeInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, NineSliceId, PaintCmd,
+    AnalyticInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, NineSliceId, PaintCmd,
     Vertex,
 };
 
@@ -54,7 +54,7 @@ fn frame_arena_within_cap(bytes: u64) -> bool {
 struct OrderedColorUpload {
     vertex_offset: u64,
     index_offset: u64,
-    chrome_offset: u64,
+    analytic_offset: u64,
     circle_offset: u64,
 }
 
@@ -109,14 +109,11 @@ const CHROME_BASE_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array!
     0 => Float32x2,
 ];
 
-/// Per-instance chrome attributes — matches [`ChromeInstance`] / `vs_chrome`.
-const CHROME_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-    1 => Float32x4, // rect
-    2 => Float32x4, // bg (gradient top)
-    3 => Float32x4, // bg2 (gradient bottom)
-    4 => Float32x4, // border
-    5 => Float32x4, // clip
-    6 => Float32x4, // params (radius, thickness, clip_enabled, _pad)
+/// Ten vec4 payloads plus a flat integer kind; location 0 is the base corner.
+const ANALYTIC_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
+    1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
+    6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4,
+    11 => Uint32,
 ];
 
 /// Per-instance circle attributes — matches [`CircleInstance`] / `vs_circle`
@@ -248,8 +245,12 @@ pub struct RenderStats {
     pub paint_runs: usize,
     /// GPU draw calls encoded.
     pub draw_calls: usize,
-    /// Soup/chrome/circle runs.
+    /// Soup/chrome/circle/shadow runs.
     pub color_runs: usize,
+    /// Analytic shadow instances submitted.
+    pub shadow_instances: usize,
+    /// Render passes opened for maximal consecutive color command runs.
+    pub color_passes: usize,
     /// Text runs.
     pub text_runs: usize,
     /// Atlas-image, nine-slice, and vector-icon runs.
@@ -329,7 +330,7 @@ pub struct UiRenderer {
     // Pipelines
     color_pipeline: wgpu::RenderPipeline,
     icon_pipeline: wgpu::RenderPipeline,
-    chrome_pipeline: wgpu::RenderPipeline,
+    analytic_pipeline: wgpu::RenderPipeline,
     circle_pipeline: wgpu::RenderPipeline,
     nine_slice_pipeline: wgpu::RenderPipeline,
 
@@ -382,13 +383,13 @@ pub struct UiRenderer {
     icon_inst_capacity: u64,
     icon_inst_offset: u64,
 
-    // Instanced chrome: a persistent unit-quad base mesh + a growing per-frame
-    // instance buffer (bump offset like the others, reset in `begin_frame`).
+    // Unified ordered chrome/shadow stream: one persistent unit quad and one
+    // growing per-frame instance arena.
     chrome_base_vbo: wgpu::Buffer,
     chrome_base_ibo: wgpu::Buffer,
-    chrome_inst_buffer: wgpu::Buffer,
-    chrome_inst_capacity: u64,
-    chrome_inst_offset: u64,
+    analytic_inst_buffer: wgpu::Buffer,
+    analytic_inst_capacity: u64,
+    analytic_inst_offset: u64,
 
     // Instanced circles: reuses the chrome unit-quad base mesh + a growing
     // per-frame instance buffer (bump offset, reset in `begin_frame`).
@@ -545,12 +546,12 @@ impl UiRenderer {
                 push_constant_ranges: &[],
             });
 
-        let chrome_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ui chrome pipeline"),
+        let analytic_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ui analytic chrome/shadow pipeline"),
             layout: Some(&chrome_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_chrome"),
+                entry_point: Some("vs_analytic"),
                 buffers: &[
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
@@ -558,16 +559,17 @@ impl UiRenderer {
                         attributes: &CHROME_BASE_ATTRIBS,
                     },
                     wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<ChromeInstance>() as wgpu::BufferAddress,
+                        array_stride: std::mem::size_of::<AnalyticInstance>()
+                            as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &CHROME_INSTANCE_ATTRIBS,
+                        attributes: &ANALYTIC_INSTANCE_ATTRIBS,
                     },
                 ],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_chrome"),
+                entry_point: Some("fs_analytic"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -712,10 +714,10 @@ impl UiRenderer {
 
         let current_atlas_size = atlas.width();
 
-        let chrome_inst_capacity = (1024 * std::mem::size_of::<ChromeInstance>()) as u64;
-        let chrome_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui chrome inst buffer"),
-            size: chrome_inst_capacity,
+        let analytic_inst_capacity = (1024 * std::mem::size_of::<AnalyticInstance>()) as u64;
+        let analytic_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ui analytic inst buffer"),
+            size: analytic_inst_capacity,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -735,11 +737,10 @@ impl UiRenderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         Self {
             color_pipeline,
             icon_pipeline,
-            chrome_pipeline,
+            analytic_pipeline,
             circle_pipeline,
             nine_slice_pipeline,
             uniform,
@@ -766,9 +767,9 @@ impl UiRenderer {
             icon_inst_offset: 0,
             chrome_base_vbo,
             chrome_base_ibo,
-            chrome_inst_buffer,
-            chrome_inst_capacity,
-            chrome_inst_offset: 0,
+            analytic_inst_buffer,
+            analytic_inst_capacity,
+            analytic_inst_offset: 0,
             circle_inst_buffer,
             circle_inst_capacity,
             circle_inst_offset: 0,
@@ -1094,7 +1095,7 @@ impl UiRenderer {
         self.color_vbo_offset = 0;
         self.color_ibo_offset = 0;
         self.icon_inst_offset = 0;
-        self.chrome_inst_offset = 0;
+        self.analytic_inst_offset = 0;
         self.circle_inst_offset = 0;
         self.nine_inst_offset = 0;
         self.uniform.reset();
@@ -1301,7 +1302,7 @@ impl UiRenderer {
         self.color_vbo_offset
             + self.color_ibo_offset
             + self.icon_inst_offset
-            + self.chrome_inst_offset
+            + self.analytic_inst_offset
             + self.circle_inst_offset
             + self.nine_inst_offset
             + self.uniform.bytes_used()
@@ -1349,10 +1350,11 @@ impl UiRenderer {
 
         self.frame_stats.draw_lists += 1;
         self.frame_stats.primitives += draw_list.prim_counts().total();
+        self.frame_stats.shadow_instances += draw_list.shadow_instance_count();
         self.frame_stats.paint_runs += draw_list.paint_commands().len();
         for cmd in draw_list.paint_commands() {
             match cmd {
-                PaintCmd::Soup { .. } | PaintCmd::Chrome { .. } | PaintCmd::Circle { .. } => {
+                PaintCmd::Soup { .. } | PaintCmd::Analytic { .. } | PaintCmd::Circle { .. } => {
                     self.frame_stats.color_runs += 1;
                 }
                 PaintCmd::Text { .. } => self.frame_stats.text_runs += 1,
@@ -1405,10 +1407,30 @@ impl UiRenderer {
             .prepare_icons(device, queue, &draw_list.icons_msdf);
 
         let color_upload = self.upload_ordered_color(device, queue, draw_list);
-        for cmd in &draw_list.paint_cmds {
+        let mut command = 0;
+        while command < draw_list.paint_cmds.len() {
+            let cmd = &draw_list.paint_cmds[command];
             match cmd {
-                PaintCmd::Soup { .. } | PaintCmd::Chrome { .. } | PaintCmd::Circle { .. } => {
-                    self.draw_color_interleaved(encoder, view, cmd, color_upload);
+                PaintCmd::Soup { .. } | PaintCmd::Analytic { .. } | PaintCmd::Circle { .. } => {
+                    let start = command;
+                    while command < draw_list.paint_cmds.len()
+                        && matches!(
+                            draw_list.paint_cmds[command],
+                            PaintCmd::Soup { .. }
+                                | PaintCmd::Analytic { .. }
+                                | PaintCmd::Circle { .. }
+                        )
+                    {
+                        command += 1;
+                    }
+                    self.frame_stats.color_passes += 1;
+                    self.draw_color_interleaved(
+                        encoder,
+                        view,
+                        &draw_list.paint_cmds[start..command],
+                        color_upload,
+                    );
+                    continue;
                 }
                 PaintCmd::NineSlice { draws } => {
                     let instances = self.build_nine_slice_instances(
@@ -1442,6 +1464,7 @@ impl UiRenderer {
                     &draw_list.texts[draws.start as usize..draws.end as usize],
                 ),
             }
+            command += 1;
         }
         // Public arrays can still be appended directly after normal API calls.
         let committed = draw_list.soup_committed_indices as usize;
@@ -1648,23 +1671,23 @@ impl UiRenderer {
         pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
     }
 
-    /// Ensure the chrome instance buffer holds `count` instances at its running
-    /// frame offset; returns the byte offset to write/draw at. Same grow
-    /// semantics as [`ensure_tex_capacity`].
-    fn ensure_chrome_capacity(&mut self, device: &wgpu::Device, count: usize) -> u64 {
-        let off = self.chrome_inst_offset;
-        let needed = off + (count * std::mem::size_of::<ChromeInstance>()) as u64;
-        if needed > self.chrome_inst_capacity {
+    /// Ensure the unified analytic instance arena can hold `count` more records.
+    fn ensure_analytic_capacity(&mut self, device: &wgpu::Device, count: usize) -> u64 {
+        let off = self.analytic_inst_offset;
+        let needed = off + (count * std::mem::size_of::<AnalyticInstance>()) as u64;
+        if needed > self.analytic_inst_capacity {
             self.frame_stats.buffer_reallocations += 1;
-            self.chrome_inst_capacity = needed.next_power_of_two();
+            self.analytic_inst_capacity = needed.next_power_of_two();
             let replacement = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ui chrome inst buffer"),
-                size: self.chrome_inst_capacity,
+                label: Some("ui analytic inst buffer"),
+                size: self.analytic_inst_capacity,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            self.retired_buffers
-                .push(std::mem::replace(&mut self.chrome_inst_buffer, replacement));
+            self.retired_buffers.push(std::mem::replace(
+                &mut self.analytic_inst_buffer,
+                replacement,
+            ));
         }
         off
     }
@@ -1724,20 +1747,20 @@ impl UiRenderer {
             self.color_ibo_offset = offsets.1 + std::mem::size_of_val(&*draw_list.indices) as u64;
             offsets
         };
-        let chrome_offset = if draw_list.chrome_instances.is_empty() {
+        let analytic_offset = if draw_list.analytic_instances.is_empty() {
             0
         } else {
-            let offset = self.ensure_chrome_capacity(device, draw_list.chrome_instances.len());
+            let offset = self.ensure_analytic_capacity(device, draw_list.analytic_instances.len());
             queue.write_buffer(
-                &self.chrome_inst_buffer,
+                &self.analytic_inst_buffer,
                 offset,
-                bytemuck::cast_slice(&draw_list.chrome_instances),
+                bytemuck::cast_slice(&draw_list.analytic_instances),
             );
             self.frame_stats.buffer_write_calls += 1;
             self.frame_stats.buffer_bytes_uploaded +=
-                std::mem::size_of_val(&*draw_list.chrome_instances) as u64;
-            self.chrome_inst_offset = offset
-                + (draw_list.chrome_instances.len() * std::mem::size_of::<ChromeInstance>()) as u64;
+                std::mem::size_of_val(&*draw_list.analytic_instances) as u64;
+            self.analytic_inst_offset =
+                offset + std::mem::size_of_val(&*draw_list.analytic_instances) as u64;
             offset
         };
         let circle_offset = if draw_list.circle_instances.is_empty() {
@@ -1759,21 +1782,21 @@ impl UiRenderer {
         OrderedColorUpload {
             vertex_offset,
             index_offset,
-            chrome_offset,
+            analytic_offset,
             circle_offset,
         }
     }
 
-    /// Draw one ordered color run from the payload uploaded once above.
+    /// Draw a maximal consecutive sequence of color commands in one render pass.
     fn draw_color_interleaved(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        cmd: &PaintCmd,
+        commands: &[PaintCmd],
         upload: OrderedColorUpload,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui color+chrome pass"),
+            label: Some("ui color primitives pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
@@ -1799,23 +1822,37 @@ impl UiRenderer {
             pass.draw_indexed(range, 0, 0..1);
         };
 
-        match cmd {
-            PaintCmd::Soup { indices } => draw_soup(&mut pass, indices.clone()),
-            PaintCmd::Chrome { instances } => {
-                pass.set_pipeline(&self.chrome_pipeline);
-                pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                pass.set_vertex_buffer(1, self.chrome_inst_buffer.slice(upload.chrome_offset..));
-                pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
+        for cmd in commands {
+            match cmd {
+                PaintCmd::Soup { indices } => draw_soup(&mut pass, indices.clone()),
+                PaintCmd::Analytic { instances } => {
+                    pass.set_pipeline(&self.analytic_pipeline);
+                    pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.analytic_inst_buffer.slice(upload.analytic_offset..),
+                    );
+                    pass.set_index_buffer(
+                        self.chrome_base_ibo.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
+                }
+                PaintCmd::Circle { instances } => {
+                    pass.set_pipeline(&self.circle_pipeline);
+                    pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
+                    pass.set_vertex_buffer(
+                        1,
+                        self.circle_inst_buffer.slice(upload.circle_offset..),
+                    );
+                    pass.set_index_buffer(
+                        self.chrome_base_ibo.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
+                }
+                _ => unreachable!("non-color command passed to color renderer"),
             }
-            PaintCmd::Circle { instances } => {
-                pass.set_pipeline(&self.circle_pipeline);
-                pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                pass.set_vertex_buffer(1, self.circle_inst_buffer.slice(upload.circle_offset..));
-                pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, instances.clone());
-            }
-            _ => unreachable!("non-color command passed to color renderer"),
         }
     }
 

@@ -213,11 +213,17 @@ mod tests {
             s.color(StyleKey::Success),
         );
         assert!(
-            list.chrome_instances.len() >= 3,
+            list.chrome_instance_count() >= 3,
             "badge face plus inset bands"
         );
-        assert_eq!(list.chrome_instances[0].border, [0.0, 0.0, 0.0, 0.6]);
-        assert_eq!(list.chrome_instances[1].bg, s.color(StyleKey::InnerShadow));
+        assert_eq!(
+            list.chrome_instance(0).unwrap().border,
+            [0.0, 0.0, 0.0, 0.6]
+        );
+        assert_eq!(
+            list.chrome_instance(1).unwrap().bg,
+            s.color(StyleKey::InnerShadow)
+        );
     }
 
     #[test]
@@ -255,7 +261,7 @@ mod tests {
         // Cap face + highlight band + side line are all instanced quads; the
         // label is a text block.
         assert!(
-            list.chrome_instances.len() >= 2,
+            list.chrome_instance_count() >= 2,
             "cap face + highlight/side bands instanced"
         );
         assert!(!list.texts.is_empty(), "label block");
@@ -275,12 +281,13 @@ mod tests {
             &crate::InputState::default(),
         );
         assert_eq!(
-            list.chrome_instances.len(),
+            list.chrome_instance_count(),
             1,
             "only the pill face is painted"
         );
         assert_ne!(
-            list.chrome_instances[0].bg, list.chrome_instances[0].bg2,
+            list.chrome_instance(0).unwrap().bg,
+            list.chrome_instance(0).unwrap().bg2,
             "face retains its vertical sheen"
         );
     }
@@ -316,7 +323,8 @@ mod tests {
         );
         assert!(off_out.clicked && on_out.clicked, "click inside reports");
         assert_ne!(
-            off.chrome_instances[0].bg, on.chrome_instances[0].bg,
+            off.chrome_instance(0).unwrap().bg,
+            on.chrome_instance(0).unwrap().bg,
             "off is a raised neutral, on is the held accent"
         );
 

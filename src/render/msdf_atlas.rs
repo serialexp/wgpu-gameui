@@ -290,7 +290,7 @@ fn rgb_to_rgba(img: &image::RgbImage) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    const FONT: &[u8] = notosans::REGULAR_TTF;
+    const FONT: &[u8] = include_bytes!("../../assets/fonts/ibm-plex/IBMPlexSans-Regular.ttf");
 
     #[test]
     fn glyph_generates_caches_and_packs() {

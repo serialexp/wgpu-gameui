@@ -31,12 +31,13 @@
 //! }
 //! ```
 
+use crate::chrome::SurfacePainter;
+use crate::color::srgb_to_linear;
 use crate::layout::Rect;
 use crate::style::StyleKey;
 use crate::text::TextBlock;
 
 use super::DrawContext;
-use super::material;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -146,8 +147,8 @@ impl<'a> DockPanel<'a> {
         let s = ctx.styles();
         let input = ctx.input;
         let tab_h = s.scalar(StyleKey::DockTabHeight);
-        let radius = s.scalar(StyleKey::BorderRadius);
         let font_size = s.scalar(StyleKey::FontSize) * 0.85;
+        let chrome = s.dock();
 
         ctx.push_debug_scope_rect("DockPanel", rect);
 
@@ -163,32 +164,20 @@ impl<'a> DockPanel<'a> {
             rect,
         };
 
-        // --- Panel background ---
-        let panel_bg = s.color(StyleKey::Panel);
-        let panel_border = s.color(StyleKey::PanelBorder);
-        ctx.draw_list.rounded_rect(rect, radius, panel_bg);
-        ctx.draw_list
-            .rounded_rect_outline(rect, radius, 1.0, panel_border);
-
-        // --- Tab header background ---
+        // --- Panel and header surfaces ---
+        ctx.draw_list.paint_quad(rect, chrome.body);
         let header_rect = Rect::new(rect.x, rect.y, rect.width, tab_h);
-        // Slightly lighter than the panel (sheen overlay).
-        let header_bg = material::sheen_over(panel_bg, [1.0, 1.0, 1.0, 0.04]);
-        ctx.draw_list.quad(
-            header_rect.x,
-            header_rect.y,
-            header_rect.width,
-            header_rect.height,
-            header_bg,
+        let mut header = SurfacePainter::new(
+            ctx.draw_list,
+            header_rect,
+            header_rect,
+            chrome.header.corner_radii,
+            chrome.header,
+            &[],
+            &chrome.lines,
         );
-        // Bottom border of the header.
-        ctx.draw_list.quad(
-            header_rect.x,
-            header_rect.y + header_rect.height - 1.0,
-            header_rect.width,
-            1.0,
-            panel_border,
-        );
+        header.paint_pre_content();
+        header.paint_post_content();
 
         // --- Close button (right side of header) ---
         let close_w = if self.closable { 18.0 } else { 0.0 };
@@ -201,13 +190,12 @@ impl<'a> DockPanel<'a> {
             );
             let close_hovered =
                 close_rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
-            let close_pressed = close_hovered && input.mouse_down;
             let close_clicked = close_hovered && input.mouse_clicked;
 
-            // Ghost button chrome.
+            // The opaque handoff table defines one header-key hover material;
+            // pressing changes interaction, not this surface color.
             if close_hovered {
-                let hover_bg = [1.0, 1.0, 1.0, if close_pressed { 0.12 } else { 0.06 }];
-                ctx.draw_list.rounded_rect(close_rect, radius, hover_bg);
+                ctx.draw_list.paint_quad(close_rect, chrome.tab_hover);
             }
             // "×" glyph.
             let xc = if close_hovered {
@@ -253,34 +241,39 @@ impl<'a> DockPanel<'a> {
                     tab_rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
                 let tab_clicked = tab_hovered && input.mouse_clicked;
 
-                // Tab background.
                 if is_active {
-                    // Gradient with subtle highlight.
-                    let top =
-                        material::sheen_over(s.color(StyleKey::TabActive), [1.0, 1.0, 1.0, 0.10]);
-                    ctx.draw_list
-                        .chrome_rect(tab_rect, radius, 1.0, top, [0.0, 0.0, 0.0, 0.35]);
-                    // Inset highlight on active tab.
-                    let hl = s.color(StyleKey::EdgeHighlight);
-                    ctx.draw_list.quad(
-                        tab_rect.x + 1.0,
-                        tab_rect.y + 1.0,
-                        (tab_rect.width - 2.0).max(0.0),
-                        1.0,
-                        hl,
+                    let padding = tab_rect.inset(chrome.active_tab.border_widths.left);
+                    let mut tab_surface = SurfacePainter::new(
+                        ctx.draw_list,
+                        tab_rect,
+                        padding,
+                        chrome.active_tab.corner_radii,
+                        chrome.active_tab,
+                        std::slice::from_ref(&chrome.active_tab_inset),
+                        &[],
                     );
+                    tab_surface.paint_pre_content();
+                    tab_surface.paint_post_content();
                 } else if tab_hovered {
-                    ctx.draw_list
-                        .rounded_rect(tab_rect, radius, [1.0, 1.0, 1.0, 0.04]);
+                    ctx.draw_list.paint_quad(tab_rect, chrome.tab_hover);
                 }
 
-                // Tab label.
+                // The dock spec keeps hovered and idle labels at the same tone;
+                // only the chip face changes on hover.
                 let text_color = if is_active {
-                    s.color(StyleKey::TextHighlight)
-                } else if tab_hovered {
-                    s.color(StyleKey::Text)
+                    srgb_to_linear([
+                        0xf1 as f32 / 255.0,
+                        0xf5 as f32 / 255.0,
+                        0xf9 as f32 / 255.0,
+                        1.0,
+                    ])
                 } else {
-                    s.color(StyleKey::TextDim)
+                    srgb_to_linear([
+                        0x98 as f32 / 255.0,
+                        0xa0 as f32 / 255.0,
+                        0xa8 as f32 / 255.0,
+                        1.0,
+                    ])
                 };
                 let ty = ctx.draw_list.vcentered_text_y(
                     tab_rect.y,
@@ -337,7 +330,9 @@ pub struct DockPanelOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DrawList, FocusState, InputState, Theme};
+    use crate::chrome::Background;
+    use crate::color::opaque_srgb8;
+    use crate::{DrawList, FocusState, InputState, StyleOverlay, Theme};
 
     fn ctx<'a>(
         list: &'a mut DrawList,
@@ -446,8 +441,72 @@ mod tests {
         );
 
         // Should still emit geometry (background) and return a body rect.
-        assert!(!list.chrome_instances.is_empty() || !list.vertices.is_empty());
+        assert!(list.chrome_instance_count() != 0 || !list.vertices.is_empty());
         assert!(out.body.height > 0.0);
+    }
+
+    #[test]
+    fn active_sidebar_tab_matches_the_reference_chip_material() {
+        let theme = Theme::default();
+        let ts = tabs();
+        let mut state = DockPanelState::new(200.0);
+        let input = InputState::default();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+
+        DockPanel::new(DockSide::Left, &ts).draw(
+            Rect::new(0.0, 0.0, 200.0, 150.0),
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input),
+        );
+
+        let active = list
+            .chrome_instances()
+            .find(|instance| instance.bg == opaque_srgb8([0x40, 0x43, 0x46]))
+            .expect("active dock tab should emit the raised reference chip");
+        assert_eq!(active.bg2, opaque_srgb8([0x2a, 0x2e, 0x31]));
+        assert_eq!(active.rect[3], 18.0);
+        assert!(list.chrome_instances().any(|instance| {
+            instance.border == opaque_srgb8([0x0f, 0x11, 0x13]) && instance.widths == [1.0; 4]
+        }));
+        assert_eq!(list.shadow_instance_count(), 1);
+    }
+
+    #[test]
+    fn typed_overlay_reaches_dock_body_header_hover_and_active_inset() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.dock;
+        chrome.body.background = Background::Solid([0.11, 0.12, 0.13, 1.0]);
+        chrome.header.background = Background::Solid([0.21, 0.22, 0.23, 1.0]);
+        chrome.tab_hover.background = Background::Solid([0.31, 0.32, 0.33, 1.0]);
+        chrome.active_tab_inset.color = [0.41, 0.42, 0.43, 1.0];
+        let mut overlay = StyleOverlay::new();
+        overlay.set_dock(chrome);
+        let ts = tabs();
+        let mut state = DockPanelState::new(200.0);
+        state.active_tab = 1;
+        let input = InputState {
+            mouse_x: 20.0,
+            mouse_y: 10.0,
+            ..Default::default()
+        };
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        DockPanel::new(DockSide::Right, &ts).draw(
+            Rect::new(0.0, 0.0, 200.0, 150.0),
+            &mut state,
+            &mut ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay),
+        );
+        assert_eq!(list.chrome_instance(0).unwrap().bg, [0.11, 0.12, 0.13, 1.0]);
+        assert_eq!(list.chrome_instance(1).unwrap().bg, [0.21, 0.22, 0.23, 1.0]);
+        assert!(
+            list.chrome_instances()
+                .any(|quad| quad.bg == [0.31, 0.32, 0.33, 1.0])
+        );
+        assert!(
+            list.shadow_instances()
+                .any(|shadow| shadow.color == [0.41, 0.42, 0.43, 1.0])
+        );
     }
 
     #[test]

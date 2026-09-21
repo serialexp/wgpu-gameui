@@ -298,7 +298,7 @@ mod tests {
         let mut s = LayerStack::new();
         // A translate-only quad records one SDF chrome instance (not soup).
         s.current_mut().quad(0.0, 0.0, 10.0, 10.0, [1.0; 4]);
-        assert_eq!(s.base().chrome_instances.len(), 1);
+        assert_eq!(s.base().chrome_instance_count(), 1);
     }
 
     #[test]
@@ -306,8 +306,8 @@ mod tests {
         let mut s = LayerStack::new();
         s.push_modal(Rect::new(0.0, 0.0, 100.0, 100.0));
         s.current_mut().quad(0.0, 0.0, 10.0, 10.0, [1.0; 4]);
-        assert_eq!(s.base().chrome_instances.len(), 0);
-        assert_eq!(s.layers()[0].list.chrome_instances.len(), 1);
+        assert_eq!(s.base().chrome_instance_count(), 0);
+        assert_eq!(s.layers()[0].list.chrome_instance_count(), 1);
         s.pop_layer();
     }
 

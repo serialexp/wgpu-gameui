@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toolbar — Forge chrome reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<!--
+  DESIGN REFERENCE — static HTML, no framework, no JavaScript, no CSS classes.
+  Every value is inline and literal. States are laid out side by side rather than
+  triggered by interaction. See README.md and tokens.md in this folder.
+-->
+<body style="margin:0;padding:34px;background:#0a0d0f;font-family:'IBM Plex Sans',Helvetica,sans-serif;color:#e6e9ec">
+<div style="max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:30px">
+  <header style="display:flex;flex-direction:column;gap:8px;padding-bottom:18px;border-bottom:1px solid rgba(255,255,255,0.08)">
+    <a href="index.html" style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#6f7982;text-decoration:none">← all sections</a>
+    <h1 style="margin:0;font-size:19px;font-weight:600;letter-spacing:-0.01em">Toolbar</h1>
+    <p style="margin:0;max-width:64ch;font-size:13px;line-height:1.55;color:#8b939b">A strip of press keys that docks to any edge. The key — face plate on a plinth, with real 2px travel — is the core widget of the whole system; everything clickable in the chrome is a variation on it.</p>
+  </header>
+<section style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;flex-direction:column;gap:3px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8fa0a8">Key states</div>
+    <div style="font-size:12px;line-height:1.5;color:#8b939b;max-width:70ch">The press key is the core widget of the system: a face plate on a plinth. The plinth carries 2px of bottom padding; pressing moves it to the top so the face drops into its own shadow without the footprint shifting. Do not substitute a transform.</div>
+  </div>
+  <div style="padding:0;border:1px solid rgba(255,255,255,0.07);background:linear-gradient(160deg,#10171c 0%,#060809 55%,#0a0d0f 100%)">
+    <div style="padding:30px;display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✥</span></span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b939b">Idle</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.24),rgba(255,255,255,0.11));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.28);color:#eef2f6;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✥</span></span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b939b">Hover</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:2px;padding-bottom:0px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.09),rgba(255,255,255,0.035));border:1px solid rgba(0,0,0,0.6);box-shadow:inset 0 1px 0 rgba(255,255,255,0.06), inset 0 2px 3px rgba(0,0,0,0.4);color:#b7bfc6;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✥</span></span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b939b">Pressed</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:2px;padding-bottom:0px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,oklch(0.62 0.1 200),oklch(0.7 0.11 200));border:1px solid rgba(0,0,0,0.6);box-shadow:inset 0 2px 4px oklch(0.32 0.07 200), inset 0 1px 0 oklch(0.55 0.09 200);color:#eafaff;text-shadow:0 -1px 0 oklch(0.38 0.08 200)">✥</span></span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b939b">Latched</span>
+      </div>
+      <div style="flex:1;min-width:230px;display:flex;flex-direction:column;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8b939b;line-height:1.7">
+        <div>face ......... 24 × 24px</div>
+        <div>travel ....... 2px</div>
+        <div>radius ....... 1px</div>
+        <div>glyph ........ 12px</div>
+        <div>latched = selected tool; stays down on mouse-out</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;flex-direction:column;gap:3px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8fa0a8">Docked left</div>
+    <div style="font-size:12px;line-height:1.5;color:#8b939b;max-width:70ch">Default orientation. Group separators run across the short axis; the drag grip sits at the leading end. The latched key here is Move.</div>
+  </div>
+  <div style="padding:0;border:1px solid rgba(255,255,255,0.07);background:linear-gradient(160deg,#10171c 0%,#060809 55%,#0a0d0f 100%)">
+    <div style="display:flex;min-height:250px">
+      <div style="position:relative;display:flex;flex-shrink:0;flex-direction:column;align-items:center;gap:2px;padding:3px;background:linear-gradient(90deg,rgba(36,41,47,0.96),rgba(22,26,30,0.97));border-right:1px solid rgba(0,0,0,0.7);box-shadow:inset -1px 0 0 rgba(255,255,255,0.05),2px 0 8px rgba(0,0,0,0.35)">
+        <span style="display:block;flex-shrink:0;cursor:pointer;border-radius:1px;width:14px;height:3px;margin:2px 0 4px;background:repeating-linear-gradient(90deg,rgba(255,255,255,0.28) 0 1px,transparent 1px 3px);box-shadow:0 1px 0 rgba(0,0,0,0.5)"></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌖</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:2px;padding-bottom:0px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,oklch(0.62 0.1 200),oklch(0.7 0.11 200));border:1px solid rgba(0,0,0,0.6);box-shadow:inset 0 2px 4px oklch(0.32 0.07 200), inset 0 1px 0 oklch(0.55 0.09 200);color:#eafaff;text-shadow:0 -1px 0 oklch(0.38 0.08 200)">✥</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⟳</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⤢</span></span>
+        <span style="display:block;padding:3px 0;align-self:stretch"><span style="display:block;height:1px;margin:0 3px;min-height:1px;background:rgba(0,0,0,0.6);box-shadow:0 1px 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">▢</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✎</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌫</span></span>
+        <span style="display:block;padding:3px 0;align-self:stretch"><span style="display:block;height:1px;margin:0 3px;min-height:1px;background:rgba(0,0,0,0.6);box-shadow:0 1px 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">☀</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">◈</span></span>
+        <span style="display:block;padding:3px 0;align-self:stretch"><span style="display:block;height:1px;margin:0 3px;min-height:1px;background:rgba(0,0,0,0.6);box-shadow:0 1px 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⟺</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌗</span></span>
+      </div>
+      <div style="flex:1;background:radial-gradient(circle at 62% 46%,#2c5a66,#0c1c23 70%)"></div>
+    </div>
+  </div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;flex-direction:column;gap:3px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8fa0a8">Docked top</div>
+    <div style="font-size:12px;line-height:1.5;color:#8b939b;max-width:70ch">The same strip rotated: flex direction, separator orientation, edge shadow and tooltip side all flip together. Four edges are supported — top, right, bottom, left.</div>
+  </div>
+  <div style="padding:0;border:1px solid rgba(255,255,255,0.07);background:linear-gradient(160deg,#10171c 0%,#060809 55%,#0a0d0f 100%)">
+    <div style="display:flex;flex-direction:column;min-height:250px">
+      <div style="position:relative;display:flex;flex-shrink:0;flex-direction:row;align-items:center;gap:2px;padding:3px;background:linear-gradient(180deg,rgba(36,41,47,0.96),rgba(22,26,30,0.97));border-bottom:1px solid rgba(0,0,0,0.7);box-shadow:inset 0 -1px 0 rgba(255,255,255,0.05),0 2px 8px rgba(0,0,0,0.35)">
+        <span style="display:block;flex-shrink:0;cursor:pointer;border-radius:1px;width:3px;height:14px;margin:0 2px 0 0;background:repeating-linear-gradient(180deg,rgba(255,255,255,0.28) 0 1px,transparent 1px 3px);box-shadow:1px 0 0 rgba(0,0,0,0.5)"></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌖</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✥</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⟳</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⤢</span></span>
+        <span style="display:block;padding:0 3px;align-self:stretch"><span style="display:block;width:1px;margin:4px 0;min-height:16px;height:100%;background:rgba(0,0,0,0.6);box-shadow:1px 0 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:2px;padding-bottom:0px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,oklch(0.62 0.1 200),oklch(0.7 0.11 200));border:1px solid rgba(0,0,0,0.6);box-shadow:inset 0 2px 4px oklch(0.32 0.07 200), inset 0 1px 0 oklch(0.55 0.09 200);color:#eafaff;text-shadow:0 -1px 0 oklch(0.38 0.08 200)">▢</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✎</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌫</span></span>
+        <span style="display:block;padding:0 3px;align-self:stretch"><span style="display:block;width:1px;margin:4px 0;min-height:16px;height:100%;background:rgba(0,0,0,0.6);box-shadow:1px 0 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">☀</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">◈</span></span>
+        <span style="display:block;padding:0 3px;align-self:stretch"><span style="display:block;width:1px;margin:4px 0;min-height:16px;height:100%;background:rgba(0,0,0,0.6);box-shadow:1px 0 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⟺</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌗</span></span>
+      </div>
+      <div style="flex:1;background:radial-gradient(circle at 62% 46%,#2c5a66,#0c1c23 70%)"></div>
+    </div>
+  </div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;flex-direction:column;gap:3px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8fa0a8">Tooltip</div>
+    <div style="font-size:12px;line-height:1.5;color:#8b939b;max-width:70ch">No delay, no fade. Offset 7px on the strip's outward side, with the shortcut set in mono at a lower contrast than the label.</div>
+  </div>
+  <div style="padding:0;border:1px solid rgba(255,255,255,0.07);background:linear-gradient(160deg,#10171c 0%,#060809 55%,#0a0d0f 100%)">
+    <div style="display:flex;min-height:150px">
+      <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;padding:3px;background:linear-gradient(90deg,rgba(36,41,47,0.96),rgba(22,26,30,0.97));border-right:1px solid rgba(0,0,0,0.7);box-shadow:inset -1px 0 0 rgba(255,255,255,0.05),2px 0 8px rgba(0,0,0,0.35)">
+        <span style="display:block;flex-shrink:0;cursor:pointer;border-radius:1px;width:14px;height:3px;margin:2px 0 4px;background:repeating-linear-gradient(90deg,rgba(255,255,255,0.28) 0 1px,transparent 1px 3px);box-shadow:0 1px 0 rgba(0,0,0,0.5)"></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⌖</span></span>
+        <span style="position:relative;display:block">
+          <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.24),rgba(255,255,255,0.11));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.28);color:#eef2f6;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✥</span></span>
+          <span style="position:absolute;z-index:60;white-space:nowrap;display:flex;align-items:center;gap:7px;top:2px;left:calc(100% + 7px);padding:3px 7px;border-radius:1px;font-size:11px;color:#e4e9ee;background:rgba(28,33,38,0.96);backdrop-filter:blur(14px);border:1px solid rgba(0,0,0,0.7);box-shadow:0 6px 18px rgba(0,0,0,0.6),inset 0 1px 0 rgba(255,255,255,0.11)">Move<span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8d959d">W</span></span>
+        </span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⟳</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">⤢</span></span>
+      </div>
+      <div style="flex:1;background:radial-gradient(circle at 62% 46%,#2c5a66,#0c1c23 70%)"></div>
+    </div>
+  </div>
+</section>
+
+<section style="display:flex;flex-direction:column;gap:12px">
+  <div style="display:flex;flex-direction:column;gap:3px">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#8fa0a8">Dock popover</div>
+    <div style="font-size:12px;line-height:1.5;color:#8b939b;max-width:70ch">Opened by the ⋯ overflow key, the drag grip, or a right-click anywhere on the strip. Same sheet style as a menu, narrowed to 142px, with a mono uppercase title row and a radio dot on the current edge.</div>
+  </div>
+  <div style="padding:0;border:1px solid rgba(255,255,255,0.07);background:linear-gradient(160deg,#10171c 0%,#060809 55%,#0a0d0f 100%)">
+    <div style="display:flex;min-height:230px">
+      <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;padding:3px;background:linear-gradient(90deg,rgba(36,41,47,0.96),rgba(22,26,30,0.97));border-right:1px solid rgba(0,0,0,0.7);box-shadow:inset -1px 0 0 rgba(255,255,255,0.05),2px 0 8px rgba(0,0,0,0.35)">
+        <span style="display:block;flex-shrink:0;cursor:pointer;border-radius:1px;width:14px;height:3px;margin:2px 0 4px;background:repeating-linear-gradient(90deg,rgba(255,255,255,0.28) 0 1px,transparent 1px 3px);box-shadow:0 1px 0 rgba(0,0,0,0.5)"></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:2px;padding-bottom:0px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,oklch(0.62 0.1 200),oklch(0.7 0.11 200));border:1px solid rgba(0,0,0,0.6);box-shadow:inset 0 2px 4px oklch(0.32 0.07 200), inset 0 1px 0 oklch(0.55 0.09 200);color:#eafaff;text-shadow:0 -1px 0 oklch(0.38 0.08 200)">⌖</span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">✥</span></span>
+        <span style="display:block;padding:3px 0;align-self:stretch"><span style="display:block;height:1px;margin:0 3px;min-height:1px;background:rgba(0,0,0,0.6);box-shadow:0 1px 0 rgba(255,255,255,0.07)"></span></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-top:0px;padding-bottom:2px;cursor:pointer;user-select:none"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:linear-gradient(180deg,rgba(255,255,255,0.16),rgba(255,255,255,0.06));border:1px solid rgba(0,0,0,0.45);box-shadow:inset 0 1px 0 rgba(255,255,255,0.18);color:#b6bec5;text-shadow:0 -1px 0 rgba(0,0,0,0.55)">▢</span></span>
+        <span style="flex:1"></span>
+        <span style="display:block;border-radius:1px;background:transparent;padding-bottom:2px;cursor:pointer"><span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;box-sizing:border-box;border-radius:1px;font-size:12px;line-height:1;background:rgba(255,255,255,0.1);border:1px solid rgba(0,0,0,0.4);box-shadow:inset 0 1px 0 rgba(255,255,255,0.12);color:#eef2f6">⋯</span></span>
+        <span style="position:absolute;bottom:4px;left:calc(100% + 4px);display:flex;flex-direction:column;min-width:142px;padding:3px;border-radius:1px;background:linear-gradient(180deg,rgba(30,35,40,0.96),rgba(20,24,28,0.97));backdrop-filter:blur(22px);border:1px solid rgba(0,0,0,0.75);box-shadow:0 16px 40px rgba(0,0,0,0.7),0 2px 6px rgba(0,0,0,0.5),inset 0 1px 0 rgba(255,255,255,0.12),inset 0 -1px 0 rgba(0,0,0,0.5)">
+          <span style="display:block;padding:4px 8px 5px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:#737c85">Dock toolbar</span>
+          <span style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;border-radius:1px;font-size:11.5px;cursor:pointer;user-select:none;white-space:nowrap;background:transparent;color:#dbe1e7"><span style="width:8px;font-size:13px;line-height:1;color:transparent">•</span>Top</span>
+          <span style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;border-radius:1px;font-size:11.5px;cursor:pointer;user-select:none;white-space:nowrap;background:oklch(0.74 0.11 200);color:#041418"><span style="width:8px;font-size:13px;line-height:1;color:transparent">•</span>Right</span>
+          <span style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;border-radius:1px;font-size:11.5px;cursor:pointer;user-select:none;white-space:nowrap;background:transparent;color:#dbe1e7"><span style="width:8px;font-size:13px;line-height:1;color:transparent">•</span>Bottom</span>
+          <span style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;border-radius:1px;font-size:11.5px;cursor:pointer;user-select:none;white-space:nowrap;background:transparent;color:#dbe1e7"><span style="width:8px;font-size:13px;line-height:1;color:oklch(0.8 0.1 200)">•</span>Left</span>
+        </span>
+      </div>
+      <div style="flex:1;background:radial-gradient(circle at 62% 46%,#2c5a66,#0c1c23 70%)"></div>
+    </div>
+  </div>
+</section>
+</div>
+</body>
+</html>

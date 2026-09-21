@@ -25,10 +25,8 @@ fdsm-ttf-parser = "0.2"
 ttf-parser = "0.25"
 nalgebra = "0.34"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-# Bundled default UI font (Noto Sans regular/bold/italic/bold-italic). Optional,
-# enabled by the default `bundled-font` feature so the UI renders identically on
-# every machine without depending on installed system fonts.
-notosans = { version = "0.1.0", optional = true }
+# The IBM Plex font files live under assets/fonts/ibm-plex/ and are embedded
+# directly by the bundled-font feature. See that directory's OFL-1.1 notice.
 # Blocking executor used only to create a headless wgpu adapter/device in
 # `render::capture::HeadlessGpu`. Zero transitive dependencies.
 pollster = { version = "0.3", optional = true }
@@ -45,9 +43,10 @@ syntax-highlighting = ["dep:tree-sitter-highlight"]
 syntax-lua = ["syntax-highlighting", "dep:tree-sitter-lua"]
 # Emit tracing spans around the render path for Tracy profiling.
 tracy = ["dep:tracing"]
-# Embed Noto Sans and register it as the default sans-serif family. Disable
-# (`--no-default-features`) to drop ~1.5 MB and fall back to system fonts only.
-bundled-font = ["dep:notosans"]
+# Embed IBM Plex Sans (the default UI face) and IBM Plex Mono (the technical
+# companion face). Disable (`--no-default-features`) to drop ~1.5 MB and fall
+# back to system fonts only.
+bundled-font = []
 # Offscreen rendering without a window (`HeadlessGpu`). The lower-level
 # `capture_draw_list`/`capture_layers`/`write_png` helpers need no async runtime
 # and are always available; only device creation needs `pollster`. Default-on so
@@ -64,7 +63,6 @@ winit = "0.30"
 pollster = "0.3"
 env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png"] }
-notosans = "0.1.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[example]]

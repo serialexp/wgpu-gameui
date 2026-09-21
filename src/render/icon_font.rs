@@ -171,10 +171,10 @@ mod tests {
     use super::*;
 
     /// A second, distinct face to register. Any parseable TTF works; the bundled
-    /// Noto face is `'static` and always present under the default features.
+    /// IBM Plex Sans face is `'static` and always present under the default features.
     #[cfg(feature = "bundled-font")]
     fn second_font() -> &'static [u8] {
-        notosans::REGULAR_TTF
+        include_bytes!("../../assets/fonts/ibm-plex/IBMPlexSans-Regular.ttf")
     }
 
     #[test]

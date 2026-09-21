@@ -1,8 +1,8 @@
 # Menubar — Design
 
-Status: partial — phases 1 and 2 (input foundations, the one-level widget) landed; phases 2b+ outstanding
+Status: partial — phases 1 and 2 plus reusable context menus landed; phases 2b+ outstanding
 Owner: Bart
-Last updated: 2026-09-15
+Last updated: 2026-09-21
 
 ## Implementation status
 
@@ -37,6 +37,13 @@ note) — there is no "implemented but not in the gallery" state.
       list now captures edges at frame-top and a closed list claims nothing, so
       the opening edge cannot also select. Pinned by
       `a_closed_dropdown_does_not_claim_the_confirm_edge_it_opens_on`.
+- [x] **Reusable context-menu slice.** `ContextMenu` reuses `MenuItem` for rows,
+      separators, checks, shortcuts and stable activations; `ContextMenuState`
+      owns cursor anchoring, viewport-clamped placement, modal-layer capture,
+      hover/keyboard selection, activation, and Escape/outside-click dismissal.
+      Tree rows report hover/right-click and secondary-click selection/focus
+      without disclosure or action side effects. Unit coverage and a focused
+      widget-gallery state exercise the integration.
 
 ### Outstanding
 
@@ -130,8 +137,9 @@ note) — there is no "implemented but not in the gallery" state.
       mirroring `TreeAction`).
 - [ ] **Defer — `place_popup` back-fill into `Dropdown`.** The dropdown cannot
       flip or shift today (`src/widgets/dropdown.rs:161`).
-- [ ] **Defer — using `Menu` for context menus.** The data model should serve
-      right-click menus; no API is designed for it here.
+- [ ] **Defer — recursive context-menu submenus.** Context menus reuse
+      `MenuItem` and render submenu affordances, but child-column interaction
+      remains part of the shared menu recursion phase.
 - [ ] **Defer — accessibility/semantic output.** Covered by the `TODO.md` P2
       semantic-output item; nothing here emits semantics.
 

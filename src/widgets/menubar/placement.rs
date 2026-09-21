@@ -9,10 +9,10 @@ use crate::layout::Rect;
 
 use super::model::SubmenuSide;
 
-/// Gap between a bar label and the column that drops below it, in pixels. Small:
-/// a drop is visually attached to its label, and the gap only keeps the column's
-/// border from touching the strip.
-pub(crate) const DROP_GAP: f32 = 2.0;
+/// Gap between a bar label and the column that drops below it. The Forge sheet
+/// is physically attached to the 26px title strip, so its top edge starts exactly
+/// at the strip's bottom edge.
+pub(crate) const DROP_GAP: f32 = 0.0;
 
 /// Where a column goes, given the label it hangs off, its own measured size, the
 /// viewport it must stay inside, and the preferred side.

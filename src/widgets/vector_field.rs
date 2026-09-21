@@ -321,7 +321,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
         // 2 rows × 3 cells: wells + tags + row labels + values + axis glyphs.
-        assert!(list.chrome_instances.len() >= 12);
+        assert!(list.chrome_instance_count() >= 12);
         assert_eq!(list.texts.len(), 2 + 6 + 6);
     }
 }

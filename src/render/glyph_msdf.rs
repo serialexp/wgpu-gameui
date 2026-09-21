@@ -183,7 +183,11 @@ mod tests {
     use super::*;
 
     fn test_face() -> Face<'static> {
-        Face::parse(notosans::REGULAR_TTF, 0).expect("parse NotoSans")
+        Face::parse(
+            include_bytes!("../../assets/fonts/ibm-plex/IBMPlexSans-Regular.ttf"),
+            0,
+        )
+        .expect("parse IBM Plex Sans")
     }
 
     fn glyph_for(face: &Face, c: char) -> GlyphId {

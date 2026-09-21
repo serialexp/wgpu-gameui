@@ -224,8 +224,11 @@ impl ApplicationHandler for App {
             .expect("decode demo image");
 
         // Load a font from bytes and select it per-`TextBlock`.
-        let custom_font = wgpu_gameui::load_font_bytes(&font_for_loading, notosans::REGULAR_TTF)
-            .expect("load custom font");
+        let custom_font = wgpu_gameui::load_font_bytes(
+            &font_for_loading,
+            include_bytes!("../assets/fonts/ibm-plex/IBMPlexMono-Regular.ttf"),
+        )
+        .expect("load custom font");
 
         self.gpu = Some(Gpu {
             surface,
@@ -648,7 +651,7 @@ impl ApplicationHandler for App {
                 );
                 // A line shaped in the runtime-loaded custom font.
                 list.text(
-                    TextBlock::new("Custom font: Noto Sans", 232.0, 322.0)
+                    TextBlock::new("Custom font: IBM Plex Mono", 232.0, 322.0)
                         .with_size(16.0)
                         .with_color(255, 228, 160)
                         .with_font(gpu.custom_font.clone()),

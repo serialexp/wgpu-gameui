@@ -11,6 +11,7 @@ mod button;
 mod checkbox;
 mod color_picker;
 mod combo_box;
+mod context_menu;
 mod curve_editor;
 mod doc_tabs;
 mod dock_panel;
@@ -47,6 +48,7 @@ mod tag_input;
 mod text_input;
 mod toast;
 mod toggle;
+#[cfg(feature = "phosphor-icons")]
 mod toolbar;
 mod tooltip;
 mod tree;
@@ -54,8 +56,10 @@ mod vector_field;
 
 pub use app_shell::{
     AppShell, SHELL_DRAG_BOTTOM_SPLITTER, SHELL_DRAG_LEFT_SPLITTER, SHELL_DRAG_RIGHT_SPLITTER,
-    SHELL_DRAG_TOOLBAR_GRIP, ShellChromeOutput, ShellLayout,
+    ShellChromeOutput, ShellLayout,
 };
+#[cfg(feature = "phosphor-icons")]
+pub use app_shell::{SHELL_DRAG_TOOLBAR_GRIP, SHELL_TOOLBAR_ID};
 pub use asset_grid::{AssetGrid, AssetGridOutput};
 pub use badge::{ChipOutput, badge, chip, keycap};
 pub use banner::{Banner, Severity};
@@ -68,6 +72,7 @@ pub use color_picker::{ColorPicker, ColorPickerOutput};
 pub use combo_box::{
     ComboOutput, draw_list as draw_combo_list, draw_trigger as draw_combo_trigger,
 };
+pub use context_menu::{ContextMenu, ContextMenuState, place_context_menu};
 pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
 pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
@@ -77,8 +82,8 @@ pub use drag_handle::{DragHandle, DragHandleOutput};
 pub use draw_list::IconMsdf;
 pub(crate) use draw_list::PaintCmd;
 pub use draw_list::{
-    ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw, NineSliceDraw, NineSliceId,
-    PrimCounts, Vertex,
+    AnalyticInstance, ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw,
+    NineSliceDraw, NineSliceId, PrimCounts, Vertex,
 };
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use focus::{FocusId, FocusState};
@@ -121,7 +126,11 @@ pub use tag_input::{TagOutput, draw as draw_tag_input};
 pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
 pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
 pub use toggle::Toggle;
-pub use toolbar::{ToolDef, Toolbar, ToolbarEdge, ToolbarItem, ToolbarOutput, ToolbarState};
+#[cfg(feature = "phosphor-icons")]
+pub use toolbar::{
+    ToolDef, Toolbar, ToolbarEdge, ToolbarEvent, ToolbarId, ToolbarItem, ToolbarOutput,
+    ToolbarState,
+};
 pub use tooltip::{TooltipContent, TooltipLayer};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};

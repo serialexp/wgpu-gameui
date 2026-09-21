@@ -55,9 +55,10 @@ pub type FontSystemHandle = Arc<Mutex<FontSystem>>;
 /// Create a new shared `FontSystem` handle.
 ///
 /// `FontSystem::new()` loads the host's system fonts (used for broad script /
-/// emoji fallback). With the default `bundled-font` feature on, the bundled Noto
-/// Sans faces are also embedded and registered as the default sans-serif (see
-/// [`register_bundled_fonts`]), so unstyled text renders identically on every
+/// emoji fallback). With the default `bundled-font` feature on, IBM Plex Sans
+/// is embedded and registered as the default sans-serif; IBM Plex Mono is
+/// registered as the companion technical face (see [`register_bundled_fonts`]
+/// and [`bundled_mono_font`]). Thus unstyled text renders identically on every
 /// machine rather than depending on which system font happens to be installed.
 pub fn shared_font_system() -> FontSystemHandle {
     let handle = Arc::new(Mutex::new(FontSystem::new()));
@@ -65,14 +66,17 @@ pub fn shared_font_system() -> FontSystemHandle {
     handle
 }
 
-/// Embed the bundled Noto Sans faces (regular/bold/italic/bold-italic) into `fs`
-/// and register the family as the default sans-serif, so `Family::SansSerif` —
-/// and any [`TextBlock`] without an explicit font — resolves to it
-/// deterministically on every machine instead of an OS-dependent system font.
-/// The bold/italic faces share the family name, so [`TextBlock::bold`] /
-/// [`TextBlock::italic`] select them on the default font too.
+/// Embed IBM Plex Sans (regular/bold/italic/bold-italic) into `fs` and register
+/// it as the default sans-serif, so `Family::SansSerif` — and any [`TextBlock`]
+/// without an explicit font — resolves to it deterministically on every machine
+/// instead of an OS-dependent system font. The bold/italic faces share the family
+/// name, so [`TextBlock::bold`] / [`TextBlock::italic`] select them by default.
 ///
-/// Returns the family [`FontHandle`] (also usable directly via
+/// This also registers IBM Plex Mono's matching four faces, returned by
+/// [`bundled_mono_font`] for applications' technical UI (coordinates, shortcuts,
+/// status readouts, and other data-dense text).
+///
+/// Returns the IBM Plex Sans family [`FontHandle`] (also usable directly via
 /// [`TextBlock::with_font`]). With the `bundled-font` feature **disabled** this is
 /// a no-op that returns `None` and the default stays the system sans-serif.
 /// [`shared_font_system`] calls this for you; call it yourself only when you
@@ -80,25 +84,101 @@ pub fn shared_font_system() -> FontSystemHandle {
 pub fn register_bundled_fonts(fs: &FontSystemHandle) -> Option<FontHandle> {
     #[cfg(feature = "bundled-font")]
     {
-        // Load all four faces; they share the "Noto Sans" family so weight/style
-        // selection picks the right one. Only the regular handle is returned.
-        let regular = load_font_bytes(fs, notosans::REGULAR_TTF).ok()?;
-        let _ = load_font_bytes(fs, notosans::BOLD_TTF);
-        let _ = load_font_bytes(fs, notosans::ITALIC_TTF);
-        let _ = load_font_bytes(fs, notosans::BOLD_ITALIC_TTF);
+        let sans = load_font_family(
+            fs,
+            IBM_PLEX_SANS_REGULAR_TTF,
+            IBM_PLEX_SANS_BOLD_TTF,
+            IBM_PLEX_SANS_ITALIC_TTF,
+            IBM_PLEX_SANS_BOLD_ITALIC_TTF,
+        )
+        .ok()?;
+        let _mono = load_font_family(
+            fs,
+            IBM_PLEX_MONO_REGULAR_TTF,
+            IBM_PLEX_MONO_BOLD_TTF,
+            IBM_PLEX_MONO_ITALIC_TTF,
+            IBM_PLEX_MONO_BOLD_ITALIC_TTF,
+        )
+        .ok()?;
         {
             let mut guard = fs.lock().expect("FontSystem poisoned");
             guard
                 .db_mut()
-                .set_sans_serif_family(regular.family().to_string());
+                .set_sans_serif_family(sans.family().to_string());
         }
-        Some(regular)
+        Some(sans)
     }
     #[cfg(not(feature = "bundled-font"))]
     {
         let _ = fs;
         None
     }
+}
+
+/// Returns the bundled IBM Plex Mono family handle after registering the bundled
+/// faces into `fs`. Use it with [`TextBlock::with_font`] for technical UI such as
+/// coordinates, shortcuts, status readouts, or compact all-caps labels.
+///
+/// With the `bundled-font` feature disabled this returns `None` and does not load
+/// a font. [`shared_font_system`] already registers the family, so normal callers
+/// only need this function to obtain the handle.
+pub fn bundled_mono_font(fs: &FontSystemHandle) -> Option<FontHandle> {
+    #[cfg(feature = "bundled-font")]
+    {
+        load_font_family(
+            fs,
+            IBM_PLEX_MONO_REGULAR_TTF,
+            IBM_PLEX_MONO_BOLD_TTF,
+            IBM_PLEX_MONO_ITALIC_TTF,
+            IBM_PLEX_MONO_BOLD_ITALIC_TTF,
+        )
+        .ok()
+    }
+    #[cfg(not(feature = "bundled-font"))]
+    {
+        let _ = fs;
+        None
+    }
+}
+
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_SANS_REGULAR_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexSans-Regular.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_SANS_BOLD_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexSans-Bold.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_SANS_ITALIC_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexSans-Italic.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_SANS_BOLD_ITALIC_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexSans-BoldItalic.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_MONO_REGULAR_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexMono-Regular.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_MONO_BOLD_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexMono-Bold.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_MONO_ITALIC_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexMono-Italic.ttf");
+#[cfg(feature = "bundled-font")]
+const IBM_PLEX_MONO_BOLD_ITALIC_TTF: &[u8] =
+    include_bytes!("../assets/fonts/ibm-plex/IBMPlexMono-BoldItalic.ttf");
+
+#[cfg(feature = "bundled-font")]
+fn load_font_family(
+    fs: &FontSystemHandle,
+    regular: &'static [u8],
+    bold: &'static [u8],
+    italic: &'static [u8],
+    bold_italic: &'static [u8],
+) -> Result<FontHandle, String> {
+    let regular = load_font_bytes(fs, regular)?;
+    let _ = load_font_bytes(fs, bold)?;
+    let _ = load_font_bytes(fs, italic)?;
+    let _ = load_font_bytes(fs, bold_italic)?;
+    Ok(regular)
 }
 
 /// Handle to a font loaded into the shared [`FontSystem`], identified by its
@@ -4312,16 +4392,12 @@ mod tests {
         assert_eq!(before, after);
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    fn load_font_bytes_returns_family_name() {
+    fn bundled_sans_font_returns_family_name() {
         let fs = shared_font_system();
-        let handle = load_font_bytes(&fs, notosans::REGULAR_TTF).expect("load noto");
-        assert!(!handle.family().is_empty());
-        assert!(
-            handle.family().to_lowercase().contains("noto"),
-            "expected a Noto family, got {:?}",
-            handle.family()
-        );
+        let handle = super::register_bundled_fonts(&fs).expect("register bundled fonts");
+        assert_eq!(handle.family(), "IBM Plex Sans");
     }
 
     #[test]
@@ -4330,12 +4406,13 @@ mod tests {
         assert!(load_font_bytes(&fs, &[0u8, 1, 2, 3, 4, 5, 6, 7]).is_err());
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn loaded_font_is_actually_selected_during_shaping() {
         // The real proof that `with_font` works: shape a string selecting the
         // loaded family and confirm cosmic-text resolved glyphs to *that* face.
         let fs = shared_font_system();
-        let handle = load_font_bytes(&fs, notosans::REGULAR_TTF).unwrap();
+        let handle = super::register_bundled_fonts(&fs).unwrap();
         let mut guard = fs.lock().unwrap();
         let mut buffer = Buffer::new(&mut guard, Metrics::new(20.0, 25.0));
         buffer.set_text(
@@ -4351,23 +4428,22 @@ mod tests {
         assert_eq!(family, handle.family());
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn measure_with_font_is_cached_per_font() {
-        // Default and custom-font measurements live under distinct cache keys and
-        // each round-trips. (We don't assert the metrics differ — the system
-        // default sans-serif may itself be Noto on some hosts.)
+        // Default and explicit bundled-mono measurements live under distinct
+        // cache keys and each round-trips.
         let fs = shared_font_system();
-        let handle = load_font_bytes(&fs, notosans::REGULAR_TTF).unwrap();
+        let mono = super::bundled_mono_font(&fs).unwrap();
         let mut measurer = TextMeasurer::with_font_system(fs);
         let default = measurer.measure("Hello world", 16.0, None);
-        let noto = measurer.measure_with_font("Hello world", 16.0, None, Some(&handle));
-        assert!(default.0 > 0.0 && noto.0 > 0.0);
-        // Re-measuring each returns its own cached value (proves keys are distinct
-        // when the metrics happen to coincide, and stable when they don't).
+        let mono_measure = measurer.measure_with_font("Hello world", 16.0, None, Some(&mono));
+        assert!(default.0 > 0.0 && mono_measure.0 > 0.0);
+        // Re-measuring each returns its own cached value.
         assert_eq!(measurer.measure("Hello world", 16.0, None), default);
         assert_eq!(
-            measurer.measure_with_font("Hello world", 16.0, None, Some(&handle)),
-            noto
+            measurer.measure_with_font("Hello world", 16.0, None, Some(&mono)),
+            mono_measure
         );
     }
 
@@ -4378,9 +4454,9 @@ mod tests {
         assert_eq!(plain.align, TextAlign::Start);
 
         let styled = TextBlock::new("x", 0.0, 0.0)
-            .with_font(FontHandle("Noto Sans".to_string()))
+            .with_font(FontHandle("IBM Plex Sans".to_string()))
             .with_align(TextAlign::Center);
-        assert_eq!(styled.font.as_ref().unwrap().family(), "Noto Sans");
+        assert_eq!(styled.font.as_ref().unwrap().family(), "IBM Plex Sans");
         assert_eq!(styled.align, TextAlign::Center);
     }
 
@@ -4683,9 +4759,9 @@ mod tests {
     fn with_font_opt_only_applies_some() {
         let none = TextBlock::new("x", 0.0, 0.0).with_font_opt(None);
         assert!(none.font.is_none());
-        let some =
-            TextBlock::new("x", 0.0, 0.0).with_font_opt(Some(FontHandle("Noto Sans".to_string())));
-        assert_eq!(some.font.as_ref().unwrap().family(), "Noto Sans");
+        let some = TextBlock::new("x", 0.0, 0.0)
+            .with_font_opt(Some(FontHandle("IBM Plex Sans".to_string())));
+        assert_eq!(some.font.as_ref().unwrap().family(), "IBM Plex Sans");
         // Some over an existing font replaces it; None leaves it untouched.
         let kept = TextBlock::new("x", 0.0, 0.0)
             .with_font(FontHandle("A".into()))
@@ -4700,13 +4776,13 @@ mod tests {
         assert_eq!(super::style_disc(Style::Oblique), 2);
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn bold_measures_wider_than_regular() {
-        // Load the regular + bold Noto faces (same "Noto Sans" family); the
-        // weight selects between them at shape time. GPU-free — measurer only.
+        // The regular + bold IBM Plex Sans faces share one family; weight selects
+        // between them at shape time. GPU-free — measurer only.
         let fs = shared_font_system();
-        let regular = load_font_bytes(&fs, notosans::REGULAR_TTF).unwrap();
-        let _bold = load_font_bytes(&fs, notosans::BOLD_TTF).unwrap();
+        let regular = super::register_bundled_fonts(&fs).unwrap();
         let mut m = TextMeasurer::with_font_system(fs);
         let text = "The quick brown fox jumps";
         let (rw, _) = m.measure_styled(
@@ -4746,8 +4822,8 @@ mod tests {
     #[cfg(feature = "bundled-font")]
     #[test]
     fn bundled_font_is_default_sans_serif() {
-        // `shared_font_system` registers the bundled Noto faces + sets the
-        // default sans-serif, so `Family::SansSerif` resolves to Noto.
+        // `shared_font_system` registers bundled IBM Plex Sans and makes it the
+        // default sans-serif, so `Family::SansSerif` resolves to that family.
         let fs = shared_font_system();
         let mut guard = fs.lock().unwrap();
 
@@ -4765,9 +4841,9 @@ mod tests {
             .face(font_id)
             .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
             .unwrap_or_default();
-        assert!(
-            fam.to_lowercase().contains("noto"),
-            "default sans-serif should be the bundled Noto family, got {fam:?}"
+        assert_eq!(
+            fam, "IBM Plex Sans",
+            "default sans-serif should be the bundled Plex Sans family"
         );
 
         // Bold weight selects a heavier face from the same bundled family.
@@ -4785,6 +4861,28 @@ mod tests {
             bold_weight >= 600,
             "bold weight should select a bold face (>=600), got {bold_weight}"
         );
+    }
+
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn bundled_mono_font_selects_the_technical_companion_family() {
+        let fs = shared_font_system();
+        let mono = super::bundled_mono_font(&fs).expect("bundled mono is available");
+        assert_eq!(mono.family(), "IBM Plex Mono");
+
+        let mut guard = fs.lock().unwrap();
+        let mut buffer = Buffer::new(&mut guard, Metrics::new(18.0, 22.0));
+        buffer.set_text(
+            &mut guard,
+            "x=42",
+            &Attrs::new().family(Family::Name(mono.family())),
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut guard, false);
+        let font_id = buffer.layout_runs().next().unwrap().glyphs[0].font_id;
+        let face = guard.db().face(font_id).expect("resolved face exists");
+        let family = face.families.first().map(|(name, _)| name.as_str());
+        assert_eq!(family, Some("IBM Plex Mono"));
     }
 
     #[test]
@@ -4983,7 +5081,7 @@ mod tests {
 
     // ----- Shaped-text cache (GPU-gated, like the chrome parity test) -----
 
-    /// Build a headless `TextRenderer` + a loaded Noto font handle, or `None` if
+    /// Build a headless `TextRenderer` + a bundled Plex Sans handle, or `None` if
     /// no GPU adapter is available (so the `#[ignore]`d tests below no-op safely).
     fn headless_renderer() -> Option<(wgpu::Device, wgpu::Queue, TextRenderer, FontHandle)> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -5001,7 +5099,7 @@ mod tests {
         ))
         .ok()?;
         let fs = shared_font_system();
-        let font = load_font_bytes(&fs, notosans::REGULAR_TTF).expect("load noto");
+        let font = super::register_bundled_fonts(&fs).expect("register bundled fonts");
         let renderer = TextRenderer::with_font_system(
             &device,
             &queue,
@@ -5359,7 +5457,7 @@ mod tests {
     fn vmetrics_default_font_in_plausible_ranges() {
         let mut m = TextMeasurer::new();
         let v = m.vmetrics(None, Weight::NORMAL, Style::Normal);
-        // Empirically Noto Sans: baseline ~1.013, x-height ~0.536, cap ~0.714.
+        // IBM Plex Sans stays in these broad optical-centering-safe ranges.
         assert!(
             v.baseline_ratio > 0.9 && v.baseline_ratio < 1.1,
             "baseline {v:?}"
@@ -5835,8 +5933,11 @@ mod icon_tests {
     fn two_icon_fonts_resolve_to_distinct_tiles_for_the_same_glyph_index() {
         use crate::render::register_icon_font;
 
-        let other = register_icon_font("text-icons-under-test", notosans::REGULAR_TTF)
-            .expect("noto parses as a face");
+        let other = register_icon_font(
+            "text-icons-under-test",
+            include_bytes!("../assets/fonts/ibm-plex/IBMPlexSans-Regular.ttf"),
+        )
+        .expect("IBM Plex Sans parses as a face");
         let phosphor = PhosphorIcon::Gear.glyph().expect("gear resolves");
         // Deliberately the *same* glyph index in the other font — the font id is
         // the only thing that may distinguish these two.

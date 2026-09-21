@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-09-21T02:15:49.974Z",
+  "browser": "153.0.8010.12",
+  "engine": "Playwright Chromium",
+  "source": "reference.html",
+  "viewport_css_px": {
+    "width": 1440,
+    "height": 1400
+  },
+  "device_scale_factors": [
+    1,
+    1.5,
+    2
+  ],
+  "backdrops": [
+    "alpha",
+    "black",
+    "white"
+  ],
+  "command": "/home/bart/.nvm/versions/node/v24.13.0/bin/node /home/bart/Projects/serialexp/wgpu-gameui/fixtures/browser/gpu-chrome-shadows/capture.mjs"
+}

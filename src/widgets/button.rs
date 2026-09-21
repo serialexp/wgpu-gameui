@@ -602,11 +602,11 @@ mod tests {
             .bare()
             .draw(rect(), &mut with_ctx(&mut bare, &mut focus, &theme, &input));
         assert_eq!(
-            chrome.chrome_instances.len(),
+            chrome.chrome_instance_count(),
             3,
             "chrome draws plinth + gradient face + highlight band"
         );
-        assert!(bare.chrome_instances.is_empty(), "bare draws no chrome");
+        assert!(bare.chrome_instance_count() == 0, "bare draws no chrome");
         assert!(
             bare.vertices.is_empty(),
             "bare idle draws no background geometry"
@@ -638,7 +638,7 @@ mod tests {
             ),
         );
         assert!(
-            hot.chrome_instances.len() > idle.chrome_instances.len(),
+            hot.chrome_instance_count() > idle.chrome_instance_count(),
             "bare hover should add an overlay quad (instanced)"
         );
     }
@@ -801,7 +801,7 @@ mod tests {
             &mut with_ctx(&mut focused, &mut focus, &theme, &idle),
         );
         assert!(
-            focused.chrome_instances.len() > unfocused.chrome_instances.len(),
+            focused.chrome_instance_count() > unfocused.chrome_instance_count(),
             "focus ring should add outline geometry when focused"
         );
     }
@@ -863,7 +863,7 @@ mod tests {
         let mut focus = FocusState::new();
         Button::new("Go").draw(rect(), &mut with_ctx(&mut base, &mut focus, &theme, &input));
         assert_eq!(
-            base.chrome_instances[1].bg,
+            base.chrome_instance(1).unwrap().bg,
             sheen_over(theme.button, theme.face_top)
         );
 
@@ -879,7 +879,7 @@ mod tests {
                 .with_style(&overlay),
         );
         assert_eq!(
-            styled.chrome_instances[1].bg,
+            styled.chrome_instance(1).unwrap().bg,
             sheen_over([0.7, 0.1, 0.2, 1.0], theme.face_top)
         );
     }
@@ -944,10 +944,13 @@ mod tests {
         Button::new("Go")
             .animated(1)
             .draw(rect(), &mut with_ctx(&mut anim, &mut focus, &theme, &input));
-        assert_eq!(plain.chrome_instances[0].bg, anim.chrome_instances[0].bg);
         assert_eq!(
-            plain.chrome_instances[0].border,
-            anim.chrome_instances[0].border
+            plain.chrome_instance(0).unwrap().bg,
+            anim.chrome_instance(0).unwrap().bg
+        );
+        assert_eq!(
+            plain.chrome_instance(0).unwrap().border,
+            anim.chrome_instance(0).unwrap().border
         );
     }
 
@@ -969,7 +972,7 @@ mod tests {
                 .with_animations(&mut state),
         );
         assert_eq!(
-            list.chrome_instances[1].bg,
+            list.chrome_instance(1).unwrap().bg,
             sheen_over(theme.button_hover, theme.face_top_hover),
             "hovered face is fully resolved on first sight"
         );
@@ -994,7 +997,7 @@ mod tests {
                 .with_animations(&mut state),
         );
         assert_eq!(
-            l1.chrome_instances[1].bg,
+            l1.chrome_instance(1).unwrap().bg,
             sheen_over(theme.button, theme.face_top)
         );
 
@@ -1011,10 +1014,13 @@ mod tests {
         // eased label sits between idle and hover text luma in the *vertex soup*
         // — assert the discrete face instead, and that it differs from idle.
         assert_eq!(
-            l2.chrome_instances[1].bg,
+            l2.chrome_instance(1).unwrap().bg,
             sheen_over(theme.button_hover, theme.face_top_hover)
         );
-        assert_ne!(l2.chrome_instances[1].bg, l1.chrome_instances[1].bg);
+        assert_ne!(
+            l2.chrome_instance(1).unwrap().bg,
+            l1.chrome_instance(1).unwrap().bg
+        );
     }
 
     #[test]
@@ -1043,7 +1049,7 @@ mod tests {
                 .with_animations(&mut state),
         );
         assert_eq!(
-            l2.chrome_instances[1].bg,
+            l2.chrome_instance(1).unwrap().bg,
             sheen_over(theme.button_hover, theme.face_top_hover)
         );
     }

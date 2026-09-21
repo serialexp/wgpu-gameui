@@ -103,7 +103,7 @@ fn a_widget_collapsed_to_nothing_is_caught() {
     list.quad(10.0, 10.0, inner_width, 24.0, [1.0, 1.0, 1.0, 1.0]);
     list.pop_debug_scope();
 
-    assert!(list.vertices.is_empty() && list.chrome_instances.is_empty());
+    assert!(list.vertices.is_empty() && list.chrome_instance_count() == 0);
 
     let report = DebugReport::measured(&mut list, screen());
     let c = codes(&report);

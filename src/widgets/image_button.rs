@@ -295,11 +295,11 @@ mod tests {
         // Chrome records the material (plinth + face + highlight); the
         // bare variant draws no chrome instance.
         assert_eq!(
-            chrome.chrome_instances.len(),
+            chrome.chrome_instance_count(),
             3,
             "chrome draws plinth + face + highlight"
         );
-        assert!(bare.chrome_instances.is_empty(), "bare draws no chrome");
+        assert!(bare.chrome_instance_count() == 0, "bare draws no chrome");
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
             &input_at(50.0, 50.0, false, false),
         );
         assert!(
-            hot.chrome_instances.len() > idle.chrome_instances.len(),
+            hot.chrome_instance_count() > idle.chrome_instance_count(),
             "hover overlay should add a quad (instanced)"
         );
     }
@@ -343,7 +343,7 @@ mod tests {
             &input_at(0.0, 0.0, false, false),
         );
         assert!(
-            disabled.chrome_instances.len() > enabled.chrome_instances.len(),
+            disabled.chrome_instance_count() > enabled.chrome_instance_count(),
             "disabled dim overlay should add a quad (instanced)"
         );
     }

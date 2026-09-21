@@ -1453,10 +1453,32 @@ impl<'a> UiContext<'a> {
         self.auto_advance = enabled;
     }
 
-    /// Default widget width: the inner width of the active `UiWindow`, else
-    /// 200px. Used when a verb's width argument is `None`.
-    fn default_field_width(&self) -> f32 {
-        self.current_window_rect().map_or(200.0, |r| r.width)
+    /// Width available from the current local origin to the right edge of the
+    /// nearest containing element. An active clip is the innermost container
+    /// (including scroll viewports and dock bodies); otherwise an active
+    /// `UiWindow` supplies the bounds. Falls back to 200px when neither exists.
+    ///
+    /// Bounds are transformed back into the current local coordinate space, so
+    /// translating within a container naturally reduces the remaining width.
+    pub fn available_content_width(&mut self) -> f32 {
+        let window = self.window_stack.last().map(|window| window.rect);
+        let list = self.backend.list_mut();
+        let bounds = list.current_clip().or(window);
+        let Some(bounds) = bounds else {
+            return 200.0;
+        };
+        let local = list
+            .current_transform()
+            .inverse()
+            .transform_rect_aabb(bounds);
+        (local.x + local.width).max(0.0)
+    }
+
+    /// Default widget width is the available width of the nearest containing
+    /// element, falling back to 200px when no container is active. Used when a
+    /// verb's width argument is `None`.
+    fn default_field_width(&mut self) -> f32 {
+        self.available_content_width()
     }
 
     /// Draw a line of text in the current theme text colour using the active
@@ -2651,7 +2673,7 @@ mod tests {
         assert_eq!(returned, 17);
         assert_eq!(ui.list().current_transform(), before);
         assert_eq!(ui.place_rect(4.0, 6.0), Rect::new(98.0, 47.0, 4.0, 6.0));
-        let chrome = ui.list().chrome_instances.last().expect("quad instance");
+        let chrome = ui.list().chrome_instances().last().expect("quad instance");
         assert_eq!(chrome.rect, [110.0, 70.0, 4.0, 6.0]);
     }
 
@@ -2887,14 +2909,14 @@ mod tests {
             // After the matching pop the override is gone → theme color again.
             ui.text_button("B", Some(80.0), Some(24.0));
         }
-        assert_eq!(list.chrome_instances.len(), 6);
+        assert_eq!(list.chrome_instance_count(), 6);
         assert_eq!(
-            list.chrome_instances[1].bg,
+            list.chrome_instance(1).unwrap().bg,
             crate::widgets::sheen_over([1.0, 0.0, 0.0, 1.0], theme.face_top),
             "button under the overlay uses the overridden fill (under the sheen)"
         );
         assert_eq!(
-            list.chrome_instances[4].bg,
+            list.chrome_instance(4).unwrap().bg,
             crate::widgets::sheen_over(theme.button, theme.face_top),
             "button after pop falls back to the theme fill"
         );
@@ -2934,7 +2956,7 @@ mod tests {
         assert!(out.hovered, "pointer is over the placed zone");
         assert!(out.clicked, "primary click is reported");
         assert!(
-            list.vertices.is_empty() && list.chrome_instances.is_empty(),
+            list.vertices.is_empty() && list.chrome_instance_count() == 0,
             "a hit zone must draw nothing"
         );
     }
@@ -3005,11 +3027,11 @@ mod tests {
         }
         // A translate-only quad records one chrome instance; its world rect
         // origin should be at (100 - 10, 100 - 10) = (90, 90).
-        assert_eq!(list.chrome_instances.len(), 1);
+        assert_eq!(list.chrome_instance_count(), 1);
         assert_eq!(
             [
-                list.chrome_instances[0].rect[0],
-                list.chrome_instances[0].rect[1]
+                list.chrome_instance(0).unwrap().rect[0],
+                list.chrome_instance(0).unwrap().rect[1]
             ],
             [90.0, 90.0]
         );
@@ -3028,11 +3050,11 @@ mod tests {
         }
         // A translate-only outline records one chrome (stroke) instance; its
         // world rect origin is the box top-left (90, 90).
-        assert_eq!(list.chrome_instances.len(), 1);
+        assert_eq!(list.chrome_instance_count(), 1);
         assert_eq!(
             [
-                list.chrome_instances[0].rect[0],
-                list.chrome_instances[0].rect[1]
+                list.chrome_instance(0).unwrap().rect[0],
+                list.chrome_instance(0).unwrap().rect[1]
             ],
             [90.0, 90.0]
         );
@@ -3197,9 +3219,9 @@ mod tests {
             ui.quad(5.0, 5.0, [1.0; 4]); // base again
         }
         // Translate-only quads record chrome instances: base got 2, modal got 1.
-        assert_eq!(layers.base().chrome_instances.len(), 2);
+        assert_eq!(layers.base().chrome_instance_count(), 2);
         assert_eq!(layers.layers().len(), 1);
-        assert_eq!(layers.layers()[0].list.chrome_instances.len(), 1);
+        assert_eq!(layers.layers()[0].list.chrome_instance_count(), 1);
     }
 
     #[test]
@@ -3261,12 +3283,12 @@ mod tests {
     fn font_verbs_mutate_stack_top() {
         let mut list = DrawList::new();
         let mut ui = UiContext::new(&mut list);
-        ui.font(FontHandle("Noto Sans".into()), 24.0);
+        ui.font(FontHandle("IBM Plex Sans".into()), 24.0);
         ui.letter_spacing(2.5);
         ui.bold(true);
         ui.italic(true);
         let f = ui.current_font();
-        assert_eq!(f.font, Some(FontHandle("Noto Sans".into())));
+        assert_eq!(f.font, Some(FontHandle("IBM Plex Sans".into())));
         assert_eq!(f.size, 24.0);
         assert_eq!(f.letter_spacing, 2.5);
         assert_eq!(f.weight, Weight::BOLD);
@@ -3278,7 +3300,7 @@ mod tests {
         assert_eq!(f.size, 12.0);
         assert_eq!(f.weight, Weight::NORMAL);
         assert_eq!(f.style, Style::Italic); // unchanged
-        assert_eq!(f.font, Some(FontHandle("Noto Sans".into()))); // unchanged
+        assert_eq!(f.font, Some(FontHandle("IBM Plex Sans".into()))); // unchanged
     }
 
     #[test]
@@ -3309,7 +3331,7 @@ mod tests {
         let mut list = DrawList::new();
         {
             let mut ui = UiContext::new(&mut list);
-            ui.font(FontHandle("Noto Sans".into()), 28.0);
+            ui.font(FontHandle("IBM Plex Sans".into()), 28.0);
             ui.letter_spacing(3.0);
             ui.bold(true);
             ui.italic(true);
@@ -3317,7 +3339,7 @@ mod tests {
         }
         assert_eq!(list.texts.len(), 1);
         let block = &list.texts[0];
-        assert_eq!(block.font, Some(FontHandle("Noto Sans".into())));
+        assert_eq!(block.font, Some(FontHandle("IBM Plex Sans".into())));
         assert_eq!(block.font_size, 28.0);
         assert_eq!(block.letter_spacing, 3.0);
         assert_eq!(block.weight, Weight::BOLD);
@@ -3346,7 +3368,7 @@ mod tests {
     /// pin each affected verb to the correct position.
     fn drawn_bounds(list: &DrawList) -> Rect {
         let mut acc = Rect::zero();
-        for c in &list.chrome_instances {
+        for c in list.chrome_instances() {
             acc = acc.union(Rect::new(c.rect[0], c.rect[1], c.rect[2], c.rect[3]));
         }
         for v in &list.vertices {
@@ -3699,8 +3721,14 @@ mod tests {
         let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
         assert!(ui.icon_button(PhosphorIcon::X, None, None));
         drop(ui);
-        assert_eq!(list.chrome_instances[0].rect[2], theme.button_height);
-        assert_eq!(list.chrome_instances[0].rect[3], theme.button_height);
+        assert_eq!(
+            list.chrome_instance(0).unwrap().rect[2],
+            theme.button_height
+        );
+        assert_eq!(
+            list.chrome_instance(0).unwrap().rect[3],
+            theme.button_height
+        );
         assert_eq!(list.icons_msdf.len(), 1);
         assert!(list.texts.iter().all(|text| text.content.is_empty()));
     }
@@ -3741,9 +3769,12 @@ mod tests {
         ui.text_button("Fit me", None, None);
         drop(ui);
 
-        assert!((list.chrome_instances[0].rect[2] - expected).abs() < 0.01);
-        assert!(list.chrome_instances[0].rect[2] < 200.0);
-        assert_eq!(list.chrome_instances[0].rect[3], theme.button_height);
+        assert!((list.chrome_instance(0).unwrap().rect[2] - expected).abs() < 0.01);
+        assert!(list.chrome_instance(0).unwrap().rect[2] < 200.0);
+        assert_eq!(
+            list.chrome_instance(0).unwrap().rect[3],
+            theme.button_height
+        );
     }
 
     #[test]
@@ -3770,7 +3801,7 @@ mod tests {
             ui.text_button("OK", Some(100.0), Some(30.0));
         }
         assert_eq!(
-            list.chrome_instances[1].bg,
+            list.chrome_instance(1).unwrap().bg,
             crate::widgets::sheen_over(theme.button, theme.face_top)
         );
         state.end_frame();
@@ -3969,17 +4000,23 @@ mod tests {
     }
 
     #[test]
-    fn default_field_width_uses_window_then_fallback() {
+    fn default_field_width_uses_nearest_container_then_fallback() {
         let theme = Theme::default();
         let input = InputState::default();
         let mut state = UiState::new();
         let mut list = DrawList::new();
         let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-        // No window: fallback 200.
+        // No containing element: fallback 200.
         assert!(approx(ui.default_field_width(), 200.0));
         ui.push();
         ui.window_begin(360.0, 100.0, false, false);
         assert!(approx(ui.default_field_width(), 360.0));
+        // An inner clip is the nearest containing element and translating the
+        // cursor consumes width from its right edge.
+        ui.clip_rect(280.0, 80.0, true);
+        assert!(approx(ui.default_field_width(), 280.0));
+        ui.translate(30.0, 0.0);
+        assert!(approx(ui.default_field_width(), 250.0));
         ui.pop();
         assert!(approx(ui.default_field_width(), 200.0));
     }

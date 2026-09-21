@@ -634,7 +634,7 @@ mod tests {
             let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
             slider.draw(50.0, 0, &mut cap, rect(), &mut ctx);
         }
-        let unfocused_chrome = list.chrome_instances.len();
+        let unfocused_chrome = list.chrome_instance_count();
         // Focused.
         let mut focus = FocusState::new();
         focus.focus(42);
@@ -644,7 +644,7 @@ mod tests {
             slider.draw(50.0, 0, &mut cap, rect(), &mut ctx);
         }
         assert!(
-            list.chrome_instances.len() > unfocused_chrome,
+            list.chrome_instance_count() > unfocused_chrome,
             "focus ring adds outline geometry"
         );
     }

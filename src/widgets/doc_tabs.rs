@@ -268,8 +268,7 @@ mod tests {
         // First chrome instance is tab 0 (active, full height 24), the next is
         // tab 1 (inactive, 22).
         let h = |x: f32| {
-            list.chrome_instances
-                .iter()
+            list.chrome_instances()
                 .find(|c| (c.rect[0] - x).abs() < 0.01 && c.rect[2] > 90.0)
                 .map(|c| c.rect[3])
                 .unwrap_or(0.0)

@@ -30,12 +30,17 @@ use super::model::{
 use super::paint;
 use super::placement;
 
-/// Check-mark gutter width as a fraction of the row height. Reserved on every
-/// row (not only checked ones) so labels don't shift when a check toggles — the
-/// classic menu layout.
-const CHECK_GUTTER: f32 = 0.75;
-/// Half-extent of the submenu chevron, as a fraction of the row height.
-const CHEVRON: f32 = 0.18;
+/// Literal Forge menu-sheet padding around the row stack.
+const SHEET_PADDING: f32 = 3.0;
+/// Horizontal row inset from the sheet edge.
+const ROW_PADDING: f32 = 8.0;
+/// Menu item typography from the handoff.
+const ROW_FONT_SIZE: f32 = 11.5;
+const HINT_FONT_SIZE: f32 = 10.0;
+const CHECK_WIDTH: f32 = 10.0;
+const CHEVRON_WIDTH: f32 = 8.0;
+/// A separator is a 1px rule with 3px breathing room above and below.
+const SEPARATOR_HEIGHT: f32 = 7.0;
 
 /// The popup layers pushed for one frame's open chain.
 ///
@@ -90,6 +95,11 @@ pub struct MenuDrawEnv<'a> {
 pub(super) struct RowGeom {
     /// Index of the item within its menu.
     pub item_index: usize,
+    /// Vertical offset from the top of the row stack.
+    pub y: f32,
+    /// Painted and interactive height. Separators use the handoff's compact 7px
+    /// wrapper rather than consuming a full menu row.
+    pub height: f32,
     /// Separators carry no text.
     pub separator: bool,
     /// Label, measured unconstrained.
@@ -107,9 +117,11 @@ pub(super) struct RowGeom {
 }
 
 impl RowGeom {
-    fn separator(item_index: usize) -> Self {
+    fn separator(item_index: usize, y: f32) -> Self {
         Self {
             item_index,
+            y,
+            height: SEPARATOR_HEIGHT,
             separator: true,
             label: None,
             label_w: 0.0,
@@ -127,8 +139,6 @@ pub(super) struct ColumnGeom {
     pub rect: Rect,
     /// Height of one row.
     pub row_h: f32,
-    /// Horizontal padding inside the column.
-    pub pad: f32,
     /// Width of the check gutter.
     pub check_w: f32,
     /// Right edge of the hint column (uniform across rows).
@@ -137,6 +147,8 @@ pub(super) struct ColumnGeom {
     pub label_avail: f32,
     /// Total content height, which may exceed `rect.height`.
     pub content_h: f32,
+    /// Outer inset between the sheet edge and its row stack.
+    pub sheet_padding: f32,
     /// One entry per item, in menu order, including separators.
     pub rows: Vec<RowGeom>,
     /// Index of the open top-level menu this column belongs to.
@@ -359,6 +371,20 @@ impl MenuBarState {
         self.highlighted_item
     }
 
+    /// Select the row highlighted in an already-open menu.
+    ///
+    /// This is primarily useful to seed a static preview or restore retained
+    /// navigation state. Invalid, separator, and disabled rows clear the
+    /// highlight rather than creating an impossible interaction state.
+    pub fn set_highlighted_item(&mut self, menus: &[Menu<'_>], item_index: Option<usize>) {
+        self.highlighted_item = item_index.filter(|&index| {
+            self.open
+                .and_then(|menu_index| menus.get(menu_index))
+                .and_then(|menu| menu.items().get(index))
+                .is_some_and(|item| item.is_enabled())
+        });
+    }
+
     /// Whether the bar is armed or a chain is open.
     ///
     /// Hosts gate text/raw-key routing on this: the lib cannot suppress
@@ -559,16 +585,16 @@ impl MenuBarState {
 
         let styles = StyleResolver::with_overlay_opt(theme, style);
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
-        let pad = styles.scalar(StyleKey::Padding).max(0.0);
         let gap = styles.scalar(StyleKey::MenuAccelGap).max(0.0);
         let min_width = styles.scalar(StyleKey::MenuItemMinWidth).max(0.0);
-        let check_w = row_h * CHECK_GUTTER;
-        let chevron_w = row_h * CHEVRON * 2.0;
+        let check_w = CHECK_WIDTH;
+        let chevron_w = CHEVRON_WIDTH;
         let font = FontSpec {
             font: theme.font.clone(),
-            size: styles.scalar(StyleKey::FontSize),
+            size: ROW_FONT_SIZE,
             ..FontSpec::default()
         };
+        let mono = crate::bundled_mono_font(&list.text_measurer_mut().font_system_handle());
 
         // One measuring pass over the column. `MeasureConstraints::UNBOUNDED`
         // keeps every measurement at its intrinsic size, which is what the
@@ -597,9 +623,11 @@ impl MenuBarState {
         let mut hint_max = 0.0f32;
         let mut any_hint = false;
         let mut any_submenu = false;
+        let mut content_h = 0.0;
         for (item_index, item) in menu.items().iter().enumerate() {
             if item.is_separator() {
-                rows.push(RowGeom::separator(item_index));
+                rows.push(RowGeom::separator(item_index, content_h));
+                content_h += SEPARATOR_HEIGHT;
                 continue;
             }
             let block = cx.text_block(item.label());
@@ -609,7 +637,10 @@ impl MenuBarState {
             let hint = if item.accelerator().is_some() || item.shortcut_text().is_some() {
                 self.hint_scratch.clear();
                 item.write_hint(platform, &mut self.hint_scratch);
-                let block = cx.text_block(self.hint_scratch.as_str());
+                let block = cx
+                    .text_block(self.hint_scratch.as_str())
+                    .with_size(HINT_FONT_SIZE)
+                    .with_font_opt(mono.clone());
                 let measured = cx.measure_text(block);
                 hint_max = hint_max.max(measured.metrics.size[0]);
                 any_hint = true;
@@ -622,6 +653,8 @@ impl MenuBarState {
             any_submenu |= item.is_submenu();
             rows.push(RowGeom {
                 item_index,
+                y: content_h,
+                height: row_h,
                 separator: false,
                 label: Some(label),
                 label_w,
@@ -630,33 +663,43 @@ impl MenuBarState {
                 disabled: !item.is_enabled(),
                 checked: item.is_checked(),
             });
+            content_h += row_h;
         }
         drop(cx);
 
-        // Column width: label column + one shared hint column + affordances.
+        // Sheet width includes its 3px outer inset and each row's 8px horizontal
+        // padding. The four columns are fixed: tick · label · shortcut · arrow.
         let hint_area = if any_hint { gap + hint_max } else { 0.0 };
         let chevron_reserve = if any_submenu { gap + chevron_w } else { 0.0 };
-        let intrinsic = pad * 2.0 + check_w + label_max + hint_area + chevron_reserve;
+        let intrinsic = SHEET_PADDING * 2.0
+            + ROW_PADDING * 2.0
+            + check_w
+            + gap
+            + label_max
+            + hint_area
+            + chevron_reserve;
         let width = intrinsic.max(min_width).min(viewport.width).max(1.0);
-        let content_h = rows.len() as f32 * row_h;
-        let height = content_h
+        let full_height = content_h + SHEET_PADDING * 2.0;
+        let height = full_height
             .min(viewport.height)
-            .max(viewport.height.min(row_h));
+            .max(viewport.height.min(row_h + SHEET_PADDING * 2.0));
         let (rect, _placed) = placement::place_popup(anchor, [width, height], viewport, side);
 
-        let hint_right = rect.right() - pad - chevron_reserve;
-        let label_x = rect.x + pad + check_w;
-        let label_avail = (hint_right - gap - label_x).max(0.0);
+        let content_left = rect.x + SHEET_PADDING + ROW_PADDING;
+        let content_right = rect.right() - SHEET_PADDING - ROW_PADDING;
+        let hint_right = content_right - chevron_reserve;
+        let label_x = content_left + check_w + gap;
+        let label_avail = (hint_right - hint_area - label_x).max(0.0);
 
         self.next_columns.clear();
         self.next_columns.push(ColumnGeom {
             rect,
             row_h,
-            pad,
             check_w,
             hint_right,
             label_avail,
             content_h,
+            sheet_padding: SHEET_PADDING,
             rows,
             menu_index,
         });
@@ -828,13 +871,17 @@ impl MenuBarState {
         let Some(index) = self.highlighted_item else {
             return;
         };
-        let max_scroll = (column.content_h - column.rect.height).max(0.0);
-        let top = index as f32 * column.row_h;
-        let bottom = top + column.row_h;
+        let visible_height = (column.rect.height - column.sheet_padding * 2.0).max(0.0);
+        let max_scroll = (column.content_h - visible_height).max(0.0);
+        let Some(row) = column.rows.iter().find(|row| row.item_index == index) else {
+            return;
+        };
+        let top = row.y;
+        let bottom = top + row.height;
         if top < self.scroll {
             self.scroll = top;
-        } else if bottom > self.scroll + column.rect.height {
-            self.scroll = bottom - column.rect.height;
+        } else if bottom > self.scroll + visible_height {
+            self.scroll = bottom - visible_height;
         }
         self.scroll = self.scroll.clamp(0.0, max_scroll);
     }

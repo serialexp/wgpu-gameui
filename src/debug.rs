@@ -115,6 +115,8 @@ pub enum NodeKind {
     Chrome,
     /// An instanced circle or ring.
     Circle,
+    /// A full-affine analytic box shadow.
+    Shadow,
     /// Aggregated triangle-soup geometry (gradients, polygons, lines).
     Geometry,
     /// A textured atlas icon or image.
@@ -135,6 +137,7 @@ impl NodeKind {
             NodeKind::Layer => "layer",
             NodeKind::Chrome => "chrome",
             NodeKind::Circle => "circle",
+            NodeKind::Shadow => "shadow",
             NodeKind::Geometry => "geometry",
             NodeKind::Icon => "icon",
             NodeKind::IconMsdf => "icon_msdf",
@@ -1202,8 +1205,10 @@ fn collect_nodes(
     // family order after the explicit stream.
     let stream_len = list.paint_commands().len();
     let mut nine_order = vec![(stream_len, 0); list.nine_slices.len()];
-    let mut chrome_order = vec![(stream_len + 1, 0); list.chrome_instances.len()];
+    let mut analytic_order = vec![(stream_len + 1, 0); list.analytic_instances.len()];
+    let mut chrome_order = vec![(stream_len + 1, 0); list.chrome_instance_count()];
     let mut circle_order = vec![(stream_len + 1, 0); list.circle_instances.len()];
+    let mut shadow_order = vec![(stream_len + 1, 0); list.shadow_instance_count()];
     let mut icon_order = vec![(stream_len + 2, 0); list.icons.len()];
     #[cfg(feature = "phosphor-icons")]
     let mut msdf_order = vec![(stream_len + 3, 0); list.icons_msdf.len()];
@@ -1219,7 +1224,7 @@ fn collect_nodes(
         };
         match cmd {
             PaintCmd::Soup { indices } => soup_runs.push((command, indices.clone())),
-            PaintCmd::Chrome { instances } => map(instances, &mut chrome_order),
+            PaintCmd::Analytic { instances } => map(instances, &mut analytic_order),
             PaintCmd::Circle { instances } => map(instances, &mut circle_order),
             PaintCmd::NineSlice { draws } => map(draws, &mut nine_order),
             PaintCmd::Icon { draws } => map(draws, &mut icon_order),
@@ -1253,7 +1258,17 @@ fn collect_nodes(
         out.push(n);
     }
 
-    for (i, c) in list.chrome_instances.iter().enumerate() {
+    let mut chrome_index = 0;
+    let mut shadow_index = 0;
+    for (analytic_index, instance) in list.analytic_instances.iter().enumerate() {
+        let Some(c) = instance.as_chrome() else {
+            shadow_order[shadow_index] = analytic_order[analytic_index];
+            shadow_index += 1;
+            continue;
+        };
+        let i = chrome_index;
+        chrome_order[i] = analytic_order[analytic_index];
+        chrome_index += 1;
         let mut n = RawNode::new(
             format!("chrome#{i}"),
             false,
@@ -1262,8 +1277,18 @@ fn collect_nodes(
             i,
         );
         n.parent = own(i, |c| c.chrome_instances);
-        n.bounds = Rect::new(c.rect[0], c.rect[1], c.rect[2], c.rect[3]);
-        n.clip = clip_from_parts(c.clip, c.params[2]);
+        let transform = crate::Affine2::new(
+            c.linear[0],
+            c.linear[1],
+            c.translation[0],
+            c.linear[2],
+            c.linear[3],
+            c.translation[1],
+        );
+        n.bounds =
+            transform.transform_rect_aabb(Rect::new(c.rect[0], c.rect[1], c.rect[2], c.rect[3]));
+        n.axis_aligned = transform.is_translate_only();
+        n.clip = clip_from_parts(c.clip, c.translation[2]);
         n.counts.chrome_instances = 1;
         n.layer = layer;
         // Fully transparent fill *and* border paints nothing at all. The
@@ -1291,6 +1316,35 @@ fn collect_nodes(
         n.counts.circle_instances = 1;
         n.layer = layer;
         n.order = (list_order, circle_order[i].0, circle_order[i].1);
+        out.push(n);
+    }
+
+    for (i, shadow) in list.shadow_instances().enumerate() {
+        let r = shadow.raster_rect;
+        let local = Rect::new(r[0], r[1], r[2], r[3]);
+        let transform = crate::Affine2::new(
+            shadow.linear[0],
+            shadow.linear[1],
+            shadow.translation[0],
+            shadow.linear[2],
+            shadow.linear[3],
+            shadow.translation[1],
+        );
+        let mut n = RawNode::new(
+            format!("shadow#{i}"),
+            false,
+            NodeKind::Shadow,
+            RenderPass::Color,
+            i,
+        );
+        n.parent = own(i, |c| c.shadow_instances);
+        n.bounds = transform.transform_rect_aabb(local);
+        n.axis_aligned = transform.is_axis_aligned();
+        n.clip = clip_from_parts(shadow.clip, shadow.translation[2]);
+        n.counts.shadow_instances = 1;
+        n.effects.push("shadow");
+        n.layer = layer;
+        n.order = (list_order, shadow_order[i].0, shadow_order[i].1);
         out.push(n);
     }
 
@@ -1478,8 +1532,9 @@ fn list_counts(list: &DrawList) -> PrimCounts {
         nine_slices: list.nine_slices.len(),
         #[cfg(feature = "phosphor-icons")]
         icons_msdf: list.icons_msdf.len(),
-        chrome_instances: list.chrome_instances.len(),
+        chrome_instances: list.chrome_instance_count(),
         circle_instances: list.circle_instances.len(),
+        shadow_instances: list.shadow_instance_count(),
         dropped_degenerate: list.dropped_degenerate() as usize,
     }
 }
@@ -2035,7 +2090,7 @@ impl DebugReport {
         ));
         if let Some(stats) = self.render_stats {
             s.push_str("RENDER:\n");
-            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations));
+            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} color_passes={} shadow_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.color_passes, stats.shadow_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations));
             for warning in stats.warnings() {
                 s.push_str(&format!("!! WARN  render {warning}\n"));
             }
@@ -2154,7 +2209,7 @@ impl DebugReport {
 
         match self.render_stats {
             Some(stats) => {
-                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations, stats.fragmentation_ratio()));
+                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"color_passes\": {}, \"shadow_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.color_passes, stats.shadow_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations, stats.fragmentation_ratio()));
                 for (i, warning) in stats.warnings().iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
@@ -2809,9 +2864,9 @@ mod tests {
         list.push_debug_scope("form");
 
         // Application peers: a caption intrudes into the neighbouring widget.
-        list.push_debug_scope_rect("TextInput", Rect::new(40.0, 0.0, 60.0, 24.0));
+        list.push_debug_scope_rect("TextInput", Rect::new(25.0, 0.0, 75.0, 24.0));
         list.chrome_rect(
-            Rect::new(40.0, 0.0, 60.0, 24.0),
+            Rect::new(25.0, 0.0, 75.0, 24.0),
             0.0,
             0.0,
             [1.0; 4],
@@ -3341,6 +3396,8 @@ mod tests {
             paint_runs: 130,
             draw_calls: 7,
             color_runs: 3,
+            shadow_instances: 0,
+            color_passes: 1,
             text_runs: 2,
             icon_runs: 2,
             buffer_write_calls: 4,

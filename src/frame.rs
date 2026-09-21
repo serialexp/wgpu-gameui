@@ -207,7 +207,7 @@ mod tests {
             ui.text_button("OK", Some(100.0), Some(30.0));
         });
         // The button's chrome reached the list — the frame actually built.
-        assert!(!list.chrome_instances.is_empty());
+        assert!(list.chrome_instance_count() != 0);
     }
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
         Frame::new(&mut state, &mut input, &theme, &KeyboardNav).run_layers(&mut layers, |ui| {
             ui.text_button("OK", Some(100.0), Some(30.0));
         });
-        assert!(!layers.base().chrome_instances.is_empty());
+        assert!(layers.base().chrome_instance_count() != 0);
     }
 
     /// The supplied [`NavMap`] runs as part of `begin_frame`: a raw `key_down`
@@ -261,7 +261,7 @@ mod tests {
         // The 4a face is discrete: idle face = sheen over the resting base
         // (instance [0] is the plinth, [1] the face).
         assert_eq!(
-            list1.chrome_instances[1].bg,
+            list1.chrome_instance(1).unwrap().bg,
             crate::widgets::sheen_over(theme.button, theme.face_top)
         );
 
@@ -280,9 +280,10 @@ mod tests {
             .run(&mut list2, |ui| {
                 ui.text_button("OK", Some(100.0), Some(30.0));
             });
-        let face = list2.chrome_instances[1].bg;
+        let face = list2.chrome_instance(1).unwrap().bg;
         assert_ne!(
-            face, list1.chrome_instances[1].bg,
+            face,
+            list1.chrome_instance(1).unwrap().bg,
             "hover should swap the face off the idle sheen"
         );
     }
@@ -298,7 +299,7 @@ mod tests {
             .dt(0.016)
             .run(&mut list, |_ui| 7i32);
         assert_eq!(out, 7);
-        assert!(list.texts.is_empty() && list.chrome_instances.is_empty());
+        assert!(list.texts.is_empty() && list.chrome_instance_count() == 0);
     }
 
     #[test]

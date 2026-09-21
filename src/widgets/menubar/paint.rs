@@ -6,9 +6,11 @@
 //! because the bar-level keyboard transitions need the menus and their label
 //! rects. This module owns everything that happens *inside* the popup layers.
 
+use crate::color::{opaque_srgb8, srgb_to_linear};
 use crate::layout::Rect;
 use crate::{
-    Affine2, DrawContext, HitShape, InteractionScene, LayerStack, PointerPolicy, StyleKey,
+    Affine2, CornerRadii, DrawContext, Edge, HitShape, InteractionScene, LayerStack, PointerPolicy,
+    StyleKey, SurfacePainter,
 };
 
 use super::model::{ActivatedItem, Menu, MenuBarId, blocker_region_id, column_blocker_id, row_id};
@@ -163,6 +165,8 @@ pub(super) fn draw_columns<'a>(
         };
         let rect = column.rect;
         let row_h = column.row_h;
+        let row_x = rect.x + column.sheet_padding;
+        let row_width = (rect.width - column.sheet_padding * 2.0).max(0.0);
         let label_avail = column.label_avail;
         let hint_right = column.hint_right;
         let menu_id = menus.get(column.menu_index).and_then(Menu::id_value);
@@ -189,10 +193,6 @@ pub(super) fn draw_columns<'a>(
             ctx.interact(column_blocker_id(bar, column.menu_index, level), rect, true);
 
             ctx.draw_list.push_debug_scope_rect("Menu column", rect);
-            // Keep row washes inside the raised sheet so a highlighted first or
-            // last row cannot cover the same outer edge an idle row exposes.
-            let row_paint_rect = rect.inset(ctx.styles().scalar(StyleKey::BorderWidth).max(1.0));
-            ctx.draw_list.push_clip_viewport(row_paint_rect);
 
             // Rows: register for dispatch (culling the scrolled-out band and
             // everything that can never be highlighted) and collect what the
@@ -201,13 +201,15 @@ pub(super) fn draw_columns<'a>(
                 if row.separator || row.disabled {
                     continue;
                 }
-                let y = rect.y + row.item_index as f32 * row_h - state.scroll;
-                if y + row_h <= rect.y || y >= rect.bottom() {
+                let y = rect.y + column.sheet_padding + row.y - state.scroll;
+                if y + row.height <= rect.y + column.sheet_padding
+                    || y >= rect.bottom() - column.sheet_padding
+                {
                     continue;
                 }
                 let response = ctx.interact(
                     row_id(bar, column.menu_index, menu_id, row.item_index, level),
-                    Rect::new(rect.x, y, rect.width, row_h),
+                    Rect::new(row_x, y, row_width, row.height),
                     true,
                 );
                 if response.hovered {
@@ -230,42 +232,78 @@ pub(super) fn draw_columns<'a>(
 
             // ---- paint ----
             let s = ctx.styles();
-            let list = &mut *ctx.draw_list;
-            // The menu sheet: the raised panel (4a blurred-sheet look reads as a
-            // near-black panel with a black edge; apps can add a backdrop blur
-            // behind it via `UiRenderer::blur_backdrop`).
-            list.chrome_rect(
+            let chrome = s.menu_sheet();
+            let target = &mut *ctx.draw_list;
+            let padding_box = sheet_padding_box(rect, chrome.surface.border_widths);
+            let mut painter = SurfacePainter::new(
+                target,
                 rect,
-                s.scalar(StyleKey::BorderRadius),
-                s.scalar(StyleKey::BorderWidth),
-                s.color(StyleKey::Panel),
-                [0.0, 0.0, 0.0, 0.7],
+                padding_box,
+                CornerRadii::default(),
+                chrome.surface,
+                &chrome.shadows,
+                &chrome.lines,
             );
-            let dim = rgb(s.color(StyleKey::TextDim));
-            let text = rgb(s.color(StyleKey::Text));
-            let selected_bg = s.color(StyleKey::Accent);
-            let border_width = s.scalar(StyleKey::BorderWidth).max(1.0);
+            painter.paint_pre_content();
+            let list = painter.draw_list();
+            // TextBlock colours are encoded 8-bit sRGB, unlike DrawList geometry
+            // colours (linear floats), so these handoff CSS values stay literal.
+            let disabled_text = (0x5d, 0x65, 0x6c);
+            let text = (0xdb, 0xe1, 0xe7);
+            let selected_bg = opaque_srgb8([0x79, 0xc6, 0xd8]);
             let check_w = column.check_w;
 
+            // Only row content is clipped to the sheet padding box. The sheet and
+            // both analytic shadows above remain unclipped so their falloff can
+            // paint beyond the popup rect.
+            list.push_clip_viewport(padding_box);
             for row in column.rows.iter_mut() {
-                let y = rect.y + row.item_index as f32 * row_h - state.scroll;
-                if y + row_h <= rect.y || y >= rect.bottom() {
+                let y = rect.y + column.sheet_padding + row.y - state.scroll;
+                if y + row.height <= rect.y + column.sheet_padding
+                    || y >= rect.bottom() - column.sheet_padding
+                {
                     continue;
                 }
                 if row.separator {
-                    list.quad(
-                        rect.x + column.pad,
-                        y + row_h * 0.5 - border_width * 0.5,
-                        (rect.width - column.pad * 2.0).max(0.0),
-                        border_width,
-                        s.color(StyleKey::PanelBorder),
+                    let rule_y = y + 3.0;
+                    let rule_x = row_x + 6.0;
+                    let rule_w = (row_width - 12.0).max(0.0);
+                    let rule = Rect::new(rule_x, rule_y, rule_w, row.height - 3.0);
+                    list.edge_line(
+                        rule,
+                        Edge::Top,
+                        chrome.separator[0].thickness,
+                        chrome.separator[0].color,
+                    );
+                    list.edge_line(
+                        Rect::new(
+                            rule.x,
+                            rule.y + chrome.separator[0].thickness,
+                            rule.width,
+                            rule.height,
+                        ),
+                        Edge::Top,
+                        chrome.separator[1].thickness,
+                        chrome.separator[1].color,
                     );
                     continue;
                 }
+                let highlighted = state.highlighted_item == Some(row.item_index) && !row.disabled;
+                if highlighted {
+                    paint_accent_row(
+                        list,
+                        Rect::new(row_x, y, row_width, row.height),
+                        selected_bg,
+                    );
+                }
                 if row.checked {
                     let stroke = (row_h * CHECK_STROKE).max(1.0);
-                    let (x, w, h) = (rect.x + column.pad, check_w, row_h);
-                    let color = s.color(StyleKey::Text);
+                    let (x, w, h) = (row_x + 8.0, check_w, row_h);
+                    let color = if highlighted {
+                        srgb_to_linear([4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 1.0])
+                    } else {
+                        srgb_to_linear([0.4265, 0.8174, 0.8336, 1.0])
+                    };
                     list.line(
                         [x + w * 0.16, y + h * 0.52],
                         [x + w * 0.40, y + h * 0.76],
@@ -281,60 +319,70 @@ pub(super) fn draw_columns<'a>(
                 }
                 if row.submenu {
                     let half = row_h * CHEVRON;
-                    let cx = rect.right() - column.pad - half * 0.6;
+                    let cx = row_x + row_width - 8.0 - half * 0.6;
                     let cy = y + row_h * 0.5;
                     list.triangle(
                         (cx - half * 0.5, cy - half),
                         (cx - half * 0.5, cy + half),
                         (cx + half * 0.7, cy),
-                        s.color(if row.disabled {
-                            StyleKey::TextDim
+                        if highlighted {
+                            srgb_to_linear([4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 1.0])
                         } else {
-                            StyleKey::Text
-                        }),
+                            s.color(if row.disabled {
+                                StyleKey::TextDim
+                            } else {
+                                StyleKey::Text
+                            })
+                        },
                     );
                 }
-                if state.highlighted_item == Some(row.item_index) && !row.disabled {
-                    // The design's menu selection: a translucent accent wash.
-                    let mut c = selected_bg;
-                    c[3] = 0.2;
-                    list.quad(rect.x, y, rect.width, row_h, c);
-                    if row.checked {
-                        // Selected + checked: solid accent row with dark text.
-                        list.quad(rect.x, y, rect.width, row_h, selected_bg);
-                    }
-                }
-                if row.checked && state.highlighted_item != Some(row.item_index) {
-                    // Latched filter row: accent wash.
-                    let mut c = selected_bg;
-                    c[3] = 0.16;
-                    list.quad(rect.x, y, rect.width, row_h, c);
-                }
 
-                let (r, g, b) = if row.disabled { dim } else { text };
+                let (r, g, b) = if row.disabled {
+                    disabled_text
+                } else if highlighted {
+                    (4, 20, 24)
+                } else {
+                    text
+                };
                 if let Some(measured) = row.label.take() {
                     let ty = y + row_h * 0.5 - measured.metrics.visual_center;
-                    let mut block = measured.into_block_at(rect.x + column.pad + check_w, ty);
+                    let mut block = measured.into_block_at(row_x + 8.0 + check_w + 7.0, ty);
                     if row.label_w > label_avail {
                         // Narrower than its intrinsic text (a column clamped by
                         // the viewport): truncate rather than overflow.
                         block = block.with_max_width(label_avail).with_ellipsis();
                     }
-                    list.text(block.with_color(r, g, b));
+                    let block = block.with_color(r, g, b);
+                    list.text(if highlighted {
+                        block
+                    } else {
+                        block.with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.5)
+                    });
                 }
                 if let Some(measured) = row.hint.take() {
                     let ty = y + row_h * 0.5 - measured.metrics.visual_center;
                     let x = hint_right - measured.metrics.size[0];
-                    list.text(
-                        measured
-                            .into_block_at(x, ty)
-                            .with_color(dim.0, dim.1, dim.2),
-                    );
+                    let (r, g, b) = if row.disabled {
+                        (0x46, 0x4e, 0x55)
+                    } else if highlighted {
+                        // TextBlock cannot express alpha independently of glyph
+                        // coverage here, so preserve the handoff's dark ink hue.
+                        (4, 20, 24)
+                    } else {
+                        (0x78, 0x81, 0x8a)
+                    };
+                    let block = measured.into_block_at(x, ty).with_color(r, g, b);
+                    list.text(if highlighted {
+                        block
+                    } else {
+                        block.with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.5)
+                    });
                 }
             }
 
             list.pop_clip();
-            list.pop_debug_scope();
+            painter.paint_post_content();
+            target.pop_debug_scope();
         }
 
         // A press anywhere inside the column is the menu's, not the widget's:
@@ -389,11 +437,29 @@ fn forget_geometry(state: &mut MenuBarState) {
     state.columns.clear();
 }
 
-/// Convert a theme color to 8-bit RGB, as the text primitives want.
-fn rgb(c: [f32; 4]) -> (u8, u8, u8) {
-    (
-        (c[0] * 255.0) as u8,
-        (c[1] * 255.0) as u8,
-        (c[2] * 255.0) as u8,
+fn sheet_padding_box(rect: Rect, widths: crate::EdgeWidths) -> Rect {
+    Rect::new(
+        rect.x + widths.left,
+        rect.y + widths.top,
+        (rect.width - widths.left - widths.right).max(0.0),
+        (rect.height - widths.top - widths.bottom).max(0.0),
     )
+}
+
+fn paint_accent_row(list: &mut crate::DrawList, rect: Rect, accent: [f32; 4]) {
+    list.quad(rect.x, rect.y, rect.width, rect.height, accent);
+    list.quad(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height.min(1.0),
+        opaque_srgb8([0xa1, 0xd7, 0xe4]),
+    );
+    list.quad(
+        rect.x,
+        rect.y + (rect.height - 1.0).max(0.0),
+        rect.width,
+        rect.height.min(1.0),
+        opaque_srgb8([0x5b, 0x95, 0xa2]),
+    );
 }

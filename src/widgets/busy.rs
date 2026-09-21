@@ -179,8 +179,8 @@ mod tests {
         let mut b = DrawList::new();
         skeleton(&mut b, &s, rect, 0.7);
         // Same instance count, but the highlight quad differs in x.
-        assert_eq!(a.chrome_instances.len(), b.chrome_instances.len());
-        assert!(a.chrome_instances.len() >= 2);
+        assert_eq!(a.chrome_instance_count(), b.chrome_instance_count());
+        assert!(a.chrome_instance_count() >= 2);
     }
 
     #[test]

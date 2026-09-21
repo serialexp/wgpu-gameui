@@ -1,14 +1,15 @@
 //! Splitter — the design's draggable pane divider (Gallery II "splitter").
 //!
-//! A vertical or horizontal grip strip between two panes: a dark inset bar
-//! with a 1px center grip line that lights up (accent, with a glow) while
+//! A vertical or horizontal 6px groove between two panes, with a centered
+//! 2×26px grip that brightens on hover and lights up (accent, with a glow) while
 //! dragged. Drag is captured through the caller-owned
 //! [`DragCapture`](super::DragCapture), so only one splitter owns the pointer
 //! at a time.
 
 use super::drag::{DragCapture, DragId};
+use crate::chrome::{Background, Edge, GradientAxis};
 use crate::layout::Rect;
-use crate::style::StyleKey;
+use crate::shadow::CornerRadii;
 
 use super::DrawContext;
 
@@ -65,7 +66,6 @@ impl Splitter {
     ) -> SplitterOutput {
         ctx.push_debug_scope_rect("Splitter", rect);
         let input = ctx.input;
-        let s = ctx.styles();
 
         let (px, py) = (input.mouse_x, input.mouse_y);
         let hovered = rect.contains(px, py) && !input.mouse_consumed;
@@ -83,55 +83,129 @@ impl Splitter {
         }
         let dragging = capture.is_active(id);
 
-        if dragging {
-            ctx.request_cursor(crate::CursorIcon::Grabbing);
-        } else if hovered {
+        if hovered || dragging {
+            // Capture keeps the axis-resize cursor and bright grip alive even
+            // after a fast pointer leaves the narrow strip.
             ctx.request_cursor(grab_axis);
         }
 
-        // Bar: dark inset slab; while dragging it lightens and the grip line
-        // goes accent.
-        let base = if dragging {
-            let mut c = s.color(StyleKey::ButtonPressed);
-            c[3] = 0.9;
-            c
-        } else {
-            s.color(StyleKey::Plinth)
-        };
-        let under = s.color(StyleKey::EdgeShadow);
+        // The groove itself is invariant. Interaction feedback belongs solely
+        // to the grip, so panes moving under a captured drag never make the
+        // splitter surface flash between materials.
+        let chrome = ctx.styles().splitter();
         let grip_color = if dragging {
-            s.color(StyleKey::Accent)
+            chrome.grip_dragging
         } else if hovered {
-            s.color(StyleKey::TextDim)
+            chrome.grip_hover
         } else {
-            let c = s.color(StyleKey::Text);
-            [c[0], c[1], c[2], 0.28]
+            chrome.grip_idle
+        };
+        let grip = match self.axis {
+            SplitAxis::Vertical => Rect::new(
+                rect.x + (rect.width - 2.0) * 0.5,
+                rect.y + (rect.height - 26.0) * 0.5,
+                2.0,
+                26.0,
+            ),
+            SplitAxis::Horizontal => Rect::new(
+                rect.x + (rect.width - 26.0) * 0.5,
+                rect.y + (rect.height - 2.0) * 0.5,
+                26.0,
+                2.0,
+            ),
         };
         {
             let list = &mut *ctx.draw_list;
-            let radius = s.scalar(StyleKey::BorderRadius);
-            list.chrome_rect(rect, radius, 1.0, base, [0.0, 0.0, 0.0, 0.6]);
-            // Edge highlights along the bar (inset light/dark pair).
+            let axis = match self.axis {
+                SplitAxis::Vertical => GradientAxis::Horizontal,
+                SplitAxis::Horizontal => GradientAxis::Vertical,
+            };
+            list.paint_quad_background(
+                rect,
+                Background::LinearGradient {
+                    start: chrome.track_colors[0],
+                    end: chrome.track_colors[1],
+                    axis,
+                },
+                CornerRadii::default(),
+            );
             match self.axis {
                 SplitAxis::Vertical => {
-                    list.quad(rect.x, rect.y, 1.0, rect.height, [0.0, 0.0, 0.0, 0.6]);
-                    list.quad(rect.x + 1.0, rect.y, 1.0, rect.height, under);
+                    list.edge_line(
+                        rect,
+                        Edge::Left,
+                        chrome.outer_edges.thickness,
+                        chrome.outer_edges.color,
+                    );
+                    list.edge_line(
+                        rect,
+                        Edge::Right,
+                        chrome.outer_edges.thickness,
+                        chrome.outer_edges.color,
+                    );
+                    let highlight_rect = Rect::new(
+                        rect.x + chrome.outer_edges.thickness,
+                        rect.y,
+                        (rect.width - chrome.outer_edges.thickness).max(0.0),
+                        rect.height,
+                    );
+                    list.edge_line(
+                        highlight_rect,
+                        Edge::Left,
+                        chrome.inner_highlight.thickness,
+                        chrome.inner_highlight.color,
+                    );
                 }
                 SplitAxis::Horizontal => {
-                    list.quad(rect.x, rect.y, rect.width, 1.0, [0.0, 0.0, 0.0, 0.6]);
-                    list.quad(rect.x, rect.y + 1.0, rect.width, 1.0, under);
+                    list.edge_line(
+                        rect,
+                        Edge::Top,
+                        chrome.outer_edges.thickness,
+                        chrome.outer_edges.color,
+                    );
+                    list.edge_line(
+                        rect,
+                        Edge::Bottom,
+                        chrome.outer_edges.thickness,
+                        chrome.outer_edges.color,
+                    );
+                    let highlight_rect = Rect::new(
+                        rect.x,
+                        rect.y + chrome.outer_edges.thickness,
+                        rect.width,
+                        (rect.height - chrome.outer_edges.thickness).max(0.0),
+                    );
+                    list.edge_line(
+                        highlight_rect,
+                        Edge::Top,
+                        chrome.inner_highlight.thickness,
+                        chrome.inner_highlight.color,
+                    );
                 }
             }
 
-            // Center grip line.
-            match self.axis {
-                SplitAxis::Vertical => {
-                    let cx = rect.x + rect.width * 0.5;
-                    list.quad(cx, rect.y + rect.height * 0.5 - 11.0, 1.0, 22.0, grip_color);
-                }
-                SplitAxis::Horizontal => {
-                    let cy = rect.y + rect.height * 0.5;
-                    list.quad(rect.x + rect.width * 0.5 - 11.0, cy, 22.0, 1.0, grip_color);
+            if dragging {
+                list.box_shadow_outset(grip, CornerRadii::uniform(1.0), chrome.dragging_glow);
+            }
+            list.paint_quad_background(
+                grip,
+                Background::Solid(grip_color),
+                CornerRadii::uniform(1.0),
+            );
+            if !dragging {
+                match self.axis {
+                    SplitAxis::Vertical => list.edge_line(
+                        grip,
+                        Edge::Right,
+                        chrome.grip_counter_edge.thickness,
+                        chrome.grip_counter_edge.color,
+                    ),
+                    SplitAxis::Horizontal => list.edge_line(
+                        grip,
+                        Edge::Bottom,
+                        chrome.grip_counter_edge.thickness,
+                        chrome.grip_counter_edge.color,
+                    ),
                 }
             }
         }
@@ -155,7 +229,7 @@ impl Splitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DrawList, FocusState, InputState, Theme};
+    use crate::{DrawList, FocusState, InputState, StyleOverlay, Theme};
 
     fn ctx<'a>(
         list: &'a mut DrawList,
@@ -223,6 +297,110 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
         assert!(!out.dragging && out.delta == 0.0);
+    }
+
+    #[test]
+    fn typed_overlay_reaches_splitter_track_grip_and_edges() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.splitter;
+        chrome.track_colors = [[0.11, 0.12, 0.13, 1.0], [0.21, 0.22, 0.23, 1.0]];
+        chrome.outer_edges.color = [0.31, 0.32, 0.33, 1.0];
+        chrome.inner_highlight.color = [0.41, 0.42, 0.43, 1.0];
+        chrome.grip_idle = [0.51, 0.52, 0.53, 1.0];
+        chrome.grip_counter_edge.color = [0.61, 0.62, 0.63, 1.0];
+        let mut overlay = StyleOverlay::new();
+        overlay.set_splitter(chrome);
+        let input = InputState::default();
+        let mut capture = DragCapture::new();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+
+        Splitter::vertical(6.0).draw(
+            1,
+            &mut capture,
+            Rect::new(10.0, 20.0, 6.0, 100.0),
+            &mut ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay),
+        );
+
+        assert_eq!(list.chrome_instance(0).unwrap().bg, chrome.track_colors[0]);
+        assert_eq!(list.chrome_instance(0).unwrap().bg2, chrome.track_colors[1]);
+        assert_eq!(
+            list.chrome_instance(1).unwrap().bg,
+            chrome.outer_edges.color
+        );
+        assert_eq!(
+            list.chrome_instance(3).unwrap().bg,
+            chrome.inner_highlight.color
+        );
+        assert_eq!(list.chrome_instance(4).unwrap().bg, chrome.grip_idle);
+        assert_eq!(
+            list.chrome_instance(5).unwrap().bg,
+            chrome.grip_counter_edge.color
+        );
+    }
+
+    #[test]
+    fn dragging_uses_typed_grip_and_one_analytic_shadow_before_the_grip() {
+        let theme = Theme::default();
+        let mut chrome = theme.chrome.splitter;
+        chrome.grip_dragging = [0.17, 0.27, 0.37, 1.0];
+        chrome.dragging_glow.color = [0.47, 0.57, 0.67, 0.77];
+        chrome.dragging_glow.blur = 9.0;
+        let mut overlay = StyleOverlay::new();
+        overlay.set_splitter(chrome);
+        let input = InputState {
+            mouse_x: 80.0,
+            mouse_y: 80.0,
+            mouse_down: true,
+            is_dragging: true,
+            drag_delta: [8.0, 0.0],
+            ..Default::default()
+        };
+        let mut capture = DragCapture::new();
+        capture.try_begin(7);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let mut cursor = crate::CursorState::new();
+        let mut draw_ctx = ctx(&mut list, &mut focus, &theme, &input)
+            .with_style(&overlay)
+            .with_cursor(&mut cursor);
+        let out = Splitter::vertical(6.0).draw(
+            7,
+            &mut capture,
+            Rect::new(10.0, 20.0, 6.0, 100.0),
+            &mut draw_ctx,
+        );
+
+        assert!(out.dragging);
+        assert_eq!(out.delta, 8.0);
+        assert_eq!(cursor.resolve(), crate::CursorIcon::ResizeHorizontal);
+        assert_eq!(list.shadow_instance_count(), 1);
+        let shadow = list.shadow_instance(0).unwrap();
+        assert_eq!(shadow.element_rect, [12.0, 57.0, 2.0, 26.0]);
+        assert_eq!(shadow.color, chrome.dragging_glow.color);
+        assert_eq!(shadow.params[0], chrome.dragging_glow.blur * 0.5);
+        assert_eq!(list.chrome_instance(4).unwrap().bg, chrome.grip_dragging);
+        assert_eq!(list.paint_cmds.len(), 1);
+        assert!(matches!(
+            &list.paint_cmds[0],
+            crate::widgets::PaintCmd::Analytic { instances }
+                if instances == &(0..list.analytic_instances.len() as u32)
+        ));
+        let shadow_position = list
+            .analytic_instances
+            .iter()
+            .position(|instance| instance.as_shadow() == Some(shadow))
+            .unwrap();
+        let grip_position = list
+            .analytic_instances
+            .iter()
+            .position(|instance| {
+                instance
+                    .as_chrome()
+                    .is_some_and(|quad| quad.bg == chrome.grip_dragging)
+            })
+            .unwrap();
+        assert!(shadow_position < grip_position);
     }
 
     #[test]
