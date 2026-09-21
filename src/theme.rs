@@ -223,9 +223,9 @@ impl Default for Theme {
         // Sizing values the menu metrics are derived from. Naming them keeps the
         // derivation visible instead of duplicating literals: a theme that
         // retunes `padding`/`font_size` for DPI gets proportional menu rows.
-        let padding = 4.0;
+        let padding = 5.0;
         let spacing = 6.0;
-        let font_size = 13.0;
+        let font_size = 12.0;
         Self {
             // The "4a" design language: near-black neutral surfaces, controls
             // painted as a subtle white-sheen gradient face resting on a dark
@@ -326,16 +326,16 @@ impl Default for Theme {
             progress_fill_low: srgb_to_linear([0.8413, 0.2796, 0.2724, 1.0]),
             progress_fill_medium: srgb_to_linear([0.9084, 0.6684, 0.3042, 1.0]),
 
-            // Sizing — the design is compact: 13px text, 24px control rows,
-            // 2px "plinth travel" press motion, radius 1.
+            // Sizing — the design: 12px body text, 28px input wells, 26px
+            // text buttons, 2px "plinth travel" press motion, radius 1.
             padding,
             spacing,
             border_radius: 1.0,
             border_width: 1.0,
             font_size,
             font_size_title: 15.0,
-            button_height: 24.0,
-            input_height: 24.0,
+            button_height: 26.0,
+            input_height: 28.0,
             // Forge menu geometry: 26px bar, 22px rows inside a 3px-padded,
             // 218px-minimum sheet. Title/row text uses its own 11.5px scale rather
             // than the 13px body font; see the menubar paint/measure paths.
@@ -411,9 +411,9 @@ mod tests {
     #[test]
     fn default_typography_leaves_room_for_application_content() {
         let theme = Theme::default();
-        // The 4a design is a compact 13px UI: a 15px title still scales visibly
-        // above body text without doubling the row heights around it.
-        assert_eq!(theme.font_size, 13.0);
+        // The Forge design uses 12px body text; 15px title still scales
+        // visibly above it without doubling row heights.
+        assert_eq!(theme.font_size, 12.0);
         assert_eq!(theme.font_size_title, 15.0);
         assert!(theme.font_size_title > theme.font_size);
     }
