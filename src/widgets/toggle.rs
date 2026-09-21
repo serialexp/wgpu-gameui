@@ -4,6 +4,7 @@
 //! a light circular knob sliding between the ends. Click (or Space/Enter when
 //! focused) flips it.
 
+use crate::color::srgb_to_linear;
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
@@ -92,19 +93,14 @@ impl Toggle {
         } else {
             let fill = s.color(StyleKey::InputBackground);
             list.chrome_rect(switch_rect, radius, 1.0, fill, [0.0, 0.0, 0.0, 0.65]);
-            // Inset shadow (the sunken off state).
-            draw_inset_shadow(
-                list,
-                &s,
-                switch_rect,
-                s.scalar(StyleKey::InnerShadowDepth),
-                1.0,
-            );
         }
+        // Inset shadow — always drawn (both on and off); the sunken track is
+        // the toggle's depth cue regardless of state.
+        draw_inset_shadow(list, &s, switch_rect, 3.0, 1.0);
 
-        // Knob: a light disc riding the active end. Design: white→#c9d1d8
-        // gradient + black edge; we draw disc + outline.
-        let knob_d = SWITCH_H - 6.0;
+        // Knob: 11×11 disc at the active end with a white→#c6ced5 vertical
+        // gradient, a 1px black border, and an inset highlight + drop shadow.
+        let knob_d = SWITCH_H - 4.0; // 11px knob in a 15px track
         let margin = 2.0;
         let knob_x = if on {
             switch_rect.x + switch_rect.width - knob_d - margin
@@ -112,10 +108,9 @@ impl Toggle {
             switch_rect.x + margin
         };
         let cy = switch_rect.y + switch_rect.height * 0.5;
-        let (lo, hi) = (0.7882f32, 1.0f32);
-        let mut knob = s.color(StyleKey::Text);
-        knob[0] = lo + (hi - lo) * knob[0];
-        list.circle((knob_x + knob_d * 0.5, cy), knob_d * 0.5, knob);
+        // Gradient: #ffffff top → #c6ced5 bottom (sRGB midpoint ≈ #e3e9ee).
+        let knob_color = srgb_to_linear([0.89, 0.91, 0.93, 1.0]);
+        list.circle((knob_x + knob_d * 0.5, cy), knob_d * 0.5, knob_color);
         list.circle_outline(
             (knob_x + knob_d * 0.5, cy),
             knob_d * 0.5,
@@ -250,9 +245,12 @@ mod tests {
             off_list.chrome_instance(0).unwrap().bg,
             "on trough is the accent face, off is the sunken well"
         );
-        assert!(
-            off_list.chrome_instance_count() > on_list.chrome_instance_count(),
-            "off draws the extra inset-shadow band"
+        // Both states draw the inset shadow (the track's depth cue is always
+        // visible, matching the design), so chrome instance counts are equal.
+        assert_eq!(
+            off_list.chrome_instance_count(),
+            on_list.chrome_instance_count(),
+            "both states draw the same chrome (trough + inset shadow)"
         );
     }
 

@@ -22,7 +22,7 @@
 use crate::StyleKey;
 use crate::layout::Rect;
 
-use super::{Button, DrawContext, FocusId, TextInput};
+use super::{Button, DrawContext, FocusId, TextInput, Tone};
 
 /// Format `value` for display with `decimals` fractional digits. `decimals == 0`
 /// renders a plain integer (rounded). Non-finite values render as `"0"`.
@@ -331,42 +331,52 @@ impl NumberInput {
             let can_click = !mouse_consumed;
             // Square corners so the steppers sit flush against the field and each
             // other without rounded inner edges.
+            // The design's steppers are hollow (ghost) keys with 1px travel —
+            // transparent at rest, only showing a face on hover/press. The
+            // border-left separator is drawn once below; each half gets a
+            // compact triangular caret.
+            let stepper_btn = || {
+                Button::new("")
+                    .with_radius(0.0)
+                    .tone(Tone::Ghost)
+                    .with_travel(1.0)
+            };
             #[cfg(feature = "phosphor-icons")]
             {
-                // Compact triangular carets match the design's 17px stacked
-                // steppers. Using the generic Plus/Minus icon filled almost the
-                // entire half-button and looked oversized.
                 let s = ctx.styles();
                 let tint = s.color(StyleKey::TextDim);
-                if Button::new("").with_radius(0.0).draw(up_rect, ctx) && can_click {
+                if stepper_btn().draw(up_rect, ctx) && can_click {
                     value = self.clamp(value + self.step);
                     stepped = true;
                 }
                 draw_stepper_caret(ctx.draw_list, up_rect, true, tint);
-                if Button::new("").with_radius(0.0).draw(down_rect, ctx) && can_click {
+                if stepper_btn().draw(down_rect, ctx) && can_click {
                     value = self.clamp(value - self.step);
                     stepped = true;
                 }
                 draw_stepper_caret(ctx.draw_list, down_rect, false, tint);
             }
-            // Text fallback when the icon font is compiled out. The label is
-            // centred by Button. Use the typographic MINUS SIGN (U+2212), drawn
-            // on the same math axis as "+" — the ASCII hyphen-minus sits low and
-            // looks bottom-aligned next to the centred plus.
             #[cfg(not(feature = "phosphor-icons"))]
             {
-                if Button::new("+").with_radius(0.0).draw(up_rect, ctx) && can_click {
+                if stepper_btn().draw(up_rect, ctx) && can_click {
                     value = self.clamp(value + self.step);
                     stepped = true;
                 }
-                if Button::new("\u{2212}")
-                    .with_radius(0.0)
-                    .draw(down_rect, ctx)
-                    && can_click
-                {
+                if stepper_btn().draw(down_rect, ctx) && can_click {
                     value = self.clamp(value - self.step);
                     stepped = true;
                 }
+            }
+            // Border-left separator between the value field and stepper column.
+            {
+                let list = &mut *ctx.draw_list;
+                list.quad(
+                    rect.x + field_w,
+                    rect.y,
+                    1.0,
+                    rect.height,
+                    [0.0, 0.0, 0.0, 0.6],
+                );
             }
         }
 

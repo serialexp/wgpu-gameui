@@ -197,6 +197,9 @@ pub struct Button {
     /// button's chrome fill + border ease between states under this id instead
     /// of switching instantly.
     anim_id: Option<u64>,
+    /// Override the theme's `Travel` for this button only. Used by the numeric
+    /// input's step buttons which press 1px rather than the standard 2px.
+    travel: Option<f32>,
 }
 
 impl Button {
@@ -210,6 +213,7 @@ impl Button {
             tone: None,
             focus_id: None,
             anim_id: None,
+            travel: None,
         }
     }
 
@@ -286,6 +290,13 @@ impl Button {
     /// field and should not round their inner edges.
     pub fn with_radius(mut self, radius: f32) -> Self {
         self.radius = Some(radius);
+        self
+    }
+
+    /// Override the theme's `Travel` value for this button. The design's
+    /// numeric-input steppers use 1px travel rather than the standard 2px.
+    pub fn with_travel(mut self, travel: f32) -> Self {
+        self.travel = Some(travel);
         self
     }
 
@@ -371,12 +382,10 @@ impl Button {
         // The 4a press is geometric (the face drops `travel` px), not a color
         // swap, so the material is resolved discretely; the eased path applies
         // only to the label color, which still fades between states.
-        let face_y = rect.y
-            + if v.enabled && pressed {
-                s.scalar(StyleKey::Travel)
-            } else {
-                0.0
-            };
+        let travel = self
+            .travel
+            .unwrap_or_else(|| s.scalar(StyleKey::Travel));
+        let face_y = rect.y + if v.enabled && pressed { travel } else { 0.0 };
         let face = Rect::new(rect.x, face_y, rect.width, rect.height - (face_y - rect.y));
         let target_text = if !self.enabled {
             s.color(StyleKey::TextDim)

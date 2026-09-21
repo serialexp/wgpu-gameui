@@ -113,7 +113,8 @@ impl Slider {
 
         // Track area (full width minus optional value text)
         let track_width = rect.width - value_text_width;
-        let track_height = rect.height.min(12.0);
+        // The design's slider track is 5px tall (a thin sunken rail).
+        let track_height = rect.height.min(5.0);
         let track_y = rect.y + (rect.height - track_height) / 2.0;
 
         // Scrubber slides within the track, inset by half scrubber width on each side
