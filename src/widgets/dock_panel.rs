@@ -165,7 +165,8 @@ impl<'a> DockPanel<'a> {
         };
 
         // --- Panel and header surfaces ---
-        ctx.draw_list.paint_quad(rect, chrome.body);
+        ctx.draw_list
+            .paint_background_opaque(rect, chrome.body.background);
         let header_rect = Rect::new(rect.x, rect.y, rect.width, tab_h);
         let mut header = SurfacePainter::new(
             ctx.draw_list,
@@ -176,7 +177,7 @@ impl<'a> DockPanel<'a> {
             &[],
             &chrome.lines,
         );
-        header.paint_pre_content();
+        header.paint_pre_content_opaque();
         header.paint_post_content();
 
         // --- Close button (right side of header) ---
@@ -197,21 +198,33 @@ impl<'a> DockPanel<'a> {
             if close_hovered {
                 ctx.draw_list.paint_quad(close_rect, chrome.tab_hover);
             }
-            // "×" glyph.
+            // Close icon: Phosphor X when available, text fallback otherwise.
             let xc = if close_hovered {
                 s.color(StyleKey::Text)
             } else {
                 s.color(StyleKey::TextDim)
             };
-            let xty = ctx.draw_list.vcentered_text_y(
-                close_rect.y,
-                close_rect.height,
-                10.0,
-                s.theme().font.as_ref(),
-                "✕",
-            );
-            ctx.draw_list.text(
-                TextBlock::new("✕", close_rect.x + (close_rect.width - 6.0) * 0.5, xty)
+            #[cfg(feature = "phosphor-icons")]
+            {
+                let icon_rect = close_rect.inset(4.0);
+                ctx.draw_list
+                    .phosphor_icon(icon_rect, crate::PhosphorIcon::X, xc);
+            }
+            #[cfg(not(feature = "phosphor-icons"))]
+            {
+                let xty = ctx.draw_list.vcentered_text_y(
+                    close_rect.y,
+                    close_rect.height,
+                    10.0,
+                    s.theme().font.as_ref(),
+                    "✕",
+                );
+                ctx.draw_list.text(
+                    TextBlock::new(
+                        "✕",
+                        close_rect.x + (close_rect.width - 6.0) * 0.5,
+                        xty,
+                    )
                     .with_size(10.0)
                     .with_color(
                         (xc[0] * 255.0) as u8,
@@ -220,7 +233,8 @@ impl<'a> DockPanel<'a> {
                     )
                     .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_font_opt(s.theme().font.clone()),
-            );
+                );
+            }
 
             if close_clicked {
                 out.close_clicked = true;
@@ -516,8 +530,18 @@ mod tests {
             &mut state,
             &mut ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay),
         );
-        assert_eq!(list.chrome_instance(0).unwrap().bg, [0.11, 0.12, 0.13, 1.0]);
-        assert_eq!(list.chrome_instance(1).unwrap().bg, [0.21, 0.22, 0.23, 1.0]);
+        // Body and header backgrounds are now opaque soup (no SDF), so verify
+        // their colors appear in the vertex buffer rather than chrome instances.
+        assert!(
+            list.vertices
+                .iter()
+                .any(|v| v.color == [0.11, 0.12, 0.13, 1.0])
+        );
+        assert!(
+            list.vertices
+                .iter()
+                .any(|v| v.color == [0.21, 0.22, 0.23, 1.0])
+        );
         assert!(
             list.chrome_instances()
                 .any(|quad| quad.bg == [0.31, 0.32, 0.33, 1.0])

@@ -167,17 +167,26 @@ pub fn draw_sheet(
         let bottom = material::sheen_over(base, s.color(StyleKey::FaceBottom));
         list.chrome_rect_gradient(close, radius, 1.0, top, bottom, [0.0, 0.0, 0.0, 0.5]);
         let xc = s.color(StyleKey::TextDim);
-        let xty = list.vcentered_text_y(close.y, close.height, 9.0, s.theme().font.as_ref(), "✕");
-        list.text(
-            TextBlock::new("✕", close.x + 3.0, xty)
-                .with_size(9.0)
-                .with_color(
-                    (xc[0] * 255.0) as u8,
-                    (xc[1] * 255.0) as u8,
-                    (xc[2] * 255.0) as u8,
-                )
-                .with_font_opt(s.theme().font.clone()),
-        );
+        #[cfg(feature = "phosphor-icons")]
+        {
+            let icon_rect = close.inset(3.0);
+            list.phosphor_icon(icon_rect, crate::PhosphorIcon::X, xc);
+        }
+        #[cfg(not(feature = "phosphor-icons"))]
+        {
+            let xty =
+                list.vcentered_text_y(close.y, close.height, 9.0, s.theme().font.as_ref(), "✕");
+            list.text(
+                TextBlock::new("✕", close.x + 3.0, xty)
+                    .with_size(9.0)
+                    .with_color(
+                        (xc[0] * 255.0) as u8,
+                        (xc[1] * 255.0) as u8,
+                        (xc[2] * 255.0) as u8,
+                    )
+                    .with_font_opt(s.theme().font.clone()),
+            );
+        }
 
         // Body lines.
         let dim = s.color(StyleKey::TextDim);

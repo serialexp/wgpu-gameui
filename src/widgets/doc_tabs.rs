@@ -143,18 +143,31 @@ pub fn draw(
                 );
             }
             let xc = s.color(StyleKey::TextDim);
-            let xty =
-                list.vcentered_text_y(slot.y, slot.height, 10.0, s.theme().font.as_ref(), "✕");
-            list.text(
-                TextBlock::new("✕", slot.x + 1.0, xty)
-                    .with_size(10.0)
-                    .with_color(
-                        (xc[0] * 255.0) as u8,
-                        (xc[1] * 255.0) as u8,
-                        (xc[2] * 255.0) as u8,
-                    )
-                    .with_font_opt(s.theme().font.clone()),
-            );
+            #[cfg(feature = "phosphor-icons")]
+            {
+                let icon_rect = slot.inset(2.0);
+                list.phosphor_icon(icon_rect, crate::PhosphorIcon::X, xc);
+            }
+            #[cfg(not(feature = "phosphor-icons"))]
+            {
+                let xty = list.vcentered_text_y(
+                    slot.y,
+                    slot.height,
+                    10.0,
+                    s.theme().font.as_ref(),
+                    "✕",
+                );
+                list.text(
+                    TextBlock::new("✕", slot.x + 1.0, xty)
+                        .with_size(10.0)
+                        .with_color(
+                            (xc[0] * 255.0) as u8,
+                            (xc[1] * 255.0) as u8,
+                            (xc[2] * 255.0) as u8,
+                        )
+                        .with_font_opt(s.theme().font.clone()),
+                );
+            }
             if hovered && slot.contains(input.mouse_x, input.mouse_y) && input.mouse_clicked {
                 out.closed = Some(i);
             }

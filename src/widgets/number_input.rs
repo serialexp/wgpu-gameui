@@ -19,7 +19,7 @@
 //! Integer fields are just `decimals == 0` (the default).
 
 #[cfg(feature = "phosphor-icons")]
-use crate::StyleKey;
+use crate::{PhosphorIcon, StyleKey};
 use crate::layout::Rect;
 
 use super::{Button, DrawContext, FocusId, TextInput, Tone};
@@ -74,30 +74,25 @@ fn sanitize_numeric(s: &str, cursor: usize, allow_decimal: bool) -> (String, usi
     (out, new_cursor)
 }
 
-/// Draw a compact up/down triangle centred in a number-input stepper.
-///
-/// It is only used when the phosphor icon feature is present; non-icon builds
-/// retain their text fallback below.
+/// Draw a compact up/down caret centred in a number-input stepper using a
+/// Phosphor CaretUp / CaretDown vector icon. The icon rect is inset so the
+/// glyph fits the 17px column at the design's 8px scale.
 #[cfg(feature = "phosphor-icons")]
 fn draw_stepper_caret(list: &mut super::DrawList, rect: Rect, up: bool, color: [f32; 4]) {
-    let cx = rect.x + rect.width * 0.5;
-    let cy = rect.y + rect.height * 0.5;
-    let half = (rect.width.min(rect.height) * 0.23).min(3.0);
-    if up {
-        list.triangle(
-            (cx, cy - half),
-            (cx - half, cy + half),
-            (cx + half, cy + half),
-            color,
-        );
+    // Inset the icon to ~8px within the stepper half-cell.
+    let icon_size = 8.0f32.min(rect.width).min(rect.height);
+    let icon_rect = Rect::new(
+        rect.x + (rect.width - icon_size) * 0.5,
+        rect.y + (rect.height - icon_size) * 0.5,
+        icon_size,
+        icon_size,
+    );
+    let icon = if up {
+        PhosphorIcon::CaretUp
     } else {
-        list.triangle(
-            (cx - half, cy - half),
-            (cx + half, cy - half),
-            (cx, cy + half),
-            color,
-        );
-    }
+        PhosphorIcon::CaretDown
+    };
+    list.phosphor_icon(icon_rect, icon, color);
 }
 
 /// Output from drawing a [`NumberInput`].
