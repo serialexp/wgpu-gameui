@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.0 (2026-09-24)
+
+### BREAKING CHANGES
+
+- feat!: blend UI colours in sRGB space like the browser
+- fix!: use DesignSync accent and palette values
+- feat!: make state changes instant; keep smooth scrolling
+
+### Features
+
+- return repaint requirements and deadlines from a UI frame
+- add GPU-native forged chrome and analytic shadows
+- conform chrome to Forge dark design, add recursive menus and UiContext verbs
+- add movable Window widget and immediate submenu hover
+
+### Bug Fixes
+
+- match Forge design sizing — 12px body text, 28px wells, 26px buttons
+- match widget sizing to Forge design tokens
+- use Phosphor vector icons for close buttons and stepper carets
+
+### Styles
+
+- apply rustfmt to the settings-form set
+
 ## 0.5.0 (2026-09-17)
 
 ### Bug Fixes
