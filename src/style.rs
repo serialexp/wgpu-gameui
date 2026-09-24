@@ -677,11 +677,7 @@ impl<'a> StyleResolver<'a> {
         let c = self.color(StyleKey::Text);
         TextBlock::new(content, x, y)
             .with_size(self.scalar(StyleKey::FontSize))
-            .with_color(
-                (c[0] * 255.0) as u8,
-                (c[1] * 255.0) as u8,
-                (c[2] * 255.0) as u8,
-            )
+            .with_color_f32(c)
             .with_font_opt(self.theme.font.clone())
     }
 
@@ -692,11 +688,7 @@ impl<'a> StyleResolver<'a> {
         let c = self.color(StyleKey::Text);
         TextBlock::new(content, x, y)
             .with_size(self.scalar(StyleKey::FontSizeTitle))
-            .with_color(
-                (c[0] * 255.0) as u8,
-                (c[1] * 255.0) as u8,
-                (c[2] * 255.0) as u8,
-            )
+            .with_color_f32(c)
             .with_font_opt(self.theme.font.clone())
     }
 }

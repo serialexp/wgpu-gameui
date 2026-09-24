@@ -17,16 +17,17 @@ use wgpu_gameui::debug::DebugReport;
 use wgpu_gameui::layout::{Flow as LayoutFlow, HStack, LayoutNode, MainAlign, Rect};
 use wgpu_gameui::{
     Accelerator, AssetGrid, Backdrop, Banner, BlurParams, Breadcrumb, Button, Checkbox,
-    ColorPicker, ColumnWidth, ContextMenu, ContextMenuState, Corner, DocTab, DragCapture,
-    DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState, GradientStop,
-    Group, HitZone, Hsva, ImageButton, ImageFit, InputState, InteractionScene, Key, LayerStack,
-    List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu, MenuBar,
-    MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, Pager, Popover, PopoverSide,
-    ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode, Separator,
-    Severity, Slider, Splitter, StatusCell, StyleKey, StyleOverlay, StyleResolver, Table,
-    TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection, TextInput, TextSpan, Theme,
-    Toast, ToastStack, Toggle, Tone, TooltipContent, TooltipLayer, TreeAction, TreeNode, TreeState,
-    UiContext, UiRenderer, UiState, Underline, VectorField, VectorScrub, ease, lerp_color,
+    ColorEncoding, ColorPicker, ColumnWidth, ContextMenu, ContextMenuState, Corner, DocTab,
+    DragCapture, DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState,
+    GradientStop, Group, HitZone, Hsva, ImageButton, ImageFit, InputState, InteractionScene, Key,
+    LayerStack, List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu,
+    MenuBar, MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, Pager, Popover,
+    PopoverSide, ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode,
+    Separator, Severity, Slider, Splitter, StatusCell, StyleKey, StyleOverlay, StyleResolver,
+    Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection, TextInput, TextSpan,
+    Theme, Toast, ToastStack, Toggle, Tone, TooltipContent, TooltipLayer, TreeAction, TreeNode,
+    TreeState, UiContext, UiRenderer, UiState, Underline, VectorField, VectorScrub, ease,
+    lerp_color,
 };
 use wgpu_gameui::{
     EmptyState, STATUS_BAR_HEIGHT, badge, chip, dots, draw_combo_trigger, draw_curve_editor,
@@ -326,16 +327,26 @@ fn render_widget_gallery() {
     }))
     .expect("no GPU adapter available");
 
+    // The gallery is one tall image — taller than wgpu's portable default
+    // texture limit (8192) — so ask for whatever this adapter supports.
+    let max_texture_dimension_2d = adapter.limits().max_texture_dimension_2d;
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("gallery device"),
+            required_limits: wgpu::Limits {
+                max_texture_dimension_2d,
+                ..Default::default()
+            },
             ..Default::default()
         },
         None,
     ))
     .expect("request device");
 
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    // A non-sRGB target takes the renderer's direct path, where every blend
+    // happens in sRGB space exactly like the browser — so this PNG is directly
+    // comparable with the DesignSync cards.
+    let format = wgpu::TextureFormat::Rgba8Unorm;
     let font_system = wgpu_gameui::shared_font_system();
     let mut ui = UiRenderer::new(&device, &queue, format, font_system.clone());
 
@@ -2698,11 +2709,7 @@ fn render_widget_gallery() {
                     list.text(
                         TextBlock::new(label, rect.x + 3.0, rect.y + 2.0)
                             .with_size(8.0)
-                            .with_color(
-                                (color[0] * 255.0) as u8,
-                                (color[1] * 255.0) as u8,
-                                (color[2] * 255.0) as u8,
-                            ),
+                            .with_color_f32(color),
                     );
                 }
             };
@@ -2770,11 +2777,7 @@ fn render_widget_gallery() {
             dctx.draw_list.text(
                 TextBlock::new("(body area)", body.x + 8.0, body.y + 8.0)
                     .with_size(10.0)
-                    .with_color(
-                        (bd[0] * 255.0) as u8,
-                        (bd[1] * 255.0) as u8,
-                        (bd[2] * 255.0) as u8,
-                    ),
+                    .with_color_f32(bd),
             );
         }
 
@@ -2790,11 +2793,7 @@ fn render_widget_gallery() {
                 dctx.draw_list.text(
                     TextBlock::new(text, body.x + 8.0, body.y + 8.0)
                         .with_size(10.0)
-                        .with_color(
-                            (bd[0] * 255.0) as u8,
-                            (bd[1] * 255.0) as u8,
-                            (bd[2] * 255.0) as u8,
-                        ),
+                        .with_color_f32(bd),
                 );
             };
             let r = flow.cell(list, "Resizable · close key hovered", 260.0, 170.0);
@@ -2883,6 +2882,10 @@ fn render_widget_gallery() {
     // Size the target to the laid-out content first, so the tooltip layer
     // knows the real screen height (it flips the popup up/left near the edges).
     let h = (content_bottom.ceil() as u32).max(64);
+    assert!(
+        h <= max_texture_dimension_2d,
+        "gallery is {h}px tall, over this adapter's {max_texture_dimension_2d}px texture limit"
+    );
 
     // Cursor-anchored context menu (modal layer: outside clicks close without
     // reaching the base UI).
@@ -3105,12 +3108,7 @@ fn render_widget_gallery() {
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: theme.background[0] as f64,
-                        g: theme.background[1] as f64,
-                        b: theme.background[2] as f64,
-                        a: theme.background[3] as f64,
-                    }),
+                    load: wgpu::LoadOp::Clear(ui.clear_color(theme.background)),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -3132,6 +3130,7 @@ fn render_widget_gallery() {
         &Backdrop {
             view: &scene_view,
             size: (W, h),
+            encoding: ColorEncoding::Srgb,
         },
         blur_rect,
         (W, h),
@@ -3229,8 +3228,9 @@ fn render_widget_gallery() {
     eprintln!("wrote test_output/widget_gallery.png ({W}x{h})");
     save_gallery_images(&img, &gallery_sections, &gallery_components);
 
-    // Sanity: at least some pixels are not the sRGB-encoded theme clear color.
-    let clear = [16u8, 23, 28];
+    // Sanity: at least some pixels are not the theme clear color.
+    let [cr, cg, cb, _] = wgpu_gameui::color::to_rgba8(theme.background);
+    let clear = [cr, cg, cb];
     let drew = img.pixels().any(|p| {
         let d = (p.0[0] as i32 - clear[0] as i32).abs()
             + (p.0[1] as i32 - clear[1] as i32).abs()

@@ -164,6 +164,9 @@ impl ApplicationHandler for App {
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
+        // An sRGB surface: the UI draws into the renderer's offscreen layer and
+        // composites, so blending still matches the browser. (`hello_ui` uses a
+        // plain surface to exercise the direct path.)
         let format = surface_caps
             .formats
             .iter()
@@ -286,12 +289,9 @@ impl ApplicationHandler for App {
                                 view: &view,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                                        r: 0.05,
-                                        g: 0.06,
-                                        b: 0.08,
-                                        a: 1.0,
-                                    }),
+                                    load: wgpu::LoadOp::Clear(
+                                        renderer.clear_color(self.theme.background),
+                                    ),
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],

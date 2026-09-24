@@ -390,9 +390,11 @@ fn mixed_color_shadows_are_reverse_stacked_below_opaque_surface() {
         "first declared red shadow was not topmost: {overlap:?}"
     );
     let surface = rgba_at(&pixels, size, 48, 36);
+    // Colours are sRGB-encoded and captured without conversion: [0.2, 0.8, 0.2]
+    // reads back as 0.2*255 / 0.8*255.
     assert_eq!(
         surface,
-        [124, 231, 124, 255],
+        [51, 204, 51, 255],
         "opaque green surface did not cover shadows"
     );
 }

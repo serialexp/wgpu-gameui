@@ -303,11 +303,7 @@ impl Slider {
             );
             let block = TextBlock::new(&display, text_x, text_y)
                 .with_size(font_size)
-                .with_color(
-                    (text_color[0] * 255.0) as u8,
-                    (text_color[1] * 255.0) as u8,
-                    (text_color[2] * 255.0) as u8,
-                )
+                .with_color_f32(text_color)
                 .with_font_opt(theme.font.clone());
             list.text(block);
         }

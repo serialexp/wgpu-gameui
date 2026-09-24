@@ -82,11 +82,7 @@ impl<'a> Breadcrumb<'a> {
                 list.text(
                     TextBlock::new(*seg, seg_rect.x, text_y_baseline)
                         .with_size(font_size)
-                        .with_color(
-                            (color[0] * 255.0) as u8,
-                            (color[1] * 255.0) as u8,
-                            (color[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(color)
                         .with_font_opt(s.theme().font.clone()),
                 );
             }
@@ -102,11 +98,7 @@ impl<'a> Breadcrumb<'a> {
                 list.text(
                     TextBlock::new(sep, x + self.gap, text_y_baseline)
                         .with_size(font_size)
-                        .with_color(
-                            (sep_color[0] * 255.0) as u8,
-                            (sep_color[1] * 255.0) as u8,
-                            (sep_color[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(sep_color)
                         .with_font_opt(s.theme().font.clone()),
                 );
                 x += self.gap + sw + self.gap;
@@ -274,11 +266,7 @@ impl Pager {
                 list.text(
                     TextBlock::new(label.as_str(), r.x + (r.width - tw) * 0.5, ty)
                         .with_size(font_size)
-                        .with_color(
-                            (color[0] * 255.0) as u8,
-                            (color[1] * 255.0) as u8,
-                            (color[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(color)
                         .with_font_opt(s.theme().font.clone()),
                 );
                 if clicked && !active {
@@ -308,11 +296,7 @@ impl Pager {
         list.text(
             TextBlock::new(readout.as_str(), rect.x + (rect.width - tw) * 0.5, ty)
                 .with_size(font_size)
-                .with_color(
-                    (color[0] * 255.0) as u8,
-                    (color[1] * 255.0) as u8,
-                    (color[2] * 255.0) as u8,
-                )
+                .with_color_f32(color)
                 .with_font_opt(s.theme().font.clone()),
         );
 

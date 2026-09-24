@@ -56,7 +56,7 @@ pub struct BoxShadow {
     pub blur: f32,
     /// CSS spread radius.
     pub spread: f32,
-    /// Straight, linear RGBA color.
+    /// Straight sRGB-encoded RGBA color (see [`crate::color`]).
     pub color: [f32; 4],
     /// Whether this is an inset shadow.
     pub inset: bool,
@@ -93,7 +93,7 @@ pub struct ShadowInstance {
     pub shadow_rect: [f32; 4],
     /// Original border box (outset) or explicit padding box (inset).
     pub element_rect: [f32; 4],
-    /// Straight, linear RGBA color, with draw-list tint applied.
+    /// Straight sRGB-encoded RGBA color, with draw-list tint applied.
     pub color: [f32; 4],
     /// Adjusted source/hole radii in clockwise order from top-left.
     pub shadow_radii: [f32; 4],

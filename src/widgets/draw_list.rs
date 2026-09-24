@@ -2287,20 +2287,14 @@ impl DrawList {
         let tint = self.current_tint();
         if tint != [1.0, 1.0, 1.0, 1.0] {
             // cosmic_text::Color is RGBA8; multiply per-channel via the public accessors.
-            let r = block.color.r() as f32 / 255.0;
-            let g = block.color.g() as f32 / 255.0;
-            let b = block.color.b() as f32 / 255.0;
-            let a = block.color.a() as f32 / 255.0;
-            let nr = (r * tint[0]).clamp(0.0, 1.0);
-            let ng = (g * tint[1]).clamp(0.0, 1.0);
-            let nb = (b * tint[2]).clamp(0.0, 1.0);
-            let na = (a * tint[3]).clamp(0.0, 1.0);
-            block.color = cosmic_text::Color::rgba(
-                (nr * 255.0).round() as u8,
-                (ng * 255.0).round() as u8,
-                (nb * 255.0).round() as u8,
-                (na * 255.0).round() as u8,
-            );
+            let c = block.color;
+            let [r, g, b, a] = crate::color::to_rgba8([
+                c.r() as f32 / 255.0 * tint[0],
+                c.g() as f32 / 255.0 * tint[1],
+                c.b() as f32 / 255.0 * tint[2],
+                c.a() as f32 / 255.0 * tint[3],
+            ]);
+            block.color = cosmic_text::Color::rgba(r, g, b, a);
             // Tint per-span/range colour and underline overrides with the same factor.
             for span in &mut block.spans {
                 if let Some(c) = &mut span.color {

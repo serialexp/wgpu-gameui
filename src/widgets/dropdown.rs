@@ -77,14 +77,6 @@ const CHEVRON: f32 = 4.0;
 /// the theme's ordinary field padding.
 const CHEVRON_EDGE_GAP: f32 = 2.0;
 
-fn rgb(c: [f32; 4]) -> (u8, u8, u8) {
-    (
-        (c[0] * 255.0) as u8,
-        (c[1] * 255.0) as u8,
-        (c[2] * 255.0) as u8,
-    )
-}
-
 /// Everything the deferred list draw needs, snapshotted while the open
 /// dropdown's button draws. Cloned once per frame for the single open dropdown
 /// (closed dropdowns snapshot nothing).
@@ -299,8 +291,8 @@ impl DropdownState {
             }
         }
 
-        let (sel_r, sel_g, sel_b) = rgb(style.color(StyleKey::Background));
-        let (txt_r, txt_g, txt_b) = rgb(style.color(StyleKey::Text));
+        let selected_text = style.color(StyleKey::Background);
+        let item_text = style.color(StyleKey::Text);
         let pad = style.scalar(StyleKey::Padding);
         let font_size = style.scalar(StyleKey::FontSize);
         let font = style.theme().font.clone();
@@ -364,17 +356,17 @@ impl DropdownState {
                         }
                         l.quad(list_rect.x, iy, list_rect.width, geom.item_h, hover);
                     }
-                    let (r, g, b) = if is_selected {
-                        (sel_r, sel_g, sel_b)
+                    let item_color = if is_selected {
+                        selected_text
                     } else {
-                        (txt_r, txt_g, txt_b)
+                        item_text
                     };
                     let text_y =
                         l.vcentered_text_y(iy, geom.item_h, font_size, font.as_ref(), item);
                     l.text(
                         TextBlock::new(item.clone(), list_rect.x + pad, text_y)
                             .with_size(font_size)
-                            .with_color(r, g, b)
+                            .with_color_f32(item_color)
                             .with_max_width((list_rect.width - pad * 2.0).max(0.0))
                             .with_ellipsis()
                             .with_font_opt(font.clone()),
@@ -602,11 +594,11 @@ impl<'a> Dropdown<'a> {
 
         // Selected label.
         let label = self.items.get(self.selected).copied().unwrap_or("");
-        let (r, g, b) = rgb(if self.items.is_empty() {
+        let label_color = if self.items.is_empty() {
             s.color(StyleKey::TextDim)
         } else {
             s.color(StyleKey::Text)
-        });
+        };
         let font_size = s.scalar(StyleKey::FontSize);
         let pad = s.scalar(StyleKey::Padding);
         let text_y = list.vcentered_text_y(
@@ -619,7 +611,7 @@ impl<'a> Dropdown<'a> {
         list.text(
             TextBlock::new(label, rect.x + pad, text_y)
                 .with_size(font_size)
-                .with_color(r, g, b)
+                .with_color_f32(label_color)
                 .with_max_width(
                     (rect.width - pad * 2.0 - CHEVRON * 3.0 - CHEVRON_EDGE_GAP).max(0.0),
                 )

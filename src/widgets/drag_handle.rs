@@ -212,11 +212,7 @@ impl DragHandle {
                 list.vcentered_text_y(rect.y, rect.height, font_size, font.as_ref(), label);
             let block = TextBlock::new(label, text_x, text_y)
                 .with_size(font_size)
-                .with_color(
-                    (c[0] * 255.0) as u8,
-                    (c[1] * 255.0) as u8,
-                    (c[2] * 255.0) as u8,
-                )
+                .with_color_f32(c)
                 .with_font_opt(font);
             list.text(block);
         }

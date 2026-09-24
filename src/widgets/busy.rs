@@ -116,11 +116,7 @@ pub fn empty_state(
     list.text(
         TextBlock::new(state.glyph, rect.x + (rect.width - gw) * 0.5, gy)
             .with_size(glyph_h)
-            .with_color(
-                (dim[0] * 255.0) as u8,
-                (dim[1] * 255.0) as u8,
-                (dim[2] * 255.0) as u8,
-            )
+            .with_color_f32(dim)
             .with_font_opt(s.theme().font.clone()),
     );
 
@@ -135,11 +131,7 @@ pub fn empty_state(
     list.text(
         TextBlock::new(state.title, rect.x + (rect.width - tw) * 0.5, ty)
             .with_size(font_size * 1.1)
-            .with_color(
-                (text[0] * 255.0) as u8,
-                (text[1] * 255.0) as u8,
-                (text[2] * 255.0) as u8,
-            )
+            .with_color_f32(text)
             .with_font_opt(s.theme().font.clone()),
     );
 
@@ -147,11 +139,7 @@ pub fn empty_state(
     list.text(
         TextBlock::new(state.body, rect.x + 16.0, by)
             .with_size(font_size * 0.9)
-            .with_color(
-                (dim[0] * 255.0) as u8,
-                (dim[1] * 255.0) as u8,
-                (dim[2] * 255.0) as u8,
-            )
+            .with_color_f32(dim)
             .with_max_width(rect.width - 32.0)
             .with_align(crate::text::TextAlign::Center)
             .with_font_opt(s.theme().font.clone()),

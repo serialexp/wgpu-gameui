@@ -18,6 +18,7 @@
 mod atlas;
 mod blur;
 mod capture;
+mod composite;
 mod glyph_msdf;
 #[cfg(feature = "phosphor-icons")]
 mod icon_font;
@@ -41,7 +42,7 @@ pub use icon_font::{
 pub use phosphor::PhosphorIcon;
 
 pub use atlas::{AtlasRegion, SpriteAtlas, SpriteId};
-pub use blur::{Backdrop, BlurParams};
+pub use blur::{Backdrop, BlurParams, ColorEncoding};
 #[cfg(feature = "headless")]
 pub use capture::HeadlessGpu;
 pub use capture::{CAPTURE_FORMAT, capture_draw_list, capture_layers, write_png};

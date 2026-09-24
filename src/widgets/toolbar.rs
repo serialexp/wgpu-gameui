@@ -31,7 +31,7 @@
 //! ```
 
 use crate::chrome::{Background, Edge, QuadStyle, StructuralLine, SurfacePainter};
-use crate::color::srgb_to_linear;
+use crate::color::{hex, rgba8};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{StyleKey, StyleResolver};
@@ -721,17 +721,15 @@ impl<'a> Toolbar<'a> {
             icon_size,
         );
         let icon_tint = if is_active {
-            srgb_to_linear([234.0 / 255.0, 250.0 / 255.0, 1.0, 1.0])
+            hex(0xeafaff)
         } else if !tool.enabled {
-            let mut color = srgb_to_linear([182.0 / 255.0, 190.0 / 255.0, 197.0 / 255.0, 1.0]);
-            color[3] *= 0.45;
-            color
+            rgba8([0xb6, 0xbe, 0xc5], 0.45)
         } else if pressed {
-            srgb_to_linear([183.0 / 255.0, 191.0 / 255.0, 198.0 / 255.0, 1.0])
+            hex(0xb7bfc6)
         } else if hovered {
-            srgb_to_linear([238.0 / 255.0, 242.0 / 255.0, 246.0 / 255.0, 1.0])
+            hex(0xeef2f6)
         } else {
-            srgb_to_linear([182.0 / 255.0, 190.0 / 255.0, 197.0 / 255.0, 1.0])
+            hex(0xb6bec5)
         };
         tool.icon.tint(icon_tint).draw(icon_rect, ctx.draw_list);
 
@@ -843,11 +841,7 @@ impl<'a> Toolbar<'a> {
             ctx.styles()
                 .text_block("…", face.x + (face.width - 8.0) * 0.5, y)
                 .with_size(12.0)
-                .with_color(
-                    (color[0] * 255.0) as u8,
-                    (color[1] * 255.0) as u8,
-                    (color[2] * 255.0) as u8,
-                )
+                .with_color_f32(color)
                 .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
         );
         if hovered {
@@ -1308,7 +1302,7 @@ fn tool_main_extent(button_size: f32, travel: f32, vertical: bool) -> f32 {
 mod tests {
     use super::*;
     use crate::Theme;
-    use crate::color::opaque_srgb8;
+    use crate::color::rgb8;
     use crate::layout::Rect;
     use crate::style::StyleOverlay;
     use crate::widgets::DrawList;
@@ -1383,7 +1377,7 @@ mod tests {
         let mut cx = ctx(&mut list, &mut focus, &theme, &input);
         Toolbar::new(&items).draw(rect, &mut state, &mut capture, 99, &mut cx);
 
-        let held_top = opaque_srgb8([0x4a, 0x8a, 0x9c]);
+        let held_top = rgb8([0x4a, 0x8a, 0x9c]);
         let held = list
             .chrome_instances()
             .find(|instance| instance.bg == held_top)
@@ -1448,9 +1442,9 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
 
-        let top = opaque_srgb8([0x41, 0x44, 0x48]);
-        let bottom = opaque_srgb8([0x2a, 0x2e, 0x33]);
-        let border = opaque_srgb8([0x10, 0x12, 0x15]);
+        let top = rgb8([0x41, 0x44, 0x48]);
+        let bottom = rgb8([0x2a, 0x2e, 0x33]);
+        let border = rgb8([0x10, 0x12, 0x15]);
         assert!(
             list.chrome_instances()
                 .any(|instance| instance.bg == top && instance.bg2 == bottom),
@@ -1683,7 +1677,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
 
-        let idle_top = opaque_srgb8([0x41, 0x44, 0x48]);
+        let idle_top = rgb8([0x41, 0x44, 0x48]);
         let face = list
             .chrome_instances()
             .find(|instance| instance.bg == idle_top)
@@ -1720,7 +1714,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
 
-        let held_top = opaque_srgb8([0x4a, 0x8a, 0x9c]);
+        let held_top = rgb8([0x4a, 0x8a, 0x9c]);
         let held = list
             .chrome_instances()
             .find(|instance| instance.bg == held_top)

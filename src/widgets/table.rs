@@ -400,11 +400,7 @@ impl<'a> Table<'a> {
             let text_dim = style.color(StyleKey::TextDim);
             let text = TextBlock::new(&col.label, text_x, text_y)
                 .with_size(font_size)
-                .with_color(
-                    (text_dim[0] * 255.0) as u8,
-                    (text_dim[1] * 255.0) as u8,
-                    (text_dim[2] * 255.0) as u8,
-                )
+                .with_color_f32(text_dim)
                 .with_font_opt(style.theme().font.clone());
             list.text(text);
 
@@ -445,11 +441,7 @@ impl<'a> Table<'a> {
         let color = cell.color.unwrap_or_else(|| style.color(StyleKey::Text));
         let text = TextBlock::new(&cell.text, text_x, text_y)
             .with_size(font_size)
-            .with_color(
-                (color[0] * 255.0) as u8,
-                (color[1] * 255.0) as u8,
-                (color[2] * 255.0) as u8,
-            )
+            .with_color_f32(color)
             .with_font_opt(style.theme().font.clone());
         list.text(text);
     }

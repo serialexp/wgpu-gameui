@@ -140,11 +140,7 @@ pub fn draw(rect: Rect, cells: &[StatusCell<'_>], ctx: &mut DrawContext) {
             list.text(
                 crate::text::TextBlock::new(cell.text, x + pad, ty)
                     .with_size(font_size)
-                    .with_color(
-                        (color[0] * 255.0) as u8,
-                        (color[1] * 255.0) as u8,
-                        (color[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(color)
                     .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_font_opt(s.theme().font.clone()),
             );

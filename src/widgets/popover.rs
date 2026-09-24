@@ -150,11 +150,7 @@ pub fn draw_sheet(
         list.text(
             TextBlock::new(title, body.x + 8.0, ty)
                 .with_size(font_size)
-                .with_color(
-                    (title_color[0] * 255.0) as u8,
-                    (title_color[1] * 255.0) as u8,
-                    (title_color[2] * 255.0) as u8,
-                )
+                .with_color_f32(title_color)
                 .with_ellipsis()
                 .with_max_width(body.width - 16.0 - 18.0)
                 .with_font_opt(s.theme().font.clone()),
@@ -179,11 +175,7 @@ pub fn draw_sheet(
             list.text(
                 TextBlock::new("✕", close.x + 3.0, xty)
                     .with_size(9.0)
-                    .with_color(
-                        (xc[0] * 255.0) as u8,
-                        (xc[1] * 255.0) as u8,
-                        (xc[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(xc)
                     .with_font_opt(s.theme().font.clone()),
             );
         }
@@ -202,11 +194,7 @@ pub fn draw_sheet(
             list.text(
                 TextBlock::new(*line, body.x + 8.0, ly)
                     .with_size(font_size)
-                    .with_color(
-                        (dim[0] * 255.0) as u8,
-                        (dim[1] * 255.0) as u8,
-                        (dim[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(dim)
                     .with_max_width(body.width - 16.0)
                     .with_font_opt(s.theme().font.clone()),
             );

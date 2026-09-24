@@ -32,7 +32,7 @@
 //! ```
 
 use crate::chrome::SurfacePainter;
-use crate::color::srgb_to_linear;
+use crate::color::hex;
 use crate::layout::Rect;
 use crate::style::StyleKey;
 use crate::text::TextBlock;
@@ -222,11 +222,7 @@ impl<'a> DockPanel<'a> {
                 ctx.draw_list.text(
                     TextBlock::new("✕", close_rect.x + (close_rect.width - 6.0) * 0.5, xty)
                         .with_size(10.0)
-                        .with_color(
-                            (xc[0] * 255.0) as u8,
-                            (xc[1] * 255.0) as u8,
-                            (xc[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(xc)
                         .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(s.theme().font.clone()),
                 );
@@ -286,19 +282,9 @@ impl<'a> DockPanel<'a> {
                 // The dock spec keeps hovered and idle labels at the same tone;
                 // only the chip face changes on hover.
                 let text_color = if is_active {
-                    srgb_to_linear([
-                        0xf1 as f32 / 255.0,
-                        0xf5 as f32 / 255.0,
-                        0xf9 as f32 / 255.0,
-                        1.0,
-                    ])
+                    hex(0xf1f5f9)
                 } else {
-                    srgb_to_linear([
-                        0x98 as f32 / 255.0,
-                        0xa0 as f32 / 255.0,
-                        0xa8 as f32 / 255.0,
-                        1.0,
-                    ])
+                    hex(0x98a0a8)
                 };
                 let ty = ctx.draw_list.vcentered_text_y(
                     tab_rect.y,
@@ -313,11 +299,7 @@ impl<'a> DockPanel<'a> {
                 ctx.draw_list.text(
                     TextBlock::new(tab.label, tab_rect.x + tab_pad_h + 1.0, ty)
                         .with_size(font_size)
-                        .with_color(
-                            (text_color[0] * 255.0) as u8,
-                            (text_color[1] * 255.0) as u8,
-                            (text_color[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(text_color)
                         .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(s.theme().font.clone()),
                 );
@@ -360,7 +342,7 @@ pub struct DockPanelOutput {
 mod tests {
     use super::*;
     use crate::chrome::Background;
-    use crate::color::opaque_srgb8;
+    use crate::color::rgb8;
     use crate::{DrawList, FocusState, InputState, StyleOverlay, Theme};
 
     fn ctx<'a>(
@@ -491,12 +473,12 @@ mod tests {
 
         let active = list
             .chrome_instances()
-            .find(|instance| instance.bg == opaque_srgb8([0x40, 0x43, 0x46]))
+            .find(|instance| instance.bg == rgb8([0x40, 0x43, 0x46]))
             .expect("active dock tab should emit the raised reference chip");
-        assert_eq!(active.bg2, opaque_srgb8([0x2a, 0x2e, 0x31]));
+        assert_eq!(active.bg2, rgb8([0x2a, 0x2e, 0x31]));
         assert_eq!(active.rect[3], 18.0);
         assert!(list.chrome_instances().any(|instance| {
-            instance.border == opaque_srgb8([0x0f, 0x11, 0x13]) && instance.widths == [1.0; 4]
+            instance.border == rgb8([0x0f, 0x11, 0x13]) && instance.widths == [1.0; 4]
         }));
         assert_eq!(list.shadow_instance_count(), 1);
     }

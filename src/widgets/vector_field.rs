@@ -13,7 +13,7 @@ use super::DrawContext;
 use super::drag::{DragCapture, DragId};
 use super::material;
 
-/// Default axis tag tints (design axis colors, linear-ish sRGB).
+/// Default axis tag tints (the design's axis colors, sRGB-encoded).
 pub const AXIS_TINTS: [[f32; 4]; 3] = [
     [0.7862, 0.3895, 0.3661, 1.0], // X — red
     [0.3722, 0.6185, 0.3817, 1.0], // Y — green
@@ -118,11 +118,7 @@ impl<'a> VectorField<'a> {
             list.text(
                 TextBlock::new(*label, rect.x, ty)
                     .with_size(font_size)
-                    .with_color(
-                        (dim[0] * 255.0) as u8,
-                        (dim[1] * 255.0) as u8,
-                        (dim[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(dim)
                     .with_font_opt(s.theme().font.clone()),
             );
 
@@ -159,11 +155,7 @@ impl<'a> VectorField<'a> {
                 list.text(
                     TextBlock::new(axis_label, cell.x + 4.0, gty)
                         .with_size(8.0)
-                        .with_color(
-                            (white[0] * 255.0) as u8,
-                            (white[1] * 255.0) as u8,
-                            (white[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(white)
                         .with_font_opt(s.theme().font.clone()),
                 );
 
@@ -182,11 +174,7 @@ impl<'a> VectorField<'a> {
                 list.text(
                     TextBlock::new(text.as_str(), cell.right() - tw - 6.0, vty)
                         .with_size(font_size)
-                        .with_color(
-                            (fg[0] * 255.0) as u8,
-                            (fg[1] * 255.0) as u8,
-                            (fg[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(fg)
                         .with_font_opt(s.theme().font.clone()),
                 );
 

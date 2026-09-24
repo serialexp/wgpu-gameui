@@ -80,7 +80,7 @@ pub use model::{
 pub use placement::{blocker_regions, place_popup, place_submenu};
 pub use state::{MAX_MENU_DEPTH, MenuBarState, MenuDrawEnv, MenuLayers};
 
-use crate::color::opaque_srgb8;
+use crate::color::rgb8;
 use crate::layout::{Constraint, Rect};
 use crate::text::{TextBlock, WrapMode};
 use crate::{
@@ -340,11 +340,10 @@ impl<'a> MenuBar<'a> {
 
         // Pass 3: paint the strip's owning chrome, then labels. Label fills are
         // limited to hovered, highlighted, and open states.
-        let accent = opaque_srgb8([0x79, 0xc6, 0xd8]);
-        let hover = opaque_srgb8([0x32, 0x37, 0x3b]);
-        // TextBlock colours are literal 8-bit sRGB, unlike geometry colours.
-        let text = (0xd5, 0xdc, 0xe2);
-        let dim = rgb(styles.color(StyleKey::TextDim));
+        let accent = rgb8([0x79, 0xc6, 0xd8]);
+        let hover = rgb8([0x32, 0x37, 0x3b]);
+        let text = rgb8([0xd5, 0xdc, 0xe2]);
+        let dim = styles.color(StyleKey::TextDim);
         let font_size = MENU_TITLE_FONT_SIZE;
         let font = theme.font.clone();
         let (open_menu, armed, highlighted, hovered) = (
@@ -390,10 +389,10 @@ impl<'a> MenuBar<'a> {
                             hover,
                         );
                     }
-                    let (r, g, b) = if !menu.is_enabled() {
+                    let label_color = if !menu.is_enabled() {
                         dim
                     } else if open {
-                        (4, 20, 24)
+                        rgb8([4, 20, 24])
                     } else {
                         text
                     };
@@ -406,7 +405,7 @@ impl<'a> MenuBar<'a> {
                     );
                     let block = TextBlock::new(menu.label(), label_rect.x + MENU_TITLE_PADDING, ty)
                         .with_size(font_size)
-                        .with_color(r, g, b)
+                        .with_color_f32(label_color)
                         .with_font_opt(font.clone());
                     list.text(if open {
                         block
@@ -495,21 +494,13 @@ fn paint_accent_plate(list: &mut crate::DrawList, rect: Rect, accent: [f32; 4]) 
         rect.y,
         rect.width,
         rect.height.min(1.0),
-        opaque_srgb8([0xa1, 0xd7, 0xe4]),
+        rgb8([0xa1, 0xd7, 0xe4]),
     );
     list.quad(
         rect.x,
         rect.y + (rect.height - 1.0).max(0.0),
         rect.width,
         rect.height.min(1.0),
-        opaque_srgb8([0x5b, 0x95, 0xa2]),
+        rgb8([0x5b, 0x95, 0xa2]),
     );
-}
-
-fn rgb(color: [f32; 4]) -> (u8, u8, u8) {
-    (
-        (color[0] * 255.0) as u8,
-        (color[1] * 255.0) as u8,
-        (color[2] * 255.0) as u8,
-    )
 }

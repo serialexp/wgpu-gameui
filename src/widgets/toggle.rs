@@ -4,7 +4,6 @@
 //! a light circular knob sliding between the ends. Click (or Space/Enter when
 //! focused) flips it.
 
-use crate::color::srgb_to_linear;
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
@@ -109,7 +108,7 @@ impl Toggle {
         };
         let cy = switch_rect.y + switch_rect.height * 0.5;
         // Gradient: #ffffff top → #c6ced5 bottom (sRGB midpoint ≈ #e3e9ee).
-        let knob_color = srgb_to_linear([0.89, 0.91, 0.93, 1.0]);
+        let knob_color = [0.89, 0.91, 0.93, 1.0];
         list.circle((knob_x + knob_d * 0.5, cy), knob_d * 0.5, knob_color);
         list.circle_outline(
             (knob_x + knob_d * 0.5, cy),
@@ -132,11 +131,7 @@ impl Toggle {
             list.text(
                 TextBlock::new(label.as_str(), switch_rect.right() + 6.0, text_y)
                     .with_size(font_size)
-                    .with_color(
-                        (text_color[0] * 255.0) as u8,
-                        (text_color[1] * 255.0) as u8,
-                        (text_color[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(text_color)
                     .with_font_opt(s.theme().font.clone()),
             );
         }

@@ -114,11 +114,7 @@ pub fn draw(
         list.text(
             TextBlock::new(tab.label, x + (tab_w - tw) * 0.5, ty)
                 .with_size(font_size)
-                .with_color(
-                    (text_color[0] * 255.0) as u8,
-                    (text_color[1] * 255.0) as u8,
-                    (text_color[2] * 255.0) as u8,
-                )
+                .with_color_f32(text_color)
                 .with_ellipsis()
                 .with_max_width((tab_w - 18.0).max(12.0))
                 .with_font_opt(s.theme().font.clone()),
@@ -155,11 +151,7 @@ pub fn draw(
                 list.text(
                     TextBlock::new("✕", slot.x + 1.0, xty)
                         .with_size(10.0)
-                        .with_color(
-                            (xc[0] * 255.0) as u8,
-                            (xc[1] * 255.0) as u8,
-                            (xc[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(xc)
                         .with_font_opt(s.theme().font.clone()),
                 );
             }

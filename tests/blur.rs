@@ -6,7 +6,7 @@
 //! assert the edge got smeared (and that a larger radius smears it wider).
 
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{Backdrop, BlurParams, UiRenderer, shared_font_system};
+use wgpu_gameui::{Backdrop, BlurParams, ColorEncoding, UiRenderer, shared_font_system};
 
 const SIZE: u32 = 64;
 
@@ -28,9 +28,38 @@ fn device_queue() -> (wgpu::Device, wgpu::Queue) {
     .expect("request device")
 }
 
+/// How a blur test's scene is stored and sampled, and what it's drawn into.
+#[derive(Clone, Copy, Debug)]
+struct Setup {
+    scene: wgpu::TextureFormat,
+    encoding: ColorEncoding,
+    target: wgpu::TextureFormat,
+    /// Byte value of the scene's left half (the right half is 255).
+    left: u8,
+}
+
+/// The classic swapchain setup: sRGB scene sampled as linear, sRGB target.
+const SRGB_HOST: Setup = Setup {
+    scene: wgpu::TextureFormat::Rgba8UnormSrgb,
+    encoding: ColorEncoding::Linear,
+    target: wgpu::TextureFormat::Rgba8UnormSrgb,
+    left: 0,
+};
+
 /// A `SIZE`×`SIZE` scene: left half black, right half white (sharp edge at the
 /// vertical midline). Returns the sampleable texture + its view.
 fn edge_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Texture, wgpu::TextureView) {
+    scene_with(device, queue, SRGB_HOST.scene, SRGB_HOST.left)
+}
+
+/// A `SIZE`×`SIZE` scene stored as `format`: left half `left`, right half
+/// white.
+fn scene_with(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    left: u8,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("blur test scene"),
         size: wgpu::Extent3d {
@@ -41,7 +70,7 @@ fn edge_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Texture, wgp
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
@@ -49,7 +78,7 @@ fn edge_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Texture, wgp
     for y in 0..SIZE {
         for x in 0..SIZE {
             let i = ((y * SIZE + x) * 4) as usize;
-            let v = if x < SIZE / 2 { 0u8 } else { 255u8 };
+            let v = if x < SIZE / 2 { left } else { 255u8 };
             pixels[i] = v;
             pixels[i + 1] = v;
             pixels[i + 2] = v;
@@ -82,11 +111,16 @@ fn edge_scene(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Texture, wgp
 /// Blur the edge scene over the full target with the given radius/downsample and
 /// return the de-padded RGBA bytes of the result.
 fn blur_to_pixels(radius: f32, downsample: u32) -> Vec<u8> {
+    blur_with(SRGB_HOST, radius, downsample, [1.0, 1.0, 1.0, 1.0])
+}
+
+/// [`blur_to_pixels`] for an explicit [`Setup`] and tint.
+fn blur_with(setup: Setup, radius: f32, downsample: u32, tint: [f32; 4]) -> Vec<u8> {
     let (device, queue) = device_queue();
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let format = setup.target;
     let mut ui = UiRenderer::new(&device, &queue, format, shared_font_system());
 
-    let (_scene, scene_view) = edge_scene(&device, &queue);
+    let (_scene, scene_view) = scene_with(&device, &queue, setup.scene, setup.left);
 
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("blur test target"),
@@ -147,6 +181,7 @@ fn blur_to_pixels(radius: f32, downsample: u32) -> Vec<u8> {
         &Backdrop {
             view: &scene_view,
             size: (SIZE, SIZE),
+            encoding: setup.encoding,
         },
         Rect::new(0.0, 0.0, SIZE as f32, SIZE as f32),
         (SIZE, SIZE),
@@ -154,7 +189,7 @@ fn blur_to_pixels(radius: f32, downsample: u32) -> Vec<u8> {
         &BlurParams {
             radius,
             downsample,
-            tint: [1.0, 1.0, 1.0, 1.0],
+            tint,
         },
     );
 
@@ -225,6 +260,42 @@ fn blur_smears_a_sharp_edge() {
         edge_blue > 30,
         "edge should be gray (blue present), not green clear"
     );
+}
+
+/// Flat areas come through unchanged, and the tint multiplies in sRGB space,
+/// whichever way the scene is stored and whatever the target stores: the
+/// encode/decode flags must line up for all four pairings.
+#[test]
+fn blur_output_is_colour_space_consistent() {
+    use wgpu::TextureFormat::{Rgba8Unorm, Rgba8UnormSrgb};
+    let pairings = [
+        (Rgba8UnormSrgb, ColorEncoding::Linear, Rgba8UnormSrgb),
+        (Rgba8UnormSrgb, ColorEncoding::Linear, Rgba8Unorm),
+        (Rgba8Unorm, ColorEncoding::Srgb, Rgba8UnormSrgb),
+        (Rgba8Unorm, ColorEncoding::Srgb, Rgba8Unorm),
+    ];
+    for (scene, encoding, target) in pairings {
+        let setup = Setup {
+            scene,
+            encoding,
+            target,
+            left: 0x80,
+        };
+        let plain = blur_with(setup, 2.0, 1, [1.0, 1.0, 1.0, 1.0]);
+        let grey = red_at(&plain, 4, SIZE / 2);
+        assert!(
+            grey.abs_diff(0x80) <= 1,
+            "{setup:?}: flat #808080 came out as {grey:#04x}"
+        );
+        // Half tint on white: sRGB 1.0 × 0.5 → 128 (a linear multiply would
+        // give 188 on an sRGB target).
+        let tinted = blur_with(setup, 2.0, 1, [0.5, 0.5, 0.5, 1.0]);
+        let half = red_at(&tinted, SIZE - 4, SIZE / 2);
+        assert!(
+            half.abs_diff(128) <= 1,
+            "{setup:?}: white × 0.5 tint came out as {half}"
+        );
+    }
 }
 
 /// Count columns in the middle row whose red channel is strictly between the
@@ -313,6 +384,7 @@ fn two_blur_calls_in_one_submission_keep_their_own_params() {
     let backdrop = Backdrop {
         view: &scene_view,
         size: (SIZE, SIZE),
+        encoding: ColorEncoding::Linear,
     };
     ui.begin_frame();
     // Left half: tiny radius (the sharp edge stays put), neutral tint.

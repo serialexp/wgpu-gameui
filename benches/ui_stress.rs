@@ -25,6 +25,11 @@
 //! - `frame_render` — full `render()` of N chrome buttons (the real frame cost).
 //! - `render_text_only` — N bare text blocks, identical vs unique labels, to
 //!   attribute how much of `frame_render` is cosmic-text shaping.
+//! - `target_path` — the same frame through the renderer's direct path
+//!   (`Rgba8Unorm` target) and its offscreen path (`Rgba8UnormSrgb`: clear the
+//!   layer, draw, composite) at 1080p and 4K, **waiting for the GPU**. The gap
+//!   between the two is the offscreen cost; the budget is ≤ 1 ms per render
+//!   call at 4K.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
@@ -56,12 +61,19 @@ struct Harness {
     ui: UiRenderer,
     view: wgpu::TextureView,
     font_system: FontSystemHandle,
+    size: (u32, u32),
     // Keep the target alive for `view`.
     _target: wgpu::Texture,
 }
 
 impl Harness {
+    /// The default harness: a 1080p sRGB target (the renderer's offscreen path,
+    /// as with a typical sRGB swapchain).
     fn new() -> Self {
+        Self::with_target(wgpu::TextureFormat::Rgba8UnormSrgb, (W, H))
+    }
+
+    fn with_target(format: wgpu::TextureFormat, size: (u32, u32)) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
@@ -69,6 +81,16 @@ impl Harness {
             force_fallback_adapter: false,
         }))
         .expect("no GPU adapter available (run under DISPLAY=:0 with a GPU)");
+        // Numbers are meaningless without knowing which adapter produced them
+        // (a machine can expose a discrete GPU, an iGPU and llvmpipe).
+        static REPORTED: std::sync::Once = std::sync::Once::new();
+        REPORTED.call_once(|| {
+            let info = adapter.get_info();
+            eprintln!(
+                "ui_stress adapter: {} ({:?}, {:?}, driver {})",
+                info.name, info.device_type, info.backend, info.driver
+            );
+        });
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -79,7 +101,6 @@ impl Harness {
         ))
         .expect("request device");
 
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let font_system = wgpu_gameui::shared_font_system();
         let mut ui = UiRenderer::new(&device, &queue, format, font_system.clone());
 
@@ -95,8 +116,8 @@ impl Harness {
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ui_stress target"),
             size: wgpu::Extent3d {
-                width: W,
-                height: H,
+                width: size.0,
+                height: size.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -114,6 +135,7 @@ impl Harness {
             ui,
             view,
             font_system,
+            size,
             _target: target,
         }
     }
@@ -127,6 +149,19 @@ impl Harness {
     /// Encode + submit one frame for `list`, draining finished GPU work without
     /// blocking on it (keeps the queue from backing up across Criterion iters).
     fn render_frame(&mut self, list: &DrawList) {
+        self.encode_and_submit(list);
+        self.device.poll(wgpu::Maintain::Poll);
+    }
+
+    /// [`render_frame`](Self::render_frame), then block until the GPU has
+    /// finished it — so the sample includes GPU execution (fill-rate costs
+    /// such as the offscreen clear + composite), not just CPU encode.
+    fn render_frame_and_wait(&mut self, list: &DrawList) {
+        self.encode_and_submit(list);
+        self.device.poll(wgpu::Maintain::Wait);
+    }
+
+    fn encode_and_submit(&mut self, list: &DrawList) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -154,12 +189,11 @@ impl Harness {
             &self.queue,
             &mut encoder,
             &self.view,
-            (W, H),
+            self.size,
             1.0,
             list,
         );
         self.queue.submit(Some(encoder.finish()));
-        self.device.poll(wgpu::Maintain::Poll);
     }
 }
 
@@ -375,6 +409,31 @@ fn bench_frame_render(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
             b.iter(|| harness.render_frame(&list));
         });
+    }
+    group.finish();
+}
+
+/// Direct vs offscreen target path, GPU time included (see the module docs).
+fn bench_target_path(c: &mut Criterion) {
+    let theme = Theme::default();
+    let input = InputState::default();
+    let mut group = c.benchmark_group("target_path");
+    group.sample_size(40);
+    for (size_name, size) in [("1080p", (1920, 1080)), ("4k", (3840, 2160))] {
+        for (path, format) in [
+            ("direct", wgpu::TextureFormat::Rgba8Unorm),
+            ("offscreen", wgpu::TextureFormat::Rgba8UnormSrgb),
+        ] {
+            let mut harness = Harness::with_target(format, size);
+            // A light scene, so the per-call fixed cost (clear + composite of
+            // the whole target) isn't drowned out by the widgets themselves.
+            let mut list = harness.draw_list();
+            build_buttons(&mut list, 20, &theme, &input);
+            harness.render_frame_and_wait(&list);
+            group.bench_function(BenchmarkId::new(path, size_name), |b| {
+                b.iter(|| harness.render_frame_and_wait(&list));
+            });
+        }
     }
     group.finish();
 }
@@ -1309,6 +1368,7 @@ criterion_group!(
     bench_shadow_build,
     bench_shadow_render,
     bench_frame_render,
+    bench_target_path,
     bench_render_text_only,
     bench_nine_slice,
     bench_icons,

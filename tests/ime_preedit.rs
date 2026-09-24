@@ -11,6 +11,10 @@
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{DrawContext, DrawList, FocusState, InputState, TextInput, Theme, UiRenderer};
 
+/// Target clear colour (sRGB-encoded, `#0d0f14`); the pixel checks below
+/// compare against the same bytes.
+const CLEAR: [f32; 4] = wgpu_gameui::color::hex(0x0d0f14);
+
 const W: u32 = 512;
 const H: u32 = 128;
 
@@ -109,12 +113,7 @@ fn render_focused_composing_text_input() {
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.05,
-                        g: 0.06,
-                        b: 0.08,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(ui.clear_color(CLEAR)),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -160,7 +159,7 @@ fn render_focused_composing_text_input() {
     eprintln!("wrote test_output/ime_preedit.png");
 
     // (a) Text actually rendered (some pixels differ from the clear colour).
-    let clear = [13u8, 15, 20];
+    let clear = [0x0d_u8, 0x0f, 0x14];
     let rendered = img.pixels().any(|p| {
         let d = (p.0[0] as i32 - clear[0] as i32).abs()
             + (p.0[1] as i32 - clear[1] as i32).abs()

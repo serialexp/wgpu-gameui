@@ -1,7 +1,7 @@
 //! Cursor-anchored context menus using the shared [`MenuItem`](crate::MenuItem)
 //! model and menu-sheet visual language.
 
-use crate::color::opaque_srgb8;
+use crate::color::rgb8;
 use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{
@@ -653,7 +653,7 @@ fn paint_items(
         }
         let selected = highlighted == Some(index) && item.is_enabled();
         if selected {
-            list.quad(row_x, y, row_w, row_h, opaque_srgb8([0x79, 0xc6, 0xd8]));
+            list.quad(row_x, y, row_w, row_h, rgb8([0x79, 0xc6, 0xd8]));
         }
         if item.is_checked() {
             list.circle(
@@ -716,7 +716,7 @@ fn paint_items(
                 (cx - 2.0, cy + 4.0),
                 (cx + 3.0, cy),
                 if selected {
-                    opaque_srgb8([4, 20, 24])
+                    rgb8([4, 20, 24])
                 } else {
                     styles.color(StyleKey::Text)
                 },

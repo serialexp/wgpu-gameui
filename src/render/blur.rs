@@ -15,6 +15,11 @@
 //! Pass A blurs horizontally from the scene into a (downsampled) intermediate;
 //! pass B blurs vertically from the intermediate into the target.
 //!
+//! Blurring happens in the backdrop's own colour space ([`ColorEncoding`]);
+//! pass B converts the result to whatever the target stores, applying the tint
+//! in sRGB space like every other UI colour (see [`crate::color`]). The
+//! intermediate is `Rgba16Float` so neither space loses precision there.
+//!
 //! Both passes are recorded into one encoder, and so is any second
 //! `blur_backdrop` call in the same frame, so each pass takes its own uniform slot
 //! from a per-frame arena — see [`uniform_arena`](super::uniform_arena).
@@ -25,12 +30,25 @@ use crate::render::UniformArena;
 
 const SHADER: &str = include_str!("blur.wgsl");
 
+/// What the values sampled from a [`Backdrop`] view represent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorEncoding {
+    /// Linear light: an `*Srgb` view (the GPU decodes on sampling), or a
+    /// float / linear-data texture.
+    Linear,
+    /// sRGB-encoded values read raw: a non-sRGB (`*Unorm`) view of an sRGB
+    /// image, e.g. a scene rendered with this crate's direct path.
+    Srgb,
+}
+
 /// The app-provided scene texture to blur behind UI panels.
 pub struct Backdrop<'a> {
     /// A sampleable view of the rendered scene (needs `TEXTURE_BINDING` usage).
     pub view: &'a wgpu::TextureView,
     /// Physical-pixel dimensions of that texture.
     pub size: (u32, u32),
+    /// What sampling `view` yields — decides the conversion into the target.
+    pub encoding: ColorEncoding,
 }
 
 /// Backdrop-blur configuration.
@@ -42,7 +60,9 @@ pub struct BlurParams {
     /// gives a wider, softer blur for the same radius. Default `2`.
     pub downsample: u32,
     /// RGBA multiplied into the blurred output — use a darkening, semi-opaque
-    /// value for a scrim. Default `[1, 1, 1, 1]` (passthrough, opaque).
+    /// value for a scrim. sRGB-encoded like every UI colour: the multiply
+    /// happens on the sRGB-encoded blur result. Default `[1, 1, 1, 1]`
+    /// (passthrough, opaque).
     pub tint: [f32; 4],
 }
 
@@ -63,8 +83,30 @@ struct BlurUniforms {
     in_uv: [f32; 4],
     dir_step: [f32; 2],
     radius: f32,
-    _pad0: f32,
+    flags: u32,
     tint: [f32; 4],
+}
+
+/// `BlurUniforms::flags`: encode the blurred (linear) value to sRGB before the tint.
+const FLAG_ENCODE: u32 = 1;
+/// `BlurUniforms::flags`: decode the tinted (sRGB) value to linear for the target.
+const FLAG_DECODE: u32 = 2;
+
+/// Intermediate (pass A output) format: float, so blurring in either colour
+/// space keeps its precision between the passes.
+const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// Pass B's conversion flags for a backdrop sampled as `source` drawn into a
+/// target that does (`target_linear`) or doesn't store linear light.
+pub(crate) fn output_flags(source: ColorEncoding, target_linear: bool) -> u32 {
+    let mut flags = 0;
+    if source == ColorEncoding::Linear {
+        flags |= FLAG_ENCODE;
+    }
+    if target_linear {
+        flags |= FLAG_DECODE;
+    }
+    flags
 }
 
 /// Cached intermediate render target (horizontal-pass output).
@@ -78,7 +120,9 @@ struct Intermediate {
 /// GPU resources for the separable-Gaussian blur. Constructed lazily on first
 /// use so [`UiRenderer::new`](crate::UiRenderer) stays unchanged.
 pub(crate) struct Blur {
-    pipeline: wgpu::RenderPipeline,
+    // Pass A draws into the float intermediate, pass B into the host target.
+    pipeline_a: wgpu::RenderPipeline,
+    pipeline_b: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     src_bgl: wgpu::BindGroupLayout,
     // One uniform slot per pass, from a per-frame arena: both passes are recorded
@@ -87,11 +131,16 @@ pub(crate) struct Blur {
     // call in the same frame would clobber the first call's. See `uniform_arena`.
     uniforms: UniformArena,
     inter: Option<Intermediate>,
-    format: wgpu::TextureFormat,
+    // Whether the host target stores linear light (`*Srgb` / float).
+    target_linear: bool,
 }
 
 impl Blur {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        target_linear: bool,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blur shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -143,42 +192,52 @@ impl Blur {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blur pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_blur"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_blur"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let pipeline = |label, format, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_blur"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_blur"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        // Pass A overwrites the whole intermediate; pass B blends over the target.
+        let pipeline_a = pipeline("blur pipeline (horizontal)", INTERMEDIATE_FORMAT, None);
+        let pipeline_b = pipeline(
+            "blur pipeline (vertical)",
+            format,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
 
         Self {
-            pipeline,
+            pipeline_a,
+            pipeline_b,
             sampler,
             src_bgl,
             uniforms,
             inter: None,
-            format,
+            target_linear,
         }
     }
 
@@ -204,7 +263,7 @@ impl Blur {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: self.format,
+                format: INTERMEDIATE_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
@@ -256,7 +315,7 @@ impl Blur {
             in_uv: uv_rect(region_phys, backdrop.size),
             dir_step: [1.0 / backdrop.size.0.max(1) as f32, 0.0],
             radius: params.radius,
-            _pad0: 0.0,
+            flags: 0,
             tint: [1.0, 1.0, 1.0, 1.0],
         };
         let (slot_a, _) = self.uniforms.allocate(device);
@@ -270,7 +329,7 @@ impl Blur {
             in_uv: [0.0, 0.0, 1.0, 1.0],
             dir_step: [0.0, 1.0 / inter_size.1.max(1) as f32],
             radius: params.radius / ds as f32,
-            _pad0: 0.0,
+            flags: output_flags(backdrop.encoding, self.target_linear),
             tint: params.tint,
         };
         let (slot_b, _) = self.uniforms.allocate(device);
@@ -294,7 +353,7 @@ impl Blur {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            rp.set_pipeline(&self.pipeline);
+            rp.set_pipeline(&self.pipeline_a);
             rp.set_bind_group(0, self.uniforms.bind_group(), &[slot_a as u32]);
             rp.set_bind_group(1, &src_bg_a, &[]);
             rp.draw(0..4, 0..1);
@@ -314,7 +373,7 @@ impl Blur {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            rp.set_pipeline(&self.pipeline);
+            rp.set_pipeline(&self.pipeline_b);
             rp.set_bind_group(0, self.uniforms.bind_group(), &[slot_b as u32]);
             rp.set_bind_group(1, &src_bg_b, &[]);
             rp.draw(0..4, 0..1);
@@ -378,6 +437,22 @@ mod tests {
         assert_eq!(p.radius, 8.0);
         assert_eq!(p.downsample, 2);
         assert_eq!(p.tint, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn output_flags_convert_between_backdrop_and_target_spaces() {
+        // Same space on both ends: pass-through.
+        assert_eq!(output_flags(ColorEncoding::Srgb, false), 0);
+        // Linear scene into a direct (sRGB-storing) target: encode only.
+        assert_eq!(output_flags(ColorEncoding::Linear, false), FLAG_ENCODE);
+        // sRGB scene into a linear-light target: decode only.
+        assert_eq!(output_flags(ColorEncoding::Srgb, true), FLAG_DECODE);
+        // Linear to linear still round-trips through sRGB so the tint applies
+        // in sRGB space.
+        assert_eq!(
+            output_flags(ColorEncoding::Linear, true),
+            FLAG_ENCODE | FLAG_DECODE
+        );
     }
 
     #[test]

@@ -31,9 +31,11 @@ use crate::layer::LayerStack;
 use crate::render::UiRenderer;
 use crate::widgets::DrawList;
 
-/// Texture format used for offscreen capture. sRGB so colours match what the
-/// swapchain shows on screen.
-pub const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Texture format used for offscreen capture. Plain `Rgba8Unorm`, so the
+/// renderer draws straight into it (its direct path) and the read-back bytes
+/// are the sRGB-encoded colours, blended exactly as a browser would — ready to
+/// write as a PNG. A `wgpu::Color` clear value for it is sRGB-encoded too.
+pub const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Round a row length up to wgpu's 256-byte `bytes_per_row` alignment.
 fn padded_bytes_per_row(width: u32) -> u32 {
@@ -290,7 +292,8 @@ impl HeadlessGpu {
         self.capture_scaled_on(list, size, scale_factor, wgpu::Color::TRANSPARENT)
     }
 
-    /// [`capture`](Self::capture) with an explicit clear colour.
+    /// [`capture`](Self::capture) with an explicit clear colour (sRGB-encoded,
+    /// like the theme — `ui.clear_color(theme.background)` works).
     pub fn capture_on(&mut self, list: &DrawList, size: (u32, u32), clear: wgpu::Color) -> Vec<u8> {
         self.capture_scaled_on(list, size, 1.0, clear)
     }

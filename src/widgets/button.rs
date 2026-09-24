@@ -162,11 +162,7 @@ pub(crate) fn draw_label_colored(
     list.text(
         TextBlock::new(label, face.x + inset, text_y)
             .with_size(font_size)
-            .with_color(
-                (text_color[0] * 255.0) as u8,
-                (text_color[1] * 255.0) as u8,
-                (text_color[2] * 255.0) as u8,
-            )
+            .with_color_f32(text_color)
             .with_max_width((face.width - inset * 2.0).max(0.0))
             // Button captions are intrinsically single-line. Truncate a label
             // that does not fit rather than allowing the text shaper's default

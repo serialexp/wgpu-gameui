@@ -65,11 +65,7 @@ pub fn badge(
     list.text(
         TextBlock::new(text, r.x + 6.0, text_y)
             .with_size(s.scalar(StyleKey::FontSize) * 0.75)
-            .with_color(
-                (fg[0] * 255.0) as u8,
-                (fg[1] * 255.0) as u8,
-                (fg[2] * 255.0) as u8,
-            )
+            .with_color_f32(fg)
             .with_font_opt(s.theme().font.clone()),
     );
     r
@@ -109,11 +105,7 @@ pub fn keycap(list: &mut DrawList, s: &StyleResolver, rect: Rect, label: &str, m
     list.text(
         TextBlock::new(label, r.x + (w - tw) * 0.5, text_y)
             .with_size(font_size)
-            .with_color(
-                (text_color[0] * 255.0) as u8,
-                (text_color[1] * 255.0) as u8,
-                (text_color[2] * 255.0) as u8,
-            )
+            .with_color_f32(text_color)
             .with_font_opt(s.theme().font.clone()),
     );
     r
@@ -181,11 +173,7 @@ pub fn chip(
     list.text(
         TextBlock::new(label, r.x + 8.0, text_y)
             .with_size(font_size)
-            .with_color(
-                (fg[0] * 255.0) as u8,
-                (fg[1] * 255.0) as u8,
-                (fg[2] * 255.0) as u8,
-            )
+            .with_color_f32(fg)
             .with_font_opt(s.theme().font.clone()),
     );
     ChipOutput { clicked }

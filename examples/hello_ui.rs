@@ -187,11 +187,19 @@ impl ApplicationHandler for App {
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
+        // Prefer a plain 8-bit (non-sRGB) surface: the UI then draws straight
+        // into it and blends exactly like a browser. (`event_driven_ui` uses an
+        // sRGB surface to exercise the renderer's offscreen path.)
         let format = surface_caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| {
+                matches!(
+                    f,
+                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+                )
+            })
             .unwrap_or(surface_caps.formats[0]);
 
         let config = wgpu::SurfaceConfiguration {
@@ -889,12 +897,9 @@ impl ApplicationHandler for App {
                             view: &view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.05,
-                                    g: 0.06,
-                                    b: 0.08,
-                                    a: 1.0,
-                                }),
+                                load: wgpu::LoadOp::Clear(
+                                    gpu.ui.clear_color(self.theme.background),
+                                ),
                                 store: wgpu::StoreOp::Store,
                             },
                         })],

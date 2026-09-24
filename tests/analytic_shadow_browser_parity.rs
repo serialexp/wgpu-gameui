@@ -8,7 +8,6 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use image::{ImageBuffer, Rgba, RgbaImage};
-use wgpu_gameui::color::srgb_to_linear;
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{Affine2, BoxShadow, CornerRadii, HeadlessGpu};
 
@@ -53,7 +52,8 @@ impl CssShadow {
     }
 
     fn render_value(self) -> BoxShadow {
-        let straight_srgb = [
+        // CSS colours are sRGB-encoded, which is the crate's convention too.
+        let css = [
             self.rgba[0] as f32 / 255.0,
             self.rgba[1] as f32 / 255.0,
             self.rgba[2] as f32 / 255.0,
@@ -63,7 +63,7 @@ impl CssShadow {
             offset: self.offset,
             blur: self.blur,
             spread: self.spread,
-            color: srgb_to_linear(straight_srgb),
+            color: css,
             inset: self.inset,
         }
     }
@@ -914,4 +914,131 @@ fn analytic_shadow_alpha_matches_chromium() {
             artifact_root.display()
         );
     }
+}
+
+/// Checks how shadow *colour* composites, independent of the (tolerance-bound)
+/// shadow shape: for a single-colour shadow, a pixel over an opaque backdrop is
+/// `colour·α + backdrop·(1−α)` on sRGB-encoded bytes, with `α` read from the
+/// matching alpha capture. The test first confirms Chromium's own black@/white@
+/// captures obey that sRGB-space formula, then that our renderer does too
+/// (against its own alpha). Blending in linear light instead would be off by up
+/// to ~60 levels mid-ramp (black 50% over white: 127 in sRGB, 188 in linear).
+#[test]
+#[ignore = "requires a GPU adapter; compares Chromium fixtures"]
+fn shadow_colour_composites_in_srgb_like_chromium() {
+    const TOLERANCE: u8 = 2;
+    let single_colour = ["outset-blur-18", "cyan-glow", "offset-positive-xy"];
+    let mut gpu = HeadlessGpu::new().expect("no GPU adapter");
+    let mut list = gpu.draw_list();
+    let (mut alpha, mut on_black, mut on_white) = (Vec::new(), Vec::new(), Vec::new());
+    let white = wgpu::Color::WHITE;
+    let black = wgpu::Color::BLACK;
+    let mut checked = 0usize;
+
+    for case in CASES.iter().filter(|c| single_colour.contains(&c.id)) {
+        let colour = case.shadows[0].rgba;
+        for &(dpr, dpr_name) in DPR_CASES {
+            let size = (
+                (CSS_SIZE.0 as f32 * dpr) as u32,
+                (CSS_SIZE.1 as f32 * dpr) as u32,
+            );
+            let dir = PathBuf::from(FIXTURE_ROOT).join("captures").join(case.id);
+            load_alpha(
+                &dir.join(format!("alpha@{dpr_name}x.png")),
+                size,
+                &mut alpha,
+            );
+            load_alpha(
+                &dir.join(format!("black@{dpr_name}x.png")),
+                size,
+                &mut on_black,
+            );
+            load_alpha(
+                &dir.join(format!("white@{dpr_name}x.png")),
+                size,
+                &mut on_white,
+            );
+            // The black/white captures keep the source element; only pixels
+            // clear of it (plus a 2 CSS px antialiasing margin) are pure shadow.
+            let outside = |x: u32, y: u32| {
+                let (cx, cy) = (x as f32 / dpr, y as f32 / dpr);
+                let r = case.rect;
+                cx < r.x - 2.0
+                    || cx > r.x + r.width + 2.0
+                    || cy < r.y - 2.0
+                    || cy > r.y + r.height + 2.0
+            };
+            let who = format!("{} @{dpr_name}x", case.id);
+            checked += check_srgb_over(
+                &who, "chromium", size, &outside, colour, &alpha, &on_black, &on_white, TOLERANCE,
+            );
+
+            list.clear();
+            draw_case(&mut list, *case);
+            let ours_alpha = gpu.capture_scaled(&list, size, dpr);
+            let ours_black = gpu.capture_scaled_on(&list, size, dpr, black);
+            let ours_white = gpu.capture_scaled_on(&list, size, dpr, white);
+            checked += check_srgb_over(
+                &who,
+                "gpu",
+                size,
+                &outside,
+                colour,
+                &ours_alpha,
+                &ours_black,
+                &ours_white,
+                TOLERANCE,
+            );
+        }
+    }
+    assert!(
+        checked > 10_000,
+        "too few shadow pixels compared ({checked})"
+    );
+}
+
+/// Assert `on_black`/`on_white` equal the sRGB-space over-composite of
+/// `colour` at the per-pixel coverage in `alpha`, for shadow pixels selected by
+/// `outside`. Returns how many pixels were compared.
+#[allow(clippy::too_many_arguments)]
+fn check_srgb_over(
+    who: &str,
+    source: &str,
+    size: (u32, u32),
+    outside: &dyn Fn(u32, u32) -> bool,
+    colour: [u8; 4],
+    alpha: &[u8],
+    on_black: &[u8],
+    on_white: &[u8],
+    tolerance: u8,
+) -> usize {
+    let mut compared = 0;
+    let mut worst = (0u8, 0u32, 0u32, [0u8; 3], [0u8; 3]);
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            let i = ((y * size.0 + x) * 4) as usize;
+            let a = alpha[i + 3];
+            if a == 0 || !outside(x, y) {
+                continue;
+            }
+            compared += 1;
+            let a = a as f32 / 255.0;
+            for (backdrop, got) in [(0.0, on_black), (255.0, on_white)] {
+                let want: [u8; 3] = std::array::from_fn(|c| {
+                    (colour[c] as f32 * a + backdrop * (1.0 - a)).round() as u8
+                });
+                let got = [got[i], got[i + 1], got[i + 2]];
+                let off = (0..3).map(|c| got[c].abs_diff(want[c])).max().unwrap();
+                if off > worst.0 {
+                    worst = (off, x, y, got, want);
+                }
+            }
+        }
+    }
+    let (off, x, y, got, want) = worst;
+    assert!(
+        off <= tolerance,
+        "{who}: {source} shadow colour is not an sRGB-space composite: at ({x},{y}) got {got:?}, sRGB formula gives {want:?} (off by {off})"
+    );
+    compared
 }

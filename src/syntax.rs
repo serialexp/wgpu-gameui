@@ -48,7 +48,7 @@ const CAPTURE_NAMES: &[&str] = &[
     "string",
 ];
 
-/// Reusable palette for Tree-sitter capture categories, as linear RGBA values.
+/// Reusable palette for Tree-sitter capture categories, as sRGB-encoded RGBA values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SyntaxTheme {
     /// Comments and documentation.

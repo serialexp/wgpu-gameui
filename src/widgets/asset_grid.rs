@@ -141,11 +141,7 @@ impl<'a> AssetGrid<'a> {
             list.text(
                 TextBlock::new(self.glyph, thumb.x + (thumb.width - gw) * 0.5, gy)
                     .with_size(19.0)
-                    .with_color(
-                        (glyph_color[0] * 255.0) as u8,
-                        (glyph_color[1] * 255.0) as u8,
-                        (glyph_color[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(glyph_color)
                     .with_font_opt(s.theme().font.clone()),
             );
             let _ = gh;
@@ -162,11 +158,7 @@ impl<'a> AssetGrid<'a> {
             list.text(
                 TextBlock::new(*label, x, ly)
                     .with_size(s.scalar(StyleKey::FontSize) * 0.8)
-                    .with_color(
-                        (label_color[0] * 255.0) as u8,
-                        (label_color[1] * 255.0) as u8,
-                        (label_color[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(label_color)
                     .with_ellipsis()
                     .with_max_width(self.cell_w)
                     .with_align(crate::text::TextAlign::Center)

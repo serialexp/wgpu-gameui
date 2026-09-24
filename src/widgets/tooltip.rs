@@ -363,11 +363,7 @@ fn draw_tooltip_body(
                 if let Some(t) = title {
                     let title_block = TextBlock::new(t, content_x, cursor_y)
                         .with_size(title_size)
-                        .with_color(
-                            (highlight[0] * 255.0) as u8,
-                            (highlight[1] * 255.0) as u8,
-                            (highlight[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(highlight)
                         .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(font.clone());
                     list.text(title_block);
@@ -375,11 +371,7 @@ fn draw_tooltip_body(
                 }
                 let body_block = TextBlock::new(body, content_x, cursor_y)
                     .with_size(body_size)
-                    .with_color(
-                        (text_color[0] * 255.0) as u8,
-                        (text_color[1] * 255.0) as u8,
-                        (text_color[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(text_color)
                     .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_max_width(width - padding * 2.0)
                     .with_font_opt(font.clone());
@@ -389,11 +381,7 @@ fn draw_tooltip_body(
                 if let Some(t) = title {
                     let title_block = TextBlock::new(t, content_x, cursor_y)
                         .with_size(title_size)
-                        .with_color(
-                            (highlight[0] * 255.0) as u8,
-                            (highlight[1] * 255.0) as u8,
-                            (highlight[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(highlight)
                         .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(font.clone());
                     list.text(title_block);
@@ -402,11 +390,7 @@ fn draw_tooltip_body(
                 for line in lines {
                     let line_block = TextBlock::new(line, content_x, cursor_y)
                         .with_size(body_size)
-                        .with_color(
-                            (text_color[0] * 255.0) as u8,
-                            (text_color[1] * 255.0) as u8,
-                            (text_color[2] * 255.0) as u8,
-                        )
+                        .with_color_f32(text_color)
                         .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(font.clone());
                     list.text(line_block);
@@ -420,11 +404,7 @@ fn draw_tooltip_body(
             } => {
                 let title_block = TextBlock::new(title, content_x, cursor_y)
                     .with_size(title_size)
-                    .with_color(
-                        (highlight[0] * 255.0) as u8,
-                        (highlight[1] * 255.0) as u8,
-                        (highlight[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(highlight)
                     .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_font_opt(font.clone());
                 list.text(title_block);
@@ -432,11 +412,7 @@ fn draw_tooltip_body(
 
                 let desc_block = TextBlock::new(description, content_x, cursor_y)
                     .with_size(body_size)
-                    .with_color(
-                        (text_color[0] * 255.0) as u8,
-                        (text_color[1] * 255.0) as u8,
-                        (text_color[2] * 255.0) as u8,
-                    )
+                    .with_color_f32(text_color)
                     .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                     .with_max_width(width - padding * 2.0)
                     .with_font_opt(font.clone());
@@ -450,11 +426,7 @@ fn draw_tooltip_body(
                         let detail_text = format!("{}: {}", key, value);
                         let detail_block = TextBlock::new(&detail_text, content_x, cursor_y)
                             .with_size(body_size)
-                            .with_color(
-                                (text_dim[0] * 255.0) as u8,
-                                (text_dim[1] * 255.0) as u8,
-                                (text_dim[2] * 255.0) as u8,
-                            )
+                            .with_color_f32(text_dim)
                             .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                             .with_font_opt(font.clone());
                         list.text(detail_block);

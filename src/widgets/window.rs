@@ -396,11 +396,7 @@ impl<'a> Window<'a> {
                     list.text(
                         TextBlock::new(self.title, padding_box.x + pad, ty)
                             .with_size(font_size)
-                            .with_color(
-                                (title_color[0] * 255.0) as u8,
-                                (title_color[1] * 255.0) as u8,
-                                (title_color[2] * 255.0) as u8,
-                            )
+                            .with_color_f32(title_color)
                             .with_font_opt(font.clone()),
                     );
                     list.pop_clip();
@@ -423,11 +419,7 @@ impl<'a> Window<'a> {
                         list.text(
                             TextBlock::new("✕", key.x + (key.width - size * 0.6) * 0.5, xty)
                                 .with_size(size)
-                                .with_color(
-                                    (tint[0] * 255.0) as u8,
-                                    (tint[1] * 255.0) as u8,
-                                    (tint[2] * 255.0) as u8,
-                                )
+                                .with_color_f32(tint)
                                 .with_font_opt(font.clone()),
                         );
                     }

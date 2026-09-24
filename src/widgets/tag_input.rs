@@ -103,11 +103,7 @@ pub fn draw(
         list.text(
             TextBlock::new(tag.as_str(), chip_rect.x + 7.0, ty)
                 .with_size(font_size)
-                .with_color(
-                    (fg[0] * 255.0) as u8,
-                    (fg[1] * 255.0) as u8,
-                    (fg[2] * 255.0) as u8,
-                )
+                .with_color_f32(fg)
                 .with_ellipsis()
                 .with_max_width(chip_w - 14.0 - 12.0)
                 .with_font_opt(s.theme().font.clone()),
@@ -148,11 +144,7 @@ pub fn draw(
         list.text(
             TextBlock::new("✕", x_rect.x + (x_rect.width - xw) * 0.5, x_y)
                 .with_size(x_size)
-                .with_color(
-                    (xc[0] * 255.0) as u8,
-                    (xc[1] * 255.0) as u8,
-                    (xc[2] * 255.0) as u8,
-                )
+                .with_color_f32(xc)
                 .with_font_opt(s.theme().font.clone()),
         );
 
@@ -186,11 +178,7 @@ pub fn draw(
         list.text(
             TextBlock::new(shown, draft_rect.x, ty)
                 .with_size(font_size)
-                .with_color(
-                    (fg[0] * 255.0) as u8,
-                    (fg[1] * 255.0) as u8,
-                    (fg[2] * 255.0) as u8,
-                )
+                .with_color_f32(fg)
                 .with_ellipsis()
                 .with_max_width(draft_rect.width)
                 .with_font_opt(s.theme().font.clone()),

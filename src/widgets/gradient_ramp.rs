@@ -225,11 +225,7 @@ pub fn readout(list: &mut DrawList, s: &StyleResolver, x: f32, rect: Rect, text:
     list.text(
         TextBlock::new(text, x, ty)
             .with_size(font_size)
-            .with_color(
-                (color[0] * 255.0) as u8,
-                (color[1] * 255.0) as u8,
-                (color[2] * 255.0) as u8,
-            )
+            .with_color_f32(color)
             .with_font_opt(s.theme().font.clone()),
     );
 }

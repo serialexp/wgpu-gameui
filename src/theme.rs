@@ -1,7 +1,7 @@
 //! UI theming - colors, fonts, spacing.
 
 use crate::chrome::ChromeTheme;
-use crate::color::srgb_to_linear;
+use crate::color::{hex, rgba8};
 use crate::style::{CustomStyles, StyleKey, StyleValue};
 use crate::text::{FontHandle, TextBlock};
 
@@ -232,101 +232,55 @@ impl Default for Theme {
             // The "4a" design language: near-black neutral surfaces, controls
             // painted as a subtle white-sheen gradient face resting on a dark
             // plinth, accent (teal, oklch hue 200) reserved for state.
-            // Theme and draw-list colors are linear RGBA. Decode CSS/sRGB
-            // palette values here so the sRGB render target encodes them exactly
-            // once. The clear colour is #0a0d0f — all opaque resolved values
-            // in the design spec are composited against this backdrop.
-            background: srgb_to_linear([
-                0x0a as f32 / 255.0,
-                0x0d as f32 / 255.0,
-                0x0f as f32 / 255.0,
-                1.0,
-            ]),
+            // Colours are sRGB-encoded, exactly as the design's CSS writes
+            // them (see `crate::color`). The clear colour is #0a0d0f — all
+            // opaque resolved values in the design spec are composited
+            // against this backdrop.
+            background: hex(0x0a0d0f),
             // Pause/menu screens dim the world by half. Black keeps the dim
             // neutral; apps wanting a color cast retune it per theme.
             scrim: [0.0, 0.0, 0.0, 0.55],
             // Raised surface = #16191d at the design's panel opacity.
-            panel: srgb_to_linear([
-                0x16 as f32 / 255.0,
-                0x19 as f32 / 255.0,
-                0x1d as f32 / 255.0,
-                0.95,
-            ]),
+            panel: rgba8([0x16, 0x19, 0x1d], 0.95),
             panel_border: [0.0, 0.0, 0.0, 0.55],
             // Resting face fill. The widgets paint raised controls as a gradient
             // from `ButtonHover`-strength sheen down to this tone; see
             // `ButtonTop`/`ButtonPressed` and the widget material helper.
-            button: srgb_to_linear([
-                0x1f as f32 / 255.0,
-                0x24 as f32 / 255.0,
-                0x29 as f32 / 255.0,
-                1.0,
-            ]),
-            button_hover: srgb_to_linear([
-                0x21 as f32 / 255.0,
-                0x26 as f32 / 255.0,
-                0x2b as f32 / 255.0,
-                1.0,
-            ]),
-            button_pressed: srgb_to_linear([
-                0x14 as f32 / 255.0,
-                0x18 as f32 / 255.0,
-                0x1c as f32 / 255.0,
-                1.0,
-            ]),
+            button: hex(0x1f2429),
+            button_hover: hex(0x21262b),
+            button_pressed: hex(0x14181c),
             button_border: [0.0, 0.0, 0.0, 0.5],
             input_background: [0.0, 0.0, 0.0, 0.42],
             input_border: [0.0, 0.0, 0.0, 0.6],
-            input_focus_border: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
+            input_focus_border: [0.2423, 0.7509, 0.7767, 1.0],
             // Design body text #eef2f5.
-            text: srgb_to_linear([
-                0xee as f32 / 255.0,
-                0xf2 as f32 / 255.0,
-                0xf5 as f32 / 255.0,
-                1.0,
-            ]),
-            text_dim: srgb_to_linear([
-                0xad as f32 / 255.0,
-                0xb6 as f32 / 255.0,
-                0xbd as f32 / 255.0,
-                1.0,
-            ]),
+            text: hex(0xeef2f5),
+            text_dim: hex(0xadb6bd),
             // The design's "held/active" face tone #f4f7fa — the brightest
             // neutral, used for active tab/tool labels.
-            text_highlight: srgb_to_linear([
-                0xf4 as f32 / 255.0,
-                0xf7 as f32 / 255.0,
-                0xfa as f32 / 255.0,
-                1.0,
-            ]),
+            text_highlight: hex(0xf4f7fa),
             // Accent = teal oklch(0.74 0.11 200), state only (selection, focus,
-            // toggle-on fills), never for resting chrome. These resolved sRGB
-            // values are decoded just like the hex palette above.
-            accent: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
-            info: srgb_to_linear([0.3692, 0.6736, 0.92, 1.0]),
-            success: srgb_to_linear([0.3799, 0.7093, 0.3977, 1.0]),
-            warning: srgb_to_linear([0.9084, 0.6684, 0.3042, 1.0]),
-            error: srgb_to_linear([0.8413, 0.2796, 0.2724, 1.0]),
-            focus_ring: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
+            // toggle-on fills), never for resting chrome.
+            accent: [0.2423, 0.7509, 0.7767, 1.0],
+            info: [0.3692, 0.6736, 0.92, 1.0],
+            success: [0.3799, 0.7093, 0.3977, 1.0],
+            warning: [0.9084, 0.6684, 0.3042, 1.0],
+            error: [0.8413, 0.2796, 0.2724, 1.0],
+            focus_ring: [0.2423, 0.7509, 0.7767, 1.0],
 
             // Tab colors — the design's document/in-set tabs: inactive reads as
             // a sunken well, active as a raised face, border is the black edge.
             tab_inactive: [0.0, 0.0, 0.0, 0.22],
-            tab_active: srgb_to_linear([
-                0x21 as f32 / 255.0,
-                0x26 as f32 / 255.0,
-                0x2b as f32 / 255.0,
-                1.0,
-            ]),
+            tab_active: hex(0x21262b),
             tab_hover: [1.0, 1.0, 1.0, 0.07],
             tab_border: [0.0, 0.0, 0.0, 0.45],
 
             // Progress bar colors
             progress_background: [0.0, 0.0, 0.0, 0.55],
             // Progress/slider fills are the accent gradient.
-            progress_fill: srgb_to_linear([0.2423, 0.7509, 0.7767, 1.0]),
-            progress_fill_low: srgb_to_linear([0.8413, 0.2796, 0.2724, 1.0]),
-            progress_fill_medium: srgb_to_linear([0.9084, 0.6684, 0.3042, 1.0]),
+            progress_fill: [0.2423, 0.7509, 0.7767, 1.0],
+            progress_fill_low: [0.8413, 0.2796, 0.2724, 1.0],
+            progress_fill_medium: [0.9084, 0.6684, 0.3042, 1.0],
 
             // Sizing — the design: 12px body text, 28px input wells, 26px
             // text buttons, 2px "plinth travel" press motion, radius 1.
@@ -368,30 +322,20 @@ impl Default for Theme {
             edge_highlight_pressed: [1.0, 1.0, 1.0, 0.06],
             inner_shadow: [0.0, 0.0, 0.0, 0.6],
             edge_shadow: [1.0, 1.0, 1.0, 0.07],
-            accent_face_top: srgb_to_linear([0.4211, 0.8464, 0.8689, 1.0]),
-            accent_face_top_hover: srgb_to_linear([0.5211, 0.8911, 0.9106, 1.0]),
-            accent_face_top_pressed: srgb_to_linear([0.2518, 0.6942, 0.7171, 1.0]),
-            accent_face_bottom: srgb_to_linear([0.0, 0.6817, 0.7111, 1.0]),
-            accent_face_bottom_hover: srgb_to_linear([0.0772, 0.732, 0.7611, 1.0]),
-            accent_face_bottom_pressed: srgb_to_linear([0.0, 0.5774, 0.6039, 1.0]),
-            on_accent: srgb_to_linear([
-                0x04 as f32 / 255.0,
-                0x17 as f32 / 255.0,
-                0x1d as f32 / 255.0,
-                1.0,
-            ]),
-            danger_face_top: srgb_to_linear([0.7841, 0.2609, 0.2536, 1.0]),
-            danger_face_top_hover: srgb_to_linear([0.8692, 0.306, 0.2953, 1.0]),
-            danger_face_top_pressed: srgb_to_linear([0.6884, 0.1648, 0.1749, 1.0]),
-            danger_face_bottom: srgb_to_linear([0.6612, 0.1341, 0.1522, 1.0]),
-            danger_face_bottom_hover: srgb_to_linear([0.7304, 0.1668, 0.1811, 1.0]),
-            danger_face_bottom_pressed: srgb_to_linear([0.6071, 0.0579, 0.1056, 1.0]),
-            on_danger: srgb_to_linear([
-                0xfd as f32 / 255.0,
-                0xea as f32 / 255.0,
-                0xea as f32 / 255.0,
-                1.0,
-            ]),
+            accent_face_top: [0.4211, 0.8464, 0.8689, 1.0],
+            accent_face_top_hover: [0.5211, 0.8911, 0.9106, 1.0],
+            accent_face_top_pressed: [0.2518, 0.6942, 0.7171, 1.0],
+            accent_face_bottom: [0.0, 0.6817, 0.7111, 1.0],
+            accent_face_bottom_hover: [0.0772, 0.732, 0.7611, 1.0],
+            accent_face_bottom_pressed: [0.0, 0.5774, 0.6039, 1.0],
+            on_accent: hex(0x04171d),
+            danger_face_top: [0.7841, 0.2609, 0.2536, 1.0],
+            danger_face_top_hover: [0.8692, 0.306, 0.2953, 1.0],
+            danger_face_top_pressed: [0.6884, 0.1648, 0.1749, 1.0],
+            danger_face_bottom: [0.6612, 0.1341, 0.1522, 1.0],
+            danger_face_bottom_hover: [0.7304, 0.1668, 0.1811, 1.0],
+            danger_face_bottom_pressed: [0.6071, 0.0579, 0.1056, 1.0],
+            on_danger: hex(0xfdeaea),
 
             chrome: ChromeTheme::default(),
             font: None,
@@ -422,31 +366,21 @@ mod tests {
     }
 
     #[test]
-    fn default_css_palette_is_stored_in_linear_light() {
+    fn default_css_palette_is_stored_as_plain_srgb() {
         let theme = Theme::default();
-        let close = |actual: [f32; 4], expected: [f32; 4]| {
-            for (actual, expected) in actual.into_iter().zip(expected) {
-                assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
-            }
-        };
-
-        close(
+        // Stored exactly as the design's CSS writes them — no gamma decode.
+        assert_eq!(
             theme.background,
-            srgb_to_linear([10.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1.0]),
+            [10.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1.0]
         );
-        close(
+        assert_eq!(
             theme.panel,
-            srgb_to_linear([22.0 / 255.0, 25.0 / 255.0, 29.0 / 255.0, 0.95]),
+            [22.0 / 255.0, 25.0 / 255.0, 29.0 / 255.0, 0.95]
         );
-        close(
+        assert_eq!(
             theme.text,
-            srgb_to_linear([238.0 / 255.0, 242.0 / 255.0, 245.0 / 255.0, 1.0]),
+            [238.0 / 255.0, 242.0 / 255.0, 245.0 / 255.0, 1.0]
         );
-        assert!(
-            theme.background[0] < 0.01,
-            "dark CSS colors must not be stored as raw sRGB"
-        );
-        assert_eq!(theme.panel[3], 0.95, "alpha remains linear and unchanged");
     }
 
     #[test]
@@ -741,11 +675,7 @@ impl Theme {
     pub fn text(&self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
         TextBlock::new(content, x, y)
             .with_size(self.font_size)
-            .with_color(
-                (self.text[0] * 255.0) as u8,
-                (self.text[1] * 255.0) as u8,
-                (self.text[2] * 255.0) as u8,
-            )
+            .with_color_f32(self.text)
             .with_font_opt(self.font.clone())
     }
 
@@ -753,11 +683,7 @@ impl Theme {
     pub fn title(&self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
         TextBlock::new(content, x, y)
             .with_size(self.font_size_title)
-            .with_color(
-                (self.text[0] * 255.0) as u8,
-                (self.text[1] * 255.0) as u8,
-                (self.text[2] * 255.0) as u8,
-            )
+            .with_color_f32(self.text)
             .with_font_opt(self.font.clone())
     }
 }

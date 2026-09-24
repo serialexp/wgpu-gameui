@@ -95,14 +95,6 @@ const GAP: f32 = 6.0;
 /// Left inset before the disclosure triangle within a row.
 const ROW_INSET: f32 = 4.0;
 
-fn rgb(c: [f32; 4]) -> (u8, u8, u8) {
-    (
-        (c[0] * 255.0) as u8,
-        (c[1] * 255.0) as u8,
-        (c[2] * 255.0) as u8,
-    )
-}
-
 /// Caller-owned expansion + selection state for one tree view. Persists across
 /// frames; construct one per tree (or share it across trees whose ids don't
 /// collide) and thread `&mut` into each node draw, the same way the crate
@@ -476,7 +468,7 @@ impl<'a> TreeNode<'a> {
         self
     }
 
-    /// Override the label colour (linear RGBA). When unset the label uses
+    /// Override the label colour (sRGB-encoded RGBA). When unset the label uses
     /// `theme.text` (or `theme.background` when selected, for contrast against
     /// the accent fill). When set, this colour is used in every state — the
     /// caller is responsible for picking something readable on a selected row.
@@ -611,11 +603,10 @@ impl<'a> TreeNode<'a> {
             theme.font.as_ref(),
             self.label,
         );
-        let (r, g, b) = rgb(text_color);
         list.text(
             TextBlock::new(self.label, text_x, text_y)
                 .with_size(s.scalar(StyleKey::FontSize))
-                .with_color(r, g, b)
+                .with_color_f32(text_color)
                 .with_max_width(label_max_w)
                 .with_ellipsis()
                 .with_font_opt(theme.font.clone()),
@@ -1055,10 +1046,10 @@ mod tests {
         let mut s = TreeState::new();
         let (def_list, _) = draw_node(&TreeNode::leaf("Node"), 1, row(), &mut s, &idle());
         let def_color = def_list.texts.first().expect("label emitted").color;
-        let (tr, tg, tb) = rgb(theme().text);
+        let [tr, tg, tb, ta] = crate::color::to_rgba8(theme().text);
         assert_eq!(
             def_color,
-            Color::rgb(tr, tg, tb),
+            Color::rgba(tr, tg, tb, ta),
             "default path uses theme.text"
         );
 
@@ -1067,8 +1058,12 @@ mod tests {
         let node = TreeNode::leaf("Node").with_label_color([0.1, 0.9, 0.3, 1.0]);
         let (list, _) = draw_node(&node, 1, row(), &mut s2, &idle());
         let col = list.texts.first().expect("label emitted").color;
-        let (r, g, b) = rgb([0.1, 0.9, 0.3, 1.0]);
-        assert_eq!(col, Color::rgb(r, g, b), "label_color is applied verbatim");
+        let [r, g, b, a] = crate::color::to_rgba8([0.1, 0.9, 0.3, 1.0]);
+        assert_eq!(
+            col,
+            Color::rgba(r, g, b, a),
+            "label_color is applied verbatim"
+        );
         assert_ne!(
             col, def_color,
             "override differs from the default text colour"

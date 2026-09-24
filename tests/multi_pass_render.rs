@@ -196,9 +196,11 @@ fn expect(name: &str, got: (u8, u8, u8), want: (u8, u8, u8), tol: i32, failures:
     }
 }
 
-/// `a` is linear 0.5 → 188 in sRGB (the target is Rgba8UnormSrgb), not 128.
+/// A `0.5` channel. UI colours are sRGB-encoded, so it reads back as 128 even
+/// through this `Rgba8UnormSrgb` target (the offscreen path decodes on
+/// composite and the target re-encodes on store).
 fn half() -> u8 {
-    188
+    128
 }
 
 fn text_band_has_ink(img: &[u8], viewport: (u32, u32), y0: u32, y1: u32) -> bool {

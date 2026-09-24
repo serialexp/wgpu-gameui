@@ -1282,11 +1282,7 @@ impl TextInput {
             let text = TextBlock::new("", draw_text_x, block_y)
                 .with_size(s.scalar(StyleKey::FontSize))
                 .with_wrap(wrap)
-                .with_color(
-                    (text_c[0] * 255.0) as u8,
-                    (text_c[1] * 255.0) as u8,
-                    (text_c[2] * 255.0) as u8,
-                )
+                .with_color_f32(text_c)
                 .with_max_width(text_max_w)
                 .with_direction(self.direction)
                 .with_spans(spans.clone());
@@ -1295,11 +1291,7 @@ impl TextInput {
             let text = TextBlock::new(text_content, draw_text_x, block_y)
                 .with_size(s.scalar(StyleKey::FontSize))
                 .with_wrap(wrap)
-                .with_color(
-                    (text_color[0] * 255.0) as u8,
-                    (text_color[1] * 255.0) as u8,
-                    (text_color[2] * 255.0) as u8,
-                )
+                .with_color_f32(text_color)
                 .with_max_width(text_max_w)
                 .with_direction(self.direction);
             #[cfg(feature = "syntax-highlighting")]

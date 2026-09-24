@@ -79,11 +79,7 @@ pub fn draw_trigger(
     list.text(
         TextBlock::new(shown, rect.x + pad, text_y)
             .with_size(font_size)
-            .with_color(
-                (color[0] * 255.0) as u8,
-                (color[1] * 255.0) as u8,
-                (color[2] * 255.0) as u8,
-            )
+            .with_color_f32(color)
             .with_ellipsis()
             .with_max_width(text_rect_w)
             .with_font_opt(s.theme().font.clone()),
@@ -249,11 +245,7 @@ pub fn draw_list(
                     list.text(
                         TextBlock::new(part, x, ty)
                             .with_size(font_size)
-                            .with_color(
-                                (c[0] * 255.0) as u8,
-                                (c[1] * 255.0) as u8,
-                                (c[2] * 255.0) as u8,
-                            )
+                            .with_color_f32(c)
                             .with_font_opt(s.theme().font.clone()),
                     );
                     x += pw;
@@ -268,11 +260,7 @@ pub fn draw_list(
         list.text(
             TextBlock::new(*opt, row.x + 8.0, ty)
                 .with_size(font_size)
-                .with_color(
-                    (fg[0] * 255.0) as u8,
-                    (fg[1] * 255.0) as u8,
-                    (fg[2] * 255.0) as u8,
-                )
+                .with_color_f32(fg)
                 .with_font_opt(s.theme().font.clone()),
         );
         if hovered && input.mouse_clicked {

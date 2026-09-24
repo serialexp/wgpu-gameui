@@ -11,6 +11,7 @@ use crate::layer::LayerStack;
 use crate::layout::Rect;
 use crate::render::atlas::{SpriteAtlas, SpriteId};
 use crate::render::blur::{Backdrop, Blur, BlurParams};
+use crate::render::composite::{Offscreen, TargetPlan};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
 use crate::render::uniform_arena::UniformArena;
 use crate::text::FontSystemHandle;
@@ -326,6 +327,26 @@ impl RenderPressureDetector {
 }
 
 /// Public renderer.
+///
+/// # Colour and target formats
+///
+/// UI colours are sRGB-encoded and blended in sRGB space, like a browser (see
+/// [`crate::color`]). How the UI reaches the target depends on the `format`
+/// passed to [`new`](Self::new):
+///
+/// * **Non-sRGB 8/10-bit targets** (`Bgra8Unorm`, `Rgba8Unorm`, …): the UI
+///   draws straight into the target. Everything — including translucency over
+///   your own scene — blends exactly like the browser. Prefer this when you can
+///   pick the surface format.
+/// * **`*Srgb` and float targets** (which store linear light): the UI draws into
+///   an internal offscreen layer, then composites it onto the target in one
+///   extra full-target pass per [`render`](Self::render) /
+///   [`render_layers`](Self::render_layers) call. UI-on-UI blending still
+///   matches the browser; only translucent UI over your own scene mixes in
+///   linear light.
+///
+/// Either way, clear the target with [`clear_color`](Self::clear_color) so the
+/// background matches the theme.
 pub struct UiRenderer {
     // Pipelines
     color_pipeline: wgpu::RenderPipeline,
@@ -403,8 +424,11 @@ pub struct UiRenderer {
     nine_inst_capacity: u64,
     nine_inst_offset: u64,
 
-    // Target color format (used for the lazily-built backdrop-blur pipeline).
-    format: wgpu::TextureFormat,
+    // Host target format (the lazily-built blur pipeline draws into it) and how
+    // the UI reaches it: directly, or through the offscreen layer.
+    host_format: wgpu::TextureFormat,
+    plan: TargetPlan,
+    offscreen: Option<Offscreen>,
     // Backdrop blur — built on first `blur_backdrop` call so `new` is unchanged.
     blur: Option<Blur>,
 
@@ -433,6 +457,11 @@ impl UiRenderer {
         format: wgpu::TextureFormat,
         font_system: FontSystemHandle,
     ) -> Self {
+        let plan = TargetPlan::for_host(format);
+        let work_format = plan.work_format;
+        let offscreen = plan
+            .offscreen
+            .then(|| Offscreen::new(device, work_format, format));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ui shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -478,7 +507,7 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("fs_color"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: work_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -524,7 +553,7 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("fs_icon"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: work_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -571,7 +600,7 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("fs_analytic"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: work_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -611,7 +640,7 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("fs_circle"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: work_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -659,7 +688,7 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("fs_nine_slice"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format,
+                    format: work_format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -710,7 +739,7 @@ impl UiRenderer {
         // Glyphs are generated lazily from the first frame's actual working set.
         // Eagerly rasterizing every ASCII and Phosphor glyph here made renderer
         // construction needlessly CPU-heavy for small or usually-hidden UIs.
-        let text_renderer = TextRenderer::with_font_system(device, queue, format, font_system);
+        let text_renderer = TextRenderer::with_font_system(device, queue, work_format, font_system);
 
         let current_atlas_size = atlas.width();
 
@@ -776,7 +805,9 @@ impl UiRenderer {
             nine_inst_buffer,
             nine_inst_capacity,
             nine_inst_offset: 0,
-            format,
+            host_format: format,
+            plan,
+            offscreen,
             blur: None,
             text_renderer,
             warned_missing: RefCell::new(HashSet::new()),
@@ -1000,7 +1031,7 @@ impl UiRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -1135,7 +1166,9 @@ impl UiRenderer {
             Self::warn_stale_list("render", "DrawList");
         }
         self.prepare_pass(device, queue, viewport, scale_factor);
-        self.render_one(device, queue, encoder, view, draw_list);
+        let target = self.begin_target(device, encoder, view, viewport);
+        self.render_one(device, queue, encoder, &target, draw_list);
+        self.end_target(encoder, view);
         self.check_frame_arena();
         self.frame_stats
     }
@@ -1166,12 +1199,52 @@ impl UiRenderer {
             Self::warn_stale_list("render_layers", "LayerStack");
         }
         self.prepare_pass(device, queue, viewport, scale_factor);
-        self.render_one(device, queue, encoder, view, layers.base());
+        let target = self.begin_target(device, encoder, view, viewport);
+        self.render_one(device, queue, encoder, &target, layers.base());
         for layer in layers.layers() {
-            self.render_one(device, queue, encoder, view, &layer.list);
+            self.render_one(device, queue, encoder, &target, &layer.list);
         }
+        self.end_target(encoder, view);
         self.check_frame_arena();
         self.frame_stats
+    }
+
+    /// The view this render call's UI passes draw into: the host `view` itself
+    /// (direct path), or the offscreen layer, freshly cleared (see the
+    /// type-level docs).
+    fn begin_target(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        viewport: (u32, u32),
+    ) -> wgpu::TextureView {
+        match self.offscreen.as_mut() {
+            Some(offscreen) => offscreen.begin(device, encoder, viewport),
+            None => view.clone(),
+        }
+    }
+
+    /// Composite the offscreen layer onto the host `view` (no-op on the direct
+    /// path).
+    fn end_target(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+        if let Some(offscreen) = self.offscreen.as_ref() {
+            offscreen.composite(encoder, view);
+        }
+    }
+
+    /// The `wgpu::Color` to clear this renderer's target with so it shows the
+    /// sRGB-encoded `color` — typically `theme.background`. Linear-light
+    /// targets (`*Srgb`, float) need the decoded value; direct targets take it
+    /// as-is.
+    pub fn clear_color(&self, color: [f32; 4]) -> wgpu::Color {
+        self.plan.clear_color(color)
+    }
+
+    /// Whether this renderer draws through its offscreen layer (the target
+    /// stores linear light) instead of straight into the target.
+    pub fn uses_offscreen_layer(&self) -> bool {
+        self.offscreen.is_some()
     }
 
     /// Emit the once-per-renderer warning that the caller is feeding a
@@ -1233,7 +1306,11 @@ impl UiRenderer {
             return;
         }
         if self.blur.is_none() {
-            self.blur = Some(Blur::new(device, self.format));
+            self.blur = Some(Blur::new(
+                device,
+                self.host_format,
+                self.plan.host_is_linear(),
+            ));
         }
         let blur = self.blur.as_mut().expect("blur just ensured");
         blur.run(
@@ -1987,7 +2064,7 @@ fn create_atlas_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });

@@ -1,7 +1,7 @@
 //! Headless tests: pure geometry, the activation state machine, pointer
 //! integration, and the layer/hit-region plumbing. No GPU needed.
 
-use crate::color::opaque_srgb8;
+use crate::color::rgb8;
 use crate::layout::Rect;
 use crate::{
     Background, DrawContext, DrawList, FocusState, InputState, InteractionScene, LayerStack, Menu,
@@ -186,7 +186,7 @@ fn strip_paints_the_handoff_gradient_highlights_edge_and_shadow() {
     assert!(
         ctx.draw_list.chrome_instances().any(|instance| {
             instance.rect == [strip.x, strip.y + strip.height - 1.0, strip.width, 1.0]
-                && instance.bg == opaque_srgb8([0x03, 0x05, 0x06])
+                && instance.bg == rgb8([0x03, 0x05, 0x06])
         }),
         "resolved opaque bottom edge is present"
     );

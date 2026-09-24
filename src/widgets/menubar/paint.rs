@@ -6,7 +6,7 @@
 //! because the bar-level keyboard transitions need the menus and their label
 //! rects. This module owns everything that happens *inside* the popup layers.
 
-use crate::color::{opaque_srgb8, srgb_to_linear};
+use crate::color::rgb8;
 use crate::layout::Rect;
 use crate::{
     Affine2, CornerRadii, DrawContext, Edge, HitShape, InteractionScene, LayerStack, PointerPolicy,
@@ -286,11 +286,10 @@ pub(super) fn draw_columns<'a>(
             );
             painter.paint_pre_content();
             let list = painter.draw_list();
-            // TextBlock colours are encoded 8-bit sRGB, unlike DrawList geometry
-            // colours (linear floats), so these handoff CSS values stay literal.
+            // Text and geometry colours are both plain sRGB (see `crate::color`).
             let disabled_text = (0x5d, 0x65, 0x6c);
             let text = (0xdb, 0xe1, 0xe7);
-            let selected_bg = opaque_srgb8([0x79, 0xc6, 0xd8]);
+            let selected_bg = rgb8([0x79, 0xc6, 0xd8]);
             let check_w = column.check_w;
 
             // Only row content is clipped to the sheet padding box. The sheet and
@@ -342,9 +341,9 @@ pub(super) fn draw_columns<'a>(
                     let stroke = (row_h * CHECK_STROKE).max(1.0);
                     let (x, w, h) = (row_x + 8.0, check_w, row_h);
                     let color = if highlighted {
-                        srgb_to_linear([4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 1.0])
+                        rgb8([4, 20, 24])
                     } else {
-                        srgb_to_linear([0.4265, 0.8174, 0.8336, 1.0])
+                        [0.4265, 0.8174, 0.8336, 1.0]
                     };
                     list.line(
                         [x + w * 0.16, y + h * 0.52],
@@ -368,7 +367,7 @@ pub(super) fn draw_columns<'a>(
                         (cx - half * 0.5, cy + half),
                         (cx + half * 0.7, cy),
                         if highlighted {
-                            srgb_to_linear([4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 1.0])
+                            rgb8([4, 20, 24])
                         } else {
                             s.color(if row.disabled {
                                 StyleKey::TextDim
@@ -612,13 +611,13 @@ fn paint_accent_row(list: &mut crate::DrawList, rect: Rect, accent: [f32; 4]) {
         rect.y,
         rect.width,
         rect.height.min(1.0),
-        opaque_srgb8([0xa1, 0xd7, 0xe4]),
+        rgb8([0xa1, 0xd7, 0xe4]),
     );
     list.quad(
         rect.x,
         rect.y + (rect.height - 1.0).max(0.0),
         rect.width,
         rect.height.min(1.0),
-        opaque_srgb8([0x5b, 0x95, 0xa2]),
+        rgb8([0x5b, 0x95, 0xa2]),
     );
 }

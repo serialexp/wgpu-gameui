@@ -422,6 +422,12 @@ impl TextRenderer {
     /// Construct a `TextRenderer` with a fresh shared `FontSystem` (loads system +
     /// bundled fonts). Use [`with_font_system`](Self::with_font_system) to share an
     /// existing one. `format` is the render target's color format.
+    ///
+    /// Text colours are sRGB-encoded (see [`crate::color`]) and blend in the
+    /// target's storage space, so a non-sRGB `format` gives browser-matching
+    /// text. [`UiRenderer`](crate::UiRenderer) arranges that for any host
+    /// target; a standalone `TextRenderer` on an `*Srgb` target blends in
+    /// linear light instead.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let font_system = shared_font_system();
         Self::with_font_system(device, queue, format, font_system)
@@ -1244,9 +1250,10 @@ impl TextRenderer {
     }
 }
 
-/// Convert a cosmic-text `Color` (sRGB u8 RGBA) to a normalized `[f32; 4]`. Matches
-/// how the colored-quad pipeline treats `Vertex` colors (pass-through), so MSDF text
-/// fill matches solid UI colors.
+/// Convert a cosmic-text `Color` (sRGB-encoded u8 RGBA) to a normalized
+/// `[f32; 4]`. No decode: the renderer blends in sRGB space, exactly like the
+/// colored-quad pipeline's pass-through `Vertex` colors, so a hex text colour
+/// renders as that hex.
 fn color_to_rgba(c: Color) -> [f32; 4] {
     [
         c.r() as f32 / 255.0,
@@ -3648,6 +3655,17 @@ impl TextBlock {
         self
     }
 
+    /// Set the fill colour from a straight sRGB-encoded `[r, g, b, a]` in
+    /// `0.0..=1.0` — the same convention as every other colour in the crate
+    /// (see [`crate::color`]), so theme/[`StyleKey`](crate::StyleKey) colours
+    /// pass straight through. Channels are clamped and rounded to 8 bits;
+    /// alpha is kept.
+    pub fn with_color_f32(mut self, color: [f32; 4]) -> Self {
+        let [r, g, b, a] = crate::color::to_rgba8(color);
+        self.color = Color::rgba(r, g, b, a);
+        self
+    }
+
     /// Clip glyphs to `clip`; anything outside the rectangle is not drawn.
     pub fn with_clip(mut self, clip: Rect) -> Self {
         self.clip = Some(clip);
@@ -3977,6 +3995,18 @@ mod tests {
         assert!((v[1] - 128.0 / 255.0).abs() < 1e-6);
         assert!((v[2] - 0.0).abs() < 1e-6);
         assert!((v[3] - 64.0 / 255.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn with_color_f32_round_trips_hex_and_keeps_alpha() {
+        // A hex colour survives the f32 round-trip exactly (rounding, not the
+        // truncation `as u8` would do: 0xbf/255*255 can land just below 191).
+        let block = TextBlock::new("x", 0.0, 0.0)
+            .with_color_f32(crate::color::rgba8([0x3e, 0xbf, 0xc6], 0.5));
+        assert_eq!(block.color, Color::rgba(0x3e, 0xbf, 0xc6, 128));
+        // Out-of-range channels clamp instead of wrapping.
+        let block = TextBlock::new("x", 0.0, 0.0).with_color_f32([1.5, -0.2, 0.5, 1.0]);
+        assert_eq!(block.color, Color::rgba(255, 0, 128, 255));
     }
 
     #[test]

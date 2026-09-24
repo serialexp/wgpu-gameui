@@ -15,7 +15,6 @@
 //! # }
 //! ```
 
-use crate::color::srgb_to_linear;
 use crate::layout::Rect;
 use crate::{StyleKey, StyleResolver};
 
@@ -54,13 +53,12 @@ impl Severity {
     /// without a [`StyleResolver`] still get the canonical colors; the rendered
     /// path resolves through [`style_key`](Self::style_key) so themes/overlays win.
     pub fn accent(self) -> [f32; 4] {
-        let srgb = match self {
+        match self {
             Severity::Info => [0.3692, 0.6736, 0.92, 1.0],
             Severity::Success => [0.3799, 0.7093, 0.3977, 1.0],
             Severity::Warning => [0.9084, 0.6684, 0.3042, 1.0],
             Severity::Error => [0.8413, 0.2796, 0.2724, 1.0],
-        };
-        srgb_to_linear(srgb)
+        }
     }
 
     /// The resolved accent color for this severity under `style`.
@@ -183,11 +181,7 @@ impl<'a> Banner<'a> {
             let block = style
                 .text_block(title, text_x, cursor_y)
                 .with_size(font_size)
-                .with_color(
-                    (accent[0] * 255.0) as u8,
-                    (accent[1] * 255.0) as u8,
-                    (accent[2] * 255.0) as u8,
-                );
+                .with_color_f32(accent);
             list.text(block);
             cursor_y += self.title_height(font_size);
         }
@@ -196,11 +190,7 @@ impl<'a> Banner<'a> {
         let block = style
             .text_block(self.message, text_x, cursor_y)
             .with_size(font_size)
-            .with_color(
-                (text[0] * 255.0) as u8,
-                (text[1] * 255.0) as u8,
-                (text[2] * 255.0) as u8,
-            )
+            .with_color_f32(text)
             .with_max_width(inner_w);
         list.text(block);
         list.pop_debug_scope();

@@ -18,10 +18,30 @@ struct BlurUniforms {
     dir_step: vec2<f32>,
     // Blur radius in taps (texels) for this pass.
     radius: f32,
-    _pad0: f32,
-    // RGBA multiplied into the output (scrim/darken; white = passthrough).
+    // Output conversion (pass B): 1 = encode linear -> sRGB before the tint,
+    // 2 = decode sRGB -> linear after it (the target stores linear light).
+    flags: u32,
+    // RGBA multiplied into the output, in sRGB space (scrim/darken; white =
+    // passthrough).
     tint: vec4<f32>,
 };
+
+const FLAG_ENCODE: u32 = 1u;
+const FLAG_DECODE: u32 = 2u;
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    let lo = x * 12.92;
+    let hi = 1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, x <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let x = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    let lo = x / 12.92;
+    let hi = pow((x + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, x <= vec3<f32>(0.04045));
+}
 
 @group(0) @binding(0) var<uniform> u: BlurUniforms;
 @group(1) @binding(0) var src_tex: texture_2d<f32>;
@@ -65,6 +85,13 @@ fn fs_blur(in: VsOut) -> @location(0) vec4<f32> {
         acc = acc + textureSample(src_tex, src_sampler, uv) * w;
         wsum = wsum + w;
     }
-    let color = acc / max(wsum, 0.0001);
-    return color * u.tint;
+    var color = acc / max(wsum, 0.0001);
+    if ((u.flags & FLAG_ENCODE) != 0u) {
+        color = vec4<f32>(linear_to_srgb(color.rgb), color.a);
+    }
+    color = color * u.tint;
+    if ((u.flags & FLAG_DECODE) != 0u) {
+        color = vec4<f32>(srgb_to_linear(color.rgb), color.a);
+    }
+    return color;
 }

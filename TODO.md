@@ -1619,7 +1619,7 @@ registration lifetime, resume clamp). 1071 lib tests green.
   for all four Plex Mono faces (~700 KB) on *every call*. fontdb keeps growing
   (memory + face-lookup cost) for as long as a menu stays open. Needs a
   load-once/cached handle (e.g. registered in `shared_font_system`, like Sans).
-- [ ] **P1 — Bug: hex text colours in menus render too bright (sRGB treated as
+- [x] **P1 — Bug: hex text colours in menus render too bright (sRGB treated as
   linear).** `TextBlock::with_color(u8,u8,u8)` → `color_to_rgba` (`text.rs:1250`)
   divides by 255 and passes straight through `ui_msdf.wgsl` to an `*Srgb`
   target, so the u8 values are effectively *linear*. Theme-driven callers
@@ -1630,9 +1630,29 @@ registration lifetime, resume clamp). 1071 lib tests green.
   mistake: `AXIS_TINTS` (vector_field.rs), slider knob, asset-grid plate,
   toolbar popup text. Also, `with_color`'s doc says sRGB while every theme
   caller feeds linear — the API contract itself needs deciding.
+  **Closed:** every colour in the crate is now sRGB-encoded and blended in
+  sRGB space like the browser (`crate::color` docs; `UiRenderer` draws
+  directly into non-sRGB targets and through an offscreen layer + composite
+  for `*Srgb`/float ones). Text takes the same `[f32; 4]` via
+  `TextBlock::with_color_f32`; `with_color(u8…)` bytes are plain sRGB too.
+  Hosts clear with `UiRenderer::clear_color(theme.background)`; blur
+  backdrops declare `Backdrop::encoding`.
 - [ ] **P1 — Two accents on screen.** Menus, context menu, splitter grip/glow
   and the latched toolbar key hard-code `#79c6d8` & friends from
   the old `design_handoff_forge_chrome/opaque-colors.md` (now deleted), whose oklch→hex conversions
   are wrong (hue drifts to 211–221). Forge `--accent` is `#3ebfc6`, which
   `theme.accent` already has. Full per-token audit:
   `docs/design/forge-token-audit.md`.
+- [ ] **P1 — Perf: `frame_render` is ~140× slower than its June baseline.**
+  `cargo bench --bench ui_stress -- frame_render` on the RX 7900 XTX: 100
+  buttons ≈ 1.16 ms, 1000 ≈ 30 ms, 10k ≈ 950 ms (criterion's stored June
+  baseline had 1000 at ~0.2 ms). Reproduced identically on a clean copy of
+  commit `719dc88`, so it predates the sRGB-pipeline change; `target_path`
+  shows 1000 buttons at ~47 ms/frame *including* GPU wait on both target
+  paths, so it is likely GPU-bound (button chrome/shadow fill?). Bisect
+  between the June baseline and `719dc88`.
+- [ ] **P2 — `hello_ui` example: overlapping layout + per-frame `LayerStack`.**
+  The text-input/dropdown row sits under the demo panel and the gradient
+  swatches overlap the "Custom font" / "Click A/B" rows; it also trips the
+  renderer's "freshly-constructed `LayerStack` for 120+ frames" warning (it
+  should build one stack and `.clear()` it). Both reproduce on `719dc88`.

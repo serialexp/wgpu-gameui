@@ -772,16 +772,10 @@ impl<'a> UiContext<'a> {
     /// `FontSpec`.
     pub fn text_line(&mut self, text: &str, color: [f32; 4]) {
         let spec = self.current_font();
-        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
         let block = TextBlock::new(text, 0.0, 0.0)
             .with_size(spec.size)
             .with_letter_spacing(spec.letter_spacing)
-            .with_rgba(
-                to_u8(color[0]),
-                to_u8(color[1]),
-                to_u8(color[2]),
-                to_u8(color[3]),
-            )
+            .with_color_f32(color)
             .with_font_opt(spec.font)
             .with_weight(spec.weight)
             .with_style(spec.style);
@@ -841,16 +835,10 @@ impl<'a> UiContext<'a> {
 
     fn text_line_block(&self, text: &str, color: [f32; 4]) -> TextBlock {
         let spec = self.current_font();
-        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0) as u8;
         TextBlock::new(text, 0.0, 0.0)
             .with_size(spec.size)
             .with_letter_spacing(spec.letter_spacing)
-            .with_rgba(
-                to_u8(color[0]),
-                to_u8(color[1]),
-                to_u8(color[2]),
-                to_u8(color[3]),
-            )
+            .with_color_f32(color)
             .with_font_opt(spec.font)
             .with_weight(spec.weight)
             .with_style(spec.style)

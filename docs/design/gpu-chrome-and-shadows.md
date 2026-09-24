@@ -127,17 +127,20 @@ GPUI is an algorithm and packing reference only. Its current implementation does
 not reverse CSS shadow declarations, does not implement CSS outset-radius spread
 correction, uses only linear inset radius subtraction, and rasterizes shadows
 axis-aligned. This project adapts the analytic method to its full-affine
-`DrawList`, CSS ordering/geometry contract, and linear RGBA renderer; it does not
+`DrawList`, CSS ordering/geometry contract, and sRGB-space RGBA renderer; it does not
 copy GPUI's retained style/layout system or treat GPUI output as CSS parity.
 
 ## Primitive model
 
 ### Colors
 
-All draw-list colors remain straight linear RGBA. Resolved design hex values
-are decoded once at the theme boundary. Alpha remains meaningful for true
-shadows and glows; ordinary surfaces and structural edge lines use the resolved
-opaque values from `opaque-colors.md`.
+All draw-list colors are straight **sRGB-encoded** RGBA — exactly what a CSS
+hex value means — and the renderer blends and interpolates them in sRGB space
+like a browser (2026-09-24 change; see `crate::color` and
+`forge-token-audit.md`). Design hex / `oklch()` values are used as-is, with no
+decode. Alpha remains meaningful for true
+shadows and glows; ordinary surfaces and structural edge lines use opaque
+values resolved from the DesignSync `tokens/colors.css`.
 
 A public `Color` alias/newtype is outside this design's required scope. The
 initial values may continue using `[f32; 4]`, provided conversions are no longer
@@ -322,14 +325,14 @@ space. The same matrix is rendered by the candidate shader. A single
 renderer-owned, unit-tested conversion supplies sigma; the public API and themes
 retain authored blur. Widget code cannot override it.
 
-The runtime renderer deliberately blends linear RGBA into an sRGB display target,
-whereas browser CSS box shadows are commonly composited in nonlinear sRGB. This
-accepted policy creates an explicit final-RGB difference: sigma must never be
-tuned to compensate for gamma. Phase 0 records both alpha-mask comparison and
-final composite difference; browser-RGB equality is not the acceptance target.
-`UiRenderer` documents sRGB targets for normal display/capture use and treats a
-non-sRGB target as an explicitly linear/offscreen choice rather than applying
-hidden compensation.
+The renderer composites in sRGB space, as Chromium does, so final RGB matches
+the browser as well as the alpha mask. On a non-sRGB target it draws directly;
+on an `*Srgb` (or float) target it draws into an offscreen layer and composites
+it, so UI-over-UI still blends in sRGB and only translucent UI over the host's
+own scene mixes in linear light (documented on `UiRenderer`). The fixtures'
+black/white captures check the colour composite separately from the shape
+(`shadow_colour_composites_in_srgb_like_chromium`). Sigma is never tuned to
+compensate for colour space.
 
 The shadow raster bounds extend to a documented Gaussian-tail cutoff (the GPUI
 reference uses three sigma, which is 1.5 authored blur radii under the default
@@ -567,7 +570,8 @@ Each type contains only combinations that the component actually uses. There is
 no generic structure with eight optional lines, an arbitrary vector of shadows,
 and every possible decoration.
 
-The default values are decoded from `opaque-colors.md` at construction. Similar
+The default values come from the DesignSync tokens (written with
+`color::hex` / `color::oklch`) at construction. Similar
 colors are shared only when changing them together is intentional; accidental
 equality does not make two semantic fields one token.
 
@@ -602,7 +606,7 @@ Widgets must not bypass these resolver accessors by reaching directly into
 | Dropdown / popover / tooltip / toast | component surface and border | replace all current `drop_shadow` calls with authored values |
 | Curve editor | existing local surface | migrate current `drop_shadow`; verify whether it is design-semantic or merely depth feedback |
 
-Opaque 1px CSS shadows that `opaque-colors.md` resolves into exact edge colors
+Opaque 1px CSS shadows that resolve into exact edge colors
 remain edge lines. Blurred CSS shadows remain `BoxShadow`s. This is decided by
 the authored effect, not by whether the CSS happened to spell both with the
 `box-shadow` property.
@@ -733,8 +737,8 @@ separately from final RGB composition:
 - maximum channel error and mean absolute channel error over the affected region;
 - count/fraction of pixels exceeding the chosen tolerance;
 - a diff PNG retained under `test_output` for inspection;
-- the expected final-RGB deviation caused by linear-light GPU blending versus
-  nonlinear browser compositing.
+- the final-RGB composite, checked against the sRGB-space source-over formula
+  on the black/white captures.
 
 Alpha tolerance is selected and documented from the calibration matrix, not
 loosened until a failing implementation passes. MAE, p99, mass, and centroid
@@ -766,8 +770,8 @@ symmetry—not merely that pixels were emitted.
 
 Check in the reference fixture HTML and browser captures. Recover reference
 alpha masks from controlled backdrops, verify `sigma = blur / 2`, compare
-midpoint and Gauss–Legendre quadrature, and document the separate linear-vs-sRGB
-composite difference. Benchmark the existing `drop_shadow`/glow approximations
+midpoint and Gauss–Legendre quadrature, and check the final RGB composite
+separately from the alpha mask. Benchmark the existing `drop_shadow`/glow approximations
 so the replacement has an honest CPU, allocation, upload, draw-call, and render-
 pass baseline.
 
@@ -827,9 +831,8 @@ overhead from unavoidable affected pixels.
 CSS supplies the `sigma = blur / 2` semantic starting point, but antialiasing,
 finite-tail cutoff, quadrature, spread/radius handling, and browser engine details
 can still differ. Alpha-mask fixtures verify those details without allowing
-nonlinear browser compositing to distort kernel calibration. The renderer's
-linear-light final blend is an accepted documented difference; sigma never
-compensates for it.
+colour compositing to distort kernel calibration; the RGB composite is checked
+on its own (both composite in sRGB space). Sigma never compensates for colour.
 
 ### Instance size
 
@@ -853,8 +856,9 @@ where coupled customization is desired.
 
 - Shadows carry local geometry plus the forward affine and support all finite,
   non-singular draw-list transforms.
-- Runtime compositing remains straight-alpha, linear-light source-over into the
-  selected target; normal display/capture targets are sRGB.
+- Runtime compositing is straight-alpha, sRGB-space source-over, like the
+  browser: directly into non-sRGB targets (the capture format is `Rgba8Unorm`),
+  via an offscreen layer and one composite pass for `*Srgb`/float targets.
 - Insets use explicit padding-box geometry supplied by the component surface
   painter.
 - Typed component overrides live as O(1) optional fields on `StyleOverlay`.

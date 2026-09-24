@@ -1,8 +1,28 @@
-//! Color helpers: HSV(A) ↔ RGB(A) conversion.
+//! Color helpers: hex / OKLCH constructors, host-boundary sRGB conversion, and
+//! HSV(A) ↔ RGB(A) conversion.
 //!
-//! The crate works in linear `[f32; 4]` RGBA throughout (the same shape the draw
-//! list and theme use). This module adds explicit sRGB conversion helpers plus an
-//! [`Hsva`] color and the conversions a color picker needs.
+//! # The crate's colour convention
+//!
+//! Every colour in the crate — theme fields, [`StyleKey`](crate::StyleKey)
+//! values, draw-list vertices, chrome, shadows, tints, text — is **straight
+//! (non-premultiplied) sRGB-encoded RGBA in `[0, 1]`**: exactly what a CSS hex
+//! value means. `#3ebfc6` is `[0x3e/255, 0xbf/255, 0xc6/255, 1.0]`, and
+//! [`rgb8`] / [`hex`] build it for you.
+//!
+//! The renderer blends, filters and interpolates gradients **in sRGB space**,
+//! the way a browser does, so a translucent layer or a two-stop gradient looks
+//! the same here as in the HTML design it came from. (It draws into a non-sRGB
+//! view of the target; for an `*Srgb` host target it draws offscreen and
+//! composites — see [`UiRenderer`](crate::UiRenderer).)
+//!
+//! Linear light only appears at the host boundary: a `wgpu::Color` clear value
+//! for an `*Srgb` target, or a scene texture sampled through an sRGB view. Use
+//! [`srgb_to_linear`] / [`linear_to_srgb`] there — never for theme or widget
+//! colours.
+//!
+//! Design tokens authored as `oklch(L C H)` should be written with [`oklch`] at
+//! the definition site rather than copied as hand-converted hex: a wrong
+//! hand conversion is exactly how a second, off-hue accent once crept in.
 //!
 //! **Why a dedicated HSV type?** An interactive color picker must keep HSV as
 //! its source of truth: HSV→RGB is total, but RGB→HSV is *lossy* at the
@@ -12,11 +32,70 @@
 //! zero the instant you dragged value or saturation to an edge. Storing [`Hsva`]
 //! avoids that round-trip entirely.
 
-/// Convert one normalized sRGB channel to linear light.
+/// Opaque colour from 8-bit sRGB channels: `rgb8([0x3e, 0xbf, 0xc6])` is CSS
+/// `#3ebfc6`.
+pub const fn rgb8(rgb: [u8; 3]) -> [f32; 4] {
+    rgba8(rgb, 1.0)
+}
+
+/// Colour from 8-bit sRGB channels plus a straight alpha in `[0, 1]`:
+/// `rgba8([0, 0, 0], 0.6)` is CSS `rgba(0,0,0,0.6)`.
+pub const fn rgba8(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
+    [
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+        alpha,
+    ]
+}
+
+/// Opaque colour from a `0xRRGGBB` literal: `hex(0x3ebfc6)` is CSS `#3ebfc6`.
+pub const fn hex(rgb: u32) -> [f32; 4] {
+    rgb8([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
+}
+
+/// A CSS `oklch(L C H / alpha)` colour, converted to sRGB the way browsers
+/// render it: OKLab → linear sRGB → sRGB transfer, with each out-of-gamut
+/// channel clipped to `[0, 1]`.
 ///
-/// Use this at palette boundaries when copying a CSS/hex color into a draw-list
-/// or theme color. Alpha is not gamma encoded and must not pass through this
-/// function.
+/// `l` is the lightness in `[0, 1]` (CSS `0.74`, not `74%`), `c` the chroma,
+/// `h` the hue in degrees. `oklch(0.74, 0.11, 200.0, 1.0)` is `#3ebfc6`.
+pub fn oklch(l: f32, c: f32, h: f32, alpha: f32) -> [f32; 4] {
+    let (sin, cos) = h.to_radians().sin_cos();
+    let (a, b) = (c * cos, c * sin);
+    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+    let r = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+    let g = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+    let b = -0.004_196_086_3 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
+    [
+        linear_channel_to_srgb(r.clamp(0.0, 1.0)),
+        linear_channel_to_srgb(g.clamp(0.0, 1.0)),
+        linear_channel_to_srgb(b.clamp(0.0, 1.0)),
+        alpha,
+    ]
+}
+
+/// Return `color` with its alpha replaced by `alpha`.
+pub const fn with_alpha(color: [f32; 4], alpha: f32) -> [f32; 4] {
+    [color[0], color[1], color[2], alpha]
+}
+
+/// Quantise one `0.0..=1.0` channel to 8 bits: clamped, then rounded to the
+/// nearest step (so `hex`/`rgb8` values round-trip exactly).
+pub fn unit_to_u8(channel: f32) -> u8 {
+    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Quantise an `[r, g, b, a]` colour to 8-bit RGBA via [`unit_to_u8`].
+pub fn to_rgba8(color: [f32; 4]) -> [u8; 4] {
+    color.map(unit_to_u8)
+}
+
+/// Decode one sRGB-encoded channel to linear light. Host boundary only — see
+/// the module docs.
 pub fn srgb_channel_to_linear(channel: f32) -> f32 {
     if channel <= 0.04045 {
         channel / 12.92
@@ -25,10 +104,21 @@ pub fn srgb_channel_to_linear(channel: f32) -> f32 {
     }
 }
 
-/// Convert straight normalized sRGB RGBA to straight linear RGBA.
+/// Encode one linear-light channel with the sRGB transfer function. Host
+/// boundary only — see the module docs.
+pub fn linear_channel_to_srgb(channel: f32) -> f32 {
+    if channel <= 0.003_130_8 {
+        channel * 12.92
+    } else {
+        1.055 * channel.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Decode straight sRGB-encoded RGBA to straight linear RGBA (alpha unchanged).
 ///
-/// RGB channels are decoded with the standard sRGB transfer function; alpha is
-/// retained unchanged.
+/// Only for the host boundary — e.g. turning a theme colour into the
+/// `wgpu::Color` clear value of an `*Srgb` target, whose clear values are
+/// linear. Theme and widget colours stay sRGB-encoded.
 pub fn srgb_to_linear(rgba: [f32; 4]) -> [f32; 4] {
     [
         srgb_channel_to_linear(rgba[0]),
@@ -38,17 +128,15 @@ pub fn srgb_to_linear(rgba: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Decode an opaque 8-bit sRGB color into the renderer's linear RGBA space.
-///
-/// Useful for copying resolved design-system hex values without repeating the
-/// channel normalization at every call site.
-pub fn opaque_srgb8(rgb: [u8; 3]) -> [f32; 4] {
-    srgb_to_linear([
-        rgb[0] as f32 / 255.0,
-        rgb[1] as f32 / 255.0,
-        rgb[2] as f32 / 255.0,
-        1.0,
-    ])
+/// Encode straight linear RGBA as straight sRGB-encoded RGBA (alpha
+/// unchanged). The inverse of [`srgb_to_linear`]; host boundary only.
+pub fn linear_to_srgb(rgba: [f32; 4]) -> [f32; 4] {
+    [
+        linear_channel_to_srgb(rgba[0]),
+        linear_channel_to_srgb(rgba[1]),
+        linear_channel_to_srgb(rgba[2]),
+        rgba[3],
+    ]
 }
 
 /// A color in HSVA space.
@@ -177,10 +265,58 @@ mod tests {
     }
 
     #[test]
-    fn opaque_srgb8_decodes_hex_channels_and_sets_opaque_alpha() {
+    fn linear_to_srgb_inverts_srgb_to_linear() {
+        for v in [0.0, 0.002, 0.04045, 0.2, 0.5, 0.73, 1.0] {
+            let back = linear_to_srgb(srgb_to_linear([v, v, v, 0.4]));
+            assert!(close(back[0], v), "{v} round-trips, got {}", back[0]);
+            assert_eq!(back[3], 0.4, "alpha untouched");
+        }
+    }
+
+    #[test]
+    fn hex_constructors_are_plain_srgb_channels() {
+        let expected = [16.0 / 255.0, 128.0 / 255.0, 1.0, 1.0];
+        assert_eq!(rgb8([0x10, 0x80, 0xff]), expected);
+        assert_eq!(hex(0x1080ff), expected);
+        assert_eq!(rgba8([0x10, 0x80, 0xff], 0.25)[3], 0.25);
         assert_eq!(
-            opaque_srgb8([0x10, 0x80, 0xff]),
-            srgb_to_linear([16.0 / 255.0, 128.0 / 255.0, 1.0, 1.0])
+            with_alpha(expected, 0.5),
+            [expected[0], expected[1], 1.0, 0.5]
+        );
+    }
+
+    fn to8(c: [f32; 4]) -> [u8; 3] {
+        let [r, g, b, _] = to_rgba8(c);
+        [r, g, b]
+    }
+
+    #[test]
+    fn oklch_matches_browser_rendering_of_forge_tokens() {
+        // Reference hex values for these Forge `tokens/colors.css` entries,
+        // from an independent OKLab reference conversion with per-channel
+        // clipping (the 2026-09-24 token audit).
+        let cases: [((f32, f32, f32), u32); 6] = [
+            ((0.74, 0.11, 200.0), 0x3ebfc6), // --accent
+            ((0.82, 0.10, 200.0), 0x6bd8de), // --accent-key-top
+            ((0.68, 0.12, 200.0), 0x00aeb5), // --accent-key-bottom (clipped)
+            ((0.60, 0.18, 25.0), 0xd74745),  // --danger-ring-edge
+            ((0.70, 0.14, 145.0), 0x61b565), // --ok
+            ((0.62, 0.13, 25.0), 0xc8635d),  // --axis-x
+        ];
+        for ((l, c, h), want) in cases {
+            let got = to8(oklch(l, c, h, 1.0));
+            let want = to8(hex(want));
+            for i in 0..3 {
+                assert!(
+                    (got[i] as i32 - want[i] as i32).abs() <= 1,
+                    "oklch({l} {c} {h}) = {got:02x?}, want {want:02x?}"
+                );
+            }
+        }
+        assert_eq!(
+            oklch(0.74, 0.11, 200.0, 0.16)[3],
+            0.16,
+            "alpha passes through"
         );
     }
 

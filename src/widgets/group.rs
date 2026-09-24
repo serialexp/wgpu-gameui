@@ -113,11 +113,7 @@ impl<'a> Group<'a> {
         let block = style
             .text_block(self.title, rect.x + pad, ty)
             .with_size(title_size)
-            .with_color(
-                (title_color[0] * 255.0) as u8,
-                (title_color[1] * 255.0) as u8,
-                (title_color[2] * 255.0) as u8,
-            );
+            .with_color_f32(title_color);
         list.text(block);
 
         list.pop_debug_scope();
