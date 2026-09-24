@@ -6,6 +6,37 @@
 //! content overflows. Scrollbar thumbs can be dragged; the wheel is consumed
 //! when the cursor is over the viewport.
 //!
+//! # Scrolling is smooth by default
+//!
+//! Input never moves the drawn offset directly. It moves the *target*
+//! ([`ScrollState::target`]) — one target step per wheel notch — and the drawn
+//! offset ([`ScrollState::offset`], the value the transform and the thumb use)
+//! eases toward it, so a burst of notches reads as one continuous glide instead
+//! of a series of 20px snaps. `scroll_range_into_view` (keyboard/selection
+//! reveal) goes through the same path.
+//!
+//! The easing is exponential rather than a fixed-duration tween: each frame
+//! closes a constant fraction of the remaining distance
+//! ([`ScrollSmoothing::settle_seconds`], 0.22s by default), which (a) makes the
+//! glide's speed follow the wheel cadence instead of restarting on every event,
+//! and (b) is frame-rate independent — the step is derived from the frame
+//! delta, so 60 Hz and 144 Hz hosts travel the same distance in the same
+//! wall-clock time. It snaps to the target once the remainder is sub-pixel, so
+//! an idle scroll is bit-exactly at its target and reports no pending repaint.
+//!
+//! The frame delta comes from [`InputState::frame_dt`] (stamped once per frame
+//! by [`UiState::begin_frame`](crate::UiState::begin_frame), or set directly by
+//! a hand-rolled host); a host that never sets one gets a nominal 60 Hz frame,
+//! and `0.0` — a paused or one-shot static frame — applies the target at once,
+//! so a single rendered frame always shows the offset that was asked for. While
+//! a glide is in flight [`ScrollState::pending_deadline`] asks the host for the
+//! next frame; see `frame_result` for how that reaches an event-driven loop.
+//!
+//! Two deliberate exceptions: dragging the scrollbar thumb is 1:1 (direct
+//! manipulation should not lag the pointer — the drag writes offset and target
+//! together), and a theme whose `animation_duration` is `0.0` disables the
+//! easing for the whole UI, as it does for every other animated verb.
+//!
 //! State is **caller-owned** so the widget remains a transient struct that
 //! can be re-built every frame, matching the rest of this crate's
 //! immediate-mode style.
@@ -26,24 +57,110 @@
 //! transform; it's what `(0,0)` inside the closure now maps to. Most callers
 //! draw at world-space rects derived from `viewport.x + col, viewport.y + row`.
 
+use crate::NOMINAL_FRAME_DT;
 use crate::layout::Rect;
 use crate::{InputState, StyleKey, StyleResolver};
 
 use super::DrawList;
 
+/// How close to its target a gliding offset must get before it is snapped onto
+/// it, in logical pixels. A quarter pixel is below the visible threshold at any
+/// realistic DPI, and terminating the glide exactly is what lets an idle scroll
+/// stop asking the host for frames.
+const SNAP_EPSILON: f32 = 0.25;
+
+/// Easing applied to a [`ScrollState`]'s drawn offset as it chases its target.
+///
+/// The offset approaches the target *exponentially* — each frame closes a
+/// constant fraction of what remains — rather than along a fixed timeline. See
+/// the module docs for why (cadence-following, retarget-safe, frame-rate
+/// independent).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollSmoothing {
+    /// Seconds to close ~99% of the distance to the target; the `e`-folding
+    /// time constant is this divided by `ln 100`. `0.0` (or non-finite)
+    /// disables easing — the offset lands on the target in a single frame.
+    pub settle_seconds: f32,
+}
+
+impl ScrollSmoothing {
+    /// Default settle time: long enough to read as motion, short enough that
+    /// the content still feels attached to the wheel.
+    pub const DEFAULT_SETTLE_SECONDS: f32 = 0.22;
+
+    /// No easing: the offset lands on the target in one frame.
+    pub const INSTANT: ScrollSmoothing = ScrollSmoothing {
+        settle_seconds: 0.0,
+    };
+
+    /// Smoothing with the given settle time. Non-finite or non-positive values
+    /// collapse to [`INSTANT`](Self::INSTANT), so a misconfigured knob degrades
+    /// to a jump rather than to a NaN offset.
+    pub fn new(settle_seconds: f32) -> Self {
+        if settle_seconds.is_finite() && settle_seconds > 0.0 {
+            Self { settle_seconds }
+        } else {
+            Self::INSTANT
+        }
+    }
+
+    /// Whether this configuration eases at all.
+    pub fn is_instant(&self) -> bool {
+        !(self.settle_seconds.is_finite() && self.settle_seconds > 0.0)
+    }
+
+    /// The easing time constant: seconds in which the offset closes `1 - 1/e`
+    /// of the remaining distance. `0.0` when this configuration does not ease.
+    pub fn tau(&self) -> f32 {
+        if self.is_instant() {
+            0.0
+        } else {
+            self.settle_seconds / 100.0_f32.ln()
+        }
+    }
+}
+
+impl Default for ScrollSmoothing {
+    fn default() -> Self {
+        Self {
+            settle_seconds: Self::DEFAULT_SETTLE_SECONDS,
+        }
+    }
+}
+
 /// Caller-owned scroll state.
 ///
-/// `offset` is the scroll offset (positive = scrolled right/down). `content_size`
-/// is what the most recent draw reported as the natural content extent — used
-/// for clamping and scrollbar sizing on subsequent frames.
+/// `offset` is the *drawn* scroll offset (positive = scrolled right/down) — the
+/// value the content transform and the scrollbar thumb use. `target` is the
+/// offset the user has asked for: wheel notches and
+/// [`scroll_range_into_view`](Self::scroll_range_into_view) move it, and
+/// `offset` eases toward it (see the module docs). `content_size` is what the
+/// most recent draw reported as the natural content extent — used for clamping
+/// and scrollbar sizing on subsequent frames.
 ///
 /// `_drag_*` fields track the currently-dragged scrollbar thumb.
 #[derive(Debug, Clone, Default)]
 pub struct ScrollState {
-    /// Current scroll offset `[x, y]` (positive = scrolled right/down).
+    /// Current scroll offset `[x, y]` (positive = scrolled right/down) — what
+    /// is drawn this frame, eased toward [`target`](Self::target).
     pub offset: [f32; 2],
+    /// Requested scroll offset `[x, y]` (positive = scrolled right/down).
+    ///
+    /// Always clamped to `[0, max_offset]` against the live content/viewport
+    /// sizes, so it is reachable and a glide toward it always terminates.
+    pub target: [f32; 2],
     /// Natural content extent `[w, h]` reported by the most recent draw.
     pub content_size: [f32; 2],
+    /// Easing preference for this scroll region. [`ScrollView`] honours it
+    /// unless the resolved theme sets `animation_duration` to `0.0`, which
+    /// disables the easing for the whole UI.
+    pub smoothing: ScrollSmoothing,
+    /// Frame delta of the most recent [`advance`](Self::advance), used to derive
+    /// [`pending_deadline`](Self::pending_deadline)'s "next frame" cadence.
+    last_dt: f32,
+    /// Easing time constant actually used by the most recent advance (the
+    /// theme-resolved one, which may differ from `smoothing.tau()`).
+    last_tau: f32,
     /// Which scrollbar is being dragged this frame (None when not dragging).
     drag_axis: Option<ScrollAxis>,
     /// Mouse position at drag start (world coords).
@@ -74,13 +191,146 @@ impl ScrollState {
         (self.content_size[axis] - viewport_size).max(0.0)
     }
 
-    /// Clamp the current offset against the latest content/viewport sizes.
+    /// Clamp the drawn offset **and** the target against the latest
+    /// content/viewport sizes.
+    ///
+    /// The target is clamped too, deliberately: an unclamped target beyond
+    /// `max_offset` would leave the glide asymptotically chasing a position the
+    /// offset can never legally occupy — i.e. permanently in flight, and asking
+    /// the host for a frame every frame, forever.
     pub fn clamp(&mut self, viewport: [f32; 2]) {
-        self.offset[0] = self.offset[0].clamp(0.0, self.max_offset(0, viewport[0]));
-        self.offset[1] = self.offset[1].clamp(0.0, self.max_offset(1, viewport[1]));
+        self.clamp_axis(0, viewport[0]);
+        self.clamp_axis(1, viewport[1]);
+    }
+
+    fn clamp_axis(&mut self, axis: usize, viewport_size: f32) {
+        let max = self.max_offset(axis, viewport_size);
+        self.offset[axis] = self.offset[axis].clamp(0.0, max);
+        self.target[axis] = self.target[axis].clamp(0.0, max);
+    }
+
+    /// Ask to scroll to `value` along `axis`; the drawn offset eases toward it
+    /// over the following frames.
+    ///
+    /// The value is floored at `0` and bounded properly by the next
+    /// [`clamp`](Self::clamp)/[`ScrollView`] pass (which knows the live
+    /// viewport). Invalid axes and non-finite values are ignored.
+    pub fn scroll_to(&mut self, axis: usize, value: f32) {
+        if axis > 1 || !value.is_finite() {
+            return;
+        }
+        self.target[axis] = value.max(0.0);
+    }
+
+    /// Move the target by `delta` along `axis` (positive = right/down), the way
+    /// one wheel notch does. Invalid axes and non-finite deltas are ignored.
+    pub fn scroll_by(&mut self, axis: usize, delta: f32) {
+        if axis > 1 || !delta.is_finite() {
+            return;
+        }
+        self.target[axis] = (self.target[axis] + delta).max(0.0);
+    }
+
+    /// Jump both the drawn offset and the target to `value` along `axis`, with
+    /// no easing — for moments where there is nothing to glide from (fresh
+    /// content, a "jump to top" command, a keyboard page jump).
+    pub fn snap_to(&mut self, axis: usize, value: f32) {
+        if axis > 1 || !value.is_finite() {
+            return;
+        }
+        let value = value.max(0.0);
+        self.offset[axis] = value;
+        self.target[axis] = value;
+    }
+
+    /// Whether the drawn offset is still visibly short of the target.
+    pub fn is_gliding(&self) -> bool {
+        self.gap() > SNAP_EPSILON
+    }
+
+    /// Largest remaining distance to the target across both axes.
+    fn gap(&self) -> f32 {
+        let dx = (self.target[0] - self.offset[0]).abs();
+        let dy = (self.target[1] - self.offset[1]).abs();
+        dx.max(dy)
+    }
+
+    /// Seconds until this scroll region's appearance next changes: the shorter
+    /// of one frame (the cadence the host is running at — a glide changes every
+    /// frame) and the time left before the offset snaps onto the target. `None`
+    /// when the offset is at the target.
+    ///
+    /// A still-moving scroll is a repaint source in its own right, but it cannot
+    /// report "my settle time" the way a hover fade does — an event-driven host
+    /// that only woke at the settle time would draw a single jump instead of a
+    /// glide. Hand the value to
+    /// [`UiState::request_repaint_after`](crate::UiState::request_repaint_after)
+    /// (which `UiState::end_frame` does for `UiState::scroll`) to keep the loop
+    /// awake for exactly as long as the motion lasts.
+    pub fn pending_deadline(&self) -> Option<f32> {
+        let gap = self.gap();
+        if gap <= SNAP_EPSILON {
+            return None;
+        }
+        let tau = if self.last_tau > 0.0 {
+            self.last_tau
+        } else {
+            self.smoothing.tau()
+        };
+        if tau <= 0.0 {
+            // Not easing: the target applies on the next drawn frame.
+            return Some(0.0);
+        }
+        let cadence = if self.last_dt > 0.0 {
+            self.last_dt
+        } else {
+            NOMINAL_FRAME_DT
+        };
+        Some(cadence.min(tau * (gap / SNAP_EPSILON).ln()))
+    }
+
+    /// Ease the drawn offset toward the target by one frame of `dt` seconds.
+    ///
+    /// `smoothing` is the *effective* configuration (the caller/widget has
+    /// already folded in any theme- or caller-level "no motion" override).
+    /// `dt` is sanitized here (non-finite/negative → `0.0`, huge deltas clamped
+    /// to [`MAX_DT`](crate::MAX_DT)); a `dt` of `0.0` — a paused or one-shot
+    /// static frame, where no time passes to animate in — applies the target at
+    /// once, so a single rendered frame shows the offset that was asked for.
+    pub fn advance(&mut self, smoothing: ScrollSmoothing, dt: f32) {
+        let dt = crate::frame_result::sanitize_dt(dt);
+        let tau = if dt > 0.0 { smoothing.tau() } else { 0.0 };
+        self.last_dt = dt;
+        self.last_tau = tau;
+        for axis in 0..2 {
+            let gap = self.target[axis] - self.offset[axis];
+            if gap == 0.0 {
+                continue;
+            }
+            if tau <= 0.0 {
+                self.offset[axis] = self.target[axis];
+                continue;
+            }
+            // Exponential step: frame-rate independent, and recomputed from the
+            // live gap each frame, so a wheel notch landing mid-glide re-aims
+            // the motion instead of restarting it.
+            let step = 1.0 - (-dt / tau).exp();
+            let next = self.offset[axis] + gap * step;
+            self.offset[axis] = if (self.target[axis] - next).abs() <= SNAP_EPSILON {
+                self.target[axis]
+            } else {
+                next
+            };
+        }
     }
 
     /// Move one axis by the minimum amount needed to reveal `[start, end]`.
+    ///
+    /// Visibility is judged against the **target**, not the mid-glide offset, so
+    /// re-issuing the same reveal every frame is a no-op once the target already
+    /// covers the range instead of nudging it forward each time. The target
+    /// (and therefore the eventual offset) moves by the minimum amount, eased
+    /// like any other scroll.
     ///
     /// Oversized ranges align their leading edge. Non-finite coordinates,
     /// invalid axes, and non-positive/non-finite viewport sizes are ignored.
@@ -104,17 +354,18 @@ impl ScrollState {
         } else {
             (end, start)
         };
-        if end - start > viewport_size || start < self.offset[axis] {
-            self.offset[axis] = start;
-        } else if end > self.offset[axis] + viewport_size {
-            self.offset[axis] = end - viewport_size;
+        if end - start > viewport_size || start < self.target[axis] {
+            self.target[axis] = start;
+        } else if end > self.target[axis] + viewport_size {
+            self.target[axis] = end - viewport_size;
         }
-        self.offset[axis] = self.offset[axis].clamp(0.0, self.max_offset(axis, viewport_size));
+        self.target[axis] = self.target[axis].clamp(0.0, self.max_offset(axis, viewport_size));
     }
 
-    /// Reset offset to (0, 0).
+    /// Reset offset and target to (0, 0) — immediately, not gliding.
     pub fn reset(&mut self) {
         self.offset = [0.0, 0.0];
+        self.target = [0.0, 0.0];
     }
 }
 
@@ -205,6 +456,9 @@ impl ScrollView {
     /// been measured). A common pattern is to compute it once based on item
     /// counts, then pass it in.
     ///
+    /// The drawn offset is eased toward `state.target` using the frame delta in
+    /// [`InputState::frame_dt`]; see the module docs.
+    ///
     /// This is a thin wrapper over [`begin`](Self::begin) + [`end`](Self::end)
     /// for callers that draw their content in a Rust closure. Immediate-mode
     /// callers (e.g. a scripting binding) can use `begin`/`end` directly.
@@ -223,26 +477,27 @@ impl ScrollView {
         self.end(state, list, style, input, begun);
     }
 
-    /// Begin a scroll region: handle wheel + thumb-drag input, push the clip and
-    /// the `-offset` transform, and return the viewport geometry. The caller
-    /// then draws content (in world-space pre-offset coords anchored at
-    /// `ScrollBegin::inner`) and **must** call [`end`](Self::end) with the
-    /// returned value to pop the clip/transform and draw the scrollbars.
+    /// Begin a scroll region: handle wheel + thumb-drag input, ease the drawn
+    /// offset toward the target, push the clip and the `-offset` transform, and
+    /// return the viewport geometry. The caller then draws content (in
+    /// world-space pre-offset coords anchored at `ScrollBegin::inner`) and
+    /// **must** call [`end`](Self::end) with the returned value to pop the
+    /// clip/transform and draw the scrollbars.
     ///
     /// `state.content_size` must be set before calling (see [`draw`](Self::draw)).
     pub fn begin(
         &self,
         state: &mut ScrollState,
         list: &mut DrawList,
-        _style: &StyleResolver,
+        style: &StyleResolver,
         input: &mut InputState,
     ) -> ScrollBegin {
         // Force-disable axes where content fits.
         if !self.enable_vertical {
-            state.offset[1] = 0.0;
+            state.snap_to(1, 0.0);
         }
         if !self.enable_horizontal {
-            state.offset[0] = 0.0;
+            state.snap_to(0, 0.0);
         }
 
         // Reserve space for visible scrollbars so content doesn't slide under them.
@@ -252,27 +507,34 @@ impl ScrollView {
         let inner_h = self.viewport.height - if h_visible { self.bar_thickness } else { 0.0 };
         let inner = Rect::new(self.viewport.x, self.viewport.y, inner_w, inner_h);
 
-        // Re-clamp against inner viewport (now that we know which bars take space).
+        // Re-clamp offset *and* target against the inner viewport (now that we
+        // know which bars take space) — before anything reads them, so an eased
+        // glide always chases a reachable position.
         state.clamp([inner_w, inner_h]);
 
         let mouse_over_inner =
             inner.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
 
-        // Wheel input — consumed when over the inner viewport, regardless of
-        // whether the offset actually changed (e.g. at a clamp boundary the
-        // wheel is still claimed so it doesn't bubble to an outer scrollable).
+        // Wheel input moves the *target*, not the drawn offset: the offset
+        // catches up in `advance` below, which turns a burst of notches into one
+        // glide. Consumed when over the inner viewport, regardless of whether the
+        // target actually changed (e.g. at a clamp boundary the wheel is still
+        // claimed so it doesn't bubble to an outer scrollable).
         if mouse_over_inner
             && input.scroll_delta != 0.0
             && !input.scroll_consumed
             && self.enable_vertical
         {
-            state.offset[1] = (state.offset[1] - input.scroll_delta * self.wheel_speed)
+            state.target[1] = (state.target[1] - input.scroll_delta * self.wheel_speed)
                 .clamp(0.0, state.max_offset(1, inner_h));
             input.scroll_consumed = true;
             input.scroll_delta = 0.0;
         }
 
-        // Handle thumb drag for both axes.
+        // Handle thumb drag for both axes. Dragging is direct manipulation: it
+        // sets the drawn offset and the target together (no easing), so the
+        // thumb tracks the pointer 1:1 and any glide still in flight is
+        // cancelled by the grab.
         if let Some(axis) = state.drag_axis {
             if !input.mouse_down {
                 state.drag_axis = None;
@@ -285,8 +547,10 @@ impl ScrollView {
                         let drag_range = (track_h - thumb_h).max(1.0);
                         let max_off = state.max_offset(1, inner_h);
                         let dy = input.mouse_y - state.drag_start_mouse;
-                        state.offset[1] = (state.drag_start_offset + dy * (max_off / drag_range))
+                        let dragged = (state.drag_start_offset + dy * (max_off / drag_range))
                             .clamp(0.0, max_off);
+                        state.offset[1] = dragged;
+                        state.target[1] = dragged;
                     }
                     ScrollAxis::Horizontal => {
                         let step = self.bar_thickness.min(inner_w * 0.5);
@@ -295,12 +559,26 @@ impl ScrollView {
                         let drag_range = (track_w - thumb_w).max(1.0);
                         let max_off = state.max_offset(0, inner_w);
                         let dx = input.mouse_x - state.drag_start_mouse;
-                        state.offset[0] = (state.drag_start_offset + dx * (max_off / drag_range))
+                        let dragged = (state.drag_start_offset + dx * (max_off / drag_range))
                             .clamp(0.0, max_off);
+                        state.offset[0] = dragged;
+                        state.target[0] = dragged;
                     }
                 }
             }
         }
+
+        // Ease the drawn offset the rest of the way toward its target with this
+        // frame's clock, before the transform below reads it. The effective
+        // smoothing is the region's preference unless the resolved theme turns
+        // animation off entirely (`animation_duration == 0`), which snaps like
+        // every other animated verb does.
+        let smoothing = if style.scalar(StyleKey::AnimationDuration) <= 0.0 {
+            ScrollSmoothing::INSTANT
+        } else {
+            state.smoothing
+        };
+        state.advance(smoothing, input.frame_dt);
 
         // Opened *before* the clip and transform below, deliberately: the scope
         // records the clip in force at push time and applies the active
@@ -599,44 +877,85 @@ mod tests {
 
     #[test]
     fn scroll_range_into_view_moves_only_when_needed() {
+        // The reveal target is what is seeded and asserted: visibility is judged
+        // against the *target* (the offset is only mid-glide toward it), so a
+        // reveal that repeats every frame must be a no-op rather than nudging
+        // the scroll forward each time.
         let mut s = ScrollState {
-            offset: [0.0, 100.0],
             content_size: [100.0, 500.0],
             ..ScrollState::default()
         };
+        s.snap_to(1, 100.0);
 
         s.scroll_range_into_view(1, 120.0, 140.0, 100.0);
-        assert_eq!(s.offset[1], 100.0, "an already-visible range must not move");
+        assert_eq!(s.target[1], 100.0, "an already-visible range must not move");
 
         s.scroll_range_into_view(1, 40.0, 60.0, 100.0);
-        assert_eq!(s.offset[1], 40.0, "a range above aligns its leading edge");
+        assert_eq!(s.target[1], 40.0, "a range above aligns its leading edge");
 
         s.scroll_range_into_view(1, 180.0, 200.0, 100.0);
         assert_eq!(
-            s.offset[1], 100.0,
+            s.target[1], 100.0,
             "a range below moves by the minimum amount"
+        );
+
+        // ... and the drawn offset follows the target over the next frames
+        // instead of jumping there with it: aiming above the offset leaves the
+        // offset partway on the following frame.
+        s.scroll_range_into_view(1, 0.0, 40.0, 100.0);
+        assert_eq!(s.target[1], 0.0, "a range above moves the target up");
+        assert_eq!(s.offset[1], 100.0, "the drawn offset has not moved yet");
+        s.advance(ScrollSmoothing::default(), 1.0 / 60.0);
+        assert!(
+            s.offset[1] > 0.0 && s.offset[1] < 100.0,
+            "offset {} should be easing toward 0",
+            s.offset[1]
         );
     }
 
     #[test]
     fn scroll_range_into_view_clamps_and_handles_oversized_ranges() {
         let mut s = ScrollState {
-            offset: [0.0, 300.0],
             content_size: [100.0, 500.0],
             ..ScrollState::default()
         };
+        s.snap_to(1, 300.0);
 
         s.scroll_range_into_view(1, -20.0, 10.0, 100.0);
-        assert_eq!(s.offset[1], 0.0);
+        assert_eq!(s.target[1], 0.0);
 
         s.scroll_range_into_view(1, 480.0, 500.0, 100.0);
-        assert_eq!(s.offset[1], 400.0);
+        assert_eq!(s.target[1], 400.0);
 
         s.scroll_range_into_view(1, 150.0, 300.0, 100.0);
         assert_eq!(
-            s.offset[1], 150.0,
+            s.target[1], 150.0,
             "oversized ranges align their leading edge"
         );
+    }
+
+    #[test]
+    fn clamp_bounds_the_target_as_well_as_the_offset() {
+        // Content shrinks under a pending glide: both fields come back into
+        // range, so the glide lands instead of asymptotically chasing a
+        // position the offset can never occupy (which would keep the region
+        // permanently "in flight" and asking the host for frames).
+        let mut s = ScrollState {
+            content_size: [100.0, 500.0],
+            ..ScrollState::default()
+        };
+        s.snap_to(1, 400.0);
+        s.scroll_to(1, 500.0);
+        assert!(s.is_gliding());
+
+        s.content_size = [100.0, 200.0];
+        s.clamp([100.0, 100.0]);
+        assert_eq!(s.target[1], 100.0, "target pulled back to the new maximum");
+        assert_eq!(s.offset[1], 100.0, "offset pulled back with it");
+
+        s.advance(ScrollSmoothing::default(), 1.0 / 60.0);
+        assert!(!s.is_gliding());
+        assert_eq!(s.pending_deadline(), None);
     }
 
     #[test]
@@ -815,8 +1134,9 @@ mod tests {
             drag_axis: Some(ScrollAxis::Vertical),
             drag_start_mouse: 0.0,
             drag_start_offset: 0.0,
-            offset: [0.0, 100.0],
+            ..ScrollState::default()
         };
+        state.snap_to(1, 100.0);
         let mut list = DrawList::new();
         let theme = theme();
         let mut input = InputState {
@@ -988,10 +1308,12 @@ mod tests {
     #[test]
     fn content_translated_by_negative_offset() {
         let mut state = ScrollState {
-            offset: [0.0, 50.0],
             content_size: [200.0, 1000.0],
             ..ScrollState::default()
         };
+        // `snap_to`, not a bare `offset` write: the drawn offset eases toward
+        // the target, so a pre-scrolled state must be pre-scrolled in both.
+        state.snap_to(1, 50.0);
         let mut list = DrawList::new();
         let theme = theme();
         let mut input = input_at(-10.0, -10.0);
@@ -1012,5 +1334,275 @@ mod tests {
             .chrome_instances()
             .any(|i| i.rect == [0.0, 50.0, 10.0, 10.0]);
         assert!(found, "content quad should be translated to world (0, 50)");
+    }
+
+    // ---- smooth scrolling -------------------------------------------------
+
+    /// Draw one frame of the standard 200x200 scroll view (content 1000px tall,
+    /// so the vertical bar is visible and the inner viewport is 187x200).
+    ///
+    /// Ends with [`InputState::end_frame`], the way a host does: per-frame edges
+    /// (the wheel delta and `scroll_consumed`) last exactly one frame, so a test
+    /// that wheels twice must do so on two frames.
+    fn draw_frame(state: &mut ScrollState, input: &mut InputState, theme: &Theme) {
+        let mut list = DrawList::new();
+        ScrollView::new(Rect::new(0.0, 0.0, 200.0, 200.0)).draw(
+            state,
+            &mut list,
+            &StyleResolver::new(theme),
+            input,
+            |_, _| {},
+        );
+        input.end_frame();
+    }
+
+    fn scroll_state() -> ScrollState {
+        ScrollState {
+            content_size: [200.0, 1000.0],
+            ..ScrollState::default()
+        }
+    }
+
+    #[test]
+    fn wheel_sets_the_target_and_eases_the_offset_toward_it() {
+        let mut state = scroll_state();
+        let theme = theme();
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0; // wheel down = 3 * 20px
+
+        draw_frame(&mut state, &mut input, &theme);
+
+        // Default 60Hz clock: the target takes the whole notch, the drawn offset
+        // only part of it — which is exactly what makes the motion smooth.
+        assert_eq!(state.target[1], 60.0, "the notch moves the target in full");
+        assert!(
+            state.offset[1] > 0.0 && state.offset[1] < state.target[1],
+            "offset {} should be partway to 60",
+            state.offset[1]
+        );
+        assert!(state.is_gliding());
+        let deadline = state.pending_deadline().expect("a glide is in flight");
+        assert!(
+            deadline > 0.0 && deadline <= 1.0 / 60.0,
+            "a glide asks for the next frame, got {deadline}"
+        );
+    }
+
+    #[test]
+    fn a_glide_converges_and_snaps_onto_the_target() {
+        let mut state = scroll_state();
+        let theme = theme();
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0;
+        draw_frame(&mut state, &mut input, &theme);
+
+        // Let the glide run on a 60Hz clock; it must land bit-exactly, not
+        // asymptotically — that is what lets an idle UI report no repaint.
+        for _ in 0..120 {
+            input.scroll_delta = 0.0;
+            draw_frame(&mut state, &mut input, &theme);
+        }
+        assert_eq!(state.offset[1], state.target[1]);
+        assert_eq!(state.offset[1], 60.0);
+        assert!(!state.is_gliding());
+        assert_eq!(state.pending_deadline(), None);
+    }
+
+    #[test]
+    fn easing_is_frame_rate_independent() {
+        // The step is derived from the frame delta, so one 100ms frame and six
+        // 16.7ms frames must land in the same place. (A per-frame fraction —
+        // `offset += gap * 0.25` — would not, and would scroll two and a half
+        // times faster on a 144Hz display than on a 60Hz one.)
+        let theme = theme();
+        let mut coarse = scroll_state();
+        let mut fine = scroll_state();
+        coarse.scroll_to(1, 400.0);
+        fine.scroll_to(1, 400.0);
+
+        let mut input = input_at(50.0, 50.0);
+        input.frame_dt = 0.1;
+        draw_frame(&mut coarse, &mut input, &theme);
+
+        input.frame_dt = 0.1 / 6.0;
+        for _ in 0..6 {
+            draw_frame(&mut fine, &mut input, &theme);
+        }
+
+        assert!(
+            (coarse.offset[1] - fine.offset[1]).abs() < 0.5,
+            "{} vs {} — the step must depend on elapsed time, not frame count",
+            coarse.offset[1],
+            fine.offset[1]
+        );
+    }
+
+    #[test]
+    fn retargeting_mid_glide_continues_from_the_current_offset() {
+        let mut state = scroll_state();
+        let theme = theme();
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0;
+        draw_frame(&mut state, &mut input, &theme);
+        let after_first = state.offset[1];
+
+        // A second notch a frame later must re-aim the motion, not restart it:
+        // the offset keeps moving from where it is (a restart would show up as a
+        // velocity discontinuity, i.e. the jerkiness this change is about).
+        input.scroll_delta = -3.0;
+        draw_frame(&mut state, &mut input, &theme);
+        assert_eq!(state.target[1], 120.0);
+        assert!(
+            state.offset[1] > after_first && state.offset[1] < state.target[1],
+            "offset {} should continue past {after_first}",
+            state.offset[1]
+        );
+
+        // Neither notch teleported the content: after two frames of a 60px and
+        // then a 120px target the offset is still well short of either.
+        assert!(
+            state.offset[1] < 60.0,
+            "two frames must not reach one notch"
+        );
+    }
+
+    #[test]
+    fn a_glide_keeps_running_when_the_cursor_leaves_the_viewport() {
+        let mut state = scroll_state();
+        let theme = theme();
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0;
+        draw_frame(&mut state, &mut input, &theme);
+        let after_wheel = state.offset[1];
+
+        // Cursor moved far away and the wheel is quiet: the glide must finish.
+        let mut away = input_at(5000.0, 5000.0);
+        draw_frame(&mut state, &mut away, &theme);
+        assert!(
+            state.offset[1] > after_wheel,
+            "offset {} should still be moving",
+            state.offset[1]
+        );
+    }
+
+    #[test]
+    fn zero_dt_applies_the_target_immediately() {
+        // A paused or one-shot static frame: no time passes, so there is nothing
+        // to animate in, and the frame must render the offset that was asked
+        // for (a screenshot, not a mid-glide frame).
+        let mut state = scroll_state();
+        let theme = theme();
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0;
+        input.frame_dt = 0.0;
+
+        draw_frame(&mut state, &mut input, &theme);
+
+        assert_eq!(state.offset[1], 60.0);
+        assert_eq!(state.offset[1], state.target[1]);
+        assert_eq!(state.pending_deadline(), None);
+    }
+
+    #[test]
+    fn instant_smoothing_jumps_to_the_target() {
+        let mut state = scroll_state();
+        state.smoothing = ScrollSmoothing::INSTANT;
+        // A caller-authored knob must not be able to produce a NaN offset.
+        assert!(ScrollSmoothing::new(f32::NAN).is_instant());
+        assert_eq!(ScrollSmoothing::new(-1.0), ScrollSmoothing::INSTANT);
+
+        let theme = theme();
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0;
+        draw_frame(&mut state, &mut input, &theme);
+
+        assert_eq!(state.offset[1], 60.0);
+        assert_eq!(state.pending_deadline(), None);
+    }
+
+    #[test]
+    fn a_theme_that_disables_animation_disables_scroll_easing() {
+        let mut state = scroll_state();
+        let mut theme = theme();
+        theme.animation_duration = 0.0;
+        let mut input = input_at(50.0, 50.0);
+        input.scroll_delta = -3.0;
+
+        draw_frame(&mut state, &mut input, &theme);
+
+        assert_eq!(
+            state.offset[1], 60.0,
+            "animation_duration == 0 means no motion anywhere"
+        );
+        assert_eq!(state.pending_deadline(), None);
+    }
+
+    #[test]
+    fn dragging_the_thumb_is_one_to_one_and_moves_the_target_with_it() {
+        let mut state = scroll_state();
+        let theme = theme();
+        let viewport = Rect::new(0.0, 0.0, 200.0, 200.0);
+
+        // Grab the thumb (vertical channel is x=187..200, first key 0..13).
+        let mut input = InputState {
+            mouse_x: 193.0,
+            mouse_y: 20.0,
+            mouse_down: true,
+            mouse_clicked: true,
+            ..InputState::default()
+        };
+        let mut list = DrawList::new();
+        ScrollView::new(viewport).draw(
+            &mut state,
+            &mut list,
+            &StyleResolver::new(&theme),
+            &mut input,
+            |_, _| {},
+        );
+
+        input.mouse_clicked = false;
+        input.mouse_y = 60.0;
+        list.clear();
+        ScrollView::new(viewport).draw(
+            &mut state,
+            &mut list,
+            &StyleResolver::new(&theme),
+            &mut input,
+            |_, _| {},
+        );
+
+        // Direct manipulation: the drawn offset follows the pointer in the same
+        // frame (no lag), and the target is dragged along so the next eased step
+        // does not undo it.
+        assert!(state.offset[1] > 0.0);
+        assert_eq!(state.offset[1], state.target[1]);
+        assert!(!state.is_gliding());
+    }
+
+    #[test]
+    fn snap_to_and_reset_land_immediately() {
+        let mut state = scroll_state();
+        state.scroll_to(1, 400.0);
+        assert_eq!(state.offset[1], 0.0, "scroll_to only aims");
+        state.snap_to(1, 400.0);
+        assert_eq!((state.offset[1], state.target[1]), (400.0, 400.0));
+        assert!(!state.is_gliding());
+
+        state.reset();
+        assert_eq!(state.offset, [0.0, 0.0]);
+        assert_eq!(state.target, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn scroll_by_accumulates_and_ignores_junk() {
+        let mut state = scroll_state();
+        state.scroll_by(1, 40.0);
+        state.scroll_by(1, 20.0);
+        assert_eq!(state.target[1], 60.0);
+        state.scroll_by(1, -1000.0);
+        assert_eq!(state.target[1], 0.0, "never negative");
+        state.scroll_by(9, 10.0);
+        state.scroll_by(1, f32::NAN);
+        assert_eq!(state.target[1], 0.0);
     }
 }

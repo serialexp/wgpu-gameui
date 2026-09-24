@@ -167,13 +167,20 @@ pub(super) struct ColumnGeom {
 /// [`MenuBarState::columns`](MenuBarState)) so a frame's paint can take them out
 /// and put them back without a borrow fight, and so a test can read back what was
 /// last drawn.
+#[derive(Clone, Copy)]
 pub(super) struct MenuGeom {
     /// The bar strip's rect, so the blocker can exclude it.
     pub bar_rect: Rect,
+    /// The label rect the root column hangs from.
+    pub anchor: Rect,
     /// The viewport the chain must stay inside.
     pub viewport: Rect,
     /// Index of the open top-level menu.
     pub menu_index: usize,
+    /// Accelerator vocabulary used while measuring row hints.
+    pub platform: AccelPlatform,
+    /// Preferred side for root and child columns.
+    pub side: SubmenuSide,
 }
 
 /// What the geometry pass is asked to measure: the menus, where the bar and the
@@ -232,11 +239,8 @@ pub struct MenuBarState {
     pub(super) scrolls: Vec<f32>,
     /// Number of attempts to open a child beyond [`MAX_MENU_DEPTH`].
     depth_truncations: usize,
-    /// Hover-intent target and elapsed dwell time.
-    pub(super) hover_level: Option<usize>,
-    pub(super) hover_item: Option<usize>,
-    pub(super) hover_elapsed: f32,
-    pub(super) frame_dt: f32,
+    /// Previous pointer sample, used by the safe-triangle corridor while moving
+    /// from a parent row toward its open child.
     pub(super) previous_pointer: Option<(f32, f32)>,
     /// Bar label under the pointer this frame.
     pub(super) hovered_menu: Option<usize>,
@@ -327,10 +331,6 @@ impl MenuBarState {
             highlights: Vec::with_capacity(MAX_MENU_DEPTH),
             scrolls: Vec::with_capacity(MAX_MENU_DEPTH),
             depth_truncations: 0,
-            hover_level: None,
-            hover_item: None,
-            hover_elapsed: 0.0,
-            frame_dt: 0.0,
             previous_pointer: None,
             hovered_menu: None,
             hovered_item: None,
@@ -465,6 +465,8 @@ impl MenuBarState {
         // The measured columns (and the text they hold) belong to a chain that is
         // gone. The buffer itself is kept, so reopening reuses the allocation.
         self.columns.clear();
+        self.previous_pointer = None;
+        self.last_pointer = None;
     }
 
     /// Frame-top: promote last frame's measured geometry, capture this frame's
@@ -482,11 +484,9 @@ impl MenuBarState {
         self.begin_frame_with_dt(input, 0.0);
     }
 
-    /// Frame-top entry point with elapsed seconds for submenu hover intent.
-    /// Invalid/negative deltas become zero and long stalls are capped at
-    /// [`crate::MAX_DT`], matching the crate's other timed frame state.
-    pub fn begin_frame_with_dt(&mut self, input: &mut InputState, dt: f32) {
-        self.frame_dt = crate::frame_result::sanitize_dt(dt);
+    /// Frame-top entry point accepting elapsed seconds for API compatibility.
+    /// Submenu hover is immediate; `dt` is no longer used.
+    pub fn begin_frame_with_dt(&mut self, input: &mut InputState, _dt: f32) {
         self.previous_pointer = self.last_pointer;
         // Promote last frame's measured geometry. With nothing open there is nothing
         // to promote — and nothing may survive either: a closed chain keeps no
@@ -801,9 +801,57 @@ impl MenuBarState {
         drop(cx);
         self.next_geom = Some(MenuGeom {
             bar_rect,
+            anchor,
             viewport,
             menu_index,
+            platform,
+            side,
         });
+    }
+
+    /// Rebuild the open chain after popup interaction changes its path.
+    ///
+    /// The normal bar pass stages geometry before popup rows resolve. Calling
+    /// this from the popup pass makes a newly hovered/clicked child available
+    /// immediately and stages the same complete chain for the following frame.
+    pub(super) fn recollect_open_chain(
+        &mut self,
+        menus: &[Menu<'_>],
+        list: &mut DrawList,
+        theme: &Theme,
+        style: Option<&StyleOverlay>,
+        geom: MenuGeom,
+    ) {
+        self.stage_open_chain(menus, list, theme, style, geom);
+        std::mem::swap(&mut self.columns, &mut self.next_columns);
+        // Promotion consumed the freshly measured buffer. Stage the same path
+        // once more so the following frame promotes identical geometry instead
+        // of briefly reverting to the pre-interaction chain.
+        self.stage_open_chain(menus, list, theme, style, geom);
+    }
+
+    /// Stage the current path without promoting it into this frame's columns.
+    pub(super) fn stage_open_chain(
+        &mut self,
+        menus: &[Menu<'_>],
+        list: &mut DrawList,
+        theme: &Theme,
+        style: Option<&StyleOverlay>,
+        geom: MenuGeom,
+    ) {
+        self.collect_chain(
+            ChainGeometry {
+                menus,
+                bar_rect: geom.bar_rect,
+                anchor: geom.anchor,
+                viewport: geom.viewport,
+                platform: geom.platform,
+                side: geom.side,
+            },
+            list,
+            theme,
+            style,
+        );
     }
 
     /// The geometry of the column last painted, as `(rect, row height, content

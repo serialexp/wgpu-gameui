@@ -1628,6 +1628,29 @@ impl DrawList {
         );
     }
 
+    /// Paint a [`Background`] as opaque triangle-soup geometry (no SDF
+    /// antialiasing).  Use for shell chrome surfaces that tile edge-to-edge
+    /// and must produce fully opaque pixels at every boundary.
+    ///
+    /// Unlike [`paint_quad_background`](Self::paint_quad_background) this
+    /// bypasses the instanced SDF rounded-rect pipeline entirely — corner
+    /// radii are not supported (shell rects are axis-aligned rectangles).
+    pub fn paint_background_opaque(&mut self, rect: Rect, background: Background) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            self.dropped_degenerate += 1;
+            return;
+        }
+        match background {
+            Background::Solid(color) => {
+                self.quad_gradient(rect, [color, color, color, color]);
+            }
+            Background::LinearGradient { start, end, axis } => match axis {
+                GradientAxis::Vertical => self.vertical_gradient(rect, start, end),
+                GradientAxis::Horizontal => self.horizontal_gradient(rect, start, end),
+            },
+        }
+    }
+
     /// Paint only an inward-growing quad border.
     pub fn paint_quad_border(
         &mut self,

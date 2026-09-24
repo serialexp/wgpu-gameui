@@ -220,19 +220,15 @@ impl<'a> DockPanel<'a> {
                     "✕",
                 );
                 ctx.draw_list.text(
-                    TextBlock::new(
-                        "✕",
-                        close_rect.x + (close_rect.width - 6.0) * 0.5,
-                        xty,
-                    )
-                    .with_size(10.0)
-                    .with_color(
-                        (xc[0] * 255.0) as u8,
-                        (xc[1] * 255.0) as u8,
-                        (xc[2] * 255.0) as u8,
-                    )
-                    .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
-                    .with_font_opt(s.theme().font.clone()),
+                    TextBlock::new("✕", close_rect.x + (close_rect.width - 6.0) * 0.5, xty)
+                        .with_size(10.0)
+                        .with_color(
+                            (xc[0] * 255.0) as u8,
+                            (xc[1] * 255.0) as u8,
+                            (xc[2] * 255.0) as u8,
+                        )
+                        .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
+                        .with_font_opt(s.theme().font.clone()),
                 );
             }
 

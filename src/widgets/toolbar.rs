@@ -808,7 +808,7 @@ impl<'a> Toolbar<'a> {
             std::slice::from_ref(&shadow),
             &lines,
         );
-        painter.paint_pre_content();
+        painter.paint_pre_content_opaque();
         painter.paint_post_content();
     }
 
@@ -1896,7 +1896,12 @@ mod tests {
             99,
             &mut ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay),
         );
-        assert_eq!(list.chrome_instance(0).unwrap().bg, chrome.rail_colors[0]);
+        // Rail background is now opaque soup (no SDF).
+        assert!(
+            list.vertices
+                .iter()
+                .any(|v| v.color == chrome.rail_colors[0])
+        );
         assert!(
             list.chrome_instances()
                 .any(|quad| quad.bg == [0.31, 0.32, 0.33, 1.0])

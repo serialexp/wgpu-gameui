@@ -106,18 +106,17 @@ fn column_blockers_include_the_full_branch_path() {
 }
 
 #[test]
-fn frame_dt_is_sanitized_for_hover_intent() {
+fn elapsed_time_entry_point_preserves_pointer_history() {
     let mut state = MenuBarState::new();
-    let mut input = InputState::default();
-    for (dt, expected) in [
-        (f32::NAN, 0.0),
-        (f32::INFINITY, 0.0),
-        (-1.0, 0.0),
-        (10.0, crate::MAX_DT),
-    ] {
-        state.begin_frame_with_dt(&mut input, dt);
-        assert_eq!(state.frame_dt, expected);
-    }
+    let mut input = InputState {
+        mouse_x: 12.0,
+        mouse_y: 34.0,
+        ..Default::default()
+    };
+    state.begin_frame_with_dt(&mut input, f32::NAN);
+    input.mouse_x = 20.0;
+    state.begin_frame_with_dt(&mut input, 10.0);
+    assert_eq!(state.previous_pointer, Some((12.0, 34.0)));
 }
 
 #[test]
@@ -210,7 +209,13 @@ fn strip_uses_typed_menu_bar_overlay() {
 
     bar().draw(strip(), &mut state, &mut ctx);
 
-    assert_eq!(ctx.draw_list.chrome_instance(0).unwrap().bg, override_color);
+    // Menu bar background is now opaque soup (no SDF).
+    assert!(
+        ctx.draw_list
+            .vertices
+            .iter()
+            .any(|v| v.color == override_color)
+    );
 }
 
 /// A whole bar-only frame: no popup layers, no scene teardown. Enough for the
@@ -1254,9 +1259,8 @@ fn the_press_that_opens_a_menu_does_not_select_a_row() {
 // -------------------------------------------------------- pointer integration
 
 #[test]
-fn timed_row_hover_opens_a_menubar_submenu() {
+fn row_hover_opens_and_paints_a_menubar_submenu_immediately() {
     let mut rig = Rig::new();
-    rig.theme.menu_hover_delay = 0.05;
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
     let rect = rig.column_rect();
@@ -1270,13 +1274,66 @@ fn timed_row_hover_opens_a_menubar_submenu() {
         rect.y + rig.state.columns[0].sheet_padding + parent.y + parent.height * 0.5,
     );
 
-    // One frame registers the moved pointer against retained regions; the next
-    // starts dwell, and only enough subsequent sanitized dt opens the child.
-    rig.step_with_dt(0.03);
-    rig.step_with_dt(0.03);
-    assert_eq!(rig.state.open_levels(), 1);
-    rig.step_with_dt(0.05);
+    rig.step_with_dt(0.0);
     assert_eq!(rig.state.open_levels(), 2);
+    assert_eq!(
+        rig.state.columns.len(),
+        2,
+        "the hover frame paints the child without waiting for another redraw"
+    );
+    assert_eq!(rig.layers.layers().len(), 3, "blocker plus two sheets");
+}
+
+#[test]
+fn clicking_a_parent_opens_and_paints_its_child_without_pointer_followup() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 0);
+    rig.settle();
+    let root = &rig.state.columns[0];
+    let parent = root
+        .rows
+        .iter()
+        .find(|row| row.item_index == 5)
+        .expect("submenu parent");
+    rig.click(
+        root.rect.x + 20.0,
+        root.rect.y + root.sheet_padding + parent.y + parent.height * 0.5,
+    );
+    rig.step();
+    assert_eq!(rig.state.open_levels(), 2);
+    assert_eq!(rig.state.columns.len(), 2, "click frame paints the child");
+}
+
+#[test]
+fn leaf_hover_and_leaving_the_chain_close_children_immediately() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 0);
+    assert!(rig.state.set_open_path(MENUS, &[5]));
+    rig.settle();
+
+    let root = &rig.state.columns[0];
+    let leaf = root
+        .rows
+        .iter()
+        .find(|row| row.item_index == 0)
+        .expect("leaf row");
+    rig.move_pointer(
+        root.rect.x + 20.0,
+        root.rect.y + root.sheet_padding + leaf.y + leaf.height * 0.5,
+    );
+    rig.step();
+    assert_eq!(rig.state.open_levels(), 1, "leaf hover closes the child");
+
+    assert!(rig.state.set_open_path(MENUS, &[5]));
+    rig.step();
+    rig.step();
+    rig.move_pointer(W - 1.0, H - 1.0);
+    rig.step();
+    assert_eq!(
+        rig.state.open_levels(),
+        1,
+        "leaving the chain closes the child"
+    );
 }
 
 #[test]

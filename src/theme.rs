@@ -120,6 +120,8 @@ pub struct Theme {
     pub dock_tab_height: f32,
     /// Width of the resize splitter between a dock panel and the viewport.
     pub dock_splitter_width: f32,
+    /// Height of a movable window's title strip, in pixels.
+    pub window_title_height: f32,
 
     /// Hover/press transition duration in seconds. `0.0` disables animation
     /// (colors switch instantly). Read by widgets via
@@ -348,6 +350,7 @@ impl Default for Theme {
             toolbar_padding: 3.0,
             dock_tab_height: 24.0,
             dock_splitter_width: 6.0,
+            window_title_height: 24.0,
             animation_duration: 0.12,
 
             // 4a material tokens (see the field docs above).
@@ -618,6 +621,7 @@ impl Theme {
             ToolbarPadding => StyleValue::Scalar(self.toolbar_padding),
             DockTabHeight => StyleValue::Scalar(self.dock_tab_height),
             DockSplitterWidth => StyleValue::Scalar(self.dock_splitter_width),
+            WindowTitleHeight => StyleValue::Scalar(self.window_title_height),
             Travel => StyleValue::Scalar(self.travel),
             InnerShadowDepth => StyleValue::Scalar(self.inner_shadow_depth),
             // Custom namespace
@@ -711,6 +715,7 @@ impl Theme {
             (ToolbarPadding, StyleValue::Scalar(s)) => self.toolbar_padding = s,
             (DockTabHeight, StyleValue::Scalar(s)) => self.dock_tab_height = s,
             (DockSplitterWidth, StyleValue::Scalar(s)) => self.dock_splitter_width = s,
+            (WindowTitleHeight, StyleValue::Scalar(s)) => self.window_title_height = s,
             (Travel, StyleValue::Scalar(s)) => self.travel = s,
             (InnerShadowDepth, StyleValue::Scalar(s)) => self.inner_shadow_depth = s,
             (k, v) => debug_assert!(

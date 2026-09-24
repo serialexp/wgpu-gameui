@@ -41,6 +41,8 @@ pub enum CursorIcon {
     ResizeHorizontal,
     /// Vertical resize (↕) — row dividers, vertical split handles.
     ResizeVertical,
+    /// Diagonal resize (↘, north-west/south-east) — bottom-right corner grips.
+    ResizeDiagonal,
     /// "Not allowed" — over a disabled or invalid drop target.
     NotAllowed,
 }
@@ -58,6 +60,7 @@ impl CursorIcon {
             | CursorIcon::Text
             | CursorIcon::ResizeHorizontal
             | CursorIcon::ResizeVertical
+            | CursorIcon::ResizeDiagonal
             | CursorIcon::NotAllowed => 1,
             CursorIcon::Grab => 2,
             // An in-progress drag should beat hover cursors of equal-or-lower rank.

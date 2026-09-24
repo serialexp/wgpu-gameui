@@ -1660,6 +1660,29 @@ fn render_widget_gallery() {
             &mut DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0),
         );
 
+        // The same 12 overflowing rows, drawn twice: at rest, and scrolled to a
+        // target, so the clip and the moved scrubber are visible in a still
+        // image. (The *easing* itself is motion and cannot show up in a PNG —
+        // `scroll_view`'s unit tests cover the glide.)
+        let scroll_rows = |list: &mut DrawList, vp: Rect| {
+            for i in 0..12usize {
+                let y = vp.y + i as f32 * 22.0;
+                let bg = if i % 2 == 0 {
+                    [0.16, 0.18, 0.24, 1.0]
+                } else {
+                    [0.10, 0.12, 0.18, 1.0]
+                };
+                // `vp` already excludes the scrollbar gutter, so fill it
+                // edge-to-edge; the row only pads its own text.
+                list.quad(vp.x, y + 2.0, vp.width, 18.0, bg);
+                list.text(
+                    TextBlock::new(format!("Item #{:02}", i), vp.x + 8.0, y + 3.0)
+                        .with_size(12.0)
+                        .with_color(180, 190, 210),
+                );
+            }
+        };
+
         let r = flow.cell(list, "Scroll view", 180.0, 100.0);
         list.rounded_rect(r, 4.0, [0.06, 0.07, 0.10, 1.0]);
         let mut scroll_state = ScrollState::default();
@@ -1669,24 +1692,22 @@ fn render_widget_gallery() {
             list,
             &StyleResolver::new(&theme),
             &mut input,
-            |list, vp| {
-                for i in 0..12usize {
-                    let y = vp.y + i as f32 * 22.0;
-                    let bg = if i % 2 == 0 {
-                        [0.16, 0.18, 0.24, 1.0]
-                    } else {
-                        [0.10, 0.12, 0.18, 1.0]
-                    };
-                    // `vp` already excludes the scrollbar gutter, so fill it
-                    // edge-to-edge; the row only pads its own text.
-                    list.quad(vp.x, y + 2.0, vp.width, 18.0, bg);
-                    list.text(
-                        TextBlock::new(format!("Item #{:02}", i), vp.x + 8.0, y + 3.0)
-                            .with_size(12.0)
-                            .with_color(180, 190, 210),
-                    );
-                }
-            },
+            scroll_rows,
+        );
+
+        let r = flow.cell(list, "Scroll view (scrolled)", 180.0, 100.0);
+        list.rounded_rect(r, 4.0, [0.06, 0.07, 0.10, 1.0]);
+        let mut scrolled_state = ScrollState::default();
+        scrolled_state.content_size = [160.0, 300.0];
+        // `snap_to`, not a bare `offset` write: the drawn offset eases toward its
+        // target, so a one-frame render has to seed both to sit still.
+        scrolled_state.snap_to(1, 66.0);
+        ScrollView::new(r).vertical_only().draw(
+            &mut scrolled_state,
+            list,
+            &StyleResolver::new(&theme),
+            &mut input,
+            scroll_rows,
         );
 
         let columns = &[
@@ -2755,6 +2776,54 @@ fn render_widget_gallery() {
                         (bd[2] * 255.0) as u8,
                     ),
             );
+        }
+
+        flow.section(list, "Window — movable, closable, optional resize grip");
+        {
+            use wgpu_gameui::{DragCapture, Window, WindowState};
+
+            // Each window sits inset in its cell so its elevation shadow reads.
+            // A synthetic pointer on the first window's close key shows the
+            // key's hover state; the second is fixed-size without a close key.
+            let label = |dctx: &mut DrawContext, body: Rect, text: &str| {
+                let bd = dctx.styles().color(StyleKey::TextDim);
+                dctx.draw_list.text(
+                    TextBlock::new(text, body.x + 8.0, body.y + 8.0)
+                        .with_size(10.0)
+                        .with_color(
+                            (bd[0] * 255.0) as u8,
+                            (bd[1] * 255.0) as u8,
+                            (bd[2] * 255.0) as u8,
+                        ),
+                );
+            };
+            let r = flow.cell(list, "Resizable · close key hovered", 260.0, 170.0);
+            let mut state = WindowState::new(Rect::new(r.x + 16.0, r.y + 8.0, 228.0, 140.0));
+            let key = Window::close_rect(
+                state.rect,
+                theme.window_title_height,
+                theme.chrome.window.surface.border_widths.top,
+            );
+            let mut window_input = InputState::default();
+            window_input.mouse_x = key.x + key.width * 0.5;
+            window_input.mouse_y = key.y + key.height * 0.5;
+            let mut dctx =
+                DrawContext::new(list, &mut focus, &theme, &window_input, W as f32, 600.0);
+            let out = Window::new(9_100, "Generate recolor mask")
+                .resizable(true)
+                .draw(&mut state, &mut DragCapture::new(), &mut dctx);
+            label(&mut dctx, out.body, "(body area)");
+
+            let r = flow.cell(list, "Fixed size · not closable", 260.0, 170.0);
+            let mut state = WindowState::new(Rect::new(r.x + 16.0, r.y + 8.0, 228.0, 140.0));
+            let idle = InputState::default();
+            let mut dctx = DrawContext::new(list, &mut focus, &theme, &idle, W as f32, 600.0);
+            let out = Window::new(9_102, "Project").closable(false).draw(
+                &mut state,
+                &mut DragCapture::new(),
+                &mut dctx,
+            );
+            label(&mut dctx, out.body, "(body area)");
         }
 
         // --- Backdrop blur (UiBlur) ----------------------------------------

@@ -109,7 +109,7 @@ pub use animation::{AnimSlot, AnimationState, Easing, ease, lerp, lerp_color};
 pub use chrome::{
     Background, ChromeTheme, DockChrome, Edge, EdgeStyle, EdgeWidths, FloatingSurfaceChrome,
     GradientAxis, MenuBarChrome, MenuSheetChrome, QuadStyle, SplitterChrome, StatusBarChrome,
-    StructuralLine, SurfacePainter, ToolbarChrome,
+    StructuralLine, SurfacePainter, ToolbarChrome, WindowChrome,
 };
 pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};
 pub use color::Hsva;
@@ -118,7 +118,7 @@ pub use cursor::{CursorIcon, CursorState};
 pub use debug::DebugReport;
 pub use drag_tracker::{DEFAULT_DRAG_THRESHOLD, DragTracker};
 pub use frame::Frame;
-pub use frame_result::{MAX_DT, UiFrameResult};
+pub use frame_result::{MAX_DT, NOMINAL_FRAME_DT, UiFrameResult};
 pub use interaction::{
     HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
 };
@@ -148,7 +148,7 @@ pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};
 pub use widgets::*;
 
 /// Input state passed to UI for interaction.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct InputState {
     /// Pointer X position in logical pixels.
     pub mouse_x: f32,
@@ -200,6 +200,24 @@ pub struct InputState {
     pub drag_delta: [f32; 2],
     /// Scroll wheel delta (positive = scroll up, negative = scroll down)
     pub scroll_delta: f32,
+    /// Seconds since the previous drawn frame — the host's frame delta, read by
+    /// time-based widgets (currently [`ScrollView`]'s
+    /// easing). Set it once per frame alongside the pointer position, the way
+    /// [`mouse_x`](Self::mouse_x) is set; interactive frames built through
+    /// [`UiState::begin_frame`](crate::UiState::begin_frame) are stamped for you
+    /// from the `dt` they were given.
+    ///
+    /// Defaults to one nominal 60 Hz frame
+    /// ([`NOMINAL_FRAME_DT`]) rather than `0.0`, so a
+    /// host that never runs a clock still animates smoothly instead of freezing.
+    /// `0.0` therefore means *no time passed* — a paused or one-shot static
+    /// frame — and time-based widgets apply their target immediately rather
+    /// than easing toward it.
+    ///
+    /// Held state: like the modifier flags, it is **not** cleared by
+    /// [`end_frame`](Self::end_frame), and [`consumed`](Self::consumed)
+    /// preserves it so a lower layer still animates.
+    pub frame_dt: f32,
     // Text input
     /// Committed text to insert at the caret this frame (UTF-8). Empty when
     /// no characters were typed; cleared by [`InputState::end_frame`].
@@ -294,6 +312,66 @@ pub struct InputState {
     ///
     /// [`end_frame`]: InputState::end_frame
     pub nav: NavInput,
+}
+
+impl Default for InputState {
+    /// Every event field cleared, the held modifier flags `false`, and
+    /// [`frame_dt`](Self::frame_dt) set to one nominal 60 Hz frame.
+    ///
+    /// Hand-written (rather than derived) **only** because of that clock
+    /// default: a derived `Default` would leave the delta at `0.0`, which the
+    /// time-based widgets read as "no time passed" and a host that never stamps
+    /// a real delta would then see its scroll snap instead of glide. Adding a
+    /// field to `InputState` therefore fails to compile here until it is listed
+    /// — the compiler keeps this honest.
+    fn default() -> Self {
+        Self {
+            mouse_x: 0.0,
+            mouse_y: 0.0,
+            mouse_down: false,
+            mouse_clicked: false,
+            mouse_released: false,
+            mouse_double_clicked: false,
+            mouse_held: false,
+            mouse_right_down: false,
+            mouse_right_clicked: false,
+            mouse_right_released: false,
+            mouse_middle_down: false,
+            mouse_middle_clicked: false,
+            mouse_middle_released: false,
+            is_dragging: false,
+            drag_delta: [0.0, 0.0],
+            scroll_delta: 0.0,
+            frame_dt: crate::NOMINAL_FRAME_DT,
+            text_input: String::new(),
+            backspace_pressed: false,
+            enter_pressed: false,
+            preedit: String::new(),
+            preedit_cursor: None,
+            mouse_consumed: false,
+            scroll_consumed: false,
+            key_left: false,
+            key_right: false,
+            key_home: false,
+            key_end: false,
+            key_delete: false,
+            key_select_all: false,
+            key_cut: false,
+            key_copy: false,
+            key_paste: false,
+            key_tab: false,
+            key_escape: false,
+            key_space: false,
+            key_up: false,
+            key_down: false,
+            shift_pressed: false,
+            ctrl_pressed: false,
+            alt_down: false,
+            alt_pressed: false,
+            alt_released: false,
+            nav: NavInput::default(),
+        }
+    }
 }
 
 impl InputState {
@@ -579,5 +657,30 @@ mod input_state_tests {
             !i.alt_pressed && !i.alt_released,
             "and gone the next, so one tap cannot arm the bar twice"
         );
+    }
+
+    // ---- frame clock (`frame_dt`) ----
+
+    #[test]
+    fn default_input_carries_a_nominal_frame_clock() {
+        // Not `0.0`: a host that never stamps a real delta must still animate
+        // (a `0.0` delta means "no time passed", i.e. snap the target). See the
+        // hand-written `Default` impl for why this is not derived.
+        assert_eq!(InputState::default().frame_dt, crate::NOMINAL_FRAME_DT);
+        assert_eq!(InputState::new().frame_dt, crate::NOMINAL_FRAME_DT);
+        assert!(crate::NOMINAL_FRAME_DT > 0.0);
+    }
+
+    #[test]
+    fn frame_clock_is_held_state_that_survives_the_frame_and_layers() {
+        let mut i = InputState {
+            frame_dt: 0.004,
+            ..InputState::default()
+        };
+        i.end_frame();
+        assert_eq!(i.frame_dt, 0.004, "held state, like the modifiers");
+        // A layer beneath a modal still animates, so the clock must survive the
+        // `consumed()` clone as well.
+        assert_eq!(i.consumed().frame_dt, 0.004);
     }
 }

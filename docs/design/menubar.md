@@ -103,12 +103,14 @@ note) — there is no "implemented but not in the gallery" state.
       activation ids. Right/Confirm opens parents; Right on a leaf at any depth
       switches to the next enabled top-level menu and collapses to its root;
       Left/Escape unwinds. Submenu placement overlaps and Auto-flips per level.
-      Timed hover intent uses sanitized/capped frame deltas, `MenuHoverDelay`, and
-      a safe-triangle corridor for both left- and right-opening children; sibling
-      parents replace immediately while a leaf closes an open child after the
-      delay. `ContextMenuState::begin_frame_with_dt` provides the same timed hover
-      behavior (`begin_frame` remains the zero-delta compatibility entry point),
-      with `open_levels`, `set_open_path`, and `depth_truncations` inspection.
+      Current-pointer hover opens submenu parents immediately in both menubars
+      and context menus; leaves and departures close descendants immediately,
+      while a safe-triangle corridor protects diagonal travel into left- or
+      right-opening children. Newly opened children are laid out and painted in
+      the triggering frame, so event-driven hosts do not depend on a later mouse
+      move. `begin_frame_with_dt` remains as a compatibility entry point; hover no
+      longer depends on elapsed time. `open_levels`, `set_open_path`, and
+      `depth_truncations` expose bounded context state.
       Both widgets truncate at the depth cap without panicking or logging each
       frame. The gallery renders nested menubar and context-menu chains.
 - [ ] **Phase 4 — accelerator dispatch.** `InputState::keys` (`KeyState`),
@@ -782,30 +784,27 @@ stationary pointer re-take the highlight on the next frame; `MenuBarState`
 instead remembers the last pointer position and only reclaims the highlight
 when it actually changes.
 
-### Hover intent, the corridor rule, and closing
+### Immediate hover, the corridor rule, and closing
 
 Three rules, all of which need specifying because they are where hand-rolled
 menus visibly fail:
 
-1. **Hover intent.** Hovering a submenu parent opens its child after
-   `StyleKey::MenuHoverDelay` seconds. The delay is skipped when the parent menu
-   was just opened by keyboard, or when a submenu of the same parent is already
-   open (hovering a sibling parent then switches immediately). The accumulated
-   hover time comes from the `dt` passed to `begin_frame` — `AnimationState`
-   keeps its `dt` private (`src/animation.rs:170`) and has no accessor, so the
-   menu does not scavenge it.
+1. **Immediate hover.** The current pointer position is hit-tested against the
+   visible row geometry. Hovering an enabled submenu parent opens or replaces
+   its child in that same draw call; no dwell timer or subsequent pointer event
+   is required. Menubars retain `InteractionScene` for authoritative press
+   ownership, but do not inherit its previous-frame latency for hover intent.
 2. **Corridor rule.** Keeping ancestors open while the pointer is *inside* a
    child popup is not enough: a diagonal move toward the child crosses sibling
    rows while still inside the parent column, which is exactly the failure the
    rule is meant to prevent. The child therefore stays open while the pointer is
    either (a) inside the child's rect, or (b) inside the triangle shed by the
    pointer's previous position and the child's leading edge — the classic
-   "safe triangle" test. Leaving both cancels the protection and starts the
-   close timer.
-3. **Replacement.** Settling on any non-ancestor row of the parent starts the
-   same `MenuHoverDelay` timer to close (or replace) the open child, cancelled
-   if the pointer reaches the child or the corridor first. Without this the
-   child either stays open forever or snaps shut during a diagonal move.
+   "safe triangle" test.
+3. **Immediate closing/replacement.** Hovering a leaf truncates its descendants,
+   hovering another parent replaces the branch, and leaving the active branch
+   closes child columns immediately. The safe corridor is the sole exception,
+   preventing diagonal travel toward a child from producing flicker.
 
 ### Pointer model
 
@@ -989,7 +988,7 @@ needs it — new scalars are cheap and theme-relative; new colours are not wante
 | `MenuRowHeight` | height of a bar or item row | `font_size` + 2 × `padding` |
 | `MenuItemMinWidth` | column width floor | `font_size` × 10 |
 | `MenuAccelGap` | label → hint gap | `spacing` |
-| `MenuHoverDelay` | seconds before hover intent opens a child | ~0.3 |
+| `MenuHoverDelay` | legacy/reserved; immediate submenu hover does not read it | ~0.3 |
 
 Core variants (not `StyleKey::custom`) because a first-class widget should be
 themable and discoverable, and `Custom` keys are excluded from
@@ -1061,9 +1060,9 @@ Headless, against `DrawList`/`Response`/state, no GPU — the shape
   parent row.
 - Escape unwinds exactly one level; from "armed, nothing open" it disarms; from
   "disarmed, nothing open" it is not claimed.
-- Hover intent: the child opens only after `MenuHoverDelay`; a sibling switch is
-  immediate when a submenu is already open; the corridor keeps the child open
-  during a diagonal move; settling on a non-ancestor row starts the close timer.
+- Hover intent: an enabled parent opens and paints its child immediately; a
+  sibling parent replaces it and a leaf/departure closes descendants in the same
+  frame; the corridor keeps the child open during a diagonal move.
 - Bar label press opens/toggles; hovering a label while armed moves the
   highlight without opening; hovering while open switches.
 - Disabled and separator items never activate and are never highlighted.

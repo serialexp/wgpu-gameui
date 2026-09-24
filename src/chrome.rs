@@ -242,6 +242,27 @@ pub struct FloatingSurfaceChrome {
     pub lines: [StructuralLine; 2],
 }
 
+/// Movable in-app window chrome: a floating surface with a title strip, a
+/// close key, and an optional bottom-right resize grip. See
+/// [`Window`](crate::Window).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowChrome {
+    /// Window surface and border (the whole outer rect).
+    pub surface: QuadStyle,
+    /// Authored elevation.
+    pub shadow: BoxShadow,
+    /// Structural lines on the outer surface (e.g. a top inset highlight).
+    pub lines: [StructuralLine; 2],
+    /// Title-strip surface, painted inside the outer border.
+    pub header: QuadStyle,
+    /// Title-strip structural rules (highlight and the divider under it).
+    pub header_lines: [StructuralLine; 3],
+    /// Hover wash behind the close key.
+    pub close_hover: QuadStyle,
+    /// Resting and hovered/dragging colors of the resize grip marks.
+    pub grip_colors: [[f32; 4]; 2],
+}
+
 /// All finite component chrome families in the default design language.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChromeTheme {
@@ -267,6 +288,8 @@ pub struct ChromeTheme {
     pub toast: FloatingSurfaceChrome,
     /// Curve-editor key chrome.
     pub curve_key: FloatingSurfaceChrome,
+    /// Movable window chrome.
+    pub window: WindowChrome,
 }
 
 /// Allocation-free staged painter for one explicitly boxed component surface.
@@ -316,6 +339,25 @@ impl<'a> SurfacePainter<'a> {
             self.style.background,
             self.style.corner_radii,
         );
+        self.list
+            .box_shadows_inset(self.padding_box, self.padding_radii, self.shadows);
+        self.padding_box
+    }
+
+    /// Like [`paint_pre_content`](Self::paint_pre_content) but renders the
+    /// background as opaque triangle soup instead of the SDF rounded-rect
+    /// pipeline.  Use for shell chrome surfaces (menu bar, toolbar rail,
+    /// dock panels) that tile edge-to-edge and must not have semi-transparent
+    /// boundary pixels.
+    ///
+    /// Outset and inset shadows still use the analytic SDF path — they paint
+    /// on top of the opaque background, so their antialiased falloff blends
+    /// against the solid surface, not the canvas.
+    pub fn paint_pre_content_opaque(&mut self) -> Rect {
+        self.list
+            .box_shadows_outset(self.border_box, self.style.corner_radii, self.shadows);
+        self.list
+            .paint_background_opaque(self.border_box, self.style.background);
         self.list
             .box_shadows_inset(self.padding_box, self.padding_radii, self.shadows);
         self.padding_box
@@ -657,6 +699,28 @@ impl Default for ChromeTheme {
                 0.6,
             ),
             curve_key: floating(panel, 1.0, 3.0, 0.6),
+            // Stand-in until the window design handoff lands: the popover's
+            // floating surface and elevation with the dock header's strip,
+            // rules, and key hover.
+            window: WindowChrome {
+                surface: QuadStyle {
+                    border_color: [0.0, 0.0, 0.0, 0.75],
+                    ..panel
+                },
+                shadow: shadow(14.0, 44.0, [0.0, 0.0, 0.0, 0.6], false),
+                lines: no_lines,
+                header: quad(gradient([0x23, 0x27, 0x2b], [0x18, 0x1c, 0x20])),
+                header_lines: [
+                    line(Edge::Top, 0.0, opaque_srgb8([0x37, 0x3b, 0x3e])),
+                    line(Edge::Bottom, 0.0, opaque_srgb8([0x0a, 0x0b, 0x0d])),
+                    line(Edge::Bottom, 1.0, opaque_srgb8([0x21, 0x25, 0x29])),
+                ],
+                close_hover: quad(Background::Solid(opaque_srgb8([0x2e, 0x31, 0x35]))),
+                grip_colors: [
+                    opaque_srgb8([0x50, 0x52, 0x53]),
+                    opaque_srgb8([0x94, 0x96, 0x97]),
+                ],
+            },
         }
     }
 }
@@ -679,6 +743,7 @@ mod tests {
         assert_eq!(chrome.tooltip.shadow.blur, 18.0);
         assert_eq!(chrome.toast.shadow.blur, 30.0);
         assert_eq!(chrome.curve_key.shadow.blur, 3.0);
+        assert_eq!(chrome.window.shadow.blur, 44.0);
         assert_eq!(chrome.splitter.dragging_glow.offset, [0.0, 0.0]);
         assert_eq!(chrome.splitter.dragging_glow.blur, 7.0);
         assert_eq!(chrome.splitter.dragging_glow.spread, 0.0);

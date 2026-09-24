@@ -3,7 +3,10 @@
 //!
 //! The library's timing sources live in caller-owned [`UiState`] parts: the
 //! hover/press animation clock ([`AnimationState`](crate::AnimationState)), the
-//! toast stack, the tooltip hover-delay layer, and a set of deadlines
+//! toast stack, the tooltip hover-delay layer, the scroll glide
+//! ([`ScrollState::pending_deadline`](crate::ScrollState::pending_deadline) —
+//! a still-moving scroll changes what is drawn *every* frame, so it asks for
+//! the next frame rather than for its own settle time), and a set of deadlines
 //! registered by the application itself (caret blink, spinner phase — anything
 //! the app animates on its own clock). [`UiState::end_frame`] aggregates them
 //! into a [`UiFrameResult`]; [`Frame::run`]/[`Frame::run_layers`] return it
@@ -19,8 +22,8 @@
 //!   to stop while something is visibly in flight).
 //! - `next_deadline` is the *earliest* instant any source becomes visible to
 //!   the user: an in-flight transition finishing, a toast entering its fade
-//!   (or expiring), a tooltip's delay elapsing, or a registered app deadline.
-//!   It is `None` when nothing is pending.
+//!   (or expiring), a tooltip's delay elapsing, the next frame a gliding scroll
+//!   needs, or a registered app deadline. It is `None` when nothing is pending.
 //! - `changed` mirrors `!needs_repaint` for bandwidth-style frame accounting.
 
 /// Aggregated per-frame timing outcome, returned by [`UiState::end_frame`]
@@ -120,6 +123,14 @@ pub fn sanitize_dt(dt: f32) -> f32 {
 
 /// Upper clamp for a caller-supplied frame delta, in seconds (100 ms).
 pub const MAX_DT: f32 = 0.1;
+
+/// Frame delta assumed when a host supplies no clock at all: one 60 Hz frame.
+///
+/// This is the default for [`InputState::frame_dt`](crate::InputState::frame_dt),
+/// so time-based widgets ([`ScrollView`](crate::ScrollView)'s easing) still
+/// animate smoothly in a host that never stamps a real delta, instead of either
+/// freezing or snapping. A host that does know its delta should write it.
+pub const NOMINAL_FRAME_DT: f32 = 1.0 / 60.0;
 
 #[cfg(test)]
 mod tests {

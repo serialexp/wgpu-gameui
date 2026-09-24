@@ -251,6 +251,13 @@ impl UiState {
     /// for `dt` to freeze animations (e.g. a paused frame or a static render); the
     /// eased verbs then hold their current value.
     ///
+    /// The same sanitized `dt` is stamped into
+    /// [`InputState::frame_dt`](crate::InputState::frame_dt), which is where
+    /// `ScrollView` reads its easing clock — a hand-rolled host that never calls
+    /// this sets that field itself. A `dt` of `0.0` applies a pending scroll
+    /// target *immediately* rather than freezing mid-glide, so a one-shot static
+    /// render always shows the offset that was asked for.
+    ///
     /// The consumer order is a **contract**, not an implementation detail. Each
     /// consumer runs at frame-top and zeroes the `nav` intents it owns in the
     /// shared `InputState`, so consumers later in the list — and the base layer,
@@ -287,6 +294,12 @@ impl UiState {
         // than leaving toasts/tooltips to the host) is what makes
         // [`end_frame`](Self::end_frame)'s repaint deadline accurate.
         let dt = crate::frame_result::sanitize_dt(dt);
+        // ... and the clock `ScrollView` eases with. Every interactive verb
+        // hands its widget a clone of `input`, so stamping it once here reaches
+        // nested, transformed and layer-dispatched scroll views alike; a host
+        // that drives frames by hand sets the field itself (see
+        // [`InputState::frame_dt`]).
+        input.frame_dt = dt;
         self.anim.tick(dt);
         self.toasts.tick(dt);
         self.tooltips.tick(dt, input);
@@ -311,9 +324,9 @@ impl UiState {
         self.focus.end_frame(None);
         self.interactions.end_frame();
         // Aggregate every timed source into the host-facing result: an
-        // in-flight transition, a visible toast, a pending tooltip hover, or
-        // an app-registered deadline each keep the frame loop awake until the
-        // earliest next change.
+        // in-flight transition, a visible toast, a pending tooltip hover, a
+        // gliding scroll, or an app-registered deadline each keep the frame loop
+        // awake until the earliest next change.
         if let Some(delay) = self.anim.pending_deadline() {
             self.frame_timings.mark_after(delay);
         }
@@ -321,6 +334,12 @@ impl UiState {
             self.frame_timings.mark_after(delay);
         }
         if let Some(delay) = self.tooltips.pending() {
+            self.frame_timings.mark_after(delay);
+        }
+        // A scroll that is still easing changes what is drawn every frame; it
+        // asks for the next frame (not for its settle time), so an event-driven
+        // host keeps drawing through the glide and stops once it lands.
+        if let Some(delay) = self.scroll.pending_deadline() {
             self.frame_timings.mark_after(delay);
         }
         for &deadline in &self.app_deadlines {
@@ -338,6 +357,18 @@ impl UiState {
     /// [`end_frame`](Self::end_frame)'s [`UiFrameResult::next_deadline`].
     pub fn request_repaint_after(&mut self, seconds: f32) {
         self.app_deadlines.push(seconds.max(0.0));
+    }
+
+    /// Fold a deadline reported by a *widget-driven* source into this frame's
+    /// timing accumulation.
+    ///
+    /// [`end_frame`](Self::end_frame) folds the sources it owns itself; this is
+    /// for sources a verb ran on the caller's behalf. A glide inside a
+    /// caller-owned [`ScrollState`] handed to [`UiContext::list_view`] or
+    /// [`UiContext::table`] is invisible to `end_frame`, so the verb reports
+    /// [`ScrollState::pending_deadline`] here instead.
+    pub(crate) fn note_repaint_deadline(&mut self, seconds: f32) {
+        self.frame_timings.mark_after(seconds);
     }
 
     /// Push the popup layer for the open dropdown (using last frame's geometry)
@@ -2636,6 +2667,13 @@ impl<'a> UiContext<'a> {
             let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             list_widget.draw(local, count, state, list, &style, &mut local_input, item)
         };
+        // The list's scroll state belongs to the caller, so a glide inside it is
+        // invisible to `end_frame` — report its deadline from here.
+        if let Some(delay) = state.scroll.pending_deadline() {
+            if let Some(s) = self.state.as_mut() {
+                s.note_repaint_deadline(delay);
+            }
+        }
         self.advance(h);
         out
     }
@@ -2669,6 +2707,13 @@ impl<'a> UiContext<'a> {
             let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             table_widget.draw(local, rows, scroll, list, &style, &mut local_input)
         };
+        // Same as `list_view`: the caller owns the table's scroll state, so its
+        // glide deadline has to be reported here.
+        if let Some(delay) = scroll.pending_deadline() {
+            if let Some(s) = self.state.as_mut() {
+                s.note_repaint_deadline(delay);
+            }
+        }
         self.advance(h);
         out
     }
@@ -4712,6 +4757,41 @@ mod tests {
             input.nav.next,
             "but Tab is left alone for the focus ring (Shift+Tab follows `shift_pressed` \
              and is never claimed either)"
+        );
+    }
+
+    #[test]
+    fn a_gliding_list_forwards_its_deadline_through_the_verb() {
+        // A `ListState` passed to `list_view` belongs to the caller, so the glide
+        // inside it is invisible to `end_frame` — the verb has to forward the
+        // deadline itself. Without that, an event-driven host would sleep through
+        // the glide and the list would visibly jump when it next woke.
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut list_state = ListState::new();
+        let mut list = DrawList::new();
+        let mut input = InputState {
+            mouse_x: 20.0,
+            mouse_y: 20.0,
+            scroll_delta: -3.0,
+            ..InputState::default()
+        };
+
+        state.begin_frame(&mut input, &theme, 1.0 / 60.0, &crate::KeyboardNav);
+        {
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.list_view(List::new(), 200, &mut list_state, 120.0, |_, _, _| {});
+        }
+        let frame = state.end_frame();
+
+        assert!(list_state.scroll.is_gliding(), "the notch aimed a target");
+        assert!(frame.needs_repaint, "glide must request repaint: {frame:?}");
+        let deadline = frame
+            .next_deadline
+            .expect("the verb forwards the glide's deadline");
+        assert!(
+            deadline > 0.0 && deadline <= 1.0 / 60.0,
+            "a glide asks for the next frame, got {deadline}"
         );
     }
 }

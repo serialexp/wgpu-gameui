@@ -33,6 +33,7 @@ fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
         CursorIcon::Grabbing => W::Grabbing,
         CursorIcon::ResizeHorizontal => W::EwResize,
         CursorIcon::ResizeVertical => W::NsResize,
+        CursorIcon::ResizeDiagonal => W::NwseResize,
         CursorIcon::NotAllowed => W::NotAllowed,
     }
 }
@@ -147,6 +148,9 @@ struct App {
     clicks: ClickTracker,
     /// App start time, for wall-clock timestamps fed to `ClickTracker::update`.
     start: Instant,
+    /// Timestamp of the previous frame, for the frame delta handed to the UI
+    /// (which is what `ScrollView` eases its scroll offset by).
+    last_frame: Instant,
 }
 
 impl ApplicationHandler for App {
@@ -397,6 +401,13 @@ impl ApplicationHandler for App {
                 let t = self.start.elapsed().as_secs_f64();
                 self.drag.update(&mut self.input);
                 self.clicks.update(&mut self.input, t);
+
+                // Frame clock for the time-based widgets. `ScrollView` eases its
+                // scroll offset by this delta, so a hand-rolled host like this one
+                // stays wall-clock accurate at any refresh rate; without it the
+                // widgets fall back to assuming a nominal 60Hz frame.
+                self.input.frame_dt = self.last_frame.elapsed().as_secs_f32();
+                self.last_frame = Instant::now();
 
                 // Per-frame cursor accumulator: hovered widgets request an icon
                 // through their DrawContext; we apply the winner to the window
@@ -927,6 +938,7 @@ fn main() {
         drag_capture: DragCapture::new(),
         clicks: ClickTracker::new(),
         start: Instant::now(),
+        last_frame: Instant::now(),
     };
     event_loop.run_app(&mut app).expect("run app");
 }

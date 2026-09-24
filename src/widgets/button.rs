@@ -382,9 +382,7 @@ impl Button {
         // The 4a press is geometric (the face drops `travel` px), not a color
         // swap, so the material is resolved discretely; the eased path applies
         // only to the label color, which still fades between states.
-        let travel = self
-            .travel
-            .unwrap_or_else(|| s.scalar(StyleKey::Travel));
+        let travel = self.travel.unwrap_or_else(|| s.scalar(StyleKey::Travel));
         let face_y = rect.y + if v.enabled && pressed { travel } else { 0.0 };
         let face = Rect::new(rect.x, face_y, rect.width, rect.height - (face_y - rect.y));
         let target_text = if !self.enabled {

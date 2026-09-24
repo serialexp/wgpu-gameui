@@ -18,9 +18,9 @@
 //!
 //! Integer fields are just `decimals == 0` (the default).
 
+use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
 use crate::{PhosphorIcon, StyleKey};
-use crate::layout::Rect;
 
 use super::{Button, DrawContext, FocusId, TextInput, Tone};
 

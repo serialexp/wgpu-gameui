@@ -10,7 +10,7 @@ use crate::color::{opaque_srgb8, srgb_to_linear};
 use crate::layout::Rect;
 use crate::{
     Affine2, CornerRadii, DrawContext, Edge, HitShape, InteractionScene, LayerStack, PointerPolicy,
-    StyleKey, StyleResolver, SurfacePainter,
+    StyleKey, SurfacePainter,
 };
 
 use super::model::{
@@ -123,26 +123,30 @@ pub(super) fn draw_columns<'a>(
         }
     }
 
-    // ---- paint ----
-    // The promoted geometry is only paintable while it still describes the open
-    // menu: the bar may have switched or closed the chain earlier this frame (a
-    // label click or hover), leaving the geometry describing a menu nobody has
-    // open.
-    //
-    // The columns are taken out of the state for the duration of the paint: the
-    // rows are mutated (their measured text is `take`n) while the rest of the state
-    // stays reachable, and putting the buffer back is what lets the next frame's
-    // measurement reuse its capacity.
-    let mut columns = std::mem::take(&mut state.columns);
+    // ---- current-pointer submenu intent ----
+    // InteractionScene deliberately resolves presses against retained geometry,
+    // but submenu hover must not inherit that one-frame latency. The promoted
+    // columns are already visible, so hit-test their rows against the current
+    // pointer and update the path before selecting what this call paints.
     let geom = state
         .geom
         .take()
         .filter(|geom| geom.menu_index == menu_index);
     let Some(geom) = geom else {
-        columns.clear();
-        state.columns = columns;
+        state.columns.clear();
         return None;
     };
+    let path_changed = navigable && !keyed && reconcile_pointer_path(state, menu);
+    if path_changed {
+        state.recollect_open_chain(menus, layers.base_mut(), env.theme, env.style, geom);
+    }
+
+    // ---- paint ----
+    // The columns are taken out of the state for the duration of the paint: the
+    // rows are mutated (their measured text is `take`n) while the rest of the state
+    // stays reachable, and putting the buffer back is what lets the next frame's
+    // measurement reuse its capacity.
+    let mut columns = std::mem::take(&mut state.columns);
 
     // The bar's rect from this frame if it was drawn, else the promoted one.
     let bar_rect = if state.bar_rect.is_empty() {
@@ -168,12 +172,14 @@ pub(super) fn draw_columns<'a>(
         let level_scroll = state.scrolls.get(level).copied().unwrap_or(0.0);
 
         // ---- register this column's hit regions ----
-        let index = match slots {
+        let index = match slots.filter(|slots| level < slots.count) {
             Some(slots) => slots.blocker + 1 + level,
             None => {
                 // A host that drew the bar but never pushed the layers still gets
                 // a visible, interactive column; it just cannot block input this
-                // frame.
+                // frame. This also covers a child opened during this popup pass:
+                // append its layer now so it paints immediately, while the already
+                // reserved viewport blocker protects lower content.
                 let index = layers.push_popup(column.rect);
                 layers.pop_layer();
                 index
@@ -432,53 +438,6 @@ pub(super) fn draw_columns<'a>(
     // ---- resolve ----
     let mut activated = None;
     if navigable {
-        if let Some((level, item_index)) = hovered_row {
-            let item = state
-                .items_at_level(menu, level)
-                .and_then(|items| items.get(item_index));
-            let corridor = state.open_path.get(level).is_some_and(|_| {
-                columns.get(level + 1).is_some_and(|child| {
-                    state.previous_pointer.is_some_and(|from| {
-                        safe_corridor(from, (state.mouse_x, state.mouse_y), child.rect)
-                    })
-                })
-            });
-            if !corridor && item.is_some_and(MenuItem::is_enabled) {
-                if state.hover_level == Some(level) && state.hover_item == Some(item_index) {
-                    state.hover_elapsed += state.frame_dt;
-                } else {
-                    state.hover_level = Some(level);
-                    state.hover_item = Some(item_index);
-                    state.hover_elapsed = 0.0;
-                }
-                let delay = StyleResolver::with_overlay_opt(env.theme, env.style)
-                    .scalar(StyleKey::MenuHoverDelay)
-                    .max(0.0);
-                let open_parent = state.open_path.get(level).copied();
-                let child_is_open = open_parent.is_some();
-                if item.is_some_and(MenuItem::is_submenu)
-                    && open_parent.is_some_and(|parent| parent != item_index)
-                {
-                    // Once this parent already has a child, sibling parents replace
-                    // it immediately; leaf rows still use the close delay below.
-                    state.open_child(menu, level, item_index);
-                } else if state.hover_elapsed >= delay {
-                    if item.is_some_and(MenuItem::is_submenu) {
-                        state.open_child(menu, level, item_index);
-                    } else if child_is_open {
-                        state.open_path.truncate(level);
-                        state.highlights.truncate(level + 1);
-                        state.scrolls.truncate(level + 1);
-                        forget_geometry(state);
-                    }
-                }
-            }
-        } else {
-            state.hover_level = None;
-            state.hover_item = None;
-            state.hover_elapsed = 0.0;
-        }
-
         let deepest = state.open_levels().saturating_sub(1);
         let chosen = clicked_row.or_else(|| {
             (state.confirm && !keyed)
@@ -512,6 +471,12 @@ pub(super) fn draw_columns<'a>(
     if column_click {
         state.click_claimed = true;
     }
+    if state.open == Some(menu_index) && state.open_levels() != columns.len() {
+        // A retained click or keyboard edge can open a parent after this frame's
+        // hover/layout pass. Stage the resulting complete path now so it cannot
+        // freeze until an unrelated pointer event in an event-driven host.
+        state.stage_open_chain(menus, layers.base_mut(), env.theme, env.style, geom);
+    }
     // Retained for the next frame (and for `debug_geometry`): a chain that is
     // still open keeps what was last drawn, one that closed or switched during the
     // paint does not. `close` already dropped the state's copy, but the columns
@@ -521,6 +486,81 @@ pub(super) fn draw_columns<'a>(
         state.columns.clear();
     }
     activated
+}
+
+/// Reconcile the current pointer with the visible chain before painting it.
+/// Returns true when the open path changed and geometry must be rebuilt.
+fn reconcile_pointer_path(state: &mut MenuBarState, menu: &Menu<'_>) -> bool {
+    let point = (state.mouse_x, state.mouse_y);
+    let mut hovered = None;
+    for (level, column) in state.columns.iter().enumerate().rev() {
+        if !column.rect.contains(point.0, point.1) {
+            continue;
+        }
+        let scroll = state.scrolls.get(level).copied().unwrap_or(0.0);
+        hovered = column
+            .rows
+            .iter()
+            .find(|row| {
+                !row.separator
+                    && !row.disabled
+                    && Rect::new(
+                        column.rect.x + column.sheet_padding,
+                        column.rect.y + column.sheet_padding + row.y - scroll,
+                        (column.rect.width - column.sheet_padding * 2.0).max(0.0),
+                        row.height,
+                    )
+                    .contains(point.0, point.1)
+            })
+            .map(|row| (level, row.item_index));
+        break;
+    }
+
+    if let Some((level, item_index)) = hovered {
+        let is_submenu = state
+            .items_at_level(menu, level)
+            .and_then(|items| items.get(item_index))
+            .is_some_and(MenuItem::is_submenu);
+        if is_submenu {
+            if state.open_path.get(level).copied() == Some(item_index) {
+                return false;
+            }
+            return state.open_child(menu, level, item_index);
+        }
+        if state.open_path.len() > level {
+            state.open_path.truncate(level);
+            state.highlights.truncate(level + 1);
+            state.scrolls.truncate(level + 1);
+            return true;
+        }
+        return false;
+    }
+
+    // Keep an open child while the pointer is inside any descendant column or is
+    // travelling through the safe triangle from its parent toward that child.
+    for level in 0..state.open_path.len() {
+        let Some(child) = state.columns.get(level + 1) else {
+            continue;
+        };
+        if child.rect.contains(point.0, point.1)
+            || state
+                .previous_pointer
+                .is_some_and(|from| safe_corridor(from, point, child.rect))
+        {
+            return false;
+        }
+    }
+
+    // The root sheet remains open, but moving out of the active branch closes
+    // all of its descendants immediately. A stationary pointer must not undo a
+    // keyboard-opened path.
+    if state.pointer_moved && !state.open_path.is_empty() {
+        state.open_path.clear();
+        state.highlights.truncate(1);
+        state.scrolls.truncate(1);
+        return true;
+    }
+    false
 }
 
 /// Drop the promoted chain geometry, keeping the buffer's capacity. Called when

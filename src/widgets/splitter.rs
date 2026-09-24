@@ -120,14 +120,13 @@ impl Splitter {
                 SplitAxis::Vertical => GradientAxis::Horizontal,
                 SplitAxis::Horizontal => GradientAxis::Vertical,
             };
-            list.paint_quad_background(
+            list.paint_background_opaque(
                 rect,
                 Background::LinearGradient {
                     start: chrome.track_colors[0],
                     end: chrome.track_colors[1],
                     axis,
                 },
-                CornerRadii::default(),
             );
             match self.axis {
                 SplitAxis::Vertical => {
@@ -322,19 +321,30 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input).with_style(&overlay),
         );
 
-        assert_eq!(list.chrome_instance(0).unwrap().bg, chrome.track_colors[0]);
-        assert_eq!(list.chrome_instance(0).unwrap().bg2, chrome.track_colors[1]);
+        // Track background is now opaque soup (no SDF); verify gradient
+        // endpoints appear in the vertex buffer.
+        assert!(
+            list.vertices
+                .iter()
+                .any(|v| v.color == chrome.track_colors[0])
+        );
+        assert!(
+            list.vertices
+                .iter()
+                .any(|v| v.color == chrome.track_colors[1])
+        );
+        // Edge lines and grip remain as chrome instances, shifted down by 1.
         assert_eq!(
-            list.chrome_instance(1).unwrap().bg,
+            list.chrome_instance(0).unwrap().bg,
             chrome.outer_edges.color
         );
         assert_eq!(
-            list.chrome_instance(3).unwrap().bg,
+            list.chrome_instance(2).unwrap().bg,
             chrome.inner_highlight.color
         );
-        assert_eq!(list.chrome_instance(4).unwrap().bg, chrome.grip_idle);
+        assert_eq!(list.chrome_instance(3).unwrap().bg, chrome.grip_idle);
         assert_eq!(
-            list.chrome_instance(5).unwrap().bg,
+            list.chrome_instance(4).unwrap().bg,
             chrome.grip_counter_edge.color
         );
     }
@@ -379,10 +389,11 @@ mod tests {
         assert_eq!(shadow.element_rect, [12.0, 57.0, 2.0, 26.0]);
         assert_eq!(shadow.color, chrome.dragging_glow.color);
         assert_eq!(shadow.params[0], chrome.dragging_glow.blur * 0.5);
-        assert_eq!(list.chrome_instance(4).unwrap().bg, chrome.grip_dragging);
-        assert_eq!(list.paint_cmds.len(), 1);
+        assert_eq!(list.chrome_instance(3).unwrap().bg, chrome.grip_dragging);
+        // Track background is now soup, so paint_cmds has a Soup + Analytic.
+        assert_eq!(list.paint_cmds.len(), 2);
         assert!(matches!(
-            &list.paint_cmds[0],
+            &list.paint_cmds[1],
             crate::widgets::PaintCmd::Analytic { instances }
                 if instances == &(0..list.analytic_instances.len() as u32)
         ));

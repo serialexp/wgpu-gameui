@@ -359,6 +359,61 @@ mod tests {
     }
 
     #[test]
+    fn a_gliding_scroll_keeps_the_frame_loop_awake_until_it_lands() {
+        // A scroll that is still easing changes what is drawn on *every* frame,
+        // so it schedules the next frame rather than its own settle time — a host
+        // that only woke at the settle time would draw a single jump instead of a
+        // glide. Once the scroll lands, the loop goes back to sleep.
+        let theme = Theme::default();
+        let mut input = InputState::default();
+        let mut state = UiState::new();
+        state.scroll.content_size = [200.0, 1000.0];
+        let mut list = DrawList::new();
+        input.mouse_x = 20.0;
+        input.mouse_y = 20.0;
+        input.scroll_delta = -3.0; // one wheel notch over the viewport
+
+        let run_frame = |state: &mut UiState, input: &mut InputState, list: &mut DrawList| {
+            let (_, frame) = Frame::new(state, input, &theme, &KeyboardNav)
+                .dt(1.0 / 60.0)
+                .run(list, |ui| {
+                    // The frame's own dt reaches the scroll through
+                    // `InputState::frame_dt`, stamped by `begin_frame`.
+                    ui.scroll_begin(None, 200.0);
+                    ui.scroll_end();
+                });
+            input.end_frame();
+            frame
+        };
+
+        let frame = run_frame(&mut state, &mut input, &mut list);
+        assert!(state.scroll.is_gliding(), "the notch aims a target");
+        assert!(
+            frame.needs_repaint,
+            "a glide must request repaint: {frame:?}"
+        );
+        let deadline = frame.next_deadline.expect("a glide schedules a deadline");
+        assert!(
+            deadline > 0.0 && deadline <= 1.0 / 60.0,
+            "a glide asks for the next frame, got {deadline}"
+        );
+
+        let landed = (0..240)
+            .find_map(|i| {
+                let frame = run_frame(&mut state, &mut input, &mut list);
+                (!state.scroll.is_gliding()).then_some((i, frame))
+            })
+            .expect("the glide terminates");
+        let (frames, frame) = landed;
+        assert!(frames < 60, "a 0.22s settle must not take {frames} frames");
+        assert_eq!(
+            frame,
+            crate::UiFrameResult::IDLE,
+            "a landed scroll must not keep the frame loop awake"
+        );
+    }
+
+    #[test]
     fn visible_toast_reports_its_fade_deadline() {
         let theme = Theme::default();
         let mut input = InputState::default();

@@ -493,7 +493,10 @@ mod tests {
 
         let mut scroll = ScrollState::default();
         scroll.content_size = [200.0, 50.0 * 24.0];
-        scroll.offset = [0.0, 100.0];
+        // Seeded with `snap_to` (not a bare `offset` write): the drawn offset
+        // eases toward the target, so a test that pre-scrolls must pre-scroll
+        // both or the first drawn frame undoes it.
+        scroll.snap_to(1, 100.0);
 
         let viewport = Rect::new(0.0, 0.0, 200.0, 100.0);
         let row_idx = 5usize;
@@ -544,7 +547,7 @@ mod tests {
 
         let mut scroll = ScrollState::default();
         scroll.content_size = [200.0, 50.0 * 24.0];
-        scroll.offset = [0.0, 100.0];
+        scroll.snap_to(1, 100.0);
         let viewport = Rect::new(0.0, 200.0, 200.0, 100.0);
         let mut input = InputState {
             mouse_x: 50.0,

@@ -370,7 +370,7 @@ impl<'a> MenuBar<'a> {
                 &chrome.shadows,
                 &chrome.lines,
             );
-            painter.paint_pre_content();
+            painter.paint_pre_content_opaque();
             {
                 let list = painter.draw_list();
                 for (index, menu) in self.menus.iter().enumerate() {
@@ -459,7 +459,7 @@ impl<'a> MenuBar<'a> {
             &chrome.shadows,
             &chrome.lines,
         );
-        painter.paint_pre_content();
+        painter.paint_pre_content_opaque();
         painter.paint_post_content();
         list.pop_debug_scope();
     }

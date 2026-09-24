@@ -382,6 +382,21 @@ harden those foundations rather than create parallel replacements.
       (No `UiContext` flow verb: a free-moving window is absolute-positioned, so
       it doesn't fit the auto-advance layout flow — use the widget directly with
       `UiState::drag` as the shared capture.)
+- [x] **P1 — Movable in-app window.** `Window` (`src/widgets/window.rs`) is an
+      interactive titled window: dragging the title strip moves it (via
+      `DragHandle::bare` on the shared `DragCapture`), a close key sized to fit
+      the strip reports `WindowOutput::close_clicked`, and `.resizable(true)`
+      adds a bottom-right grip (drag id `id + 1`, `CursorIcon::ResizeDiagonal`)
+      clamped to `.min_size([w, h])`. `.bounds(rect)` keeps the whole window
+      inside (bounds win over the minimum). Placement is caller-owned
+      `WindowState { rect }`; `WindowOutput::interaction_ended` fires once per
+      move/resize release so hosts persist without per-frame writes. Returns the
+      body rect (below the strip, above the resize band) for content. The host
+      picks the layer: `push_modal` to block, `push_popup` to float. Themed by
+      the new `ChromeTheme::window: WindowChrome` family (`StyleOverlay::set_window`,
+      `StyleResolver::window`) and `StyleKey::WindowTitleHeight` (24). The default
+      `WindowChrome` is a **stand-in** (popover surface/shadow + dock header)
+      until the window design handoff lands — swap theme values only.
 - [x] **P1 — List / grid / virtualized list.** `List` (`src/widgets/list.rs`)
       is a general virtualized iterator over a flat `count` of items: it sets
       `ScrollState::content_size` and drives `ScrollView` (vertical), culling to
@@ -1134,12 +1149,14 @@ off-screen. All were one root cause: **`place_rect` returns *world* space, but
 - [x] **P0 — Arbitrary-depth MenuBar and ContextMenu submenus.** Both widgets
   traverse `MenuItem::children()` to `MAX_MENU_DEPTH = 8`, retain per-level
   highlight/scroll state, report full-path activation ids, place overlapping
-  Auto-flipping flyouts, unwind with Left/Escape, and use `MenuHoverDelay` plus
-  safe-triangle hover intent. Path-scoped row and blocker IDs prevent retained
-  sibling response leaks; sanitized `begin_frame_with_dt` drives timed context
-  hover while `begin_frame` remains compatible; `open_levels`, `set_open_path`,
-  and `depth_truncations` expose bounded context state. Right on any menubar leaf
-  switches top-level menus and collapses to root. The gallery shows nested chains
+  Auto-flipping flyouts and unwind with Left/Escape. Current-pointer hover opens
+  parents immediately and closes descendants on leaves/departure, while a
+  safe-triangle protects diagonal entry; the triggering frame lays out and paints
+  the child so event-driven hosts need no incidental mouse move. Path-scoped row
+  and blocker IDs prevent retained sibling response leaks; `begin_frame_with_dt`
+  remains compatible while hover is time-independent; `open_levels`,
+  `set_open_path`, and `depth_truncations` expose bounded context state. Right on
+  any menubar leaf switches top-level menus and collapses to root. The gallery shows nested chains
   for both widgets.
 
 ## 2026-09-15 — Menubar (one level), and a renderer bug it surfaced
@@ -1593,3 +1610,29 @@ when it needs to run again.
 7 new unit tests in `src/frame_result.rs` + `src/frame.rs` (sanitization,
 merge/finish semantics, per-source deadlines, earliest-wins, per-frame
 registration lifetime, resume clamp). 1071 lib tests green.
+
+## 2026-09-24 — Found during Forge design-token audit
+
+- [ ] **P1 — Bug: menubar reloads IBM Plex Mono into fontdb every frame a menu
+  is open.** `menubar/state.rs:664` calls `bundled_mono_font()`, which goes
+  through `load_font_family` → `load_font_bytes` → `db.load_font_data(bytes.to_vec())`
+  for all four Plex Mono faces (~700 KB) on *every call*. fontdb keeps growing
+  (memory + face-lookup cost) for as long as a menu stays open. Needs a
+  load-once/cached handle (e.g. registered in `shared_font_system`, like Sans).
+- [ ] **P1 — Bug: hex text colours in menus render too bright (sRGB treated as
+  linear).** `TextBlock::with_color(u8,u8,u8)` → `color_to_rgba` (`text.rs:1250`)
+  divides by 255 and passes straight through `ui_msdf.wgsl` to an `*Srgb`
+  target, so the u8 values are effectively *linear*. Theme-driven callers
+  (button, status bar) pass `linear * 255` and look right; but the literal
+  sRGB hexes in `menubar/mod.rs`, `menubar/paint.rs` and `context_menu.rs`
+  (comments claim "8-bit sRGB") render 19–73 steps too bright — e.g. disabled
+  `#5d656c` shows as `#a3a9ae`, ink-on-accent `#041418` as `#224f56`. Same
+  mistake: `AXIS_TINTS` (vector_field.rs), slider knob, asset-grid plate,
+  toolbar popup text. Also, `with_color`'s doc says sRGB while every theme
+  caller feeds linear — the API contract itself needs deciding.
+- [ ] **P1 — Two accents on screen.** Menus, context menu, splitter grip/glow
+  and the latched toolbar key hard-code `#79c6d8` & friends from
+  the old `design_handoff_forge_chrome/opaque-colors.md` (now deleted), whose oklch→hex conversions
+  are wrong (hue drifts to 211–221). Forge `--accent` is `#3ebfc6`, which
+  `theme.accent` already has. Full per-token audit:
+  `docs/design/forge-token-audit.md`.

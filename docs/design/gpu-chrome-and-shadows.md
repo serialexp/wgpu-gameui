@@ -27,8 +27,10 @@ the migrated widgets.
 
 ## Why this exists
 
-The library's default chrome is being brought in line with the authored HTML in
-`design_handoff_forge_chrome/`. The existing renderer can already draw good
+The library's default chrome is being brought in line with the Forge design
+system (claude.ai/design project `1f8b3bfd-a399-4bc7-b8e8-210da4ff4326`, the
+authoritative source since 2026-09-24; the old `design_handoff_forge_chrome/`
+folder was removed). The existing renderer can already draw good
 solid and gradient rounded rectangles, but ordinary widget code assembles
 surfaces from low-level calls and scatters authored colors across modules. A
 single palette change therefore requires editing several widgets, and visually
@@ -864,8 +866,10 @@ need a separate design and pipeline rather than silently changing `BoxShadow`.
 
 ## References
 
-- `design_handoff_forge_chrome/opaque-colors.md`
-- `design_handoff_forge_chrome/01-menu-bar.html` through `06-status-bar.html`
+- Forge design system tokens (`tokens/*.css`) and component sources in the
+  claude.ai/design project `1f8b3bfd-a399-4bc7-b8e8-210da4ff4326`. The former
+  `design_handoff_forge_chrome/opaque-colors.md` was removed: its oklch→hex
+  conversions were wrong (see `docs/design/forge-token-audit.md`).
 - `src/widgets/draw_list.rs` — current patch shadows, glows, chrome instances,
   and ordered paint stream
 - `src/render/ui_renderer.rs`, `src/render/ui.wgsl` — renderer pipeline and

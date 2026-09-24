@@ -233,6 +233,8 @@ pub enum StyleKey {
     /// Width (or height, for horizontal) of the resize splitter between a dock
     /// panel and the viewport, in pixels.
     DockSplitterWidth,
+    /// Height of a movable [`Window`](crate::Window)'s title strip, in pixels.
+    WindowTitleHeight,
     /// A mod-defined key, addressed by the FNV-1a hash of its name (see
     /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a [`StyleOverlay`].
     Custom(u64),
@@ -334,6 +336,7 @@ pub struct StyleOverlay {
     tooltip: Option<crate::FloatingSurfaceChrome>,
     toast: Option<crate::FloatingSurfaceChrome>,
     curve_key: Option<crate::FloatingSurfaceChrome>,
+    window: Option<crate::WindowChrome>,
 }
 
 impl StyleOverlay {
@@ -470,6 +473,15 @@ impl StyleOverlay {
     pub fn curve_key(&self) -> Option<crate::FloatingSurfaceChrome> {
         self.curve_key
     }
+    /// Override movable-window chrome.
+    pub fn set_window(&mut self, value: crate::WindowChrome) -> &mut Self {
+        self.window = Some(value);
+        self
+    }
+    /// Return the movable-window override.
+    pub fn window(&self) -> Option<crate::WindowChrome> {
+        self.window
+    }
 
     /// Whether the overlay has no scalar, color, or component overrides.
     pub fn is_empty(&self) -> bool {
@@ -485,6 +497,7 @@ impl StyleOverlay {
             && self.tooltip.is_none()
             && self.toast.is_none()
             && self.curve_key.is_none()
+            && self.window.is_none()
     }
 
     /// Drop all scalar, color, and typed component overrides while retaining
@@ -502,6 +515,7 @@ impl StyleOverlay {
         self.tooltip = None;
         self.toast = None;
         self.curve_key = None;
+        self.window = None;
     }
 }
 
@@ -648,6 +662,12 @@ impl<'a> StyleResolver<'a> {
         self.overlay
             .and_then(StyleOverlay::curve_key)
             .unwrap_or(self.theme.chrome.curve_key)
+    }
+    /// Resolve movable-window chrome in O(1).
+    pub fn window(&self) -> crate::WindowChrome {
+        self.overlay
+            .and_then(StyleOverlay::window)
+            .unwrap_or(self.theme.chrome.window)
     }
 
     /// A body [`TextBlock`] styled through the resolver: [`FontSize`](StyleKey::FontSize)
@@ -854,6 +874,18 @@ mod tests {
         overlay.clear();
         assert!(overlay.is_empty());
         assert_eq!(overlay.splitter(), None);
+
+        let mut window = theme.chrome.window;
+        window.grip_colors[0] = [0.4, 0.3, 0.2, 1.0];
+        overlay.set_window(window);
+        assert!(!overlay.is_empty());
+        assert_eq!(
+            StyleResolver::with_overlay(&theme, &overlay).window(),
+            window
+        );
+        assert_eq!(StyleResolver::new(&theme).window(), theme.chrome.window);
+        overlay.clear();
+        assert_eq!(overlay.window(), None);
     }
 
     #[test]

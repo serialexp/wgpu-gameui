@@ -150,13 +150,8 @@ pub fn draw(
             }
             #[cfg(not(feature = "phosphor-icons"))]
             {
-                let xty = list.vcentered_text_y(
-                    slot.y,
-                    slot.height,
-                    10.0,
-                    s.theme().font.as_ref(),
-                    "✕",
-                );
+                let xty =
+                    list.vcentered_text_y(slot.y, slot.height, 10.0, s.theme().font.as_ref(), "✕");
                 list.text(
                     TextBlock::new("✕", slot.x + 1.0, xty)
                         .with_size(10.0)

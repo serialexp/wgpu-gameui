@@ -53,6 +53,7 @@ mod toolbar;
 mod tooltip;
 mod tree;
 mod vector_field;
+mod window;
 
 pub use app_shell::{
     AppShell, SHELL_DRAG_BOTTOM_SPLITTER, SHELL_DRAG_LEFT_SPLITTER, SHELL_DRAG_RIGHT_SPLITTER,
@@ -111,7 +112,7 @@ pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};
 pub use popover::{Popover, PopoverOutput, PopoverSide, measure_sheet_height, place_popover};
 pub use progress_bar::{ProgressBar, ProgressFill};
 pub use radio::RadioGroup;
-pub use scroll_view::{ScrollBegin, ScrollState, ScrollView};
+pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};
 pub use separator::{Orientation, Separator};
 pub use settings::{
     SettingField, SettingValue, SettingsForm, SettingsFormOutput, SettingsFormState, SettingsSpec,
@@ -134,6 +135,10 @@ pub use toolbar::{
 pub use tooltip::{TooltipContent, TooltipLayer};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};
+pub use window::{
+    DEFAULT_WINDOW_MIN_SIZE, WINDOW_CLOSE_KEY_INSET, WINDOW_RESIZE_GRIP_SIZE, Window, WindowOutput,
+    WindowState,
+};
 
 use crate::{
     AnimSlot, AnimationState, Easing, InputState, StyleKey, StyleOverlay, StyleResolver, Theme,

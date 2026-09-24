@@ -65,7 +65,7 @@ pub fn draw(rect: Rect, cells: &[StatusCell<'_>], ctx: &mut DrawContext) {
     let list = &mut *ctx.draw_list;
 
     let chrome = s.status_bar();
-    list.paint_quad_background(rect, chrome.surface.background, chrome.surface.corner_radii);
+    list.paint_background_opaque(rect, chrome.surface.background);
     for line in chrome.lines {
         let line_rect = Rect::new(
             rect.x,
@@ -179,21 +179,23 @@ mod tests {
         );
         // Text blocks for the two text cells; spacer contributes none.
         assert_eq!(ctx.draw_list.texts.len(), 2);
-        // Surface, top pair, and two divider pairs are retained quad instances.
-        assert_eq!(ctx.draw_list.chrome_instance_count(), 7);
+        // Surface background is now opaque soup; top pair and two divider pairs
+        // remain as retained chrome instances.
+        assert_eq!(ctx.draw_list.chrome_instance_count(), 6);
         let Background::LinearGradient { start, end, .. } =
             theme.chrome.status_bar.surface.background
         else {
             panic!("default status surface must be a gradient");
         };
-        assert_eq!(ctx.draw_list.chrome_instance(0).unwrap().bg, start);
-        assert_eq!(ctx.draw_list.chrome_instance(0).unwrap().bg2, end);
+        // Verify gradient endpoints in the vertex buffer.
+        assert!(ctx.draw_list.vertices.iter().any(|v| v.color == start));
+        assert!(ctx.draw_list.vertices.iter().any(|v| v.color == end));
         assert_eq!(
-            ctx.draw_list.chrome_instance(1).unwrap().bg,
+            ctx.draw_list.chrome_instance(0).unwrap().bg,
             theme.chrome.status_bar.lines[0].style.color
         );
         assert_eq!(
-            ctx.draw_list.chrome_instance(3).unwrap().bg,
+            ctx.draw_list.chrome_instance(2).unwrap().bg,
             theme.chrome.status_bar.divider[0].color
         );
     }
@@ -219,16 +221,19 @@ mod tests {
             &mut ctx,
         );
 
-        assert_eq!(
-            ctx.draw_list.chrome_instance(0).unwrap().bg,
-            [0.12, 0.23, 0.34, 1.0]
+        // Surface background is now opaque soup.
+        assert!(
+            ctx.draw_list
+                .vertices
+                .iter()
+                .any(|v| v.color == [0.12, 0.23, 0.34, 1.0])
         );
         assert_eq!(
-            ctx.draw_list.chrome_instance(1).unwrap().bg,
+            ctx.draw_list.chrome_instance(0).unwrap().bg,
             chrome.lines[0].style.color
         );
         assert_eq!(
-            ctx.draw_list.chrome_instance(3).unwrap().bg,
+            ctx.draw_list.chrome_instance(2).unwrap().bg,
             chrome.divider[0].color
         );
     }

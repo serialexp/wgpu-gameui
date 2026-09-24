@@ -413,15 +413,16 @@ impl List {
                 } else {
                     state.cursor = Some(next);
                 }
-                // Auto-scroll the cursor into view.
+                // Auto-scroll the cursor into view. Routed through the scroll
+                // state's target API rather than poking `offset`: the drawn
+                // offset eases toward the target, so writing `offset` directly
+                // here would just be undone by the next eased step.
                 let cursor_row = next / cols;
                 let cell_top = cursor_row as f32 * row_pitch;
                 let cell_bottom = cell_top + item_h;
-                if cell_top < state.scroll.offset[1] {
-                    state.scroll.offset[1] = cell_top;
-                } else if cell_bottom > state.scroll.offset[1] + rect.height {
-                    state.scroll.offset[1] = cell_bottom - rect.height;
-                }
+                state
+                    .scroll
+                    .scroll_range_into_view(1, cell_top, cell_bottom, rect.height);
                 state.scroll.clamp([rect.width, rect.height]);
             }
 

@@ -62,10 +62,6 @@ pub struct ContextMenuState {
     highlights: Vec<Option<usize>>,
     rects: Vec<Rect>,
     hint_scratch: String,
-    hover_level: Option<usize>,
-    hover_item: Option<usize>,
-    hover_elapsed: f32,
-    frame_dt: f32,
     previous_pointer: Option<(f32, f32)>,
     last_pointer: Option<(f32, f32)>,
     depth_truncations: usize,
@@ -93,6 +89,8 @@ impl ContextMenuState {
         self.highlights.clear();
         self.highlights.push(None);
         self.rects.clear();
+        self.previous_pointer = None;
+        self.last_pointer = None;
     }
 
     /// Close the menu and discard its transient selection/geometry.
@@ -103,6 +101,8 @@ impl ContextMenuState {
         self.open_path.clear();
         self.highlights.clear();
         self.rects.clear();
+        self.previous_pointer = None;
+        self.last_pointer = None;
     }
 
     /// Whether the menu is currently open.
@@ -162,11 +162,9 @@ impl ContextMenuState {
         self.begin_frame_with_dt(input, 0.0);
     }
 
-    /// Capture input with an elapsed time for submenu hover/close intent.
-    /// Invalid/negative deltas become zero and long stalls are capped at
-    /// [`crate::MAX_DT`].
-    pub fn begin_frame_with_dt(&mut self, input: &mut InputState, dt: f32) {
-        self.frame_dt = crate::frame_result::sanitize_dt(dt);
+    /// Capture input while retaining the elapsed-time parameter for API
+    /// compatibility. Submenu hover is immediate; `dt` is no longer used.
+    pub fn begin_frame_with_dt(&mut self, input: &mut InputState, _dt: f32) {
         self.previous_pointer = self.last_pointer;
         self.last_pointer = Some((input.mouse_x, input.mouse_y));
         self.up = false;
@@ -257,7 +255,7 @@ impl ContextMenuState {
                 index
             }
         };
-        let rect = self.rect.expect("open context menu has measured geometry");
+        self.rect.expect("open context menu has measured geometry");
         let layer_input = layers.input_for_layer(index, input);
 
         if (self.cancel && self.open_path.is_empty())
@@ -309,41 +307,21 @@ impl ContextMenuState {
         }
 
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
+        layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
+        let keyboard_handled =
+            self.up || self.down || self.left || self.right || self.confirm || self.cancel;
+        if !keyboard_handled && reconcile_context_pointer(self, menu, &layer_input, row_h) {
+            layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
+        }
+
         let mut clicked = None;
-        let mut hovered = None;
-        self.rects.truncate(1);
         let mut draw_items = menu.items;
         for draw_level in 0..=self.open_path.len() {
-            let draw_rect = if draw_level == 0 {
-                rect
-            } else {
-                let parent_index = self.open_path[draw_level - 1];
-                let parent_rect = self.rects[draw_level - 1];
-                let mut y = parent_rect.y + SHEET_PADDING;
-                for item in draw_items.iter().take(parent_index) {
-                    y += if item.is_separator() {
-                        SEPARATOR_HEIGHT
-                    } else {
-                        row_h
-                    };
-                }
-                let row = Rect::new(parent_rect.x, y, parent_rect.width, row_h);
-                let size = measure_items(
-                    &mut layers.layers_mut()[index].list,
-                    draw_items[parent_index].children(),
-                    menu.platform,
-                    styles,
-                    viewport.width,
-                    &mut self.hint_scratch,
-                );
-                let placed = place_submenu(row, size, viewport, SubmenuSide::Auto).0;
-                self.rects.push(placed);
-                placed
-            };
             if draw_level > 0 {
                 let parent = self.open_path[draw_level - 1];
                 draw_items = draw_items[parent].children();
             }
+            let draw_rect = self.rects[draw_level];
             let mut y = draw_rect.y + SHEET_PADDING;
             for (item_index, item) in draw_items.iter().enumerate() {
                 let height = if item.is_separator() {
@@ -357,15 +335,11 @@ impl ContextMenuState {
                     draw_rect.width - SHEET_PADDING * 2.0,
                     height,
                 );
-                if item.is_enabled() && row.contains(layer_input.mouse_x, layer_input.mouse_y) {
-                    hovered = Some((draw_level, item_index));
-                    self.highlights[draw_level] = Some(item_index);
-                    if draw_level == 0 {
-                        self.highlighted = Some(item_index);
-                    }
-                    if layer_input.mouse_clicked {
-                        clicked = Some((draw_level, item_index));
-                    }
+                if item.is_enabled()
+                    && row.contains(layer_input.mouse_x, layer_input.mouse_y)
+                    && layer_input.mouse_clicked
+                {
+                    clicked = Some((draw_level, item_index));
                 }
                 y += height;
             }
@@ -377,60 +351,6 @@ impl ContextMenuState {
                 styles,
                 self.highlights[draw_level],
             );
-        }
-
-        if let Some((hover_level, item_index)) = hovered {
-            let mut hover_items = menu.items;
-            for &parent in self.open_path.iter().take(hover_level) {
-                hover_items = hover_items[parent].children();
-            }
-            let item = &hover_items[item_index];
-            let corridor = self.open_path.get(hover_level).is_some_and(|_| {
-                self.rects.get(hover_level + 1).is_some_and(|child| {
-                    self.previous_pointer.is_some_and(|from| {
-                        safe_corridor(from, (layer_input.mouse_x, layer_input.mouse_y), *child)
-                    })
-                })
-            });
-            if !corridor {
-                if self.hover_level == Some(hover_level) && self.hover_item == Some(item_index) {
-                    self.hover_elapsed += self.frame_dt;
-                } else {
-                    self.hover_level = Some(hover_level);
-                    self.hover_item = Some(item_index);
-                    self.hover_elapsed = 0.0;
-                }
-                let delay = styles.scalar(StyleKey::MenuHoverDelay).max(0.0);
-                let open_parent = self.open_path.get(hover_level).copied();
-                let child_is_open = open_parent.is_some();
-                if item.is_submenu() && open_parent.is_some_and(|parent| parent != item_index) {
-                    self.open_path.truncate(hover_level);
-                    self.open_path.push(item_index);
-                    self.highlights.truncate(hover_level + 1);
-                    self.highlights
-                        .push(item.children().iter().position(MenuItem::is_enabled));
-                } else if self.hover_elapsed >= delay {
-                    if item.is_submenu() {
-                        if hover_level + 1 < MAX_MENU_DEPTH {
-                            self.open_path.truncate(hover_level);
-                            self.open_path.push(item_index);
-                            self.highlights.truncate(hover_level + 1);
-                            self.highlights
-                                .push(item.children().iter().position(MenuItem::is_enabled));
-                        } else {
-                            self.depth_truncations += 1;
-                        }
-                    } else if child_is_open {
-                        self.open_path.truncate(hover_level);
-                        self.highlights.truncate(hover_level + 1);
-                        self.rects.truncate(hover_level + 1);
-                    }
-                }
-            }
-        } else {
-            self.hover_level = None;
-            self.hover_item = None;
-            self.hover_elapsed = 0.0;
         }
 
         let chosen = clicked.or_else(|| self.confirm.then_some((level, selected?)));
@@ -467,6 +387,142 @@ impl ContextMenuState {
         self.close();
         Some(ActivatedItem { id, item })
     }
+}
+
+fn layout_context_chain(
+    state: &mut ContextMenuState,
+    layers: &mut LayerStack,
+    layer: usize,
+    menu: &ContextMenu<'_>,
+    styles: &StyleResolver<'_>,
+    viewport: Rect,
+    row_h: f32,
+) {
+    state.rects.truncate(1);
+    let mut items = menu.items;
+    for level in 1..=state.open_path.len() {
+        let parent_index = state.open_path[level - 1];
+        let parent_rect = state.rects[level - 1];
+        let mut y = parent_rect.y + SHEET_PADDING;
+        for item in items.iter().take(parent_index) {
+            y += if item.is_separator() {
+                SEPARATOR_HEIGHT
+            } else {
+                row_h
+            };
+        }
+        let row = Rect::new(parent_rect.x, y, parent_rect.width, row_h);
+        let children = items[parent_index].children();
+        let size = measure_items(
+            &mut layers.layers_mut()[layer].list,
+            children,
+            menu.platform,
+            styles,
+            viewport.width,
+            &mut state.hint_scratch,
+        );
+        state
+            .rects
+            .push(place_submenu(row, size, viewport, SubmenuSide::Auto).0);
+        items = children;
+    }
+}
+
+fn reconcile_context_pointer(
+    state: &mut ContextMenuState,
+    menu: &ContextMenu<'_>,
+    input: &InputState,
+    row_h: f32,
+) -> bool {
+    let point = (input.mouse_x, input.mouse_y);
+    let mut items = menu.items;
+    let mut hovered = None;
+    for level in 0..state.rects.len() {
+        if level > 0 {
+            items = items[state.open_path[level - 1]].children();
+        }
+        let rect = state.rects[level];
+        if !rect.contains(point.0, point.1) {
+            continue;
+        }
+        let mut y = rect.y + SHEET_PADDING;
+        for (item_index, item) in items.iter().enumerate() {
+            let height = if item.is_separator() {
+                SEPARATOR_HEIGHT
+            } else {
+                row_h
+            };
+            let row = Rect::new(
+                rect.x + SHEET_PADDING,
+                y,
+                rect.width - SHEET_PADDING * 2.0,
+                height,
+            );
+            if item.is_enabled() && row.contains(point.0, point.1) {
+                hovered = Some((level, item_index, item.is_submenu()));
+                break;
+            }
+            y += height;
+        }
+    }
+
+    if let Some((level, item_index, is_submenu)) = hovered {
+        while state.highlights.len() <= level {
+            state.highlights.push(None);
+        }
+        state.highlights[level] = Some(item_index);
+        if level == 0 {
+            state.highlighted = Some(item_index);
+        }
+        if is_submenu {
+            if state.open_path.get(level).copied() == Some(item_index) {
+                return false;
+            }
+            if level + 1 >= MAX_MENU_DEPTH {
+                state.depth_truncations += 1;
+                return false;
+            }
+            let mut level_items = menu.items;
+            for &parent in state.open_path.iter().take(level) {
+                level_items = level_items[parent].children();
+            }
+            let children = level_items[item_index].children();
+            state.open_path.truncate(level);
+            state.open_path.push(item_index);
+            state.highlights.truncate(level + 1);
+            state
+                .highlights
+                .push(children.iter().position(MenuItem::is_enabled));
+            return true;
+        }
+        if state.open_path.len() > level {
+            state.open_path.truncate(level);
+            state.highlights.truncate(level + 1);
+            state.rects.truncate(level + 1);
+            return true;
+        }
+        return false;
+    }
+
+    for child in state.rects.iter().skip(1) {
+        if child.contains(point.0, point.1)
+            || state
+                .previous_pointer
+                .is_some_and(|from| safe_corridor(from, point, *child))
+        {
+            return false;
+        }
+    }
+    let pointer_moved = state
+        .previous_pointer
+        .is_some_and(|previous| previous != point);
+    if pointer_moved && !state.open_path.is_empty() {
+        state.open_path.clear();
+        state.highlights.truncate(1);
+        state.rects.truncate(1);
+        return true;
+    }
+    false
 }
 
 /// Clamp a cursor-anchored sheet wholly inside `viewport`.
@@ -744,21 +800,18 @@ mod tests {
     }
 
     #[test]
-    fn frame_dt_is_sanitized_and_legacy_begin_frame_keeps_zero_dt() {
+    fn elapsed_time_entry_point_preserves_pointer_history() {
         let mut state = ContextMenuState::new();
         state.open_at(0.0, 0.0);
-        let mut input = InputState::default();
-        for (dt, expected) in [
-            (f32::NAN, 0.0),
-            (f32::INFINITY, 0.0),
-            (-1.0, 0.0),
-            (10.0, crate::MAX_DT),
-        ] {
-            state.begin_frame_with_dt(&mut input, dt);
-            assert_eq!(state.frame_dt, expected);
-        }
-        state.begin_frame(&mut input);
-        assert_eq!(state.frame_dt, 0.0);
+        let mut input = InputState {
+            mouse_x: 12.0,
+            mouse_y: 34.0,
+            ..Default::default()
+        };
+        state.begin_frame_with_dt(&mut input, f32::NAN);
+        input.mouse_x = 20.0;
+        state.begin_frame_with_dt(&mut input, 10.0);
+        assert_eq!(state.previous_pointer, Some((12.0, 34.0)));
     }
 
     #[test]
@@ -841,36 +894,105 @@ mod tests {
     }
 
     #[test]
-    fn timed_hover_opens_then_leaf_hover_closes_after_delay() {
+    fn hover_opens_then_leaf_hover_closes_immediately() {
         const CHILD: &[MenuItem<'static>] = &[MenuItem::new("Leaf")];
         const ROOT: &[MenuItem<'static>] = &[
             MenuItem::new("Parent").with_children(CHILD),
             MenuItem::new("Sibling leaf"),
         ];
         let menu = ContextMenu::new(ROOT);
-        let mut theme = Theme::default();
-        theme.menu_hover_delay = 0.05;
+        let theme = Theme::default();
         let mut state = ContextMenuState::new();
         state.open_at(20.0, 20.0);
 
-        let parent = InputState {
-            mouse_x: 40.0,
-            mouse_y: 30.0,
-            ..Default::default()
-        };
-        context_frame(&mut state, &menu, &theme, parent.clone(), 0.03);
-        assert_eq!(state.open_levels(), 1);
-        context_frame(&mut state, &menu, &theme, parent, 0.05);
+        context_frame(
+            &mut state,
+            &menu,
+            &theme,
+            InputState {
+                mouse_x: 40.0,
+                mouse_y: 30.0,
+                ..Default::default()
+            },
+            0.0,
+        );
         assert_eq!(state.open_levels(), 2);
+        assert_eq!(state.rects.len(), 2, "child is laid out in the hover frame");
 
-        let sibling = InputState {
-            mouse_x: 40.0,
-            mouse_y: 30.0 + theme.menu_row_height,
-            ..Default::default()
-        };
-        context_frame(&mut state, &menu, &theme, sibling.clone(), 0.03);
+        context_frame(
+            &mut state,
+            &menu,
+            &theme,
+            InputState {
+                mouse_x: 40.0,
+                mouse_y: 30.0 + theme.menu_row_height,
+                ..Default::default()
+            },
+            0.0,
+        );
+        assert_eq!(state.open_levels(), 1);
+        assert_eq!(state.rects.len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_parent_lays_out_its_child_in_the_same_frame() {
+        const CHILD: &[MenuItem<'static>] = &[MenuItem::new("Leaf")];
+        const ROOT: &[MenuItem<'static>] = &[MenuItem::new("Parent").with_children(CHILD)];
+        let menu = ContextMenu::new(ROOT);
+        let theme = Theme::default();
+        let mut state = ContextMenuState::new();
+        state.open_at(20.0, 20.0);
+
+        context_frame(
+            &mut state,
+            &menu,
+            &theme,
+            InputState {
+                mouse_x: 40.0,
+                mouse_y: 30.0,
+                mouse_clicked: true,
+                mouse_down: true,
+                ..Default::default()
+            },
+            0.0,
+        );
+        assert_eq!(state.open_path, [0]);
+        assert_eq!(state.rects.len(), 2, "click frame lays out the child");
+    }
+
+    #[test]
+    fn leaving_the_context_menu_chain_closes_children_immediately() {
+        const CHILD: &[MenuItem<'static>] = &[MenuItem::new("Leaf")];
+        const ROOT: &[MenuItem<'static>] = &[MenuItem::new("Parent").with_children(CHILD)];
+        let menu = ContextMenu::new(ROOT);
+        let theme = Theme::default();
+        let mut state = ContextMenuState::new();
+        state.open_at(20.0, 20.0);
+        assert!(state.set_open_path(&menu, &[0]));
+
+        context_frame(
+            &mut state,
+            &menu,
+            &theme,
+            InputState {
+                mouse_x: 40.0,
+                mouse_y: 30.0,
+                ..Default::default()
+            },
+            0.0,
+        );
         assert_eq!(state.open_levels(), 2);
-        context_frame(&mut state, &menu, &theme, sibling, 0.05);
+        context_frame(
+            &mut state,
+            &menu,
+            &theme,
+            InputState {
+                mouse_x: 700.0,
+                mouse_y: 500.0,
+                ..Default::default()
+            },
+            0.0,
+        );
         assert_eq!(state.open_levels(), 1);
     }
 
