@@ -924,6 +924,12 @@ harden those foundations rather than create parallel replacements.
 - [x] **P2 — Bench suite** (`benches/`) for hot paths (text shaping, draw
       list construction, layout, interactive widgets, scroll view, list, table,
       UiContext facade, animation).
+- [x] **P2 — Gallery leaves stale section PNGs behind.**
+      `save_gallery_images` (`tests/widget_gallery.rs`) used to wipe only
+      `test_output/widget_gallery/components/`, so a renamed section kept its
+      old file (found 2026-09-24: `menubar.png` from 09-20, now
+      `menubar-01-menu-bar-html-states.png`). Closed: it now removes the whole
+      `test_output/widget_gallery/` directory before writing.
 
 ---
 

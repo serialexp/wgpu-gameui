@@ -243,17 +243,14 @@ fn save_gallery_images(
 ) {
     let output_dir = "test_output/widget_gallery";
     let component_dir = format!("{output_dir}/components");
-    std::fs::create_dir_all(&component_dir).expect("create gallery image directories");
-    for entry in std::fs::read_dir(&component_dir).expect("read gallery component directory") {
-        let entry = entry.expect("read gallery component entry");
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|extension| extension == "png")
-        {
-            std::fs::remove_file(entry.path()).expect("remove stale gallery component PNG");
-        }
+    // Start from an empty directory so a renamed or removed section/component
+    // never leaves a stale PNG behind.
+    match std::fs::remove_dir_all(output_dir) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => panic!("wipe {output_dir}: {err}"),
     }
+    std::fs::create_dir_all(&component_dir).expect("create gallery image directories");
 
     for section in sections {
         assert!(
