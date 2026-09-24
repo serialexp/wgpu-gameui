@@ -21,6 +21,14 @@ Token files live in the design project under `tokens/` (`colors.css`,
 4. **Blend like the browser (sRGB space)** so what the design agent shows is
    what the library renders.
 
+## Fixed since the audit
+
+- **Colour space and text colours** — `6890f05` (`feat!: blend UI colours in
+  sRGB space like the browser`): colours are sRGB-encoded everywhere and blend
+  like CSS; `TextBlock` colours are plain hex.
+- **Two accents and palette drifts** — `fix: use DesignSync accent and palette
+  values`: the rows marked *(fixed)* below.
+
 ## Cross-cutting findings
 
 ### Colour space (drives decisions 1 and 4)
@@ -65,14 +73,14 @@ Legend: ✅ match (≤2/255, ≤0.01 α) · ≠ different · ✗ missing.
 
 | Area | ✅ | ≠ | ✗ |
 |---|---|---|---|
-| Accent | accent (theme), accent-ring, accent-key top/bottom/pressed, hover-bottom, accent-switch, ink-on-accent-key, ink-on-latch | menu/context/splitter accent `#79c6d8`; accent-tick; accent-grip; accent-dirty (no glow); accent-wash (uses ButtonHover); accent-key-hover-top (`#85e3e8` vs `#79e5eb`); latch top/bottom/shade/hi; slider fill reuses key gradient; progress fill; accent-chip (+ dark ink instead of light) | accent-match, accent-glyph, accent-toggle-*, fill-live-*, accent-sweep, live-* |
-| Danger | ring-edge, key top/bottom/hover, key-ink | key-pressed top/bottom (Δ17/Δ25); danger-ring α .16 vs .18; banner bg/ink | danger-text, danger-hint, chip-*, soft(-ink), bubble-* |
-| Warning | — | warn-meta/rule vs `theme.warning` Δ13; warn-soft α | warn-soft-ink, chip-*, banner-* |
+| Accent | accent (theme), accent-ring, accent-key top/bottom/pressed, hover-bottom, accent-switch, ink-on-accent-key, ink-on-latch; *(fixed)* menu/context/splitter accent, accent-tick (`Theme::accent_tick`), accent-grip, accent-glow, accent-key-hover-top, latch top/bottom/shade/hi, ink-on-accent-2 | accent-dirty (no glow); accent-wash (uses ButtonHover); slider fill reuses key gradient; progress fill; accent-chip (+ dark ink instead of light) | accent-match, accent-glyph, accent-toggle-*, fill-live-*, accent-sweep, live-* |
+| Danger | ring-edge, key top/bottom/hover, key-ink; *(fixed)* key-pressed top/bottom, danger-ring α .18 | banner bg/ink | danger-text, danger-hint, chip-*, soft(-ink), bubble-* |
+| Warning | *(fixed)* warn-rule = `theme.warning` | warn-meta (no own field); warn-soft α | warn-soft-ink, chip-*, banner-* |
 | Success | ok | — | ok-glow, ok-chip-* |
-| Axis | values in `AXIS_TINTS` correct | render ~70 steps too light (used raw as linear) | — |
-| Ink ladder | ink-max (dock tab), ink-value (`theme.text`), ink-icon, ink-chip (`text_dim`), ink-tab, ink-on-accent (geometry) | ink-menu/title/shortcut/disabled/disabled-key (text bug); status bar uses TextDim `#adb6bd` not ink-muted `#7d858e` | 15 of 26 steps: white, emph, row, cell, 2, glyph, tip-hint, body-2, label, caption, dim, disabled-glyph, empty, brand, primary |
+| Axis | values in `AXIS_TINTS` correct; *(fixed)* rendered as sRGB | — | — |
+| Ink ladder | ink-max (dock tab, *(fixed)* `text_highlight`), ink-value (`theme.text`), ink-icon, ink-chip (`text_dim`), ink-tab, ink-on-accent (geometry); *(fixed)* ink-menu/title/shortcut/disabled/disabled-key | status bar uses TextDim `#adb6bd` not ink-muted `#7d858e` | 15 of 26 steps: white, emph, row, cell, 2, glyph, tip-hint, body-2, label, caption, dim, disabled-glyph, empty, brand, primary |
 | Surfaces | app, menubar, toolbar, sheet, dock(+opaque), dock-header(+opaque), status(+opaque), tooltip, dropdown | dialog/toast/popover use flat panel not their gradients; row-zebra (×1.12 linear); row-hover (opaque ButtonHover) | page, app-gradient, viewport, card |
-| Key / well / edges | plinth, key-face idle/pressed α, key-border, well, well-focus, well-border, edge-dark/hard/sheet/light/light-2 | key-face-hover α .24/.11 vs .22/.10 | key-border-pressed, well-deep; edge tokens are hard-coded literals, not themeable |
+| Key / well / edges | plinth, key-face idle/pressed α, key-border, well, well-focus, well-border, edge-dark/hard/sheet/light/light-2; *(fixed)* key-face-hover α .22/.10 | — | key-border-pressed, well-deep; edge tokens are hard-coded literals, not themeable |
 
 Library colours with no Forge token: `theme.info` `#5eaceb`, button base tones
 `#1f2429/#21262b/#14181c`, `theme.panel` `#16191d@.95`, `text_highlight`,
@@ -125,9 +133,9 @@ sizes are `font_size × factor` rather than tokens.
 | Token | Status |
 |---|---|
 | key-inset .18 | ✅ |
-| key-inset-hover .26 | ≠ .28 |
-| key-inset-pressed .07 + inset 0 2 3 .4 | ≠ .06 + flat unblurred 2 px band @.6 (`material.rs`); toolbar partial |
-| key-inset-latched | partial — toolbar only, wrong colours; `Material` has no latched state |
+| key-inset-hover .26 | ✅ *(fixed)* |
+| key-inset-pressed .07 + inset 0 2 3 .4 | partial — edge .07 *(fixed)*, but a flat unblurred 2 px band @.6 (`material.rs`); toolbar partial |
+| key-inset-latched | partial — toolbar only (colours *(fixed)*); `Material` has no latched state; status-bar inset lacks the `latch-hi` line |
 | accent-key-inset .5 / danger-key-inset .3 | ≠ both .18 |
 | accent/danger pressed insets | ≠ (flat band) |
 | sunken-key-inset | ≠ 6 px gradient band |
@@ -135,7 +143,7 @@ sizes are `font_size × factor` rather than tokens.
 | well-inset-row / -tall | ✗ |
 | well-focus-ring (2 px outer @.16) | ≠ 1 px inward, likely invisible under the accent border |
 | well-invalid-ring | ✗ in practice (`draw_well` private; everyone passes `invalid=false`) |
-| row-hover-inset / row-select-inset | ✅ menubar only; ✗ List, Tree, Table, Dropdown, ContextMenu |
+| row-hover-inset / row-select-inset | ✅ menubar and ContextMenu *(fixed: real translucent insets)*; ✗ List, Tree, Table, Dropdown |
 | tab-active-inset .22 | ✅ dock; ≠ Tabs/DocTabs .18 |
 | hi-bar .11 | ✅ menubar; ≠ dock header, status bar, toolbar |
 | hi-card .055 | ✗ Panel/Group |

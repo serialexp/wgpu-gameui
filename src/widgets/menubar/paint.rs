@@ -289,7 +289,10 @@ pub(super) fn draw_columns<'a>(
             // Text and geometry colours are both plain sRGB (see `crate::color`).
             let disabled_text = (0x5d, 0x65, 0x6c);
             let text = (0xdb, 0xe1, 0xe7);
-            let selected_bg = rgb8([0x79, 0xc6, 0xd8]);
+            let selected_bg = s.color(StyleKey::Accent);
+            let tick = s.color(StyleKey::AccentTick);
+            // Forge `--ink-shortcut`: shortcut hints and submenu arrows.
+            let shortcut_ink = rgb8([0x78, 0x81, 0x8a]);
             let check_w = column.check_w;
 
             // Only row content is clipped to the sheet padding box. The sheet and
@@ -331,7 +334,7 @@ pub(super) fn draw_columns<'a>(
                     == Some(row.item_index)
                     && !row.disabled;
                 if highlighted {
-                    paint_accent_row(
+                    chrome.paint_highlighted_row(
                         list,
                         Rect::new(row_x, y, row_width, row.height),
                         selected_bg,
@@ -340,11 +343,7 @@ pub(super) fn draw_columns<'a>(
                 if row.checked {
                     let stroke = (row_h * CHECK_STROKE).max(1.0);
                     let (x, w, h) = (row_x + 8.0, check_w, row_h);
-                    let color = if highlighted {
-                        rgb8([4, 20, 24])
-                    } else {
-                        [0.4265, 0.8174, 0.8336, 1.0]
-                    };
+                    let color = if highlighted { rgb8([4, 20, 24]) } else { tick };
                     list.line(
                         [x + w * 0.16, y + h * 0.52],
                         [x + w * 0.40, y + h * 0.76],
@@ -369,11 +368,7 @@ pub(super) fn draw_columns<'a>(
                         if highlighted {
                             rgb8([4, 20, 24])
                         } else {
-                            s.color(if row.disabled {
-                                StyleKey::TextDim
-                            } else {
-                                StyleKey::Text
-                            })
+                            shortcut_ink
                         },
                     );
                 }
@@ -406,9 +401,8 @@ pub(super) fn draw_columns<'a>(
                     let (r, g, b) = if row.disabled {
                         (0x46, 0x4e, 0x55)
                     } else if highlighted {
-                        // TextBlock cannot express alpha independently of glyph
-                        // coverage here, so preserve the handoff's dark ink hue.
-                        (4, 20, 24)
+                        // Forge `--ink-on-accent-2`.
+                        (0x29, 0x4d, 0x55)
                     } else {
                         (0x78, 0x81, 0x8a)
                     };
@@ -602,22 +596,4 @@ fn sheet_padding_box(rect: Rect, widths: crate::EdgeWidths) -> Rect {
         (rect.width - widths.left - widths.right).max(0.0),
         (rect.height - widths.top - widths.bottom).max(0.0),
     )
-}
-
-fn paint_accent_row(list: &mut crate::DrawList, rect: Rect, accent: [f32; 4]) {
-    list.quad(rect.x, rect.y, rect.width, rect.height, accent);
-    list.quad(
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height.min(1.0),
-        rgb8([0xa1, 0xd7, 0xe4]),
-    );
-    list.quad(
-        rect.x,
-        rect.y + (rect.height - 1.0).max(0.0),
-        rect.width,
-        rect.height.min(1.0),
-        rgb8([0x5b, 0x95, 0xa2]),
-    );
 }

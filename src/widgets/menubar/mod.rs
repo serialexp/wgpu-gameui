@@ -340,8 +340,10 @@ impl<'a> MenuBar<'a> {
 
         // Pass 3: paint the strip's owning chrome, then labels. Label fills are
         // limited to hovered, highlighted, and open states.
-        let accent = rgb8([0x79, 0xc6, 0xd8]);
-        let hover = rgb8([0x32, 0x37, 0x3b]);
+        // Forge MenuBar: an open title is a plain accent plate (no inset
+        // edges, unlike a highlighted sheet row); hover is a white wash.
+        let accent = styles.color(StyleKey::Accent);
+        let hover = [1.0, 1.0, 1.0, 0.09];
         let text = rgb8([0xd5, 0xdc, 0xe2]);
         let dim = styles.color(StyleKey::TextDim);
         let font_size = MENU_TITLE_FONT_SIZE;
@@ -378,15 +380,20 @@ impl<'a> MenuBar<'a> {
                     label_x = label_rect.right() + MENU_TITLE_GAP;
 
                     let open = open_menu == Some(index);
-                    if open {
-                        paint_accent_plate(list, label_rect, accent);
+                    let plate = if open {
+                        Some(accent)
                     } else if (armed && highlighted == Some(index)) || hovered == Some(index) {
+                        Some(hover)
+                    } else {
+                        None
+                    };
+                    if let Some(fill) = plate {
                         list.quad(
                             label_rect.x,
                             label_rect.y,
                             label_rect.width,
                             label_rect.height,
-                            hover,
+                            fill,
                         );
                     }
                     let label_color = if !menu.is_enabled() {
@@ -485,22 +492,4 @@ impl<'a> MenuBar<'a> {
             hovered_menu,
         }
     }
-}
-
-fn paint_accent_plate(list: &mut crate::DrawList, rect: Rect, accent: [f32; 4]) {
-    list.quad(rect.x, rect.y, rect.width, rect.height, accent);
-    list.quad(
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height.min(1.0),
-        rgb8([0xa1, 0xd7, 0xe4]),
-    );
-    list.quad(
-        rect.x,
-        rect.y + (rect.height - 1.0).max(0.0),
-        rect.width,
-        rect.height.min(1.0),
-        rgb8([0x5b, 0x95, 0xa2]),
-    );
 }

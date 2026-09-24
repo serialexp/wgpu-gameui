@@ -1,7 +1,7 @@
 //! UI theming - colors, fonts, spacing.
 
 use crate::chrome::ChromeTheme;
-use crate::color::{hex, rgba8};
+use crate::color::{hex, oklch, rgba8};
 use crate::style::{CustomStyles, StyleKey, StyleValue};
 use crate::text::{FontHandle, TextBlock};
 
@@ -42,6 +42,9 @@ pub struct Theme {
     pub text_highlight: [f32; 4],
     /// Accent color for primary/active UI elements.
     pub accent: [f32; 4],
+    /// Lighter accent for small marks on dark surfaces: menu check ticks,
+    /// radio dots (Forge `--accent-tick`).
+    pub accent_tick: [f32; 4],
     /// Severity accents (see [`Severity`](crate::Severity)). The themeable palette
     /// behind banners/toasts; `error` doubles as the failure severity, so there's
     /// no separate severity-error field.
@@ -252,21 +255,23 @@ impl Default for Theme {
             button_border: [0.0, 0.0, 0.0, 0.5],
             input_background: [0.0, 0.0, 0.0, 0.42],
             input_border: [0.0, 0.0, 0.0, 0.6],
-            input_focus_border: [0.2423, 0.7509, 0.7767, 1.0],
+            input_focus_border: oklch(0.74, 0.11, 200.0, 1.0),
             // Design body text #eef2f5.
             text: hex(0xeef2f5),
             text_dim: hex(0xadb6bd),
-            // The design's "held/active" face tone #f4f7fa — the brightest
-            // neutral, used for active tab/tool labels.
-            text_highlight: hex(0xf4f7fa),
+            // Forge `--ink-max` — the brightest neutral, used for active
+            // tab/tool labels.
+            text_highlight: hex(0xf1f5f9),
             // Accent = teal oklch(0.74 0.11 200), state only (selection, focus,
             // toggle-on fills), never for resting chrome.
-            accent: [0.2423, 0.7509, 0.7767, 1.0],
+            accent: oklch(0.74, 0.11, 200.0, 1.0),
+            accent_tick: oklch(0.8, 0.1, 200.0, 1.0),
             info: [0.3692, 0.6736, 0.92, 1.0],
             success: [0.3799, 0.7093, 0.3977, 1.0],
-            warning: [0.9084, 0.6684, 0.3042, 1.0],
+            // Forge `--warn-rule`.
+            warning: oklch(0.78, 0.14, 75.0, 1.0),
             error: [0.8413, 0.2796, 0.2724, 1.0],
-            focus_ring: [0.2423, 0.7509, 0.7767, 1.0],
+            focus_ring: oklch(0.74, 0.11, 200.0, 1.0),
 
             // Tab colors — the design's document/in-set tabs: inactive reads as
             // a sunken well, active as a raised face, border is the black edge.
@@ -278,7 +283,7 @@ impl Default for Theme {
             // Progress bar colors
             progress_background: [0.0, 0.0, 0.0, 0.55],
             // Progress/slider fills are the accent gradient.
-            progress_fill: [0.2423, 0.7509, 0.7767, 1.0],
+            progress_fill: oklch(0.74, 0.11, 200.0, 1.0),
             progress_fill_low: [0.8413, 0.2796, 0.2724, 1.0],
             progress_fill_medium: [0.9084, 0.6684, 0.3042, 1.0],
 
@@ -312,29 +317,31 @@ impl Default for Theme {
             travel: 2.0,
             inner_shadow_depth: 6.0,
             face_top: [1.0, 1.0, 1.0, 0.16],
-            face_top_hover: [1.0, 1.0, 1.0, 0.24],
+            face_top_hover: [1.0, 1.0, 1.0, 0.22],
             face_top_pressed: [1.0, 1.0, 1.0, 0.09],
             face_bottom: [1.0, 1.0, 1.0, 0.06],
-            face_bottom_hover: [1.0, 1.0, 1.0, 0.11],
+            face_bottom_hover: [1.0, 1.0, 1.0, 0.10],
             face_bottom_pressed: [1.0, 1.0, 1.0, 0.035],
             edge_highlight: [1.0, 1.0, 1.0, 0.18],
-            edge_highlight_hover: [1.0, 1.0, 1.0, 0.28],
-            edge_highlight_pressed: [1.0, 1.0, 1.0, 0.06],
+            edge_highlight_hover: [1.0, 1.0, 1.0, 0.26],
+            edge_highlight_pressed: [1.0, 1.0, 1.0, 0.07],
             inner_shadow: [0.0, 0.0, 0.0, 0.6],
             edge_shadow: [1.0, 1.0, 1.0, 0.07],
-            accent_face_top: [0.4211, 0.8464, 0.8689, 1.0],
-            accent_face_top_hover: [0.5211, 0.8911, 0.9106, 1.0],
-            accent_face_top_pressed: [0.2518, 0.6942, 0.7171, 1.0],
-            accent_face_bottom: [0.0, 0.6817, 0.7111, 1.0],
-            accent_face_bottom_hover: [0.0772, 0.732, 0.7611, 1.0],
-            accent_face_bottom_pressed: [0.0, 0.5774, 0.6039, 1.0],
+            // Forge `--accent-key-*` and `--danger-key-*`, spelled as the
+            // design's `colors.css` writes them.
+            accent_face_top: oklch(0.82, 0.1, 200.0, 1.0),
+            accent_face_top_hover: oklch(0.86, 0.1, 200.0, 1.0),
+            accent_face_top_pressed: oklch(0.7, 0.1, 200.0, 1.0),
+            accent_face_bottom: oklch(0.68, 0.12, 200.0, 1.0),
+            accent_face_bottom_hover: oklch(0.72, 0.12, 200.0, 1.0),
+            accent_face_bottom_pressed: oklch(0.6, 0.11, 200.0, 1.0),
             on_accent: hex(0x04171d),
-            danger_face_top: [0.7841, 0.2609, 0.2536, 1.0],
-            danger_face_top_hover: [0.8692, 0.306, 0.2953, 1.0],
-            danger_face_top_pressed: [0.6884, 0.1648, 0.1749, 1.0],
-            danger_face_bottom: [0.6612, 0.1341, 0.1522, 1.0],
-            danger_face_bottom_hover: [0.7304, 0.1668, 0.1811, 1.0],
-            danger_face_bottom_pressed: [0.6071, 0.0579, 0.1056, 1.0],
+            danger_face_top: oklch(0.57, 0.17, 25.0, 1.0),
+            danger_face_top_hover: oklch(0.62, 0.18, 25.0, 1.0),
+            danger_face_top_pressed: oklch(0.5, 0.14, 25.0, 1.0),
+            danger_face_bottom: oklch(0.48, 0.17, 25.0, 1.0),
+            danger_face_bottom_hover: oklch(0.52, 0.18, 25.0, 1.0),
+            danger_face_bottom_pressed: oklch(0.44, 0.14, 25.0, 1.0),
             on_danger: hex(0xfdeaea),
 
             chrome: ChromeTheme::default(),
@@ -381,6 +388,29 @@ mod tests {
             theme.text,
             [238.0 / 255.0, 242.0 / 255.0, 245.0 / 255.0, 1.0]
         );
+    }
+
+    #[test]
+    fn default_palette_uses_the_forge_tokens() {
+        use crate::color::oklch;
+        let t = Theme::default();
+        let accent = oklch(0.74, 0.11, 200.0, 1.0);
+        assert_eq!(crate::color::to_rgba8(accent), [0x3e, 0xbf, 0xc6, 0xff]);
+        assert_eq!(t.accent, accent);
+        assert_eq!(t.accent_tick, oklch(0.8, 0.1, 200.0, 1.0));
+        assert_eq!(t.accent_face_top_hover, oklch(0.86, 0.1, 200.0, 1.0));
+        assert_eq!(t.danger_face_top_pressed, oklch(0.5, 0.14, 25.0, 1.0));
+        assert_eq!(t.danger_face_bottom_pressed, oklch(0.44, 0.14, 25.0, 1.0));
+        assert_eq!(t.warning, oklch(0.78, 0.14, 75.0, 1.0));
+        assert_eq!(t.text_highlight, hex(0xf1f5f9), "--ink-max");
+        // --key-face-hover and the key-inset edges.
+        assert_eq!((t.face_top_hover[3], t.face_bottom_hover[3]), (0.22, 0.10));
+        assert_eq!(t.edge_highlight_hover[3], 0.26);
+        assert_eq!(t.edge_highlight_pressed[3], 0.07);
+
+        let splitter = t.chrome.splitter;
+        assert_eq!(splitter.grip_dragging, oklch(0.82, 0.1, 200.0, 1.0));
+        assert_eq!(splitter.dragging_glow.color, oklch(0.74, 0.11, 200.0, 0.65));
     }
 
     #[test]
@@ -496,6 +526,7 @@ impl Theme {
             TextDim => StyleValue::Color(self.text_dim),
             TextHighlight => StyleValue::Color(self.text_highlight),
             Accent => StyleValue::Color(self.accent),
+            AccentTick => StyleValue::Color(self.accent_tick),
             Info => StyleValue::Color(self.info),
             Success => StyleValue::Color(self.success),
             Warning => StyleValue::Color(self.warning),
@@ -591,6 +622,7 @@ impl Theme {
             (TextDim, StyleValue::Color(c)) => self.text_dim = c,
             (TextHighlight, StyleValue::Color(c)) => self.text_highlight = c,
             (Accent, StyleValue::Color(c)) => self.accent = c,
+            (AccentTick, StyleValue::Color(c)) => self.accent_tick = c,
             (Info, StyleValue::Color(c)) => self.info = c,
             (Success, StyleValue::Color(c)) => self.success = c,
             (Warning, StyleValue::Color(c)) => self.warning = c,

@@ -1637,12 +1637,27 @@ registration lifetime, resume clamp). 1071 lib tests green.
   `TextBlock::with_color_f32`; `with_color(u8…)` bytes are plain sRGB too.
   Hosts clear with `UiRenderer::clear_color(theme.background)`; blur
   backdrops declare `Backdrop::encoding`.
-- [ ] **P1 — Two accents on screen.** Menus, context menu, splitter grip/glow
+- [x] **P1 — Two accents on screen.** Menus, context menu, splitter grip/glow
   and the latched toolbar key hard-code `#79c6d8` & friends from
   the old `design_handoff_forge_chrome/opaque-colors.md` (now deleted), whose oklch→hex conversions
   are wrong (hue drifts to 211–221). Forge `--accent` is `#3ebfc6`, which
   `theme.accent` already has. Full per-token audit:
   `docs/design/forge-token-audit.md`.
+  Closed: menus and the context menu read `StyleKey::Accent`; a highlighted
+  sheet row is `MenuSheetChrome::paint_highlighted_row` (accent plate +
+  translucent `row_highlight_insets`, the design's `--row-hover-inset`), an
+  open menubar title a plain accent plate. New `Theme::accent_tick` /
+  `StyleKey::AccentTick` (`--accent-tick`) for ticks and radio dots.
+  Splitter grip/glow, the toolbar grip and latched key, and the status-bar
+  latched inset use the `--accent-grip/-glow/-latch-*` tokens, spelled with
+  `color::oklch` in `ChromeTheme::default`. Theme drifts fixed in the same
+  pass: accent-key hover top, danger-key pressed, `warning` (`--warn-rule`),
+  key-face hover and key-inset alphas, `text_highlight` (`--ink-max`),
+  invalid-ring alpha, toggle knob gradient.
+- [ ] **P2 — Status-bar latched inset is one shadow.**
+  `StatusBarChrome::latched_inset` holds only `--key-inset-latched`'s first
+  layer (`inset 0 2px 4px latch-shade`); the `inset 0 1px 0 latch-hi` line
+  needs a second slot. Nothing paints it yet (no latched status toggle).
 - [ ] **P1 — Perf: `frame_render` is ~140× slower than its June baseline.**
   `cargo bench --bench ui_stress -- frame_render` on the RX 7900 XTX: 100
   buttons ≈ 1.16 ms, 1000 ≈ 30 ms, 10k ≈ 950 ms (criterion's stored June

@@ -105,6 +105,9 @@ pub enum StyleKey {
     TextHighlight,
     /// Accent color for primary/active elements.
     Accent,
+    /// Lighter accent for small marks on dark surfaces (menu ticks, radio
+    /// dots).
+    AccentTick,
     /// Informational severity accent (see [`Severity`](crate::Severity)). Themeable
     /// palette entry; the severity→key mapping is the only fixed policy.
     Info,
@@ -269,6 +272,7 @@ impl StyleKey {
                 | TextDim
                 | TextHighlight
                 | Accent
+                | AccentTick
                 | Info
                 | Success
                 | Warning
@@ -712,6 +716,7 @@ pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::TextDim,
     StyleKey::TextHighlight,
     StyleKey::Accent,
+    StyleKey::AccentTick,
     StyleKey::Info,
     StyleKey::Success,
     StyleKey::Warning,

@@ -4,6 +4,7 @@
 //! a light circular knob sliding between the ends. Click (or Space/Enter when
 //! focused) flips it.
 
+use crate::color::hex;
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
@@ -107,9 +108,14 @@ impl Toggle {
             switch_rect.x + margin
         };
         let cy = switch_rect.y + switch_rect.height * 0.5;
-        // Gradient: #ffffff top → #c6ced5 bottom (sRGB midpoint ≈ #e3e9ee).
-        let knob_color = [0.89, 0.91, 0.93, 1.0];
-        list.circle((knob_x + knob_d * 0.5, cy), knob_d * 0.5, knob_color);
+        list.chrome_rect_gradient(
+            Rect::new(knob_x, cy - knob_d * 0.5, knob_d, knob_d),
+            knob_d * 0.5,
+            0.0,
+            hex(0xffffff),
+            hex(0xc6ced5),
+            [0.0; 4],
+        );
         list.circle_outline(
             (knob_x + knob_d * 0.5, cy),
             knob_d * 0.5,

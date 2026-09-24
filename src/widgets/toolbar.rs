@@ -1309,6 +1309,33 @@ mod tests {
     use crate::widgets::drag::DragCapture;
     use crate::widgets::focus::FocusState;
 
+    /// Top colour of the latched tool face gradient in `theme`.
+    fn latched_top(theme: &Theme) -> [f32; 4] {
+        match theme.chrome.toolbar.tool_latched.background {
+            Background::LinearGradient { start, .. } => start,
+            other => panic!("latched face should be a gradient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn latched_tool_face_uses_the_forge_latch_tokens() {
+        use crate::color::oklch;
+        let toolbar = Theme::default().chrome.toolbar;
+        assert_eq!(
+            toolbar.tool_latched.background,
+            Background::LinearGradient {
+                start: oklch(0.62, 0.1, 200.0, 1.0),
+                end: oklch(0.7, 0.11, 200.0, 1.0),
+                axis: crate::chrome::GradientAxis::Vertical,
+            }
+        );
+        let [shade, hi] = toolbar.tool_insets[3];
+        assert_eq!(shade.color, oklch(0.32, 0.07, 200.0, 1.0));
+        assert_eq!((shade.offset, shade.blur), ([0.0, 2.0], 4.0));
+        assert_eq!(hi.color, oklch(0.55, 0.09, 200.0, 1.0));
+        assert_eq!((hi.offset, hi.blur), ([0.0, 1.0], 0.0));
+    }
+
     fn ctx<'a>(
         list: &'a mut DrawList,
         focus: &'a mut FocusState,
@@ -1377,7 +1404,7 @@ mod tests {
         let mut cx = ctx(&mut list, &mut focus, &theme, &input);
         Toolbar::new(&items).draw(rect, &mut state, &mut capture, 99, &mut cx);
 
-        let held_top = rgb8([0x4a, 0x8a, 0x9c]);
+        let held_top = latched_top(&theme);
         let held = list
             .chrome_instances()
             .find(|instance| instance.bg == held_top)
@@ -1714,7 +1741,7 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
 
-        let held_top = rgb8([0x4a, 0x8a, 0x9c]);
+        let held_top = latched_top(&theme);
         let held = list
             .chrome_instances()
             .find(|instance| instance.bg == held_top)

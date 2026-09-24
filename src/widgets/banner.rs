@@ -56,7 +56,7 @@ impl Severity {
         match self {
             Severity::Info => [0.3692, 0.6736, 0.92, 1.0],
             Severity::Success => [0.3799, 0.7093, 0.3977, 1.0],
-            Severity::Warning => [0.9084, 0.6684, 0.3042, 1.0],
+            Severity::Warning => crate::color::oklch(0.78, 0.14, 75.0, 1.0),
             Severity::Error => [0.8413, 0.2796, 0.2724, 1.0],
         }
     }

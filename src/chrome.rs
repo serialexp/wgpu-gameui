@@ -145,6 +145,21 @@ pub struct MenuSheetChrome {
     pub lines: [StructuralLine; 2],
     /// Dark/light separator pair.
     pub separator: [EdgeStyle; 2],
+    /// Inset edges drawn over the accent fill of the highlighted row (Forge
+    /// `--row-hover-inset`: a light line along the top, a dark one along the
+    /// bottom).
+    pub row_highlight_insets: [BoxShadow; 2],
+}
+
+impl MenuSheetChrome {
+    /// Paint a highlighted (hovered or keyboard-selected) row: a `fill` plate
+    /// with the sheet's corner radii, then [`Self::row_highlight_insets`].
+    /// Menus pass the theme accent as `fill`.
+    pub fn paint_highlighted_row(&self, list: &mut DrawList, rect: Rect, fill: [f32; 4]) {
+        let radii = self.surface.corner_radii;
+        list.paint_quad_background(rect, Background::Solid(fill), radii);
+        list.box_shadows_inset(rect, radii, &self.row_highlight_insets);
+    }
 }
 
 /// Finite toolbar rail, tool-face, separator, and popup chrome.
@@ -406,7 +421,7 @@ fn inset_edge(rect: Rect, edge: Edge, amount: f32) -> Rect {
 
 impl Default for ChromeTheme {
     fn default() -> Self {
-        use crate::color::rgb8;
+        use crate::color::{oklch, rgb8};
 
         let gradient = |top, bottom| Background::LinearGradient {
             start: rgb8(top),
@@ -467,10 +482,39 @@ impl Default for ChromeTheme {
             Background::Solid(crate::color::rgba8([0x16, 0x19, 0x1d], 0.95)),
             [0.0, 0.0, 0.0, 0.7],
         );
-        let menu_sheet = bordered(
-            gradient([0x1d, 0x22, 0x27], [0x14, 0x18, 0x1c]),
-            rgb8([0x03, 0x04, 0x05]),
-        );
+        let menu_sheet = MenuSheetChrome {
+            surface: bordered(
+                gradient([0x1d, 0x22, 0x27], [0x14, 0x18, 0x1c]),
+                rgb8([0x03, 0x04, 0x05]),
+            ),
+            shadows: [
+                shadow(16.0, 40.0, [0.0, 0.0, 0.0, 0.7], false),
+                shadow(2.0, 6.0, [0.0, 0.0, 0.0, 0.5], false),
+            ],
+            lines: [
+                line(Edge::Top, 1.0, rgb8([0x38, 0x3d, 0x41])),
+                line(Edge::Bottom, 1.0, rgb8([0x0a, 0x0c, 0x0e])),
+            ],
+            separator: [
+                EdgeStyle {
+                    thickness: 1.0,
+                    color: rgb8([0x0a, 0x0c, 0x0d]),
+                },
+                EdgeStyle {
+                    thickness: 1.0,
+                    color: rgb8([0x26, 0x2b, 0x2f]),
+                },
+            ],
+            row_highlight_insets: [
+                shadow(1.0, 0.0, [1.0, 1.0, 1.0, 0.3], true),
+                shadow(-1.0, 0.0, [0.0, 0.0, 0.0, 0.25], true),
+            ],
+        };
+        // Forge accent-family tokens (`colors.css`), spelled as the design
+        // writes them.
+        let accent_grip = oklch(0.82, 0.1, 200.0, 1.0);
+        let latch_shade = oklch(0.32, 0.07, 200.0, 1.0);
+        let latch_hi = oklch(0.55, 0.09, 200.0, 1.0);
         Self {
             menu_bar: MenuBarChrome {
                 surface: quad(gradient([0x25, 0x2b, 0x31], [0x17, 0x1b, 0x1f])),
@@ -480,27 +524,7 @@ impl Default for ChromeTheme {
                     line(Edge::Bottom, 0.0, rgb8([0x03, 0x05, 0x06])),
                 ],
             },
-            menu_sheet: MenuSheetChrome {
-                surface: menu_sheet,
-                shadows: [
-                    shadow(16.0, 40.0, [0.0, 0.0, 0.0, 0.7], false),
-                    shadow(2.0, 6.0, [0.0, 0.0, 0.0, 0.5], false),
-                ],
-                lines: [
-                    line(Edge::Top, 1.0, rgb8([0x38, 0x3d, 0x41])),
-                    line(Edge::Bottom, 1.0, rgb8([0x0a, 0x0c, 0x0e])),
-                ],
-                separator: [
-                    EdgeStyle {
-                        thickness: 1.0,
-                        color: rgb8([0x0a, 0x0c, 0x0d]),
-                    },
-                    EdgeStyle {
-                        thickness: 1.0,
-                        color: rgb8([0x26, 0x2b, 0x2f]),
-                    },
-                ],
-            },
+            menu_sheet,
             toolbar: ToolbarChrome {
                 rail_colors: [rgb8([0x23, 0x28, 0x2e]), rgb8([0x16, 0x1a, 0x1e])],
                 dock_edge: EdgeStyle {
@@ -527,7 +551,11 @@ impl Default for ChromeTheme {
                     rgb8([0x0b, 0x0d, 0x0f]),
                 ),
                 tool_latched: bordered(
-                    gradient([0x4a, 0x8a, 0x9c], [0x5f, 0xa3, 0xb6]),
+                    Background::LinearGradient {
+                        start: oklch(0.62, 0.1, 200.0, 1.0),
+                        end: oklch(0.7, 0.11, 200.0, 1.0),
+                        axis: GradientAxis::Vertical,
+                    },
                     rgb8([0x0b, 0x0d, 0x0f]),
                 ),
                 tool_insets: [
@@ -544,40 +572,16 @@ impl Default for ChromeTheme {
                         shadow(2.0, 3.0, [0.0, 0.0, 0.0, 0.4], true),
                     ],
                     [
-                        shadow(2.0, 4.0, rgb8([0x1c, 0x46, 0x53]), true),
-                        shadow(1.0, 0.0, rgb8([0x3f, 0x7a, 0x8b]), true),
+                        shadow(2.0, 4.0, latch_shade, true),
+                        shadow(1.0, 0.0, latch_hi, true),
                     ],
                 ],
-                grip_colors: [
-                    [1.0, 1.0, 1.0, 0.28],
-                    [1.0, 1.0, 1.0, 0.55],
-                    rgb8([0x65, 0xbd, 0xca]),
-                ],
+                grip_colors: [[1.0, 1.0, 1.0, 0.28], [1.0, 1.0, 1.0, 0.55], accent_grip],
                 grip_counter_edge: EdgeStyle {
                     thickness: 1.0,
                     color: [0.0, 0.0, 0.0, 0.5],
                 },
-                popup: MenuSheetChrome {
-                    surface: menu_sheet,
-                    shadows: [
-                        shadow(16.0, 40.0, [0.0, 0.0, 0.0, 0.7], false),
-                        shadow(2.0, 6.0, [0.0, 0.0, 0.0, 0.5], false),
-                    ],
-                    lines: [
-                        line(Edge::Top, 1.0, rgb8([0x38, 0x3d, 0x41])),
-                        line(Edge::Bottom, 1.0, rgb8([0x0a, 0x0c, 0x0e])),
-                    ],
-                    separator: [
-                        EdgeStyle {
-                            thickness: 1.0,
-                            color: rgb8([0x0a, 0x0c, 0x0d]),
-                        },
-                        EdgeStyle {
-                            thickness: 1.0,
-                            color: rgb8([0x26, 0x2b, 0x2f]),
-                        },
-                    ],
-                },
+                popup: menu_sheet,
                 separator: [
                     EdgeStyle {
                         thickness: 1.0,
@@ -621,7 +625,7 @@ impl Default for ChromeTheme {
                 },
                 grip_idle: rgb8([0x50, 0x52, 0x53]),
                 grip_hover: rgb8([0x94, 0x96, 0x97]),
-                grip_dragging: rgb8([0x8f, 0xd6, 0xe4]),
+                grip_dragging: accent_grip,
                 grip_counter_edge: EdgeStyle {
                     thickness: 1.0,
                     color: rgb8([0x08, 0x09, 0x0a]),
@@ -631,7 +635,7 @@ impl Default for ChromeTheme {
                         offset: [0.0, 0.0],
                         blur: 7.0,
                         spread: 0.0,
-                        color: crate::color::rgba8([0x79, 0xc6, 0xd8], 0.65),
+                        color: oklch(0.74, 0.11, 200.0, 0.65),
                         inset: false,
                     }
                 },
@@ -652,7 +656,7 @@ impl Default for ChromeTheme {
                         color: rgb8([0x26, 0x2a, 0x2f]),
                     },
                 ],
-                latched_inset: shadow(2.0, 3.0, rgb8([0x1c, 0x46, 0x53]), true),
+                latched_inset: shadow(2.0, 4.0, latch_shade, true),
             },
             dropdown: floating(panel, 10.0, 26.0, 0.6),
             popover: floating(

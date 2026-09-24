@@ -965,7 +965,10 @@ fn open_sheet_uses_compact_separators_handoff_text_and_two_outer_shadows() {
     assert_eq!(rect.height, content_h + 6.0, "3px sheet inset per side");
 
     let list = rig.column_list();
-    assert_eq!(list.shadow_instance_count(), 2);
+    // The sheet's two outer shadows come first; a highlighted row adds its two
+    // inset edges after them.
+    let row_insets = rig.state.highlighted_item().map_or(0, |_| 2);
+    assert_eq!(list.shadow_instance_count(), 2 + row_insets);
     assert_eq!(
         list.shadow_instance(0).unwrap().color,
         rig.theme.chrome.menu_sheet.shadows[1].color,
@@ -975,7 +978,7 @@ fn open_sheet_uses_compact_separators_handoff_text_and_two_outer_shadows() {
         list.shadow_instance(1).unwrap().color,
         rig.theme.chrome.menu_sheet.shadows[0].color
     );
-    assert!(list.shadow_instances().all(|shadow| {
+    assert!(list.shadow_instances().take(2).all(|shadow| {
         shadow.element_rect == [rect.x, rect.y, rect.width, rect.height]
             && shadow.translation[2] == 0.0
     }));
@@ -1704,4 +1707,66 @@ fn the_bar_measures_as_one_row_tall() {
         measured.preferred[0] > 0.0,
         "the strip is as wide as its labels"
     );
+}
+
+#[test]
+fn open_title_is_a_plain_accent_plate() {
+    let theme = Theme::default();
+    let input = InputState::default();
+    let mut state = MenuBarState::new();
+    state.open_menu_at(MENUS, 0);
+    let mut list = DrawList::new();
+    let mut focus = FocusState::new();
+    let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, W, H);
+
+    bar().draw(strip(), &mut state, &mut ctx);
+
+    let strip = strip();
+    let plates: Vec<_> = ctx
+        .draw_list
+        .chrome_instances()
+        .filter(|quad| quad.bg == theme.accent)
+        .collect();
+    assert_eq!(plates.len(), 1, "the open title uses theme.accent");
+    let plate = plates[0].rect;
+    assert_eq!(
+        (plate[1], plate[3]),
+        (strip.y, strip.height),
+        "fills the strip"
+    );
+    // Forge MenuBar has no inset edges on the open title; only sheet rows do.
+    assert!(
+        !ctx.draw_list.chrome_instances().any(|quad| {
+            quad.rect[3] <= 1.0
+                && quad.rect[0] >= plate[0]
+                && quad.rect[0] + quad.rect[2] <= plate[0] + plate[2]
+        }),
+        "no hairline inside the open title's plate"
+    );
+}
+
+#[test]
+fn highlighted_row_is_an_accent_plate_with_row_hover_inset_edges() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 0);
+    rig.settle();
+    assert!(
+        rig.state.highlighted_item().is_some(),
+        "a keyboard-opened menu highlights its first row"
+    );
+
+    let accent = rig.theme.accent;
+    let insets = rig.theme.chrome.menu_sheet.row_highlight_insets;
+    let list = rig.column_list();
+    assert!(
+        list.chrome_instances().any(|quad| quad.bg == accent),
+        "the highlighted row plate is theme.accent"
+    );
+    let edges: Vec<[f32; 4]> = list.shadow_instances().skip(2).map(|s| s.color).collect();
+    assert_eq!(edges.len(), 2, "two --row-hover-inset edges");
+    for inset in insets {
+        assert!(edges.contains(&inset.color), "{inset:?} painted");
+    }
+    assert_eq!(insets[0].color, [1.0, 1.0, 1.0, 0.3]);
+    assert_eq!(insets[1].color, [0.0, 0.0, 0.0, 0.25]);
 }

@@ -443,7 +443,9 @@ pub fn draw_well(list: &mut DrawList, s: &StyleResolver, rect: Rect, focused: bo
         } else {
             s.color(StyleKey::Accent)
         };
-        let ring_out = [ring[0], ring[1], ring[2], 0.16];
+        // Forge `--danger-ring` is .18 alpha, `--accent-ring` .16.
+        let alpha = if invalid { 0.18 } else { 0.16 };
+        let ring_out = [ring[0], ring[1], ring[2], alpha];
         list.rounded_rect_outline(rect, radius + 0.5, 1.0, ring_out);
     }
 }

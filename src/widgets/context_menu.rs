@@ -653,13 +653,21 @@ fn paint_items(
         }
         let selected = highlighted == Some(index) && item.is_enabled();
         if selected {
-            list.quad(row_x, y, row_w, row_h, rgb8([0x79, 0xc6, 0xd8]));
+            chrome.paint_highlighted_row(
+                list,
+                Rect::new(row_x, y, row_w, row_h),
+                styles.color(StyleKey::Accent),
+            );
         }
         if item.is_checked() {
             list.circle(
                 (row_x + ROW_PADDING + CHECK_WIDTH * 0.5, y + row_h * 0.5),
                 2.0,
-                styles.color(StyleKey::Accent),
+                if selected {
+                    rgb8([4, 20, 24])
+                } else {
+                    styles.color(StyleKey::AccentTick)
+                },
             );
         }
         let color = if !item.is_enabled() {
@@ -676,37 +684,43 @@ fn paint_items(
             styles.theme().font.as_ref(),
             item.label(),
         );
-        list.text(
-            TextBlock::new(
-                item.label(),
-                row_x + ROW_PADDING + CHECK_WIDTH + 7.0,
-                text_y,
-            )
-            .with_size(FONT_SIZE)
-            .with_color(color.0, color.1, color.2)
-            .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
-            .with_font_opt(styles.theme().font.clone()),
-        );
+        let label = TextBlock::new(
+            item.label(),
+            row_x + ROW_PADDING + CHECK_WIDTH + 7.0,
+            text_y,
+        )
+        .with_size(FONT_SIZE)
+        .with_color(color.0, color.1, color.2)
+        .with_font_opt(styles.theme().font.clone());
+        // The highlighted row drops the carve (Forge MenuSheet).
+        list.text(if selected {
+            label
+        } else {
+            label.with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
+        });
         hint.clear();
         item.write_hint(platform, &mut hint);
         if !hint.is_empty() {
             let width = list.measure_text(&hint, HINT_FONT_SIZE, None).0;
             let hint_color = if selected {
-                (4, 20, 24)
+                // Forge `--ink-on-accent-2`.
+                (0x29, 0x4d, 0x55)
             } else {
                 (0x78, 0x81, 0x8a)
             };
-            list.text(
-                TextBlock::new(
-                    hint.clone(),
-                    row_x + row_w - ROW_PADDING - CHEVRON_WIDTH - width,
-                    y + (row_h - HINT_FONT_SIZE) * 0.5,
-                )
-                .with_size(HINT_FONT_SIZE)
-                .with_color(hint_color.0, hint_color.1, hint_color.2)
-                .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
-                .with_font_opt(styles.theme().font.clone()),
-            );
+            let hint_block = TextBlock::new(
+                hint.clone(),
+                row_x + row_w - ROW_PADDING - CHEVRON_WIDTH - width,
+                y + (row_h - HINT_FONT_SIZE) * 0.5,
+            )
+            .with_size(HINT_FONT_SIZE)
+            .with_color(hint_color.0, hint_color.1, hint_color.2)
+            .with_font_opt(styles.theme().font.clone());
+            list.text(if selected {
+                hint_block
+            } else {
+                hint_block.with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
+            });
         }
         if item.is_submenu() {
             let cx = row_x + row_w - ROW_PADDING - 3.0;
@@ -718,7 +732,8 @@ fn paint_items(
                 if selected {
                     rgb8([4, 20, 24])
                 } else {
-                    styles.color(StyleKey::Text)
+                    // Forge `--ink-shortcut`.
+                    rgb8([0x78, 0x81, 0x8a])
                 },
             );
         }
@@ -1128,6 +1143,41 @@ mod tests {
             chrome.shadows[0].color
         );
         assert_eq!(list.chrome_instance(0).unwrap().bg, override_color);
+    }
+
+    #[test]
+    fn highlighted_row_matches_the_forge_menu_sheet() {
+        const ROWS: &[MenuItem<'static>] = &[
+            MenuItem::new("Snap").checked(true).shortcut("S"),
+            MenuItem::new("Grid").checked(true),
+        ];
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let menu = ContextMenu::new(ROWS);
+        let mut list = DrawList::new();
+        let rect = Rect::new(20.0, 30.0, 218.0, 80.0);
+
+        paint_items(&mut list, rect, menu.items, menu.platform, &styles, Some(0));
+
+        assert!(
+            list.chrome_instances().any(|quad| quad.bg == theme.accent),
+            "accent row plate"
+        );
+        let edges: Vec<[f32; 4]> = list.shadow_instances().skip(2).map(|s| s.color).collect();
+        for inset in theme.chrome.menu_sheet.row_highlight_insets {
+            assert!(edges.contains(&inset.color), "{inset:?} painted");
+        }
+        // Tick: ink-on-accent on the highlighted row, accent-tick elsewhere.
+        let dots: Vec<[f32; 4]> = list.circle_instances.iter().map(|c| c.color).collect();
+        assert!(dots.contains(&rgb8([4, 20, 24])), "{dots:?}");
+        assert!(dots.contains(&theme.accent_tick), "{dots:?}");
+
+        let snap = list.texts.iter().find(|t| t.content == "Snap").unwrap();
+        assert!(snap.shadow.is_none(), "no carve on the highlighted row");
+        let grid = list.texts.iter().find(|t| t.content == "Grid").unwrap();
+        assert!(grid.shadow.is_some(), "idle rows keep the carve");
+        let hint = list.texts.iter().find(|t| t.content == "S").unwrap();
+        assert_eq!(hint.color.as_rgba(), [0x29, 0x4d, 0x55, 0xff]);
     }
 
     #[test]
