@@ -293,7 +293,9 @@ mod tests {
 
     #[test]
     fn animated_active_bg_eases_on_switch() {
-        let theme = Theme::default();
+        // Opt into fades (the Forge default is instant).
+        let mut theme = Theme::default();
+        theme.animation_duration = 0.12;
         let s = StyleResolver::new(&theme);
         let labels = ["A", "B", "C"];
         let tab_width = (W - 4.0 - 2.0 * 3.0) / 3.0;

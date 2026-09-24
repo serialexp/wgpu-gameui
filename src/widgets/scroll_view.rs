@@ -32,10 +32,13 @@
 //! a glide is in flight [`ScrollState::pending_deadline`] asks the host for the
 //! next frame; see `frame_result` for how that reaches an event-driven loop.
 //!
-//! Two deliberate exceptions: dragging the scrollbar thumb is 1:1 (direct
+//! One deliberate exception: dragging the scrollbar thumb is 1:1 (direct
 //! manipulation should not lag the pointer — the drag writes offset and target
-//! together), and a theme whose `animation_duration` is `0.0` disables the
-//! easing for the whole UI, as it does for every other animated verb.
+//! together).
+//!
+//! The glide is governed only by [`ScrollState::smoothing`]; the theme's
+//! `animation_duration` (hover/press fades, `0.0` by default) does not touch
+//! it. Use [`ScrollSmoothing::INSTANT`] to opt a region out.
 //!
 //! State is **caller-owned** so the widget remains a transient struct that
 //! can be re-built every frame, matching the rest of this crate's
@@ -151,9 +154,8 @@ pub struct ScrollState {
     pub target: [f32; 2],
     /// Natural content extent `[w, h]` reported by the most recent draw.
     pub content_size: [f32; 2],
-    /// Easing preference for this scroll region. [`ScrollView`] honours it
-    /// unless the resolved theme sets `animation_duration` to `0.0`, which
-    /// disables the easing for the whole UI.
+    /// Easing preference for this scroll region; the only thing that decides
+    /// whether [`ScrollView`] glides ([`ScrollSmoothing::INSTANT`] opts out).
     pub smoothing: ScrollSmoothing,
     /// Frame delta of the most recent [`advance`](Self::advance), used to derive
     /// [`pending_deadline`](Self::pending_deadline)'s "next frame" cadence.
@@ -472,7 +474,7 @@ impl ScrollView {
     ) where
         F: FnMut(&mut DrawList, Rect),
     {
-        let begun = self.begin(state, list, style, input);
+        let begun = self.begin(state, list, input);
         content(list, begun.inner);
         self.end(state, list, style, input, begun);
     }
@@ -489,7 +491,6 @@ impl ScrollView {
         &self,
         state: &mut ScrollState,
         list: &mut DrawList,
-        style: &StyleResolver,
         input: &mut InputState,
     ) -> ScrollBegin {
         // Force-disable axes where content fits.
@@ -569,16 +570,8 @@ impl ScrollView {
         }
 
         // Ease the drawn offset the rest of the way toward its target with this
-        // frame's clock, before the transform below reads it. The effective
-        // smoothing is the region's preference unless the resolved theme turns
-        // animation off entirely (`animation_duration == 0`), which snaps like
-        // every other animated verb does.
-        let smoothing = if style.scalar(StyleKey::AnimationDuration) <= 0.0 {
-            ScrollSmoothing::INSTANT
-        } else {
-            state.smoothing
-        };
-        state.advance(smoothing, input.frame_dt);
+        // frame's clock, before the transform below reads it.
+        state.advance(state.smoothing, input.frame_dt);
 
         // Opened *before* the clip and transform below, deliberately: the scope
         // records the clip in force at push time and applies the active
@@ -1521,20 +1514,24 @@ mod tests {
     }
 
     #[test]
-    fn a_theme_that_disables_animation_disables_scroll_easing() {
+    fn scroll_easing_ignores_the_theme_animation_duration() {
+        // Forge: hover/press changes are instant, smooth scrolling stays.
         let mut state = scroll_state();
         let mut theme = theme();
         theme.animation_duration = 0.0;
         let mut input = input_at(50.0, 50.0);
         input.scroll_delta = -3.0;
+        input.frame_dt = 1.0 / 60.0;
 
         draw_frame(&mut state, &mut input, &theme);
 
-        assert_eq!(
-            state.offset[1], 60.0,
-            "animation_duration == 0 means no motion anywhere"
+        assert_eq!(state.target[1], 60.0);
+        assert!(
+            state.offset[1] > 0.0 && state.offset[1] < 60.0,
+            "still gliding: {}",
+            state.offset[1]
         );
-        assert_eq!(state.pending_deadline(), None);
+        assert!(state.pending_deadline().is_some());
     }
 
     #[test]

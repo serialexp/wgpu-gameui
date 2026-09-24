@@ -28,6 +28,10 @@ Token files live in the design project under `tokens/` (`colors.css`,
   like CSS; `TextBlock` colours are plain hex.
 - **Two accents and palette drifts** — `fix: use DesignSync accent and palette
   values`: the rows marked *(fixed)* below.
+- **Motion** — `feat!: make state changes instant; keep smooth scrolling`:
+  `Theme::animation_duration` and the toast fade default to `0` (both still
+  opt-in); ScrollView smoothing no longer reads `animation_duration`. The
+  three loop timings and the indeterminate progress bar are still open.
 
 ## Cross-cutting findings
 

@@ -211,8 +211,8 @@ pub struct UiState {
     tree_focus_registered: bool,
     /// Hover/press color-transition clock for animated verbs. Ticked once per
     /// frame by [`begin_frame`](Self::begin_frame) with the caller-supplied `dt`;
-    /// a `dt` of `0.0` (or `theme.animation_duration == 0`) keeps every verb's
-    /// drawn color instant/byte-identical to the un-animated path.
+    /// a `dt` of `0.0` or `theme.animation_duration == 0` (the default) keeps
+    /// every verb's drawn color instant/byte-identical to the un-animated path.
     pub anim: AnimationState,
     /// Toast notification stack — push transient [`Toast`](crate::Toast)s,
     /// [`tick`](ToastStack::tick) once per frame with `dt`, and
@@ -2410,7 +2410,7 @@ impl<'a> UiContext<'a> {
     /// ui.scroll_end();
     /// ```
     pub fn scroll_begin(&mut self, w: Option<f32>, h: f32) -> Rect {
-        let (input, theme) = match self.interactive_refs() {
+        let (input, _) = match self.interactive_refs() {
             Some(v) => v,
             None => {
                 let p = self.cursor();
@@ -2427,7 +2427,6 @@ impl<'a> UiContext<'a> {
         let inv = self.backend.list_mut().current_transform().inverse();
         let (viewport, mut local_input) = self.localize(inv, world, input);
         let sv = ScrollView::new(viewport);
-        let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
         let begun = {
             let list = self.backend.list_mut();
             let state = match self.state.as_mut() {
@@ -2437,7 +2436,7 @@ impl<'a> UiContext<'a> {
                     return Rect::new(viewport.x, viewport.y, 0.0, 0.0);
                 }
             };
-            sv.begin(&mut state.scroll, list, &style, &mut local_input)
+            sv.begin(&mut state.scroll, list, &mut local_input)
         };
         self.pending_scroll_viewport = Some(viewport);
         self.pending_scroll_inv = Some(inv);

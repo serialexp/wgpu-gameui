@@ -421,9 +421,20 @@ mod tests {
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
         state.toasts.push(crate::Toast::info("hi").with_ttl(2.0));
         let frame = state.end_frame();
-        // DEFAULT fade is 0.4s, ttl 2.0: the next visible change is the fade
-        // start at 1.6s from now.
+        // No fade by default, ttl 2.0: the next visible change is expiry.
         assert!(frame.needs_repaint);
+        let deadline = frame.next_deadline.expect("visible toast has a deadline");
+        assert!(
+            (deadline - 2.0).abs() < 1e-4,
+            "deadline should be the expiry (ttl), got {deadline}"
+        );
+
+        // With a 0.4s fade opted in, the next change is the fade start at 1.6s.
+        let mut state = UiState::new();
+        state.toasts = crate::ToastStack::new().with_fade(0.4);
+        state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
+        state.toasts.push(crate::Toast::info("hi").with_ttl(2.0));
+        let frame = state.end_frame();
         let deadline = frame.next_deadline.expect("visible toast has a deadline");
         assert!(
             (deadline - 1.6).abs() < 1e-4,
@@ -509,16 +520,16 @@ mod tests {
         state.end_frame();
         // Frame 2: a backgrounded host resumes with a 5s delta. Clamped to
         // MAX_DT (0.1), the toast ages only 0.1s of its 2s ttl (it was pushed
-        // after frame 1's tick, so frame 2's tick is its first), leaving the
-        // fade start 1.5s out instead of the toast having expired instantly.
+        // after frame 1's tick, so frame 2's tick is its first), leaving its
+        // expiry 1.9s out instead of the toast having expired instantly.
         state.begin_frame(&mut input, &theme, 5.0, &KeyboardNav);
         let frame = state.end_frame();
         let deadline = frame
             .next_deadline
             .expect("toast survives a clamped resume");
         assert!(
-            (deadline - 1.5).abs() < 1e-4,
-            "expected the unexpired fade start after the clamp, got {deadline}"
+            (deadline - 1.9).abs() < 1e-4,
+            "expected the unexpired expiry after the clamp, got {deadline}"
         );
     }
 }

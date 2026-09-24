@@ -604,7 +604,9 @@ mod tests {
     #[test]
     fn animated_fill_eases_between_checked_states() {
         use crate::AnimationState;
-        let th = theme();
+        // Opt into fades (the Forge default is instant).
+        let mut th = theme();
+        th.animation_duration = 0.12;
         let idle = input_at(-1.0, -1.0);
         let mut state = AnimationState::new();
 

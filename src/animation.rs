@@ -1,7 +1,9 @@
 //! Hover/press transition animations — an easing clock for smoothing the
 //! state-driven color changes widgets make (idle→hover→press, check/uncheck,
-//! tab activate). Today those colors switch instantly; an [`AnimationState`]
-//! eases them over a short, themeable duration.
+//! tab activate). By default those colors switch instantly
+//! (`Theme::animation_duration` is `0.0`, as the Forge design wants); a theme
+//! that sets a positive duration opts in, and an [`AnimationState`] eases them
+//! over it.
 //!
 //! ## Model: animate *toward the resolved color*
 //!

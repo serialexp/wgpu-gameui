@@ -126,10 +126,15 @@ pub struct Theme {
     /// Height of a movable window's title strip, in pixels.
     pub window_title_height: f32,
 
-    /// Hover/press transition duration in seconds. `0.0` disables animation
-    /// (colors switch instantly). Read by widgets via
+    /// Hover/press transition duration in seconds. The default `0.0` switches
+    /// colors instantly, as the Forge design does; a positive value opts into
+    /// eased transitions. Read by widgets via
     /// [`StyleKey::AnimationDuration`](crate::StyleKey::AnimationDuration) so a
-    /// [`StyleOverlay`](crate::StyleOverlay) can retune or disable it per subtree.
+    /// [`StyleOverlay`](crate::StyleOverlay) can retune it per subtree.
+    ///
+    /// Scrolling is separate: [`ScrollView`](crate::ScrollView) glides by its
+    /// [`ScrollState::smoothing`](crate::ScrollState::smoothing) whatever this
+    /// is set to.
     pub animation_duration: f32,
 
     // --- 4a material tokens -----------------------------------------------
@@ -310,7 +315,9 @@ impl Default for Theme {
             dock_tab_height: 24.0,
             dock_splitter_width: 6.0,
             window_title_height: 24.0,
-            animation_duration: 0.12,
+            // Forge: state changes are instant (smooth scrolling is the one
+            // motion, and it does not read this).
+            animation_duration: 0.0,
 
             // 4a material tokens (see the field docs above).
             plinth: [0.0, 0.0, 0.0, 0.6],
@@ -476,14 +483,14 @@ mod tests {
     #[test]
     fn animation_duration_default_and_keyed_access() {
         let theme = Theme::default();
-        assert_eq!(theme.animation_duration, 0.12);
+        assert_eq!(theme.animation_duration, 0.0, "Forge: no fades");
         assert_eq!(
             theme
                 .get(StyleKey::AnimationDuration)
                 .unwrap()
                 .as_scalar()
                 .unwrap(),
-            0.12
+            0.0
         );
     }
 

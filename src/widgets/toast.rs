@@ -146,7 +146,8 @@ impl ToastStack {
             width: 300.0,
             gap: 8.0,
             margin: 16.0,
-            fade: 0.4,
+            // Forge: no fades; `with_fade` opts in.
+            fade: 0.0,
             max: 4,
         }
     }
@@ -167,7 +168,8 @@ impl ToastStack {
         self.max = max;
         self
     }
-    /// Fade-out duration in seconds before expiry (default 0.4; 0 disables).
+    /// Fade-out duration in seconds before expiry (default 0: a toast
+    /// disappears at once when its ttl runs out).
     pub fn with_fade(mut self, fade: f32) -> Self {
         self.fade = fade.max(0.0);
         self
@@ -459,10 +461,11 @@ mod tests {
         let mut overlay = crate::StyleOverlay::new();
         overlay.set_toast(chrome);
         let styles = StyleResolver::with_overlay(&theme, &overlay);
-        let mut stack = ToastStack::new();
+        let mut stack = ToastStack::new().with_fade(0.4);
         stack.push(Toast::info("toast").with_ttl(1.0));
         stack.tick(0.8);
         let alpha = fade_alpha(0.8, 1.0, stack.fade);
+        assert!(alpha > 0.0 && alpha < 1.0, "mid-fade: {alpha}");
         let mut list = DrawList::new();
         stack.draw(800.0, 600.0, &mut list, &styles);
         let surface = list.chrome_instances().find(|i| i.bg[0] == 0.2).unwrap();

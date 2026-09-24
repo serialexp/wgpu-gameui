@@ -775,7 +775,8 @@ harden those foundations rather than create parallel replacements.
       blend). `src/animation.rs`: `AnimationState` (caller-owned, dt-driven,
       keyed by `(u64 id, AnimSlot)`), `Easing{Linear,EaseIn,EaseOut,EaseInOut}`,
       and public `ease`/`lerp`/`lerp_color` (endpoint-snapping). Duration is a
-      themeable scalar — `Theme::animation_duration` (default `0.12`) /
+      themeable scalar — `Theme::animation_duration` (default `0.0` since the
+      Forge "no fades" decision; was `0.12`) /
       `StyleKey::AnimationDuration`, overridable per-subtree via `StyleOverlay`;
       `0.0` snaps. Seam: `DrawContext::with_animations(&mut AnimationState)` +
       `ctx.animate_color(id, slot, target)` / `animate_scalar(...)` (resolve
