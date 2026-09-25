@@ -27,7 +27,12 @@ fn assert_horizontal_mirror(left: &[u8], right: &[u8], size: (u32, u32), toleran
 
 fn assert_all_alpha_zero(pixels: &[u8]) {
     assert_eq!(
-        pixels.chunks_exact(4).filter(|pixel| pixel[3] != 0).count(),
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[3] != 0)
+            .count(),
         0,
         "an identical crisp outset source and element must cancel exactly"
     );
@@ -139,7 +144,9 @@ fn analytic_shadow_zero_blur_inset_outset_and_affine() {
 
     let pixels = gpu.capture(&list, (240, 130));
     let affected = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] != 0 || p[1] != 0 || p[2] != 0)
         .count();
     assert!(
@@ -420,7 +427,9 @@ fn asymmetric_corner_quadrature_remains_stable_for_broad_blur() {
 
     assert_horizontal_mirror(&direct_pixels, &reflected_pixels, size, 2);
     let nonzero = direct_pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[3] > 0)
         .count();
     assert!(

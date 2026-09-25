@@ -131,6 +131,7 @@ impl ImageButton {
                 style,
                 rect,
                 style.scalar(StyleKey::BorderRadius),
+                style.scalar(StyleKey::Travel),
                 &ButtonVisual {
                     enabled: self.enabled,
                     hovered,
@@ -292,14 +293,16 @@ mod tests {
         ImageButton::sprite(ID)
             .bare()
             .draw(rect(), &mut bare, &StyleResolver::new(&theme), &input);
-        // Chrome records the material (plinth + face + highlight); the
-        // bare variant draws no chrome instance.
+        // Chrome records the material (plinth + face, then the highlight as
+        // an inset shadow); the bare variant draws neither.
         assert_eq!(
             chrome.chrome_instance_count(),
-            3,
-            "chrome draws plinth + face + highlight"
+            2,
+            "chrome draws plinth + face"
         );
+        assert_eq!(chrome.shadow_instance_count(), 1, "and the highlight");
         assert!(bare.chrome_instance_count() == 0, "bare draws no chrome");
+        assert!(bare.shadow_instance_count() == 0, "bare draws no highlight");
     }
 
     #[test]

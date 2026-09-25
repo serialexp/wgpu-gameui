@@ -141,6 +141,12 @@ impl<'a> MenuList<'a> {
         self
     }
 
+    /// Whether row `i` is enabled: rows without a flag count as enabled.
+    fn row_enabled(&self, i: usize) -> bool {
+        self.enabled
+            .is_none_or(|e| e.get(i).copied().unwrap_or(true))
+    }
+
     /// Make every row focusable under stable ids `base + i` (see
     /// [`Button::focusable`]): the rows join the Tab ring, draw the focus ring
     /// while focused, and activation also flows through the button's own
@@ -244,10 +250,7 @@ impl<'a> MenuList<'a> {
             for (i, _) in self.items.iter().enumerate() {
                 let row = Rect::new(x, hy, out.intrinsic_width, row_height);
                 hy += row_height + gap;
-                let enabled = self
-                    .enabled
-                    .map_or(true, |e| e.get(i).copied().unwrap_or(true));
-                if enabled && !mouse.2 && row.contains(mouse.0, mouse.1) {
+                if self.row_enabled(i) && !mouse.2 && row.contains(mouse.0, mouse.1) {
                     hovered_index = Some(i);
                     break;
                 }
@@ -269,9 +272,7 @@ impl<'a> MenuList<'a> {
             let row = Rect::new(x, y, out.intrinsic_width, row_height);
             y += row_height + gap;
 
-            let enabled = self
-                .enabled
-                .map_or(true, |e| e.get(i).copied().unwrap_or(true));
+            let enabled = self.row_enabled(i);
 
             // Hover chrome comes from selection (hover promotes selection),
             // so nothing per-row is needed beyond the tone above.
@@ -295,19 +296,13 @@ impl<'a> MenuList<'a> {
         // the same frame the selection moved (the press that confirms must
         // not also be the press that moves).
         if confirm && !had_nav && activated_here.is_none() && !ctx.input.mouse_consumed {
-            if self
-                .enabled
-                .map_or(true, |e| e.get(*selected).copied().unwrap_or(true))
-            {
+            if self.row_enabled(*selected) {
                 out.activated = Some(*selected);
             }
-        } else if let Some(i) = activated_here {
-            if self
-                .enabled
-                .map_or(true, |e| e.get(i).copied().unwrap_or(true))
-            {
-                out.activated = Some(i);
-            }
+        } else if let Some(i) = activated_here
+            && self.row_enabled(i)
+        {
+            out.activated = Some(i);
         }
 
         out

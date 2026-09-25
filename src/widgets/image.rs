@@ -441,7 +441,7 @@ mod tests {
             .natural_size(64.0, 64.0)
             .fit(ImageFit::Tile)
             .draw(Rect::new(0.0, 0.0, 100.0, 100.0), &mut list);
-        assert!(list.icons[0].wrap == false && list.icons[0].src.is_none());
+        assert!(!list.icons[0].wrap && list.icons[0].src.is_none());
 
         // Sprite source without a natural size has no tile extent either.
         let mut list = DrawList::new();

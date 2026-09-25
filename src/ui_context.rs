@@ -31,11 +31,11 @@ use crate::widgets::{
     VectorFieldOutput, VectorScrub,
 };
 use crate::widgets::{
-    badge, chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, empty_state, keycap,
-    skeleton, spinner,
+    badge, chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton,
+    spinner,
 };
 #[cfg(feature = "phosphor-icons")]
-use crate::{Icon, PhosphorIcon};
+use crate::{IconKey, PhosphorIcon, Tone};
 use cosmic_text::{Style, Weight};
 use std::collections::HashMap;
 
@@ -214,10 +214,12 @@ pub struct UiState {
     /// a `dt` of `0.0` or `theme.animation_duration == 0` (the default) keeps
     /// every verb's drawn color instant/byte-identical to the un-animated path.
     pub anim: AnimationState,
-    /// Toast notification stack — push transient [`Toast`](crate::Toast)s,
-    /// [`tick`](ToastStack::tick) once per frame with `dt`, and
-    /// [`draw`](ToastStack::draw) at the end of the frame above the rest of the
-    /// UI. Caller-owned; no `UiContext` verb wraps it.
+    /// Toast notification stack: [`push`](ToastStack::push)
+    /// [`Toast`](crate::Toast)s; [`begin_frame`](Self::begin_frame) ticks it.
+    /// Push its layer with [`push_layer`](ToastStack::push_layer) before
+    /// resolving the base input and [`draw`](ToastStack::draw) it into that
+    /// layer at the end of the frame. Caller-owned; no `UiContext` verb wraps
+    /// it.
     pub toasts: ToastStack,
     /// Tooltip layer — register hover regions with
     /// [`TooltipLayer::hover_zone`], call [`tick`](TooltipLayer::tick) once per
@@ -364,7 +366,7 @@ impl UiState {
     ///
     /// [`end_frame`](Self::end_frame) folds the sources it owns itself; this is
     /// for sources a verb ran on the caller's behalf. A glide inside a
-    /// caller-owned [`ScrollState`] handed to [`UiContext::list_view`] or
+    /// caller-owned [`ScrollState`] handed to [`UiContext::virtual_list`] or
     /// [`UiContext::table`] is invisible to `end_frame`, so the verb reports
     /// [`ScrollState::pending_deadline`] here instead.
     pub(crate) fn note_repaint_deadline(&mut self, seconds: f32) {
@@ -1463,6 +1465,17 @@ impl<'a> UiContext<'a> {
         self.backend.list_mut().translate(0.0, height + gap);
     }
 
+    /// Report a glide in a caller-owned [`ScrollState`] (a verb's list or
+    /// table): `end_frame` only sees the context's own scroll state, so
+    /// without this the host would stop drawing mid-glide.
+    fn report_scroll_glide(&mut self, scroll: &ScrollState) {
+        if let Some(delay) = scroll.pending_deadline()
+            && let Some(s) = self.state.as_mut()
+        {
+            s.note_repaint_deadline(delay);
+        }
+    }
+
     /// Advance the layout cursor by exactly `height` (no theme `item_gap`),
     /// honoring [`auto_advance`](Self::auto_advance). The public companion to the
     /// private `advance`: the Lua bindings call this for
@@ -1606,17 +1619,52 @@ impl<'a> UiContext<'a> {
         clicked
     }
 
-    /// Draw a square button containing a fit-centered Phosphor vector icon.
-    /// Width and height default to the themed button height. Auto-advances by
-    /// the resolved height.
+    /// Draw a default-tone [`IconKey`] showing `icon` in a `w`×`h` rect (the
+    /// face is `h` minus the key travel). Width and height default to the
+    /// themed button height. Auto-advances by the resolved height. For the
+    /// design's fixed key sizes and tones, use [`icon_key`](Self::icon_key).
     #[cfg(feature = "phosphor-icons")]
     pub fn icon_button(&mut self, icon: PhosphorIcon, w: Option<f32>, h: Option<f32>) -> bool {
+        let Some((_, theme)) = self.interactive_refs() else {
+            return false;
+        };
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let height = h.unwrap_or(theme.button_height);
+        let width = w.unwrap_or(height);
+        let face = (height - styles.scalar(StyleKey::Travel)).max(0.0);
+        self.icon_key_in(IconKey::new(icon, face), width, height)
+    }
+
+    /// Draw an [`IconKey`] with a `size` px face ([`IconKey::HEADER`],
+    /// [`IconKey::STATUS`] or [`IconKey::TOOLBAR`]) in `tone`, and report
+    /// whether it was clicked (or activated from the keyboard while focused).
+    /// The key joins the Tab ring. Auto-advances by the key's height (the face
+    /// plus the key travel).
+    #[cfg(feature = "phosphor-icons")]
+    pub fn icon_key(&mut self, icon: PhosphorIcon, size: f32, tone: Tone) -> bool {
+        let Some((_, theme)) = self.interactive_refs() else {
+            return false;
+        };
+        let key = IconKey::new(icon, size).tone(tone);
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let [width, height] = key.outer_size(&styles);
+        self.icon_key_in(key, width, height)
+    }
+
+    /// Place `key` in a `width`×`height` cell of the flow, draw it with an
+    /// automatic focus id, and advance.
+    #[cfg(feature = "phosphor-icons")]
+    fn icon_key_in(&mut self, key: IconKey, width: f32, height: f32) -> bool {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => return false,
         };
-        let height = h.unwrap_or(theme.button_height);
-        let width = w.unwrap_or(height);
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
@@ -1624,13 +1672,13 @@ impl<'a> UiContext<'a> {
             .state
             .as_mut()
             .map(|s| s.auto_id())
-            .expect("icon_button requires interactive state");
+            .expect("icon keys require interactive state");
         let clicked = {
             let list = self.backend.list_mut();
             let state = self
                 .state
                 .as_mut()
-                .expect("icon_button requires interactive state");
+                .expect("icon keys require interactive state");
             let UiState {
                 focus,
                 anim,
@@ -1641,24 +1689,7 @@ impl<'a> UiContext<'a> {
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
-            let clicked = Button::new("")
-                .focusable(fid)
-                .animated(fid)
-                .draw(local, &mut ctx);
-            let styles = ctx.styles();
-            let pad = styles
-                .scalar(StyleKey::Padding)
-                .min(width.min(height) * 0.2);
-            let icon_rect = Rect::new(
-                local.x + pad,
-                local.y + pad,
-                (local.width - pad * 2.0).max(0.0),
-                (local.height - pad * 2.0).max(0.0),
-            );
-            Icon::new(icon)
-                .tint(styles.color(StyleKey::Text))
-                .draw(icon_rect, ctx.draw_list);
-            clicked
+            key.focusable(fid).draw(local, &mut ctx).clicked
         };
         self.advance(height);
         clicked
@@ -1872,6 +1903,35 @@ impl<'a> UiContext<'a> {
         self.text_input_masked(id, buffer, placeholder, w, Some('•'))
     }
 
+    /// Search field: a round well with a magnifier, the text, and a clear key
+    /// once there is text ([`SearchField`](crate::SearchField)). Bound to the
+    /// caller's `buffer` like [`text_input`](Self::text_input), sharing its
+    /// retained editor map, so give it an id distinct from other fields'.
+    /// Returns whether the text changed this frame, by typing or by the clear
+    /// key. `w` defaults to `default_field_width`; the height is
+    /// [`SearchField::HEIGHT`](crate::SearchField::HEIGHT). Auto-advances by
+    /// the height.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn search_field(
+        &mut self,
+        id: FocusId,
+        buffer: &mut String,
+        placeholder: &str,
+        w: Option<f32>,
+    ) -> bool {
+        let width = w.unwrap_or_else(|| self.default_field_width());
+        self.retained_text_field(
+            id,
+            buffer,
+            placeholder,
+            [width, crate::SearchField::HEIGHT],
+            TextInput::new,
+            |ti, rect, id, ctx| {
+                crate::SearchField::new().draw(ti, id, rect, ctx);
+            },
+        )
+    }
+
     /// Shared body for [`text_input`](Self::text_input) /
     /// [`password_input`](Self::password_input): `mask` selects plaintext (`None`)
     /// vs masked (`Some(ch)`) display.
@@ -1883,45 +1943,71 @@ impl<'a> UiContext<'a> {
         w: Option<f32>,
         mask: Option<char>,
     ) -> bool {
-        let (input, theme) = match self.interactive_refs() {
-            Some(v) => v,
-            None => return false,
+        let Some((_, theme)) = self.interactive_refs() else {
+            return false;
         };
         let width = w.unwrap_or_else(|| self.default_field_width());
-        let height = theme.input_height;
+        self.retained_text_field(
+            id,
+            buffer,
+            placeholder,
+            [width, theme.input_height],
+            TextInput::new,
+            |ti, _, id, ctx| {
+                ti.mask = mask;
+                ti.draw(id, ctx);
+            },
+        )
+    }
+
+    /// The retained-editor plumbing every text-editing verb shares: place a
+    /// `size` cell, fetch (or create with `create`) the [`TextInput`] kept for
+    /// `id`, sync it to this frame (placed rect, placeholder, shared
+    /// clipboard, and the caller's `buffer`, whose external changes win),
+    /// hand it to `draw` with the local rect, then write edits back into
+    /// `buffer`. Returns whether the text changed; auto-advances by the
+    /// height.
+    fn retained_text_field(
+        &mut self,
+        id: FocusId,
+        buffer: &mut String,
+        placeholder: &str,
+        [width, height]: [f32; 2],
+        create: impl FnOnce(f32, f32, f32, f32) -> TextInput,
+        draw: impl FnOnce(&mut TextInput, Rect, FocusId, &mut DrawContext),
+    ) -> bool {
+        let Some((input, theme)) = self.interactive_refs() else {
+            return false;
+        };
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
         let changed = {
             // Disjoint field borrows: `self.backend` (list) and `self.state`.
             let list = self.backend.list_mut();
-            let state = match self.state.as_mut() {
-                Some(s) => s,
-                None => {
-                    debug_assert!(false, "UiContext::text_input requires interactive state");
-                    return false;
-                }
+            let Some(state) = self.state.as_mut() else {
+                debug_assert!(false, "text-editing verbs require interactive state");
+                return false;
             };
-            // Touch the retained editor, focus, and shared clipboard together.
             let UiState {
                 text_inputs,
                 focus,
+                anim,
+                interactions,
                 clipboard_get,
                 clipboard_set,
                 ..
             } = &mut **state;
             let ti = text_inputs.entry(id).or_insert_with(|| {
-                let mut t = TextInput::new(local.x, local.y, local.width, local.height);
+                let mut t = create(local.x, local.y, local.width, local.height);
                 t.value = buffer.clone();
                 t.cursor_pos = t.value.len();
                 t
             });
-            // Keep geometry + placeholder + mask synced to this frame's placed rect.
             ti.x = local.x;
             ti.y = local.y;
             ti.width = local.width;
             ti.height = local.height;
-            ti.mask = mask;
             if let Some(get) = clipboard_get {
                 ti.set_shared_clipboard_get(get.clone());
             }
@@ -1930,7 +2016,7 @@ impl<'a> UiContext<'a> {
             }
             ti.placeholder.clear();
             ti.placeholder.push_str(placeholder);
-            // External changes to the caller's buffer win over our cached value.
+            // External changes to the caller's buffer win over the cached value.
             if ti.value != *buffer {
                 ti.value = buffer.clone();
                 if ti.cursor_pos > ti.value.len() {
@@ -1940,8 +2026,10 @@ impl<'a> UiContext<'a> {
             }
             let before = ti.value.clone();
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
-            ti.draw(id, &mut ctx);
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_animations(anim)
+                .with_interactions(interactions);
+            draw(ti, local, id, &mut ctx);
             let changed = ti.value != before;
             if changed {
                 buffer.clear();
@@ -2002,74 +2090,25 @@ impl<'a> UiContext<'a> {
         rows: u16,
         #[cfg(feature = "syntax-highlighting")] syntax: Option<crate::SyntaxHighlighting>,
     ) -> bool {
-        let (input, theme) = match self.interactive_refs() {
-            Some(v) => v,
-            None => return false,
+        let Some((_, theme)) = self.interactive_refs() else {
+            return false;
         };
         let width = w.unwrap_or_else(|| self.default_field_width());
         let line_height = theme.font_size * 1.25;
         let height = (rows.max(1) as f32) * line_height + theme.padding * 2.0;
-        let world = self.place_rect(width, height);
-        let inv = self.backend.list_mut().current_transform().inverse();
-        let (local, local_input) = self.localize(inv, world, input);
-        let changed = {
-            let list = self.backend.list_mut();
-            let state = match self.state.as_mut() {
-                Some(s) => s,
-                None => {
-                    debug_assert!(false, "UiContext::text_area requires interactive state");
-                    return false;
-                }
-            };
-            let UiState {
-                text_inputs,
-                focus,
-                clipboard_get,
-                clipboard_set,
-                ..
-            } = &mut **state;
-            let ti = text_inputs.entry(id).or_insert_with(|| {
-                let mut t = TextInput::new(local.x, local.y, local.width, local.height)
-                    .with_multiline(true);
-                t.value = buffer.clone();
-                t.cursor_pos = t.value.len();
-                t
-            });
-            ti.x = local.x;
-            ti.y = local.y;
-            ti.width = local.width;
-            ti.height = local.height;
-            ti.multiline = true;
-            #[cfg(feature = "syntax-highlighting")]
-            ti.set_syntax_highlighting(syntax);
-            if let Some(get) = clipboard_get {
-                ti.set_shared_clipboard_get(get.clone());
-            }
-            if let Some(set) = clipboard_set {
-                ti.set_shared_clipboard_set(set.clone());
-            }
-            ti.placeholder.clear();
-            ti.placeholder.push_str(placeholder);
-            if ti.value != *buffer {
-                ti.value = buffer.clone();
-                if ti.cursor_pos > ti.value.len() {
-                    ti.cursor_pos = ti.value.len();
-                }
-                ti.selection_start = None;
-            }
-            let before = ti.value.clone();
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
-            ti.draw(id, &mut ctx);
-            let changed = ti.value != before;
-            if changed {
-                buffer.clear();
-                buffer.push_str(&ti.value);
-            }
-            changed
-        };
-        self.advance(height);
-        changed
+        self.retained_text_field(
+            id,
+            buffer,
+            placeholder,
+            [width, height],
+            |x, y, w, h| TextInput::new(x, y, w, h).with_multiline(true),
+            |ti, _, id, ctx| {
+                ti.multiline = true;
+                #[cfg(feature = "syntax-highlighting")]
+                ti.set_syntax_highlighting(syntax);
+                ti.draw(id, ctx);
+            },
+        )
     }
 
     /// Draw a numeric spin box bound to the caller's `value`. Validates and
@@ -2160,7 +2199,8 @@ impl<'a> UiContext<'a> {
             Some(v) => v,
             None => return TreeNodeOutput::default(),
         };
-        let height = theme.font_size.max(20.0);
+        let height = StyleResolver::with_overlay_opt(theme, self.style_stack.last())
+            .scalar(StyleKey::ListRowHeight);
         let width = self.default_field_width();
         let depth = self.tree_depth;
         let world = self.place_rect(width, height);
@@ -2626,13 +2666,15 @@ impl<'a> UiContext<'a> {
         out
     }
 
-    /// Draw a scrollable list. `count` is the total item count; `item` is a
-    /// closure called for each visible row with the `DrawList`, the row `Rect`,
-    /// and a [`ListItem`] descriptor. Returns [`ListOutput`] with click/hover
-    /// results. Auto-advances by `h`.
-    pub fn list_view<F>(
+    /// Draw a scrollable, virtualised [`List`]. `count` is the total item
+    /// count; `item` is a closure called for each visible row with the
+    /// `DrawList`, the row `Rect`, and a [`ListItem`] descriptor. Returns
+    /// [`ListOutput`] with click/hover results. Auto-advances by `h`. For the
+    /// design's dense sidebar list (label, subtitle, meta, highlight), see
+    /// [`list_view`](Self::list_view).
+    pub fn virtual_list<F>(
         &mut self,
-        list_widget: List,
+        list_widget: List<'_>,
         count: usize,
         state: &mut ListState,
         h: f32,
@@ -2654,13 +2696,66 @@ impl<'a> UiContext<'a> {
             let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             list_widget.draw(local, count, state, list, &style, &mut local_input, item)
         };
-        // The list's scroll state belongs to the caller, so a glide inside it is
-        // invisible to `end_frame` — report its deadline from here.
-        if let Some(delay) = state.scroll.pending_deadline() {
-            if let Some(s) = self.state.as_mut() {
-                s.note_repaint_deadline(delay);
+        self.report_scroll_glide(&state.scroll);
+        self.advance(h);
+        out
+    }
+
+    /// Draw a [`ListView`](crate::ListView), the design's dense sidebar list,
+    /// `h` tall and `default_field_width` wide, showing `count` rows built by
+    /// `row` (asked only for visible rows). `id` is its focus id: a click in
+    /// the list focuses it, and while focused it takes the arrow keys and
+    /// `Enter` and its selection wears the accent. `selected` is the caller's
+    /// selected row; the output reports the row the user picked or opened.
+    /// Auto-advances by `h`.
+    #[cfg(feature = "phosphor-icons")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_view<'r>(
+        &mut self,
+        view: crate::ListView<'_>,
+        id: FocusId,
+        count: usize,
+        selected: Option<usize>,
+        state: &mut ListState,
+        h: f32,
+        row: impl Fn(usize) -> crate::ListRow<'r>,
+    ) -> crate::ListViewOutput {
+        let Some((input, theme)) = self.interactive_refs() else {
+            return crate::ListViewOutput::default();
+        };
+        let width = self.default_field_width();
+        let world = self.place_rect(width, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, mut local_input) = self.localize(inv, world, input);
+        let out = {
+            let list = self.backend.list_mut();
+            let Some(ui_state) = self.state.as_mut() else {
+                debug_assert!(false, "list views require interactive state");
+                return crate::ListViewOutput::default();
+            };
+            let focus = &mut ui_state.focus;
+            focus.register(id);
+            // A click in the list focuses it in this frame, so the row it
+            // selects already wears the accent.
+            if local_input.mouse_clicked
+                && !local_input.mouse_consumed
+                && local.contains(local_input.mouse_x, local_input.mouse_y)
+            {
+                focus.request(id);
             }
-        }
+            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
+            view.focused(focus.is_focused(id)).draw(
+                local,
+                count,
+                selected,
+                state,
+                list,
+                &style,
+                &mut local_input,
+                row,
+            )
+        };
+        self.report_scroll_glide(&state.scroll);
         self.advance(h);
         out
     }
@@ -2694,13 +2789,7 @@ impl<'a> UiContext<'a> {
             let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             table_widget.draw(local, rows, scroll, list, &style, &mut local_input)
         };
-        // Same as `list_view`: the caller owns the table's scroll state, so its
-        // glide deadline has to be reported here.
-        if let Some(delay) = scroll.pending_deadline() {
-            if let Some(s) = self.state.as_mut() {
-                s.note_repaint_deadline(delay);
-            }
-        }
+        self.report_scroll_glide(scroll);
         self.advance(h);
         out
     }
@@ -2840,24 +2929,44 @@ impl<'a> UiContext<'a> {
         self.advance(size);
     }
 
-    /// Draw an empty-state placeholder (icon + title + body). Auto-advances by
-    /// the consumed height. Returns the `Rect` consumed so the caller can place
-    /// a CTA button below it.
-    pub fn empty_state_block(&mut self, es: &EmptyState<'_>) -> Rect {
-        let theme = self.theme;
-        let overlay = self.style_stack.last().cloned();
-        let (theme, overlay) = match (theme, overlay) {
-            (Some(t), o) => (t, o),
-            _ => return Rect::new(0.0, 0.0, 0.0, 0.0),
+    /// Draw an [`EmptyState`] box `default_field_width` wide and `h` tall
+    /// ([`EmptyState::HEIGHT`] is the design's default). Its action key, if
+    /// any, joins the Tab ring. Returns whether the action was clicked.
+    /// Auto-advances by `h`.
+    pub fn empty_state(&mut self, es: &EmptyState<'_>, h: f32) -> bool {
+        let (input, theme) = match self.interactive_refs() {
+            Some(v) => v,
+            None => return false,
         };
-        let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
         let width = self.default_field_width();
-        // Height estimate: icon + title + body lines. Generous fallback.
-        let h = style.scalar(StyleKey::FontSize) * 6.0;
-        let rect = self.place_local(width, h);
-        let consumed = empty_state(self.backend.list_mut(), &style, rect, es);
-        self.advance(consumed.height);
-        consumed
+        let world = self.place_rect(width, h);
+        let inv = self.backend.list_mut().current_transform().inverse();
+        let (local, local_input) = self.localize(inv, world, input);
+        let fid = self
+            .state
+            .as_mut()
+            .map(|s| s.auto_id())
+            .expect("empty_state requires interactive state");
+        let clicked = {
+            let list = self.backend.list_mut();
+            let state = self
+                .state
+                .as_mut()
+                .expect("empty_state requires interactive state");
+            let UiState {
+                focus,
+                anim,
+                interactions,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_animations(anim)
+                .with_interactions(interactions);
+            es.action_focus_or(fid).draw(local, &mut ctx)
+        };
+        self.advance(h);
+        clicked
     }
 
     /// Draw a breadcrumb trail. Returns `Some(index)` when a non-final segment
@@ -3484,14 +3593,15 @@ mod tests {
             // After the matching pop the override is gone → theme color again.
             ui.text_button("B", Some(80.0), Some(24.0));
         }
-        assert_eq!(list.chrome_instance_count(), 6);
+        // Plinth + face per button; the highlights are inset shadows.
+        assert_eq!(list.chrome_instance_count(), 4);
         assert_eq!(
             list.chrome_instance(1).unwrap().bg,
             crate::widgets::sheen_over([1.0, 0.0, 0.0, 1.0], theme.face_top),
             "button under the overlay uses the overridden fill (under the sheen)"
         );
         assert_eq!(
-            list.chrome_instance(4).unwrap().bg,
+            list.chrome_instance(3).unwrap().bg,
             crate::widgets::sheen_over(theme.button, theme.face_top),
             "button after pop falls back to the theme fill"
         );
@@ -4305,7 +4415,59 @@ mod tests {
             theme.button_height
         );
         assert_eq!(list.icons_msdf.len(), 1);
-        assert!(list.texts.iter().all(|text| text.content.is_empty()));
+        assert!(list.texts.is_empty());
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn icon_key_takes_the_face_plus_travel_and_clicks() {
+        let theme = Theme::default();
+        let travel = theme.get(StyleKey::Travel).unwrap().as_scalar().unwrap();
+        let input = click_at(8.0, 8.0);
+        let mut state = UiState::new();
+        let gap = state.item_gap;
+        let mut list = DrawList::new();
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        assert!(ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost));
+        assert_eq!(ui.cursor()[1], IconKey::HEADER + travel + gap);
+        assert!(!ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost));
+        drop(ui);
+        assert_eq!(list.icons_msdf.len(), 2);
+    }
+
+    #[test]
+    fn empty_state_reports_its_action_and_advances_by_its_height() {
+        let theme = Theme::default();
+        let es = EmptyState::new().title("Nothing here").action("Create");
+        let h = EmptyState::HEIGHT;
+
+        // First frame without a click, to find where the key's label sits.
+        let label = {
+            let input = InputState::default();
+            let mut state = UiState::new();
+            let gap = state.item_gap;
+            let mut list = DrawList::new();
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            assert!(!ui.empty_state(&es, h));
+            assert_eq!(ui.cursor()[1], h + gap);
+            drop(ui);
+            let t = list
+                .texts
+                .iter()
+                .find(|t| t.content == "Create")
+                .expect("the action key is drawn");
+            (t.x + 4.0, t.y + t.font_size * 0.5)
+        };
+
+        let clicked = |x: f32, y: f32| {
+            let input = click_at(x, y);
+            let mut state = UiState::new();
+            let mut list = DrawList::new();
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.empty_state(&es, h)
+        };
+        assert!(clicked(label.0, label.1), "a click on the key");
+        assert!(!clicked(4.0, 4.0), "a click on the box");
     }
 
     #[test]
@@ -4489,6 +4651,41 @@ mod tests {
         assert!(changed, "typing should report a change");
         assert_eq!(buffer.len(), 3);
         assert!(buffer.contains('c'));
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn search_field_edits_the_buffer_and_its_clear_key_empties_it() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut buffer = String::from("ag");
+        let frame = |input: &mut InputState, state: &mut UiState, buffer: &mut String| {
+            state.begin_frame(input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            let changed = {
+                let mut ui = UiContext::interactive(&mut list, input, state, &theme);
+                ui.search_field(3, buffer, "Filter", Some(200.0))
+            };
+            state.end_frame();
+            (changed, list)
+        };
+        // A click on the text focuses the field; typing then edits the buffer.
+        let (changed, list) = frame(&mut click_at(60.0, 14.0), &mut state, &mut buffer);
+        assert!(!changed);
+        assert_eq!(list.icons_msdf.len(), 2, "magnifier and clear key");
+        let mut typing = InputState {
+            text_input: "e".into(),
+            ..Default::default()
+        };
+        let (changed, _) = frame(&mut typing, &mut state, &mut buffer);
+        assert!(changed);
+        assert_eq!(buffer, "age");
+        // The clear key sits at the right end of the 200 px field.
+        let (changed, _) = frame(&mut click_at(187.0, 13.0), &mut state, &mut buffer);
+        assert!(changed, "the clear key reports a change");
+        assert_eq!(buffer, "");
+        let (_, list) = frame(&mut InputState::default(), &mut state, &mut buffer);
+        assert_eq!(list.icons_msdf.len(), 1, "the clear key is gone");
     }
 
     #[test]
@@ -4747,9 +4944,54 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn list_view_takes_focus_on_click_and_then_the_arrow_keys() {
+        use crate::ListRow;
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut list_state = ListState::new();
+        let names = ["alpha", "beta", "gamma"];
+        let mut selected = None;
+        let mut frame = |input: &mut InputState, selected: &mut Option<usize>| {
+            crate::map_keyboard(input);
+            state.begin_frame(input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            let out = {
+                let mut ui = UiContext::interactive(&mut list, input, &mut state, &theme);
+                ui.list_view(
+                    crate::ListView::new(),
+                    9,
+                    names.len(),
+                    *selected,
+                    &mut list_state,
+                    100.0,
+                    |i| ListRow::new(names[i]),
+                )
+            };
+            state.end_frame();
+            if let Some(i) = out.select {
+                *selected = Some(i);
+            }
+            (out, state.focus.is_focused(9))
+        };
+        // A click on the first row selects it and focuses the list.
+        let (out, focused) = frame(&mut click_at(20.0, 11.0), &mut selected);
+        assert_eq!(out.select, Some(0));
+        assert!(focused);
+        // Focused, it takes the arrow keys.
+        let mut down = InputState {
+            key_down: true,
+            ..Default::default()
+        };
+        let (out, _) = frame(&mut down, &mut selected);
+        assert_eq!(out.select, Some(1));
+        assert_eq!(selected, Some(1));
+    }
+
     #[test]
     fn a_gliding_list_forwards_its_deadline_through_the_verb() {
-        // A `ListState` passed to `list_view` belongs to the caller, so the glide
+        // A `ListState` passed to `virtual_list` belongs to the caller, so the glide
         // inside it is invisible to `end_frame` — the verb has to forward the
         // deadline itself. Without that, an event-driven host would sleep through
         // the glide and the list would visibly jump when it next woke.
@@ -4767,7 +5009,7 @@ mod tests {
         state.begin_frame(&mut input, &theme, 1.0 / 60.0, &crate::KeyboardNav);
         {
             let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-            ui.list_view(List::new(), 200, &mut list_state, 120.0, |_, _, _| {});
+            ui.virtual_list(List::new(), 200, &mut list_state, 120.0, |_, _, _| {});
         }
         let frame = state.end_frame();
 

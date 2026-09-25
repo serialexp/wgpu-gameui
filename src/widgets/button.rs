@@ -55,7 +55,8 @@ impl ButtonVisual {
     }
 }
 
-/// Draw a button's face-over-plinth material for the given state.
+/// Draw a button's face-over-plinth material for the given state, its face
+/// dropping `travel` px while pressed.
 ///
 /// Shared by [`Button`] and [`ImageButton`](super::ImageButton) so both get the
 /// same material from a single place. Honors [`Theme::border_radius`] (0 =>
@@ -65,12 +66,14 @@ pub(crate) fn draw_chrome(
     s: &StyleResolver,
     rect: Rect,
     radius: f32,
+    travel: f32,
     v: &ButtonVisual,
 ) {
     let m = Material::new(v.tone)
         .enabled(v.enabled)
         .hovered(v.hovered)
-        .pressed(v.pressed);
+        .pressed(v.pressed)
+        .travel(travel);
     material::draw_with_radius(list, s, rect, radius, &m);
 }
 
@@ -196,6 +199,8 @@ pub struct Button {
     /// Override the theme's `Travel` for this button only. Used by the numeric
     /// input's step buttons which press 1px rather than the standard 2px.
     travel: Option<f32>,
+    /// Wear the pressed face while not being pressed (a latched key).
+    held: bool,
 }
 
 impl Button {
@@ -210,6 +215,7 @@ impl Button {
             focus_id: None,
             anim_id: None,
             travel: None,
+            held: false,
         }
     }
 
@@ -296,6 +302,14 @@ impl Button {
         self
     }
 
+    /// Keep the key down: it wears the pressed face (dropped by `travel`)
+    /// without being pressed, as a latched toggle does. Clicks still report
+    /// normally; a disabled button never looks held.
+    pub fn held(mut self, held: bool) -> Self {
+        self.held = held;
+        self
+    }
+
     /// Make the button keyboard-focusable under `id`: it joins the Tab ring,
     /// draws a focus ring while focused, and activates on Space/Enter (in
     /// addition to mouse clicks). Clicking it also moves focus to it.
@@ -355,6 +369,7 @@ impl Button {
         let pressed = retained
             .as_ref()
             .map_or(hovered && input.mouse_down, |r| r.pressed);
+        let looks_pressed = pressed || self.held;
         let clicked = retained
             .as_ref()
             .map_or(hovered && input.mouse_clicked, |r| r.clicked);
@@ -363,7 +378,7 @@ impl Button {
         let v = ButtonVisual {
             enabled: self.enabled,
             hovered,
-            pressed,
+            pressed: looks_pressed,
             tone,
         };
 
@@ -379,7 +394,12 @@ impl Button {
         // swap, so the material is resolved discretely; the eased path applies
         // only to the label color, which still fades between states.
         let travel = self.travel.unwrap_or_else(|| s.scalar(StyleKey::Travel));
-        let face_y = rect.y + if v.enabled && pressed { travel } else { 0.0 };
+        let face_y = rect.y
+            + if v.enabled && looks_pressed {
+                travel
+            } else {
+                0.0
+            };
         let face = Rect::new(rect.x, face_y, rect.width, rect.height - (face_y - rect.y));
         let target_text = if !self.enabled {
             s.color(StyleKey::TextDim)
@@ -397,11 +417,13 @@ impl Button {
         {
             let list = &mut *ctx.draw_list;
             if self.chrome {
-                draw_chrome(list, &s, rect, radius, &v);
+                draw_chrome(list, &s, rect, radius, travel, &v);
             } else {
                 draw_bare_overlay(list, rect, &v);
             }
-            draw_label_colored(list, &s, face, &self.label, text_color);
+            if !self.label.is_empty() {
+                draw_label_colored(list, &s, face, &self.label, text_color);
+            }
         }
 
         // Keyboard focus + Space/Enter activation (opt-in via `focusable`).
@@ -606,10 +628,16 @@ mod tests {
             .draw(rect(), &mut with_ctx(&mut bare, &mut focus, &theme, &input));
         assert_eq!(
             chrome.chrome_instance_count(),
-            3,
-            "chrome draws plinth + gradient face + highlight band"
+            2,
+            "chrome draws plinth + gradient face"
+        );
+        assert_eq!(
+            chrome.shadow_instance_count(),
+            1,
+            "the highlight is an inset shadow following the corners"
         );
         assert!(bare.chrome_instance_count() == 0, "bare draws no chrome");
+        assert!(bare.shadow_instance_count() == 0, "bare draws no highlight");
         assert!(
             bare.vertices.is_empty(),
             "bare idle draws no background geometry"
@@ -928,6 +956,80 @@ mod tests {
             !Button::new("Go").draw(rect(), &mut with_ctx(&mut list, &mut focus, &theme, &input)),
             "mouse_consumed must suppress the click"
         );
+    }
+
+    #[test]
+    fn held_looks_pressed_but_does_not_click() {
+        let theme = Theme::default();
+        let away = input_at(500.0, 500.0, false, false);
+        let over = input_at(50.0, 25.0, true, false);
+        let chrome = |list: &DrawList| list.chrome_instances().collect::<Vec<_>>();
+
+        let mut pressed = DrawList::new();
+        let mut focus = FocusState::new();
+        Button::new("Go").draw(
+            rect(),
+            &mut with_ctx(&mut pressed, &mut focus, &theme, &over),
+        );
+        let mut held = DrawList::new();
+        let mut focus = FocusState::new();
+        let clicked = Button::new("Go")
+            .held(true)
+            .draw(rect(), &mut with_ctx(&mut held, &mut focus, &theme, &away));
+        assert!(!clicked);
+        assert_eq!(
+            chrome(&held),
+            chrome(&pressed),
+            "held wears the pressed face"
+        );
+
+        // A disabled key never looks pressed, held or not.
+        let mut idle = DrawList::new();
+        let mut focus = FocusState::new();
+        Button::new("Go")
+            .enabled(false)
+            .draw(rect(), &mut with_ctx(&mut idle, &mut focus, &theme, &away));
+        let mut disabled_held = DrawList::new();
+        let mut focus = FocusState::new();
+        Button::new("Go").enabled(false).held(true).draw(
+            rect(),
+            &mut with_ctx(&mut disabled_held, &mut focus, &theme, &away),
+        );
+        assert_eq!(chrome(&disabled_held), chrome(&idle));
+    }
+
+    #[test]
+    fn a_travel_override_moves_the_painted_face_too() {
+        // A pressed key with `with_travel(1)` looks exactly like a pressed
+        // key in a theme whose travel is 1: the material, not only the label,
+        // drops by the override.
+        let over = input_at(50.0, 25.0, true, false);
+        let chrome = |list: &DrawList| list.chrome_instances().collect::<Vec<_>>();
+
+        let theme = Theme::default();
+        let mut overridden = DrawList::new();
+        let mut focus = FocusState::new();
+        Button::new("Go").with_travel(1.0).draw(
+            rect(),
+            &mut with_ctx(&mut overridden, &mut focus, &theme, &over),
+        );
+
+        let mut one = Theme::default();
+        one.set(StyleKey::Travel, crate::StyleValue::Scalar(1.0));
+        let mut themed = DrawList::new();
+        let mut focus = FocusState::new();
+        Button::new("Go").draw(rect(), &mut with_ctx(&mut themed, &mut focus, &one, &over));
+        assert_eq!(chrome(&overridden), chrome(&themed));
+    }
+
+    #[test]
+    fn empty_label_draws_no_text() {
+        let theme = Theme::default();
+        let input = input_at(0.0, 0.0, false, false);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        Button::new("").draw(rect(), &mut with_ctx(&mut list, &mut focus, &theme, &input));
+        assert!(list.texts.is_empty());
     }
 
     #[test]

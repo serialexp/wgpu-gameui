@@ -215,92 +215,89 @@ impl<'a> Table<'a> {
         let mouse_over_content =
             content_rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
 
-        // Snapshot offset for use inside the closure — scroll is borrowed
-        // mutably by ScrollView::draw, so we read once up front. Same for
-        // mouse position: ScrollView gets `&mut input` and may zero scroll
-        // fields, but the fields we use here (mouse position + click state)
-        // are stable for the lifetime of the call.
-        let scroll_y = scroll.offset[1];
+        // Snapshot the mouse: `begin` gets `&mut input` and may zero the
+        // wheel fields, but position and click state stay as they were.
         let mouse_y = input.mouse_y;
         let mouse_clicked = input.mouse_clicked;
 
-        ScrollView::new(content_rect).vertical_only().draw(
-            scroll,
-            list,
-            style,
-            input,
-            |list, vp| {
-                // The ScrollView has translated by -scroll.offset and clipped
-                // to `vp`. Draw rows in vp-local world coordinates: row N lives
-                // at y = vp.y + N * row_height (pre-translation), which the
-                // ScrollView shifts by -offset for us.
-                let first_visible = (scroll_y / self.row_height).floor() as usize;
-                let visible_count = (vp.height / self.row_height).ceil() as usize + 1;
+        // `begin` eases the drawn offset toward the target and clamps it, so
+        // culling and hit-testing read the offset after it, not before.
+        let view = ScrollView::new(content_rect).vertical_only();
+        let begun = view.begin(scroll, list, input);
+        let scroll_y = scroll.offset[1];
+        {
+            let vp = begun.inner;
+            // The ScrollView has translated by -scroll.offset and clipped
+            // to `vp`. Draw rows in vp-local world coordinates: row N lives
+            // at y = vp.y + N * row_height (pre-translation), which the
+            // ScrollView shifts by -offset for us.
+            let first_visible = (scroll_y / self.row_height).floor() as usize;
+            let visible_count = (vp.height / self.row_height).ceil() as usize + 1;
 
-                let end = (first_visible + visible_count).min(rows.len());
-                for (row_idx, row) in rows
-                    .iter()
-                    .enumerate()
-                    .skip(first_visible)
-                    .take(end.saturating_sub(first_visible))
-                {
-                    // `world_y` here is in CONTENT space (pre-scroll-translate)
-                    // — this is what we draw at, because the ScrollView has
-                    // already pushed a `translate(0, -scroll_y)` for us.
-                    let world_y = vp.y + row_idx as f32 * self.row_height;
-                    // `screen_y` is where this row actually lands on screen.
-                    // Mouse coords are in screen space, so we hit-test against
-                    // this, not against `world_y`.
-                    let screen_y = world_y - scroll_y;
+            let end = (first_visible + visible_count).min(rows.len());
+            for (row_idx, row) in rows
+                .iter()
+                .enumerate()
+                .skip(first_visible)
+                .take(end.saturating_sub(first_visible))
+            {
+                // `world_y` here is in CONTENT space (pre-scroll-translate)
+                // — this is what we draw at, because the ScrollView has
+                // already pushed a `translate(0, -scroll_y)` for us.
+                let world_y = vp.y + row_idx as f32 * self.row_height;
+                // `screen_y` is where this row actually lands on screen.
+                // Mouse coords are in screen space, so we hit-test against
+                // this, not against `world_y`.
+                let screen_y = world_y - scroll_y;
 
-                    let row_hovered = mouse_over_content
-                        && mouse_y >= screen_y
-                        && mouse_y < screen_y + self.row_height
-                        && mouse_y >= vp.y
-                        && mouse_y < vp.y + vp.height;
+                let row_hovered = mouse_over_content
+                    && mouse_y >= screen_y
+                    && mouse_y < screen_y + self.row_height
+                    && mouse_y >= vp.y
+                    && mouse_y < vp.y + vp.height;
 
-                    if row_hovered {
-                        hovered_row = Some(row_idx);
-                        if mouse_clicked {
-                            clicked_row = Some(row_idx);
-                        }
-                    }
-
-                    let bg_color = if row_hovered {
-                        style.color(StyleKey::ButtonHover)
-                    } else if self.zebra_stripe && row_idx % 2 == 1 {
-                        let mut c = style.color(StyleKey::Panel);
-                        c[0] *= 1.1;
-                        c[1] *= 1.1;
-                        c[2] *= 1.1;
-                        c
-                    } else {
-                        [0.0, 0.0, 0.0, 0.0]
-                    };
-
-                    if bg_color[3] > 0.0 {
-                        list.quad(rect.x, world_y, rect.width, self.row_height, bg_color);
-                    }
-
-                    let mut x = rect.x;
-                    for (col_idx, col_width) in col_widths.iter().enumerate() {
-                        if col_idx < row.len() {
-                            let cell = &row[col_idx];
-                            let cell_rect = Rect::new(x, world_y, *col_width, self.row_height);
-                            self.draw_cell(
-                                cell,
-                                &self.columns[col_idx],
-                                cell_rect,
-                                font_size,
-                                list,
-                                style,
-                            );
-                        }
-                        x += col_width;
+                if row_hovered {
+                    hovered_row = Some(row_idx);
+                    if mouse_clicked {
+                        clicked_row = Some(row_idx);
                     }
                 }
-            },
-        );
+
+                let bg_color = if row_hovered {
+                    style.color(StyleKey::ButtonHover)
+                } else if self.zebra_stripe && row_idx % 2 == 1 {
+                    let mut c = style.color(StyleKey::Panel);
+                    c[0] *= 1.1;
+                    c[1] *= 1.1;
+                    c[2] *= 1.1;
+                    c
+                } else {
+                    [0.0, 0.0, 0.0, 0.0]
+                };
+
+                if bg_color[3] > 0.0 {
+                    list.quad(rect.x, world_y, rect.width, self.row_height, bg_color);
+                }
+
+                let mut x = rect.x;
+                for (col_idx, col_width) in col_widths.iter().enumerate() {
+                    if col_idx < row.len() {
+                        let cell = &row[col_idx];
+                        let cell_rect = Rect::new(x, world_y, *col_width, self.row_height);
+                        self.draw_cell(
+                            cell,
+                            &self.columns[col_idx],
+                            cell_rect,
+                            font_size,
+                            list,
+                            style,
+                        );
+                    }
+                    x += col_width;
+                }
+            }
+        }
+        view.end(scroll, list, style, input, begun);
 
         list.pop_debug_scope();
         TableOutput {
@@ -525,6 +522,56 @@ mod tests {
             out.clicked_row
         );
         assert_eq!(out.hovered_row, Some(row_idx));
+    }
+
+    #[test]
+    fn rows_and_clicks_follow_the_offset_the_frame_draws_at() {
+        // Only the target is set (a keyboard reveal or a wheel notch does
+        // this); the scroll view moves the drawn offset toward it at the start
+        // of the frame. Culling and hit-testing must use that moved offset, or
+        // the frame draws the rows for the old position under a translation
+        // for the new one — blank, and clicks land on the wrong row.
+        let columns = cols();
+        let row_data = rows(50);
+        let table = Table::new(&columns)
+            .with_row_height(24.0)
+            .with_header(false);
+        let viewport = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let theme = Theme::default();
+
+        for frame_dt in [0.0, 1.0 / 60.0] {
+            let mut scroll = ScrollState::default();
+            scroll.content_size = [200.0, 50.0 * 24.0];
+            scroll.scroll_to(1, 600.0);
+            let mut input = InputState {
+                mouse_x: 50.0,
+                mouse_y: 30.0,
+                mouse_clicked: true,
+                mouse_down: true,
+                frame_dt,
+                ..InputState::default()
+            };
+            let mut list = DrawList::new();
+            let out = table.draw(
+                viewport,
+                &row_data,
+                &mut scroll,
+                &mut list,
+                &StyleResolver::new(&theme),
+                &mut input,
+            );
+            let drawn = scroll.offset[1];
+            assert!(
+                drawn > 0.0,
+                "the frame moved toward the target (dt {frame_dt})"
+            );
+            let expected = ((30.0 + drawn) / 24.0).floor() as usize;
+            assert_eq!(
+                out.clicked_row,
+                Some(expected),
+                "dt {frame_dt}, offset {drawn}"
+            );
+        }
     }
 
     #[test]

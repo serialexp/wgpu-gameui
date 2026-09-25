@@ -15,19 +15,26 @@ mod context_menu;
 mod curve_editor;
 mod doc_tabs;
 mod dock_panel;
+#[cfg(feature = "phosphor-icons")]
+mod dock_stack;
 mod drag;
 mod drag_handle;
 mod draw_list;
 mod dropdown;
+mod empty_state;
 mod focus;
 mod gradient_ramp;
 mod group;
 mod hit_zone;
 #[cfg(feature = "phosphor-icons")]
 mod icon;
+#[cfg(feature = "phosphor-icons")]
+mod icon_key;
 mod image;
 mod image_button;
 mod list;
+#[cfg(feature = "phosphor-icons")]
+mod list_view;
 mod material;
 mod menu_screens;
 mod menubar;
@@ -37,6 +44,8 @@ mod popover;
 mod progress_bar;
 mod radio;
 mod scroll_view;
+#[cfg(feature = "phosphor-icons")]
+mod search_field;
 mod separator;
 mod settings;
 mod slider;
@@ -66,7 +75,7 @@ pub use badge::{ChipOutput, badge, chip, keycap};
 pub use banner::{Banner, Severity};
 pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
-pub use busy::{EmptyState, dots, empty_state, skeleton, spinner};
+pub use busy::{dots, skeleton, spinner};
 pub use button::Button;
 pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
@@ -77,6 +86,8 @@ pub use context_menu::{ContextMenu, ContextMenuState, place_context_menu};
 pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
 pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
+#[cfg(feature = "phosphor-icons")]
+pub use dock_stack::{DockSection, DockSectionOutput, DockStack, DockStackOutput, DockStackState};
 pub use drag::{DragCapture, DragId};
 pub use drag_handle::{DragHandle, DragHandleOutput};
 #[cfg(feature = "phosphor-icons")]
@@ -87,6 +98,7 @@ pub use draw_list::{
     NineSliceDraw, NineSliceId, PrimCounts, Vertex,
 };
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
+pub use empty_state::{EmptyGlyph, EmptyState};
 pub use focus::{FocusId, FocusState};
 pub use gradient_ramp::{
     GradientStop, RampOutput, draw as draw_gradient_ramp, readout as gradient_ramp_readout,
@@ -96,9 +108,13 @@ pub use group::Group;
 pub use hit_zone::{HitZone, HitZoneOutput};
 #[cfg(feature = "phosphor-icons")]
 pub use icon::Icon;
+#[cfg(feature = "phosphor-icons")]
+pub use icon_key::IconKey;
 pub use image::{Image, ImageAlign, ImageFit};
 pub use image_button::ImageButton;
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
+#[cfg(feature = "phosphor-icons")]
+pub use list_view::{ListRow, ListView, ListViewOutput};
 pub(crate) use material::sheen_over;
 pub use material::{Material, Tone};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
@@ -113,6 +129,8 @@ pub use popover::{Popover, PopoverOutput, PopoverSide, measure_sheet_height, pla
 pub use progress_bar::{ProgressBar, ProgressFill};
 pub use radio::RadioGroup;
 pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};
+#[cfg(feature = "phosphor-icons")]
+pub use search_field::SearchField;
 pub use separator::{Orientation, Separator};
 pub use settings::{
     SettingField, SettingValue, SettingsForm, SettingsFormOutput, SettingsFormState, SettingsSpec,

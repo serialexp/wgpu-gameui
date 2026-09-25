@@ -2090,7 +2090,7 @@ impl DebugReport {
         ));
         if let Some(stats) = self.render_stats {
             s.push_str("RENDER:\n");
-            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} color_passes={} shadow_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.color_passes, stats.shadow_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations));
+            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} render_passes={} shadow_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations));
             for warning in stats.warnings() {
                 s.push_str(&format!("!! WARN  render {warning}\n"));
             }
@@ -2209,7 +2209,7 @@ impl DebugReport {
 
         match self.render_stats {
             Some(stats) => {
-                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"color_passes\": {}, \"shadow_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.color_passes, stats.shadow_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations, stats.fragmentation_ratio()));
+                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"render_passes\": {}, \"shadow_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.buffer_reallocations, stats.fragmentation_ratio()));
                 for (i, warning) in stats.warnings().iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
@@ -3397,7 +3397,7 @@ mod tests {
             draw_calls: 7,
             color_runs: 3,
             shadow_instances: 0,
-            color_passes: 1,
+            render_passes: 1,
             text_runs: 2,
             icon_runs: 2,
             buffer_write_calls: 4,

@@ -176,6 +176,15 @@ impl MsdfGlyphAtlas {
         }
     }
 
+    /// What [`glyph`](Self::glyph) would return, if the glyph was already
+    /// looked up: `Some(None)` for an outline-less one, `None` when it hasn't
+    /// been generated yet and needs its font data.
+    pub fn cached(&self, font_id: u64, glyph_id: u16) -> Option<Option<GlyphTile>> {
+        self.lookup
+            .get(&(font_id, glyph_id))
+            .map(|cached| cached.map(|idx| self.tile(idx)))
+    }
+
     fn tile(&self, idx: u32) -> GlyphTile {
         let g = &self.glyphs[idx as usize];
         GlyphTile {

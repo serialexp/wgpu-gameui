@@ -213,13 +213,14 @@ harden those foundations rather than create parallel replacements.
       panicked holding the lock = unrecoverable; propagating the panic is the
       correct idiom, not a recoverable `UiError`).
 - [x] **P1 — Cache glyphon `Buffer`s by content+size hash or pool them.**
-      Done better than pooling buffers: `TextRenderer::build_vertices` caches the
-      *shaped glyph layout* (relative positions) keyed by
-      `(content, font_size, line_height, max_width, family, align, ellipsize,
-      weight, style)`. A hit skips `Buffer::new`/`set_text`/`shape_until_scroll`
-      and takes no `FontSystem` lock (the MSDF atlas never evicts, so cached
-      glyphs are always present). Working-set eviction past `SHAPE_CACHE_MAX`
-      (8192); `clear_shape_cache()` for font hot-loads. (`src/text.rs`)
+      Done better than pooling buffers: shaped glyph layouts (relative glyph
+      positions plus the laid-out size) are cached on the shared font system
+      (`SharedFontSystem`, `src/shaping.rs`), keyed by every attribute that
+      changes the layout (`LayoutSpec`) and the content. `TextMeasurer` and
+      `TextRenderer` share them, so a block measured for layout is drawn
+      without shaping it again. Least-recently-used eviction past a 16 MiB
+      budget; `SharedFontSystem::db_mut()` and `clear_caches()` drop them when
+      fonts change; `layout_stats()` reports hits and shapes.
 
 ---
 
@@ -1614,12 +1615,15 @@ registration lifetime, resume clamp). 1071 lib tests green.
 
 ## 2026-09-24 — Found during Forge design-token audit
 
-- [ ] **P1 — Bug: menubar reloads IBM Plex Mono into fontdb every frame a menu
+- [x] **P1 — Bug: menubar reloads IBM Plex Mono into fontdb every frame a menu
   is open.** `menubar/state.rs:664` calls `bundled_mono_font()`, which goes
   through `load_font_family` → `load_font_bytes` → `db.load_font_data(bytes.to_vec())`
   for all four Plex Mono faces (~700 KB) on *every call*. fontdb keeps growing
   (memory + face-lookup cost) for as long as a menu stays open. Needs a
   load-once/cached handle (e.g. registered in `shared_font_system`, like Sans).
+  Fixed (2026-09-25): the theme has a `mono_font` (the bundled Plex Mono by
+  default), which the menubar uses; `bundled_mono_font` only loads the faces
+  into a font system that doesn't have them yet.
 - [x] **P1 — Bug: hex text colours in menus render too bright (sRGB treated as
   linear).** `TextBlock::with_color(u8,u8,u8)` → `color_to_rgba` (`text.rs:1250`)
   divides by 255 and passes straight through `ui_msdf.wgsl` to an `*Srgb`
@@ -1672,3 +1676,263 @@ registration lifetime, resume clamp). 1071 lib tests green.
   swatches overlap the "Custom font" / "Click A/B" rows; it also trips the
   renderer's "freshly-constructed `LayerStack` for 120+ frames" warning (it
   should build one stack and `.clear()` it). Both reproduce on `719dc88`.
+
+## 2026-09-25 — Sidebar pieces (Forge `components/sidebar`, for agent-ui)
+
+- [x] **Tokens.** The ink ladder as `StyleKey::Ink(Ink::…)` (27 roles), plus
+  `AccentMatch`, `RowZebra`, `RowHover`, `RowHeld`, `WellDeep`, `EdgeHard`,
+  the type steps (`TextSize`: caption 9 / meta 10 / dense 10.5 / row 11 /
+  menu 11.5), the tracking steps (`Tracking`, in em) and `ListRowHeight` (22).
+  `Theme::mono_font` holds the mono family once. `StyleResolver` has
+  `ink`, `text_size`, `sans_block`, `mono_block` and `caption_block`
+  (upper-case, tracked). DockPanel's tab labels use `Ink::Max` / `Ink::Tab`.
+- [x] **Bug: letter spacing was em, documented as pixels.** cosmic-text takes
+  `Attrs::letter_spacing` in em; gameui passed its pixel value straight
+  through, so `with_letter_spacing(2.0)` at 10 px added 20 px per glyph. The
+  value is now divided by the font size where it reaches cosmic-text
+  (`letter_spacing_em`). Test: `letter_spacing_is_in_pixels_at_any_font_size`.
+- [x] **Icons.** `PhosphorIcon` gains MagnifyingGlass, ArrowsClockwise,
+  House, Folder, FolderOpen, CaretRight, CaretDown, ChatCircle and the rest
+  the sidebar uses; the gallery's icon row lists `PhosphorIcon::ALL`.
+- [x] **IconKey** (`widgets/icon_key.rs`, `phosphor-icons`). A square key
+  with one icon at the design's sizes (`TOOLBAR` 24, `STATUS` 18, `HEADER`
+  17), any `Tone`, held and disabled; its rect is the face plus the plinth
+  travel. `UiContext::icon_key(icon, size, tone)`; `icon_button` now draws an
+  `IconKey` sized to its height. `Button::held` latches a key down without
+  clicking it; an empty `Button` label draws no text.
+- [x] **Bug: MSDF icons and glyphs drew stray ink.** Lines, dots and
+  stair-steps of ink away from the outline: beside the house, palette and
+  angle icons, running off the gear and the chat bubble, above Plex's `|`
+  and `[`. Causes, all in how fdsm takes an outline as it comes: no error
+  correction; corner ties between two edges decided by rounding noise (fdsm
+  stores a line as start + offset); zero-length segments (NaN direction);
+  Phosphor's hairpins (the outline runs a fraction of a pixel forward and
+  straight back, which a distance field renders as an endless spike); and
+  mixed contour winding. `glyph_msdf.rs` now snaps, drops degenerate
+  segments, removes hairpins, orients contours and runs `correct_error_msdf`.
+  Tests: `icon_fields_have_no_stray_ink_or_holes` and
+  `text_fields_have_no_stray_ink_or_holes` render every icon and ASCII glyph
+  at the sizes in use and compare against the true fill; each step has a
+  focused test. `fdsm` builds at `opt-level = 3` in dev so they run in ~2 s.
+- [x] **SearchField** (`widgets/search_field.rs`, `phosphor-icons`). A round
+  well (`--radius-search`) with the magnifier, the caller's retained
+  `TextInput` and, once there is text, a round ghost clear key. 28 px tall.
+  `UiContext::search_field(id, &mut String, placeholder, w)`. To draw inside
+  it, `TextInput` gained `well` (skip its own well) and `insets` (separate
+  left/right text insets). `material::draw_well_rounded` paints a well of any
+  radius with the design's box shadows (`--well-inset`,
+  `--well-focus-ring`), so the ring and inner shadow follow the rounding.
+  `text_input`, `password_input`, `text_area` and `search_field` share one
+  retained-editor helper (`UiContext::retained_text_field`).
+- [ ] **P3 — SearchField scopes.** The design's latching scope key inside the
+  well (and its sheet of scopes) is not built.
+- [ ] **P3 — `draw_well` on box shadows.** The square well still paints its
+  inner shadow as a gradient band and its under-line as a quad; moving it to
+  `draw_well_rounded`'s box shadows would give one well recipe. Changes every
+  input's pixels, so do it with a gallery review.
+- [ ] **P3 — Ghost tone colours vs Forge.** The design's ghost key is a flat
+  `rgba(255,255,255,.08)` on hover (.04 pressed), a `.1` highlight on hover
+  and no highlight when pressed; gameui's ghost uses the raised key's face
+  gradient and highlight tokens.
+- [x] **Bug: `Button::with_travel` only moved the label.** The face dropped by
+  the theme's travel regardless; `Material` now carries the travel. Test:
+  `a_travel_override_moves_the_painted_face_too`. `IconKey` gained `travel`
+  and `radius`.
+- [x] **Bug: key highlights ignored the corner radius.** The 1 px top
+  highlight was a straight quad and the press shadow a 2 px band, so round
+  keys showed a flat line across their top. Both are now inset box shadows
+  inside the face's border, like the design's `--key-inset*`; the press
+  shadow is the design's soft `inset 0 2px 3px`. Test:
+  `highlights_and_press_shadows_follow_the_face_rounding`.
+- [x] **ListView** (`widgets/list_view.rs`, `phosphor-icons`). The design's
+  list on top of `List`: 22 px rows (34 when two-line) with an optional
+  Phosphor glyph, a sans or mono label with ellipsis, a mono sub line and a
+  right-aligned mono meta on the label's baseline. The first case-insensitive
+  `highlight` match is tinted `AccentMatch`, or underlined on an accent row.
+  Disabled rows are dimmed and never selected; an empty list shows a
+  magnifier and a message. Rows come from a per-index closure, so only the
+  visible ones are built. The caller owns the selection (`selected` in,
+  `ListViewOutput::select` / `open` out). `UiContext::list_view(view, id,
+  count, selected, state, h, row)` registers a focus id and takes focus on a
+  click, so the selection turns accent in the same frame.
+- [x] **List follows the design's rows.** Zebra, hover and selection use the
+  `RowZebra` / `RowHover` / `Accent` / `RowHeld` tokens with the design's
+  edge lines; the selection is accent only while the list is `focused`.
+  `List::disabled(pred)` rows don't hover, select or activate and the arrow
+  keys step over them; a double-click activates; `ListItem` carries
+  `focused` and `disabled`; `ListState::sync_selection` follows a
+  caller-owned selection. The old `UiContext::list_view` verb (a raw `List`)
+  is now `virtual_list`, since `list_view` draws a `ListView`.
+- [x] **Bug: style-range underlines were ignored.** `TextStyleRange.underline`
+  drew nothing; span underlines were measured in the default font rather
+  than the block's, and ran past an ellipsis. `DrawList::text` now
+  underlines both, in the block's family, cut where the text is cut
+  (`text::ellipsis_cut`). Tests in `draw_list.rs`.
+- [x] **Bug: List and Table culled with a stale scroll offset.** Both read
+  `scroll.offset` before `ScrollView` eased it toward the target, so during
+  a glide (a keyboard reveal, a wheel notch) or a jump they drew and
+  hit-tested the rows for the previous position: blank strips and clicks on
+  the wrong row. They now use `begin`/`end` and read the offset after
+  `begin`. Tests: `rows_and_clicks_follow_the_offset_the_frame_draws_at` in
+  both. The gallery's virtualized cell, which wrote `offset` directly and
+  drew empty, uses `snap_to`.
+- [ ] **P3 — ListView disabled reason.** The design shows why a row is
+  disabled in a tooltip; `ListRow` has no reason yet.
+- [ ] **P3 — No Plex Medium.** Only Regular/Bold/Italic are bundled, and
+  cosmic-text falls back to another family for weight 500, so the design's
+  medium-weight labels are drawn Regular. Bundle Medium if it is wanted.
+- [ ] **P3 — Table row colours.** Table's zebra (`Panel` × 1.1) and hover
+  (`ButtonHover`) predate the row tokens; move them to `RowZebra` /
+  `RowHover` with a gallery review.
+- [x] **P3 — Pre-existing clippy warnings.** `cargo clippy --all-targets`
+  reports ~60 warnings across 25 files (material.rs 11, the shadow/instancing
+  tests, app_shell, menu_screens, …), none new. Either fix them and make
+  clippy part of the checklist, or decide it isn't a gate.
+  Fixed (2026-09-25): `cargo clippy --all-targets -- -D warnings` is clean
+  with default features, `--no-default-features` and `--all-features`. The
+  repeated caller-owned scroll-glide report in `UiContext` is one helper
+  (`report_scroll_glide`), `MenuList` has `row_enabled`, and the
+  `event_driven_ui` example returns the Quit click instead of taking an out
+  parameter.
+- [x] **Bug: GPU tests didn't build without `headless`.** Five test files use
+  `HeadlessGpu` but didn't declare the feature, and the gallery's toolbar and
+  app-shell cells weren't gated on `phosphor-icons`, so
+  `cargo test --no-default-features` failed to compile. They now have
+  `[[test]] required-features` and `cfg` gates. Nine lib tests that need
+  real glyphs or Plex by name (ink bands, text measurement, underline
+  fonts, the menu sheet's mono hint) failed without `bundled-font`; they
+  are gated on it like the existing font tests.
+- [x] **DockStack / DockSection** (`widgets/dock_stack.rs`,
+  `phosphor-icons`). Collapsible sections stacked in a dock: a raised 22 px
+  header (caret, mono-capitals title, count, ghost `IconKey` actions), an
+  optional recessed toolbar strip, and a body the caller fills. Expanded
+  sections share the height by weight above a minimum body (66 px), fixed
+  sections take their height, collapsed ones their header; a 6 px splitter
+  between expanded neighbours turns every weight into its current height
+  when dragged, so the others hold still. `DockStack::layout` is a pure
+  function; `DockStackState` is caller-owned. Chrome in
+  `theme.chrome.dock_section` (`DockSectionChrome`).
+- [x] **ScrollView overlay bars** (Forge `ScrollArea`). `ScrollView::overlay`
+  floats a thin thumb over the content instead of docking a gutter beside
+  it; the thumb takes the pointer and drags like a docked one. Thumb faces
+  come from `theme.chrome.scrollbar` (`ScrollbarChrome`: idle, hovered,
+  dragged). ListView uses overlay bars.
+- [x] **Bug: docked step keys didn't scroll.** The step keys were drawn but
+  had no input handling, so clicking them did nothing. They now press,
+  hover and scroll by a step. Test: `docked_step_keys_scroll_by_a_step`.
+- [x] **Bug: the thumb's length used the track as the visible amount.** The
+  thumb was `track × track / content`, where the track is the viewport minus
+  the step keys, so it came out shorter than the visible fraction. It is now
+  `track × visible / content`. Test:
+  `thumb_extent_proportional_to_visible_fraction`.
+- [x] **`ListRow::sub` is now `subtitle`** (the design's name).
+- [x] **Tree follows the design** (Forge `Tree`). 22 px rows
+  (`ListRowHeight`, also in `UiContext::tree_row`), 11 px indent, a ▾/▸
+  caret, an optional per-node glyph (`TreeNode::with_glyph`, a sprite or,
+  with `phosphor-icons`, a `TreeIcon::Phosphor`; `TreeAction::phosphor`),
+  labels at the menu size in `Ink::Title`. Selection is the list's accent
+  bar with on-accent ink, and the held (grey) bar while a wired focus id
+  isn't focused. `TreeNode::with_disabled`: a disabled node is dimmed, never
+  hovered or selected, its actions still fire, a disabled branch still
+  expands by pointer, and the arrow keys step over it. Selection painting
+  is shared with `List` (`list::paint_selected_row`); `DrawList::
+  x_centered_text_y` centres a line's x-height on a row (List, ListView and
+  Tree use it). Tests in `tree.rs`; gallery cell "Tree — glyphs · selected ·
+  disabled · hovered".
+- [x] **Opening a tree row.** For rows with an action of their own (open the
+  folder, show the asset): `TreeNodeOutput::opened` reports a double-click
+  on the row body (not the caret, an action or a disabled row), and
+  `TreeState::set_enter_opens(true)` makes Enter/Space report the selected
+  row through `TreeState::opened()` instead of toggling it (branches then
+  open and close with Right/Left and their caret). Off by default, so
+  existing trees still toggle on Enter. Tests in `tree.rs`. agent-ui's Disk
+  tab opens a folder as the project this way.
+- [x] **Toasts follow Forge `feedback/Toast` and can wait to be dismissed.**
+  A toast is a tone pip, a title (menu size, `Ink::Emph`) over a body (row
+  size, `Ink::Glyph`, 1.45 leading), and a ghost × close key; without a
+  title the message is the title. It no longer draws a `Banner`.
+  `Toast::until_dismissed()` stays until closed (errors); `with_key` makes a
+  push replace the shown toast with the same key instead of stacking a copy;
+  `ToastStack::{dismiss(key), clear(), toasts()}`; `placed()` gives the
+  shown toasts with their rects and `close_rect(rect)` a toast's close key,
+  for hit tests and app-level tests. `pending()` ignores
+  toasts without a time. The stack lays out in an `area` rect (e.g. below a
+  menu bar) rather than the whole screen. `push_layer(layers, area, styles)`
+  pushes a popup layer over the visible toasts so clicks on them don't reach
+  the UI under them, and `draw(area, ctx) -> Option<Toast>` draws with a
+  `DrawContext` (the close keys need input) and returns the dismissed toast.
+  Breaking: `draw(w, h, list, style)` is gone, and `Toast` derives
+  `PartialEq`. Tests in `toast.rs`; gallery cell "Toast stack (top-right)".
+- [x] **Bug: frames with many text runs hung on Metal.** The ordered paint
+  stream opened one render pass per run (every text run between two quads
+  started a new pass). wgpu-core opens a Metal command buffer per pass and
+  the queue allows 2048, so a frame of ~1,100 runs (the widget gallery)
+  blocked forever in `Queue::submit`. The renderer now uploads every run
+  first and draws the whole stream in one pass (`PreparedRun`,
+  `TextRenderer::draw_prepared`, `render::load_pass`); pixels are identical.
+  `RenderStats::color_passes` is now `render_passes` (all passes opened) and
+  `UiRenderer::frame_stats` returns the last frame's stats. Test:
+  `tests/render_passes.rs` (3,000 runs, one pass, order kept).
+- [x] **EmptyState follows the design** (`widgets/empty_state.rs`, Forge
+  `EmptyState`). A sunken box (`WellDeep` fill, `EdgeHard` border, the
+  design's `inset 0 2px 5px` shadow) with a centred column 9 px apart: a
+  20 px glyph in `Ink::Empty` (text, or a `PhosphorIcon` with
+  `phosphor-icons`), an optional title (menu size, `Ink::Tab`), an optional
+  hint (dense, 1.5 line height, `Ink::Caption`) and an optional accent
+  action key. `EmptyState::new()…draw(rect, ctx) -> bool` replaces the free
+  `empty_state` function and its separate CTA button;
+  `UiContext::empty_state(&es, h)` replaces `empty_state_block` and puts the
+  action in the Tab ring. `TextBlock::with_line_height` sets a line box;
+  `color::text_color` is the one `[f32; 4]` → text colour conversion (the
+  Tree and ListView tests had their own copies).
+- [x] **cosmic-text 0.19, and one shaping cache for measuring and drawing.**
+  cosmic-text 0.14 → 0.19 (it caches HarfRust shape plans, which alone took
+  agent-ui's scrollbar drag from 70.7 to 17.3 ms a frame;
+  `Buffer::set_size`/`set_wrap`/`set_text` no longer take the `FontSystem`,
+  and `FontSystem::get_font` takes the glyph's weight). The measurer and the
+  renderer used to shape every text twice, each with its own cache; they
+  now share `SharedFontSystem` (`src/shaping.rs`), which holds the
+  `FontSystem`, the shaped layouts and the vertical metrics.
+  `FontSystemHandle` is `Arc<Mutex<SharedFontSystem>>` (breaking: callers
+  lock it and call `font_system()`). A block is laid out once per
+  `LayoutSpec` and content; the measurer's height for a block is the height
+  of the layout the renderer draws, including its own line height (it
+  measured at the default 1.25 before, so a block with another line height
+  was sized wrongly — a toast's body now clears its bottom edge). The drag
+  through the 2,438-event transcript is now 12.9 ms a frame (worst
+  157 → 26 ms). Tests in `shaping.rs` and `text.rs`
+  (`a_block_measured_for_layout_is_drawn_without_shaping_it_again`,
+  `measuring_text_and_measuring_its_block_share_one_layout`,
+  `a_block_is_measured_at_its_own_line_height`).
+  `SharedFontSystem::set_layout_budget` changes the layout budget (lowering
+  it trims at once). agent-ui's background row-height thread measures with
+  its own font system at budget 0, which keeps only the last layout, since
+  it only wants heights (`with_no_layout_budget_only_the_last_layout_is_kept`).
+- [ ] **P2 — Ellipsis shapes the full text twice.** On a miss, an ellipsized
+  block's natural width is shaped by the measurer, and `ellipsis_cut` shapes
+  the full content again to find the cut. It could read the width and the
+  glyph boundaries from the cached unellipsized layout.
+- [ ] **P2 — Caret, cursor and visual layouts shape on their own.**
+  `text_caret_layout`, `text_cursor_positions` and `text_visual_layout` build
+  their own `Buffer` every call rather than using the shared layouts; a
+  large text input reshapes its whole content for each of them.
+- [ ] **P3 — Variable font weights.** The atlas keys glyphs by
+  `(font id, glyph id)` and rasterises from the font file, so a variable font
+  draws every weight at its default instance. Carry the weight into the
+  atlas key and apply the variation when one is needed.
+- [ ] **P3 — Docked scrollbar gutter colours.** The docked gutter and step
+  keys still use the older scrollbar keys, not the Forge `ScrollArea`
+  values; move them into `ScrollbarChrome` with a gallery review.
+- [ ] **P3 — Key tooltips.** The design's `IconKey`s carry a tooltip (title
+  plus shortcut); gameui's keys take none, so DockStack actions and the
+  search clear key show nothing on hover.
+- [ ] **P3 — Tree action hover literal.** `Tree::draw_action`'s hover
+  overlay is a hard-coded `[1, 1, 1, 0.12]`; it should be a token.
+- [ ] **P3 — Tree disabled reason.** Like ListView, a disabled node has no
+  tooltip saying why.
+- [ ] **P3 — Keyboard expand of a disabled branch.** A disabled branch
+  expands by pointer, but the arrow keys skip it, so the keyboard can't
+  reach its children.
+- [ ] **P3 — `block` 0.1.6 future-incompat warning.** Every build warns
+  that `block` (pulled in through the Metal backend) will be rejected by a
+  future Rust; it goes away with a wgpu upgrade.

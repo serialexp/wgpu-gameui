@@ -210,6 +210,29 @@ pub struct Theme {
     /// Text/icon color drawn on top of danger faces.
     pub on_danger: [f32; 4],
 
+    // --- Forge roles -------------------------------------------------------
+    /// The ink ladder, indexed by [`Ink`](crate::Ink) (`Ink::ALL` order).
+    /// Read through [`StyleKey::Ink`].
+    pub ink: [[f32; 4]; crate::Ink::ALL.len()],
+    /// Search-match highlight on a dark surface.
+    pub accent_match: [f32; 4],
+    /// Zebra stripe over every other list row.
+    pub row_zebra: [f32; 4],
+    /// Hovered list row fill.
+    pub row_hover: [f32; 4],
+    /// Selected row fill in a list without keyboard focus.
+    pub row_held: [f32; 4],
+    /// Deep sunken surface (empty-state boxes).
+    pub well_deep: [f32; 4],
+    /// Hard black edge around sunken boxes.
+    pub edge_hard: [f32; 4],
+    /// Type scale in pixels, indexed by [`TextSize`](crate::TextSize).
+    pub text_sizes: [f32; crate::TextSize::ALL.len()],
+    /// Letter spacing in em, indexed by [`Tracking`](crate::Tracking).
+    pub tracking: [f32; crate::Tracking::ALL.len()],
+    /// Height of one list, tree or section header row, in pixels.
+    pub list_row_height: f32,
+
     /// Finite, typed chrome materials for component families.
     pub chrome: ChromeTheme,
 
@@ -219,6 +242,12 @@ pub struct Theme {
     /// custom family; every widget that builds text through this `Theme` picks it
     /// up. Per-block `TextBlock::with_font` still overrides it.
     pub font: Option<FontHandle>,
+
+    /// Font for technical text: counts, metadata, shortcuts, mono-caps
+    /// captions. Defaults to the bundled IBM Plex Mono (registered by
+    /// [`shared_font_system`](crate::shared_font_system)); `None` (the default
+    /// without the `bundled-font` feature) falls back to the sans font.
+    pub mono_font: Option<FontHandle>,
 
     /// Mod-defined style values keyed by [`StyleKey::custom`] name-hash. Built-in
     /// styles live in the typed fields above; this map holds keys the core
@@ -351,8 +380,54 @@ impl Default for Theme {
             danger_face_bottom_pressed: oklch(0.44, 0.14, 25.0, 1.0),
             on_danger: hex(0xfdeaea),
 
+            // Forge `colors.css` ink ladder, in `Ink::ALL` order.
+            ink: [
+                hex(0xffffff), // White
+                hex(0xf1f5f9), // Max
+                hex(0xeef2f6), // Value
+                hex(0xe2e8ee), // Emph
+                hex(0xdbe1e7), // Menu
+                hex(0xd5dce2), // Title
+                hex(0xcfd6dd), // Row
+                hex(0xc6ced5), // Cell
+                hex(0xbdc5cc), // Second
+                hex(0xb6bec5), // Icon
+                hex(0xaeb6be), // Chip
+                hex(0x9aa2aa), // Glyph
+                hex(0x98a0a8), // Tab
+                hex(0x8d959d), // TipHint
+                hex(0x8b939b), // Body2
+                hex(0x7d858e), // Muted
+                hex(0x78818a), // Shortcut
+                hex(0x737c85), // Label
+                hex(0x6a737b), // Caption
+                hex(0x626b73), // Dim
+                hex(0x5d656c), // Disabled
+                hex(0x4f575e), // DisabledGlyph
+                hex(0x464e55), // DisabledKey
+                hex(0x3f474e), // Empty
+                hex(0x6f7982), // Brand
+                hex(0xe6e9ec), // Primary
+                hex(0x294d55), // OnAccentSecond
+            ],
+            accent_match: oklch(0.84, 0.09, 200.0, 1.0),
+            row_zebra: [1.0, 1.0, 1.0, 0.016],
+            row_hover: [1.0, 1.0, 1.0, 0.055],
+            row_held: [1.0, 1.0, 1.0, 0.1],
+            well_deep: [0.0, 0.0, 0.0, 0.4],
+            edge_hard: [0.0, 0.0, 0.0, 0.65],
+            // `typography.css`: caption, meta, dense, row, menu.
+            text_sizes: [9.0, 10.0, 10.5, 11.0, 11.5],
+            // Badge, prop, caption, section, brand.
+            tracking: [0.08, 0.1, 0.14, 0.16, 0.18],
+            list_row_height: 22.0,
+
             chrome: ChromeTheme::default(),
             font: None,
+            #[cfg(feature = "bundled-font")]
+            mono_font: Some(FontHandle(crate::text::BUNDLED_MONO_FAMILY.to_string())),
+            #[cfg(not(feature = "bundled-font"))]
+            mono_font: None,
             custom: CustomStyles::default(),
         }
     }
@@ -441,10 +516,40 @@ mod tests {
             theme.set(k, StyleValue::Color(probe));
             assert_eq!(theme.get(k).unwrap().as_color().unwrap(), probe, "{k:?}");
         }
-        for &k in SCALAR_KEYS {
+        let roles = crate::Ink::ALL.map(StyleKey::Ink);
+        for k in roles {
+            let probe = [0.1, 0.2, 0.3, 1.0];
+            theme.set(k, StyleValue::Color(probe));
+            assert_eq!(theme.get(k).unwrap().as_color().unwrap(), probe, "{k:?}");
+            assert!(k.is_color(), "{k:?}");
+        }
+        let sizes = crate::TextSize::ALL.map(StyleKey::TextSize);
+        let tracking = crate::Tracking::ALL.map(StyleKey::Tracking);
+        for &k in SCALAR_KEYS.iter().chain(&sizes).chain(&tracking) {
             theme.set(k, StyleValue::Scalar(123.5));
             assert_eq!(theme.get(k).unwrap().as_scalar().unwrap(), 123.5, "{k:?}");
+            assert!(!k.is_color(), "{k:?}");
         }
+    }
+
+    #[test]
+    fn forge_roles_use_the_design_values() {
+        use crate::{Ink, TextSize, Tracking};
+        let t = Theme::default();
+        let ink = |role| t.get(StyleKey::Ink(role)).unwrap().as_color().unwrap();
+        assert_eq!(ink(Ink::Max), t.text_highlight, "--ink-max");
+        assert_eq!(ink(Ink::Glyph), hex(0x9aa2aa));
+        assert_eq!(ink(Ink::Caption), hex(0x6a737b));
+        assert_eq!(ink(Ink::Empty), hex(0x3f474e));
+        assert_eq!(ink(Ink::OnAccentSecond), hex(0x294d55));
+        assert_eq!(t.accent_match, oklch(0.84, 0.09, 200.0, 1.0));
+        assert_eq!(t.row_zebra, [1.0, 1.0, 1.0, 0.016]);
+        let size = |s| t.get(StyleKey::TextSize(s)).unwrap().as_scalar().unwrap();
+        assert_eq!(size(TextSize::Caption), 9.0);
+        assert_eq!(size(TextSize::Menu), 11.5);
+        let track = |r| t.get(StyleKey::Tracking(r)).unwrap().as_scalar().unwrap();
+        assert_eq!(track(Tracking::Section), 0.16);
+        assert_eq!(t.list_row_height, 22.0);
     }
 
     #[test]
@@ -596,6 +701,17 @@ impl Theme {
             WindowTitleHeight => StyleValue::Scalar(self.window_title_height),
             Travel => StyleValue::Scalar(self.travel),
             InnerShadowDepth => StyleValue::Scalar(self.inner_shadow_depth),
+            // Forge roles
+            Ink(role) => StyleValue::Color(self.ink[role as usize]),
+            AccentMatch => StyleValue::Color(self.accent_match),
+            RowZebra => StyleValue::Color(self.row_zebra),
+            RowHover => StyleValue::Color(self.row_hover),
+            RowHeld => StyleValue::Color(self.row_held),
+            WellDeep => StyleValue::Color(self.well_deep),
+            EdgeHard => StyleValue::Color(self.edge_hard),
+            TextSize(step) => StyleValue::Scalar(self.text_sizes[step as usize]),
+            Tracking(role) => StyleValue::Scalar(self.tracking[role as usize]),
+            ListRowHeight => StyleValue::Scalar(self.list_row_height),
             // Custom namespace
             Custom(id) => return self.custom.get(&id).copied(),
         };
@@ -691,6 +807,16 @@ impl Theme {
             (WindowTitleHeight, StyleValue::Scalar(s)) => self.window_title_height = s,
             (Travel, StyleValue::Scalar(s)) => self.travel = s,
             (InnerShadowDepth, StyleValue::Scalar(s)) => self.inner_shadow_depth = s,
+            (Ink(role), StyleValue::Color(c)) => self.ink[role as usize] = c,
+            (AccentMatch, StyleValue::Color(c)) => self.accent_match = c,
+            (RowZebra, StyleValue::Color(c)) => self.row_zebra = c,
+            (RowHover, StyleValue::Color(c)) => self.row_hover = c,
+            (RowHeld, StyleValue::Color(c)) => self.row_held = c,
+            (WellDeep, StyleValue::Color(c)) => self.well_deep = c,
+            (EdgeHard, StyleValue::Color(c)) => self.edge_hard = c,
+            (TextSize(step), StyleValue::Scalar(s)) => self.text_sizes[step as usize] = s,
+            (Tracking(role), StyleValue::Scalar(s)) => self.tracking[role as usize] = s,
+            (ListRowHeight, StyleValue::Scalar(s)) => self.list_row_height = s,
             (k, v) => debug_assert!(
                 false,
                 "Theme::set shape mismatch for {k:?}: built-in key got {v:?}"

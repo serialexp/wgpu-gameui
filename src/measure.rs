@@ -828,6 +828,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
     fn text_measurement_is_structured_and_consumes_into_paint_block() {
         let theme = crate::Theme::default();

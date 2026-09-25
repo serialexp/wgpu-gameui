@@ -54,6 +54,8 @@ pub struct Material {
     pub hovered: bool,
     /// Pressed: the face drops `travel` px onto the plinth.
     pub pressed: bool,
+    /// How far the face drops, in px. `None` uses [`StyleKey::Travel`].
+    pub travel: Option<f32>,
 }
 
 impl Material {
@@ -65,6 +67,7 @@ impl Material {
             enabled: true,
             hovered: false,
             pressed: false,
+            travel: None,
         }
     }
 
@@ -88,12 +91,20 @@ impl Material {
         self.pressed = pressed;
         self
     }
+
+    /// Drop the face `travel` px instead of the theme's (builder style).
+    #[must_use]
+    pub fn travel(mut self, travel: f32) -> Self {
+        self.travel = Some(travel);
+        self
+    }
 }
 
 /// 1px inset highlight/shadow band under a face's top edge.
 const BAND_H: f32 = 1.0;
-/// 2px pressed shadow where the face dropped onto the plinth.
-const PRESS_SHADOW_H: f32 = 2.0;
+/// Offset and blur of the shadow a pressed face drops into (the design's
+/// `--key-inset-pressed` `inset 0 2px 3px`).
+const PRESS_SHADOW: ([f32; 2], f32) = ([0.0, 2.0], 3.0);
 /// Face border alpha (the design's `1px solid rgba(0,0,0,0.5)`).
 const FACE_EDGE_ALPHA: f32 = 0.5;
 /// Ghost-tone border alphas: fainter idle, near-face-edge when active.
@@ -116,7 +127,6 @@ pub fn draw(list: &mut DrawList, s: &StyleResolver, rect: Rect, m: &Material) ->
 /// `travel: 1, radius: 0`-style overrides).
 ///
 /// Returns the face rect.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_with_radius(
     list: &mut DrawList,
     s: &StyleResolver,
@@ -124,7 +134,7 @@ pub fn draw_with_radius(
     radius: f32,
     m: &Material,
 ) -> Rect {
-    let travel = s.scalar(StyleKey::Travel);
+    let travel = m.travel.unwrap_or_else(|| s.scalar(StyleKey::Travel));
     // The face is always `travel` px shorter than the plinth: at rest it sits
     // at the top (plinth visible beneath), pressed it drops to the bottom
     // (plinth visible above). That's the design's plinth model — the gap
@@ -201,6 +211,7 @@ pub(crate) fn draw_inset_shadow(
 /// [`StyleKey::Button`](StyleKey::Button) still recolors buttons, while the
 /// sheen stays themeable separately. Accent/danger faces use their own opaque
 /// gradients.
+#[allow(clippy::too_many_arguments)]
 fn draw_raised(
     list: &mut DrawList,
     s: &StyleResolver,
@@ -301,21 +312,42 @@ fn draw_raised(
     // Top edge decoration: at rest a 1px white highlight; pressed, the short
     // shadow of the face sitting in the plinth (plus its own faint highlight).
     if pressed {
-        let shadow = dim(s.color(StyleKey::InnerShadow));
-        list.chrome_rect(
-            Rect::new(face.x + 1.0, face.y + 1.0, face.width - 2.0, PRESS_SHADOW_H),
+        let (offset, blur) = PRESS_SHADOW;
+        face_inset(
+            list,
+            face,
             radius,
-            0.0,
-            shadow,
-            [0.0; 4],
+            offset,
+            blur,
+            dim(s.color(StyleKey::InnerShadow)),
         );
     }
-    list.quad(
-        face.x + 1.0,
-        face.y + 1.0,
-        (face.width - 2.0).max(0.0),
-        BAND_H,
-        dim(highlight),
+    face_inset(list, face, radius, [0.0, BAND_H], 0.0, dim(highlight));
+}
+
+/// Paint one of a face's inset box shadows (`inset x y blur color`) inside
+/// its 1 px border, so highlights and press shadows follow the corner
+/// rounding however round the key is.
+fn face_inset(
+    list: &mut DrawList,
+    face: Rect,
+    radius: f32,
+    offset: [f32; 2],
+    blur: f32,
+    color: [f32; 4],
+) {
+    use crate::{BoxShadow, CornerRadii};
+    let radius = radius.min(face.width.min(face.height) * 0.5);
+    list.box_shadow_inset(
+        face.inset(1.0),
+        CornerRadii::uniform((radius - 1.0).max(0.0)),
+        BoxShadow {
+            offset,
+            blur,
+            color,
+            inset: true,
+            ..BoxShadow::default()
+        },
     );
 }
 
@@ -394,23 +426,18 @@ fn draw_ghost(
     list.chrome_rect_gradient(face, radius, 1.0, dim(top), dim(bottom), dim(border));
 
     if pressed {
-        let shadow = dim(s.color(StyleKey::InnerShadow));
-        list.chrome_rect(
-            Rect::new(face.x + 1.0, face.y + 1.0, face.width - 2.0, PRESS_SHADOW_H),
+        let (offset, blur) = PRESS_SHADOW;
+        face_inset(
+            list,
+            face,
             radius,
-            0.0,
-            shadow,
-            [0.0; 4],
+            offset,
+            blur,
+            dim(s.color(StyleKey::InnerShadow)),
         );
     }
     if active {
-        list.quad(
-            face.x + 1.0,
-            face.y + 1.0,
-            (face.width - 2.0).max(0.0),
-            BAND_H,
-            dim(highlight),
-        );
+        face_inset(list, face, radius, [0.0, BAND_H], 0.0, dim(highlight));
     }
 }
 
@@ -443,8 +470,7 @@ pub fn draw_well(list: &mut DrawList, s: &StyleResolver, rect: Rect, focused: bo
         } else {
             s.color(StyleKey::Accent)
         };
-        // Forge `--danger-ring` is .18 alpha, `--accent-ring` .16.
-        let alpha = if invalid { 0.18 } else { 0.16 };
+        let alpha = WELL_RING_ALPHA[usize::from(invalid)];
         let ring_out = [ring[0], ring[1], ring[2], alpha];
         list.rounded_rect_outline(rect, radius + 0.5, 1.0, ring_out);
     }
@@ -486,6 +512,85 @@ pub fn draw_well_simple(
     );
 }
 
+/// Offset and blur of the well's inner shadow (`--well-inset`'s
+/// `inset 0 2px 4px`).
+#[cfg(feature = "phosphor-icons")]
+const WELL_INSET_SHADOW: ([f32; 2], f32) = ([0.0, 2.0], 4.0);
+/// Spread of the focus / invalid ring around a well (`--well-focus-ring`'s
+/// `0 0 0 2px`).
+#[cfg(feature = "phosphor-icons")]
+const WELL_RING_SPREAD: f32 = 2.0;
+/// The ring's alpha: Forge `--accent-ring` is .16, `--danger-ring` .18.
+const WELL_RING_ALPHA: [f32; 2] = [0.16, 0.18];
+
+/// Draw an input well with corner `radius`, painted with the design's box
+/// shadows so every layer follows the rounding: the round search well
+/// (`--radius-search`) as much as a square one. Resting, the well has a
+/// light line under its bottom edge (`--well-inset`); focused or invalid,
+/// the border turns accent or danger and a soft 2 px ring replaces that line
+/// (`--well-focus-ring`, `--well-invalid-ring`). `radius` is clamped to half
+/// the shorter side.
+///
+/// Only the search field paints one so far, hence the feature gate; see the
+/// TODO on moving [`draw_well`] onto these shadows.
+#[cfg(feature = "phosphor-icons")]
+pub fn draw_well_rounded(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    rect: Rect,
+    radius: f32,
+    focused: bool,
+    invalid: bool,
+) {
+    use crate::{BoxShadow, CornerRadii};
+    let radius = radius.min(rect.width.min(rect.height) * 0.5).max(0.0);
+    let border_w = s.scalar(StyleKey::BorderWidth);
+    let ring = if invalid {
+        Some((s.color(StyleKey::Error), WELL_RING_ALPHA[1]))
+    } else if focused {
+        Some((s.color(StyleKey::Accent), WELL_RING_ALPHA[0]))
+    } else {
+        None
+    };
+    let outset = match ring {
+        Some((c, alpha)) => BoxShadow {
+            spread: WELL_RING_SPREAD,
+            color: [c[0], c[1], c[2], alpha],
+            ..BoxShadow::default()
+        },
+        None => BoxShadow {
+            offset: [0.0, BAND_H],
+            color: s.color(StyleKey::EdgeShadow),
+            ..BoxShadow::default()
+        },
+    };
+    list.box_shadow_outset(rect, CornerRadii::uniform(radius), outset);
+
+    let mut fill = s.color(StyleKey::InputBackground);
+    if focused {
+        // `--well-focus` is .5 over `--well`'s .42.
+        fill[3] = (fill[3] + 0.08).min(1.0);
+    }
+    let border = match ring {
+        Some((c, _)) => c,
+        None => s.color(StyleKey::InputBorder),
+    };
+    list.chrome_rect(rect, radius, border_w, fill, border);
+
+    let (offset, blur) = WELL_INSET_SHADOW;
+    list.box_shadow_inset(
+        rect.inset(border_w),
+        CornerRadii::uniform((radius - border_w).max(0.0)),
+        BoxShadow {
+            offset,
+            blur,
+            color: s.color(StyleKey::InnerShadow),
+            inset: true,
+            ..BoxShadow::default()
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,7 +610,7 @@ mod tests {
         let s = styles();
         let rect = Rect::new(10.0, 10.0, 60.0, 24.0);
         let mut idle = DrawList::new();
-        let f = draw(&mut idle, &s, rect, &Material::new(Tone::Default));
+        let f = draw(&mut idle, s, rect, &Material::new(Tone::Default));
         assert_eq!(
             (f.y - rect.y, f.height),
             (0.0, 22.0),
@@ -515,7 +620,7 @@ mod tests {
         let mut pressed = DrawList::new();
         let f = draw(
             &mut pressed,
-            &s,
+            s,
             rect,
             &Material::new(Tone::Default).pressed(true),
         );
@@ -527,11 +632,44 @@ mod tests {
     }
 
     #[test]
+    fn highlights_and_press_shadows_follow_the_face_rounding() {
+        let s = styles();
+        // A round 16 px key: the face is 16×14, so its radius clamps to 7.
+        let rect = Rect::new(0.0, 0.0, 16.0, 16.0);
+        for tone in [Tone::Default, Tone::Ghost] {
+            let mut list = DrawList::new();
+            let m = Material::new(tone).hovered(true).pressed(true);
+            let face = draw_with_radius(&mut list, s, rect, 8.0, &m);
+            assert_eq!(
+                list.shadow_instance_count(),
+                2,
+                "{tone:?}: press shadow + highlight"
+            );
+            for shadow in list.shadow_instances() {
+                assert_eq!(
+                    shadow.element_rect,
+                    [
+                        face.x + 1.0,
+                        face.y + 1.0,
+                        face.width - 2.0,
+                        face.height - 2.0
+                    ],
+                    "{tone:?}: painted inside the face's border"
+                );
+                assert_eq!(
+                    shadow.element_radii, [6.0; 4],
+                    "{tone:?}: rounded like the face"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn raised_paints_plinth_then_sheen_face() {
         let s = styles();
         let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
         let mut list = DrawList::new();
-        draw(&mut list, &s, rect, &Material::new(Tone::Default));
+        draw(&mut list, s, rect, &Material::new(Tone::Default));
         // [0] plinth (flat dark), [1] face gradient = sheen over the state base.
         assert_eq!(
             list.chrome_instance(0).unwrap().bg,
@@ -545,7 +683,7 @@ mod tests {
         let mut hov = DrawList::new();
         draw(
             &mut hov,
-            &s,
+            s,
             rect,
             &Material::new(Tone::Default).hovered(true),
         );
@@ -576,7 +714,7 @@ mod tests {
         let s = styles();
         let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
         let mut list = DrawList::new();
-        draw(&mut list, &s, rect, &Material::new(Tone::Ghost));
+        draw(&mut list, s, rect, &Material::new(Tone::Ghost));
         assert_eq!(list.chrome_instance_count(), 1, "no plinth instance");
         assert_eq!(
             list.chrome_instance(0).unwrap().bg[3],
@@ -590,7 +728,7 @@ mod tests {
         let s = styles();
         let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
         let mut list = DrawList::new();
-        draw(&mut list, &s, rect, &Material::new(Tone::Accent));
+        draw(&mut list, s, rect, &Material::new(Tone::Accent));
         assert_eq!(
             list.chrome_instance(1).unwrap().bg,
             s.color(StyleKey::AccentFaceTop)
@@ -599,7 +737,7 @@ mod tests {
         let mut off = DrawList::new();
         draw(
             &mut off,
-            &s,
+            s,
             rect,
             &Material::new(Tone::Accent).enabled(false),
         );
@@ -616,7 +754,7 @@ mod tests {
         let s = styles();
         let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
         let mut list = DrawList::new();
-        draw(&mut list, &s, rect, &Material::new(Tone::Sunken));
+        draw(&mut list, s, rect, &Material::new(Tone::Sunken));
         assert_eq!(
             list.chrome_instance(0).unwrap().bg,
             s.color(StyleKey::InputBackground)
@@ -628,9 +766,9 @@ mod tests {
         let s = styles();
         let rect = Rect::new(0.0, 0.0, 60.0, 22.0);
         let mut idle = DrawList::new();
-        draw_well(&mut idle, &s, rect, false, false);
+        draw_well(&mut idle, s, rect, false, false);
         let mut focus = DrawList::new();
-        draw_well(&mut focus, &s, rect, true, false);
+        draw_well(&mut focus, s, rect, true, false);
         assert!(
             focus.chrome_instance_count() > idle.chrome_instance_count(),
             "the focus ring is an extra stroke instance"

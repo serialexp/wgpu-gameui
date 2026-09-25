@@ -32,9 +32,8 @@
 //! ```
 
 use crate::chrome::SurfacePainter;
-use crate::color::hex;
 use crate::layout::Rect;
-use crate::style::StyleKey;
+use crate::style::{Ink, StyleKey};
 use crate::text::TextBlock;
 
 use super::DrawContext;
@@ -282,9 +281,9 @@ impl<'a> DockPanel<'a> {
                 // The dock spec keeps hovered and idle labels at the same tone;
                 // only the chip face changes on hover.
                 let text_color = if is_active {
-                    hex(0xf1f5f9)
+                    s.ink(Ink::Max)
                 } else {
-                    hex(0x98a0a8)
+                    s.ink(Ink::Tab)
                 };
                 let ty = ctx.draw_list.vcentered_text_y(
                     tab_rect.y,

@@ -211,6 +211,40 @@ pub struct DockChrome {
     pub active_tab_inset: BoxShadow,
 }
 
+/// Chrome of the collapsible sections stacked inside a dock (see
+/// [`DockStack`](crate::DockStack)): a raised header bar per section and an
+/// optional recessed toolbar strip under it. The washes are translucent, laid
+/// over the dock body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DockSectionChrome {
+    /// Header wash, idle and hovered.
+    pub header: [Background; 2],
+    /// Dark rule on top of every header but the first — with
+    /// [`header_highlight`](Self::header_highlight) under it, the two-line
+    /// edge that reads each section as its own pane.
+    pub top_rule: EdgeStyle,
+    /// Highlight just inside a header's top edge.
+    pub header_highlight: EdgeStyle,
+    /// Rule under an expanded header.
+    pub header_rule: EdgeStyle,
+    /// Toolbar strip wash.
+    pub toolbar: Background,
+    /// Rule under the toolbar strip.
+    pub toolbar_rule: EdgeStyle,
+    /// Highlight just above the toolbar rule.
+    pub toolbar_highlight: EdgeStyle,
+}
+
+/// Scrollbar thumb chrome (Forge `ScrollArea`): a translucent raised face in
+/// three states, shared by the docked bar and the overlay bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollbarChrome {
+    /// Face and border: idle, hovered, dragged.
+    pub thumb: [QuadStyle; 3],
+    /// Inset highlight and shade inside the border, per state.
+    pub thumb_insets: [[BoxShadow; 2]; 3],
+}
+
 /// Finite splitter track, grip, and dragging glow chrome.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplitterChrome {
@@ -289,6 +323,10 @@ pub struct ChromeTheme {
     pub toolbar: ToolbarChrome,
     /// Dock-panel chrome.
     pub dock: DockChrome,
+    /// Chrome of the sections stacked inside a dock.
+    pub dock_section: DockSectionChrome,
+    /// Scrollbar thumb chrome.
+    pub scrollbar: ScrollbarChrome,
     /// Splitter chrome.
     pub splitter: SplitterChrome,
     /// Status-bar chrome.
@@ -612,6 +650,50 @@ impl Default for ChromeTheme {
                     corner_radii: CornerRadii::uniform(1.0),
                 },
                 active_tab_inset: shadow(1.0, 0.0, rgb8([0x6a, 0x6c, 0x6f]), true),
+            },
+            dock_section: {
+                let wash = |top: f32, bottom: f32| Background::LinearGradient {
+                    start: [1.0, 1.0, 1.0, top],
+                    end: [1.0, 1.0, 1.0, bottom],
+                    axis: GradientAxis::Vertical,
+                };
+                let edge = |color| EdgeStyle {
+                    thickness: 1.0,
+                    color,
+                };
+                DockSectionChrome {
+                    header: [wash(0.055, 0.015), wash(0.08, 0.025)],
+                    top_rule: edge(rgb8([0x0a, 0x0b, 0x0d])),
+                    header_highlight: edge([1.0, 1.0, 1.0, 0.07]),
+                    header_rule: edge([0.0, 0.0, 0.0, 0.6]),
+                    toolbar: Background::Solid([0.0, 0.0, 0.0, 0.14]),
+                    toolbar_rule: edge([0.0, 0.0, 0.0, 0.5]),
+                    toolbar_highlight: edge([1.0, 1.0, 1.0, 0.035]),
+                }
+            },
+            scrollbar: {
+                let face = |top: f32, bottom: f32| QuadStyle {
+                    background: Background::LinearGradient {
+                        start: [1.0, 1.0, 1.0, top],
+                        end: [1.0, 1.0, 1.0, bottom],
+                        axis: GradientAxis::Vertical,
+                    },
+                    border_widths: EdgeWidths::uniform(1.0),
+                    border_color: [0.0, 0.0, 0.0, 0.55],
+                    corner_radii: CornerRadii::uniform(1.0),
+                };
+                let shade = shadow(-1.0, 0.0, [0.0, 0.0, 0.0, 0.3], true);
+                ScrollbarChrome {
+                    thumb: [face(0.19, 0.07), face(0.25, 0.11), face(0.1, 0.04)],
+                    thumb_insets: [
+                        [shadow(1.0, 0.0, [1.0, 1.0, 1.0, 0.22], true), shade],
+                        [shadow(1.0, 0.0, [1.0, 1.0, 1.0, 0.3], true), shade],
+                        [
+                            shadow(1.0, 0.0, [1.0, 1.0, 1.0, 0.07], true),
+                            shadow(2.0, 4.0, [0.0, 0.0, 0.0, 0.45], true),
+                        ],
+                    ],
+                }
             },
             splitter: SplitterChrome {
                 track_colors: [rgb8([0x16, 0x19, 0x1b]), rgb8([0x0e, 0x11, 0x13])],

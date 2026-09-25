@@ -59,10 +59,12 @@
     )
 )]
 
+mod shaping;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax;
 mod text;
 
+pub use shaping::{LayoutStats, SharedFontSystem};
 #[cfg(feature = "syntax-lua")]
 pub use syntax::SyntaxConfigurationError;
 #[cfg(feature = "syntax-highlighting")]
@@ -107,9 +109,10 @@ mod widgets;
 pub use affine::Affine2;
 pub use animation::{AnimSlot, AnimationState, Easing, ease, lerp, lerp_color};
 pub use chrome::{
-    Background, ChromeTheme, DockChrome, Edge, EdgeStyle, EdgeWidths, FloatingSurfaceChrome,
-    GradientAxis, MenuBarChrome, MenuSheetChrome, QuadStyle, SplitterChrome, StatusBarChrome,
-    StructuralLine, SurfacePainter, ToolbarChrome, WindowChrome,
+    Background, ChromeTheme, DockChrome, DockSectionChrome, Edge, EdgeStyle, EdgeWidths,
+    FloatingSurfaceChrome, GradientAxis, MenuBarChrome, MenuSheetChrome, QuadStyle,
+    ScrollbarChrome, SplitterChrome, StatusBarChrome, StructuralLine, SurfacePainter,
+    ToolbarChrome, WindowChrome,
 };
 pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};
 pub use color::Hsva;
@@ -142,7 +145,7 @@ pub use render::{
     IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
 };
 pub use shadow::{BoxShadow, CornerRadii, ShadowInstance};
-pub use style::{StyleKey, StyleOverlay, StyleResolver, StyleValue};
+pub use style::{Ink, StyleKey, StyleOverlay, StyleResolver, StyleValue, TextSize, Tracking};
 pub use theme::Theme;
 pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};
 pub use widgets::*;
@@ -668,7 +671,7 @@ mod input_state_tests {
         // hand-written `Default` impl for why this is not derived.
         assert_eq!(InputState::default().frame_dt, crate::NOMINAL_FRAME_DT);
         assert_eq!(InputState::new().frame_dt, crate::NOMINAL_FRAME_DT);
-        assert!(crate::NOMINAL_FRAME_DT > 0.0);
+        const { assert!(crate::NOMINAL_FRAME_DT > 0.0) };
     }
 
     #[test]

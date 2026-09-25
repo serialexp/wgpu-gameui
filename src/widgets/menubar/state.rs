@@ -661,7 +661,7 @@ impl MenuBarState {
             size: ROW_FONT_SIZE,
             ..FontSpec::default()
         };
-        let mono = crate::bundled_mono_font(&list.text_measurer_mut().font_system_handle());
+        let mono = theme.mono_font.clone();
 
         // One measuring pass over the column. `MeasureConstraints::UNBOUNDED`
         // keeps every measurement at its intrinsic size, which is what the

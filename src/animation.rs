@@ -279,7 +279,7 @@ impl AnimationState {
                         a.start = target; // settle exactly
                     }
                 }
-                let pending = (a.t < duration).then(|| duration - a.t);
+                let pending = (a.t < duration).then_some(duration - a.t);
                 let drawn = a.current(easing, duration);
                 if let Some(remaining) = pending {
                     self.note_remaining(remaining);
@@ -341,7 +341,7 @@ impl AnimationState {
                         a.start = target;
                     }
                 }
-                let pending = (a.t < duration).then(|| duration - a.t);
+                let pending = (a.t < duration).then_some(duration - a.t);
                 let drawn = a.current(easing, duration);
                 if let Some(remaining) = pending {
                     self.note_remaining(remaining);

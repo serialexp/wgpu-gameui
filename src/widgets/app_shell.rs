@@ -256,50 +256,53 @@ impl AppShell {
         }
 
         // --- Bottom: bottom dock + splitter ---
-        if let Some(bs) = bottom {
-            if bs.visible && rem.height > splitter_w + 1.0 {
-                let dock_h = bs.size.min(rem.height - splitter_w);
-                let sp_y = rem.y + rem.height - dock_h - splitter_w;
-                out.bottom_splitter = Some(Rect::new(rem.x, sp_y, rem.width, splitter_w));
-                out.bottom_dock = Some(Rect::new(rem.x, sp_y + splitter_w, rem.width, dock_h));
-                rem = Rect::new(
-                    rem.x,
-                    rem.y,
-                    rem.width,
-                    (rem.height - dock_h - splitter_w).max(0.0),
-                );
-            }
+        if let Some(bs) = bottom
+            && bs.visible
+            && rem.height > splitter_w + 1.0
+        {
+            let dock_h = bs.size.min(rem.height - splitter_w);
+            let sp_y = rem.y + rem.height - dock_h - splitter_w;
+            out.bottom_splitter = Some(Rect::new(rem.x, sp_y, rem.width, splitter_w));
+            out.bottom_dock = Some(Rect::new(rem.x, sp_y + splitter_w, rem.width, dock_h));
+            rem = Rect::new(
+                rem.x,
+                rem.y,
+                rem.width,
+                (rem.height - dock_h - splitter_w).max(0.0),
+            );
         }
 
         // --- Left: left dock + splitter ---
-        if let Some(ls) = left {
-            if ls.visible && rem.width > splitter_w + 1.0 {
-                let dock_w = ls.size.min(rem.width - splitter_w);
-                out.left_dock = Some(Rect::new(rem.x, rem.y, dock_w, rem.height));
-                out.left_splitter = Some(Rect::new(rem.x + dock_w, rem.y, splitter_w, rem.height));
-                rem = Rect::new(
-                    rem.x + dock_w + splitter_w,
-                    rem.y,
-                    (rem.width - dock_w - splitter_w).max(0.0),
-                    rem.height,
-                );
-            }
+        if let Some(ls) = left
+            && ls.visible
+            && rem.width > splitter_w + 1.0
+        {
+            let dock_w = ls.size.min(rem.width - splitter_w);
+            out.left_dock = Some(Rect::new(rem.x, rem.y, dock_w, rem.height));
+            out.left_splitter = Some(Rect::new(rem.x + dock_w, rem.y, splitter_w, rem.height));
+            rem = Rect::new(
+                rem.x + dock_w + splitter_w,
+                rem.y,
+                (rem.width - dock_w - splitter_w).max(0.0),
+                rem.height,
+            );
         }
 
         // --- Right: right dock + splitter ---
-        if let Some(rs) = right {
-            if rs.visible && rem.width > splitter_w + 1.0 {
-                let dock_w = rs.size.min(rem.width - splitter_w);
-                let sp_x = rem.x + rem.width - dock_w - splitter_w;
-                out.right_splitter = Some(Rect::new(sp_x, rem.y, splitter_w, rem.height));
-                out.right_dock = Some(Rect::new(sp_x + splitter_w, rem.y, dock_w, rem.height));
-                rem = Rect::new(
-                    rem.x,
-                    rem.y,
-                    (rem.width - dock_w - splitter_w).max(0.0),
-                    rem.height,
-                );
-            }
+        if let Some(rs) = right
+            && rs.visible
+            && rem.width > splitter_w + 1.0
+        {
+            let dock_w = rs.size.min(rem.width - splitter_w);
+            let sp_x = rem.x + rem.width - dock_w - splitter_w;
+            out.right_splitter = Some(Rect::new(sp_x, rem.y, splitter_w, rem.height));
+            out.right_dock = Some(Rect::new(sp_x + splitter_w, rem.y, dock_w, rem.height));
+            rem = Rect::new(
+                rem.x,
+                rem.y,
+                (rem.width - dock_w - splitter_w).max(0.0),
+                rem.height,
+            );
         }
 
         // --- Toolbar: peel from the toolbar's edge of the viewport ---
@@ -310,44 +313,42 @@ impl AppShell {
             out.toolbar_dock_area = rem;
         }
         #[cfg(feature = "phosphor-icons")]
-        if self.has_toolbar {
-            if let Some(ts) = toolbar {
-                let btn_size = styles.scalar(StyleKey::ToolbarButtonSize);
-                let pad = styles.scalar(StyleKey::ToolbarPadding);
-                // The handoff rail uses content-box sizing: its 1px dock-edge
-                // rule is outside the padded content area. Horizontal rails
-                // also carry the key's travel slot on their cross axis.
-                let cross = btn_size
-                    + pad * 2.0
-                    + 1.0
-                    + if ts.edge.is_vertical() {
-                        0.0
-                    } else {
-                        styles.scalar(StyleKey::Travel)
-                    };
-                match ts.edge {
-                    ToolbarEdge::Left => {
-                        let tw = cross.min(rem.width);
-                        out.toolbar = Some(Rect::new(rem.x, rem.y, tw, rem.height));
-                        rem = Rect::new(rem.x + tw, rem.y, (rem.width - tw).max(0.0), rem.height);
-                    }
-                    ToolbarEdge::Right => {
-                        let tw = cross.min(rem.width);
-                        out.toolbar =
-                            Some(Rect::new(rem.x + rem.width - tw, rem.y, tw, rem.height));
-                        rem = Rect::new(rem.x, rem.y, (rem.width - tw).max(0.0), rem.height);
-                    }
-                    ToolbarEdge::Top => {
-                        let th = cross.min(rem.height);
-                        out.toolbar = Some(Rect::new(rem.x, rem.y, rem.width, th));
-                        rem = Rect::new(rem.x, rem.y + th, rem.width, (rem.height - th).max(0.0));
-                    }
-                    ToolbarEdge::Bottom => {
-                        let th = cross.min(rem.height);
-                        out.toolbar =
-                            Some(Rect::new(rem.x, rem.y + rem.height - th, rem.width, th));
-                        rem = Rect::new(rem.x, rem.y, rem.width, (rem.height - th).max(0.0));
-                    }
+        if self.has_toolbar
+            && let Some(ts) = toolbar
+        {
+            let btn_size = styles.scalar(StyleKey::ToolbarButtonSize);
+            let pad = styles.scalar(StyleKey::ToolbarPadding);
+            // The handoff rail uses content-box sizing: its 1px dock-edge
+            // rule is outside the padded content area. Horizontal rails
+            // also carry the key's travel slot on their cross axis.
+            let cross = btn_size
+                + pad * 2.0
+                + 1.0
+                + if ts.edge.is_vertical() {
+                    0.0
+                } else {
+                    styles.scalar(StyleKey::Travel)
+                };
+            match ts.edge {
+                ToolbarEdge::Left => {
+                    let tw = cross.min(rem.width);
+                    out.toolbar = Some(Rect::new(rem.x, rem.y, tw, rem.height));
+                    rem = Rect::new(rem.x + tw, rem.y, (rem.width - tw).max(0.0), rem.height);
+                }
+                ToolbarEdge::Right => {
+                    let tw = cross.min(rem.width);
+                    out.toolbar = Some(Rect::new(rem.x + rem.width - tw, rem.y, tw, rem.height));
+                    rem = Rect::new(rem.x, rem.y, (rem.width - tw).max(0.0), rem.height);
+                }
+                ToolbarEdge::Top => {
+                    let th = cross.min(rem.height);
+                    out.toolbar = Some(Rect::new(rem.x, rem.y, rem.width, th));
+                    rem = Rect::new(rem.x, rem.y + th, rem.width, (rem.height - th).max(0.0));
+                }
+                ToolbarEdge::Bottom => {
+                    let th = cross.min(rem.height);
+                    out.toolbar = Some(Rect::new(rem.x, rem.y + rem.height - th, rem.width, th));
+                    rem = Rect::new(rem.x, rem.y, rem.width, (rem.height - th).max(0.0));
                 }
             }
         }
@@ -364,6 +365,7 @@ impl AppShell {
     /// [`layout`](Self::layout).
     ///
     /// Splitter deltas are applied to dock state with clamping before returning.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_chrome<'t>(
         &self,
         shell: &ShellLayout,

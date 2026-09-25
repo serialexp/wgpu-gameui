@@ -189,11 +189,12 @@ impl<'a> VectorField<'a> {
                         step: self.step,
                     });
                 }
-                if active && input.mouse_down {
-                    if let Some(sc) = scrub {
-                        let new = sc.start_value + (input.mouse_x - sc.start_x) * sc.step;
-                        out.changed.push((ri, ci, new));
-                    }
+                if active
+                    && input.mouse_down
+                    && let Some(sc) = scrub
+                {
+                    let new = sc.start_value + (input.mouse_x - sc.start_x) * sc.step;
+                    out.changed.push((ri, ci, new));
                 }
             }
         }

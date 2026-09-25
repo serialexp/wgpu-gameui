@@ -701,6 +701,17 @@ impl DrawList {
         top + height / 2.0 - font_size * m.visual_center_ratio(text)
     }
 
+    /// The `y` for a one-line [`TextBlock`] whose **x-height** band is
+    /// centred on `cy`, whatever its letters. Unlike
+    /// [`vcentered_text_y`](Self::vcentered_text_y), every label in a column
+    /// of rows (and a mono meta beside it, measured with its own font) lands
+    /// on the same baseline, so capitals and digits don't hop. Pass the same
+    /// `font` the block renders with.
+    pub fn x_centered_text_y(&mut self, cy: f32, font_size: f32, font: Option<&FontHandle>) -> f32 {
+        let m = self.font_vmetrics(font);
+        cy - font_size * m.baseline_ratio + font_size * m.x_ratio * 0.5
+    }
+
     /// Compute per-character cursor x-positions for the given text.
     ///
     /// Returns a `Vec<(usize, f32)>` mapping byte indices in `text` to their
@@ -716,10 +727,48 @@ impl DrawList {
         max_width: Option<f32>,
     ) -> Vec<(usize, f32)> {
         let handle = self.text_measurer.font_system_handle();
-        let mut fs = handle.lock().expect("FontSystem poisoned");
+        let mut shared = handle.lock().expect("FontSystem poisoned");
+        let fs = shared.font_system();
         let mw = max_width.unwrap_or(f32::MAX / 4.0);
         let lh = font_size * 1.25;
-        crate::text::text_cursor_positions(&mut fs, text, font_size, lh, mw, None)
+        crate::text::text_cursor_positions(fs, text, font_size, lh, mw, None)
+    }
+
+    /// Caret x offsets of `block`'s content laid out in its own font, and how
+    /// many of its bytes are shown: an [`ellipsize`](TextBlock::ellipsize)
+    /// block is one line cut at `max_width`, anything else wraps at it.
+    fn underline_layout(&mut self, block: &TextBlock) -> (Vec<(usize, f32)>, usize) {
+        let handle = self.text_measurer.font_system_handle();
+        let mut shared = handle.lock().expect("FontSystem poisoned");
+        let fs = shared.font_system();
+        let family = block.font.as_ref().map(|f| f.family());
+        let mut visible = block.content.len();
+        let max_width = if block.ellipsize {
+            let cut = crate::text::ellipsis_cut(
+                fs,
+                &block.content,
+                block.font_size,
+                block.line_height,
+                block.max_width,
+                family.map_or(cosmic_text::Family::SansSerif, cosmic_text::Family::Name),
+                block.weight,
+                block.style,
+                block.letter_spacing,
+            );
+            visible = cut.unwrap_or(visible);
+            f32::MAX / 4.0
+        } else {
+            block.max_width
+        };
+        let positions = crate::text::text_cursor_positions(
+            fs,
+            &block.content,
+            block.font_size,
+            block.line_height,
+            max_width,
+            family,
+        );
+        (positions, visible)
     }
 
     /// Line-aware caret layout for the given text — the multi-line counterpart of
@@ -741,10 +790,11 @@ impl DrawList {
         direction: crate::text::TextDirection,
     ) -> Vec<crate::text::CaretPos> {
         let handle = self.text_measurer.font_system_handle();
-        let mut fs = handle.lock().expect("FontSystem poisoned");
+        let mut shared = handle.lock().expect("FontSystem poisoned");
+        let fs = shared.font_system();
         let mw = max_width.unwrap_or(f32::MAX / 4.0);
         let lh = font_size * 1.25;
-        crate::text::text_caret_layout(&mut fs, text, font_size, lh, mw, wrap, None, direction)
+        crate::text::text_caret_layout(fs, text, font_size, lh, mw, wrap, None, direction)
     }
 
     /// Visual-order glyph layout for bidi-aware editing — the source for
@@ -759,10 +809,11 @@ impl DrawList {
         direction: crate::text::TextDirection,
     ) -> Vec<crate::text::VisualGlyph> {
         let handle = self.text_measurer.font_system_handle();
-        let mut fs = handle.lock().expect("FontSystem poisoned");
+        let mut shared = handle.lock().expect("FontSystem poisoned");
+        let fs = shared.font_system();
         let mw = max_width.unwrap_or(f32::MAX / 4.0);
         let lh = font_size * 1.25;
-        crate::text::text_visual_layout(&mut fs, text, font_size, lh, mw, wrap, None, direction)
+        crate::text::text_visual_layout(fs, text, font_size, lh, mw, wrap, None, direction)
     }
 
     // ---- Debug scopes ----
@@ -2318,19 +2369,61 @@ impl DrawList {
             block.style_range_tint = tint;
         }
 
-        // Emit underline rects for spans that have `underline` set, BEFORE
-        // transforming block.x/block.y. We use the original (pre-transform,
-        // pre-scale) font_size and position, so that `self.quad()` can apply
-        // the active transform uniformly — matching exactly what the text
-        // pipeline does. Soup geometry draws before text glyphs, so the
-        // underlines naturally appear beneath the MSDF rendering.
-        if block
+        // Emit underline rects for the spans and style ranges that ask for
+        // one, BEFORE transforming block.x/block.y. We use the original
+        // (pre-transform, pre-scale) font_size and position, so that
+        // `self.quad()` can apply the active transform uniformly — matching
+        // exactly what the text pipeline does. Soup geometry draws before text
+        // glyphs, so the underlines naturally appear beneath the MSDF rendering.
+        let underlined = block
             .spans
             .iter()
             .any(|s| !matches!(s.underline, Underline::None))
-        {
-            let positions =
-                self.text_cursor_positions(&block.content, block.font_size, Some(block.max_width));
+            || block
+                .style_ranges
+                .iter()
+                .any(|r| !matches!(r.underline, Underline::None));
+        if underlined {
+            // The block colour (already tinted above), as the fallback for an
+            // inheriting underline on a span or range with no colour of its own.
+            let block_rgba = [
+                block.color.r() as f32 / 255.0,
+                block.color.g() as f32 / 255.0,
+                block.color.b() as f32 / 255.0,
+                block.color.a() as f32 / 255.0,
+            ];
+            // Inherit → the run's text colour (or the block colour); Color →
+            // the explicit override; None → no underline.
+            let color_of = |underline: Underline, own: Option<[f32; 4]>| match underline {
+                Underline::None => None,
+                Underline::Inherit => Some(own.unwrap_or(block_rgba)),
+                Underline::Color(c) => Some(c),
+            };
+            let mut runs: Vec<(std::ops::Range<usize>, [f32; 4])> = Vec::new();
+            let mut span_byte = 0usize;
+            for span in &block.spans {
+                let end = span_byte + span.text.len();
+                if let Some(c) = color_of(span.underline, span.color) {
+                    runs.push((span_byte..end, c));
+                }
+                span_byte = end;
+            }
+            // Range colours are tinted where their glyphs are placed; tint
+            // their underlines the same way here.
+            let tint = block.style_range_tint;
+            let tinted = |c: [f32; 4]| std::array::from_fn(|i| (c[i] * tint[i]).clamp(0.0, 1.0));
+            for range in block.style_ranges.iter() {
+                let own = range.color.map(tinted);
+                let underline = match range.underline {
+                    Underline::Color(c) => Underline::Color(tinted(c)),
+                    other => other,
+                };
+                if let Some(c) = color_of(underline, own) {
+                    runs.push((range.range.clone(), c));
+                }
+            }
+
+            let (positions, visible) = self.underline_layout(&block);
             // Sit the underline just below the baseline so it clears the letter
             // bottoms. `baseline_ratio` (~1.0 of the em) locates the baseline
             // below the block top; the old flat `0.9` sat *above* it, cutting
@@ -2339,38 +2432,20 @@ impl DrawList {
             let vm = self.font_vmetrics(block.font.as_ref());
             let underline_y = block.y + block.font_size * (vm.baseline_ratio + 0.12);
             let thickness = (block.font_size * 0.07).max(1.0);
-            // The block colour (already tinted above), as the fallback for an
-            // inheriting underline on a span with no colour of its own.
-            let block_rgba = [
-                block.color.r() as f32 / 255.0,
-                block.color.g() as f32 / 255.0,
-                block.color.b() as f32 / 255.0,
-                block.color.a() as f32 / 255.0,
-            ];
-            let mut span_byte = 0usize;
-            for span in &block.spans {
-                // Inherit → the span's text colour (or the block colour); Color →
-                // the explicit (tinted) override; None → no underline.
-                let ul_color = match span.underline {
-                    Underline::None => None,
-                    Underline::Inherit => Some(span.color.unwrap_or(block_rgba)),
-                    Underline::Color(c) => Some(c),
-                };
-                if let Some(ul_color) = ul_color {
-                    let x_start = span_cursor_x(&positions, span_byte);
-                    let end_byte = span_byte + span.text.len();
-                    let x_end = span_cursor_x(&positions, end_byte);
-                    if x_end > x_start {
-                        self.quad(
-                            block.x + x_start,
-                            underline_y,
-                            x_end - x_start,
-                            thickness,
-                            ul_color,
-                        );
-                    }
+            for (range, color) in runs {
+                // Text an ellipsis cut off has no underline.
+                let end = range.end.min(visible);
+                let x_start = span_cursor_x(&positions, range.start);
+                let x_end = span_cursor_x(&positions, end);
+                if x_end > x_start {
+                    self.quad(
+                        block.x + x_start,
+                        underline_y,
+                        x_end - x_start,
+                        thickness,
+                        color,
+                    );
                 }
-                span_byte += span.text.len();
             }
         }
 
@@ -2390,12 +2465,18 @@ impl DrawList {
             block.max_width *= scale;
         }
 
+        // Only the clips cut the text: the active clip, narrowed by the block's
+        // own clip if it has one. Not the block's layout box: text can reach
+        // past `max_width` (`WrapMode::None`, a word too long for `Word`) or
+        // start outside the clip (a scrolled field or view), and that part is
+        // visible wherever the clip allows.
         if let Some(clip) = self.current_clip() {
-            let natural_bounds = Rect::new(block.x, block.y, block.max_width, 2000.0);
-            let text_bounds = block.clip.unwrap_or(natural_bounds);
-            block.clip = text_bounds
-                .intersection(clip)
-                .or_else(|| Some(Rect::new(clip.x, clip.y, 0.0, 0.0)));
+            block.clip = Some(match block.clip {
+                Some(own) => own
+                    .intersection(clip)
+                    .unwrap_or(Rect::new(clip.x, clip.y, 0.0, 0.0)),
+                None => clip,
+            });
         }
         self.flush_soup();
         let start = self.texts.len() as u32;
@@ -2939,6 +3020,33 @@ mod tests {
     }
 
     #[test]
+    fn clipped_text_is_cut_only_by_the_clips() {
+        let mut list = DrawList::new();
+        let clip = Rect::new(10.0, 20.0, 100.0, 40.0);
+        list.push_clip(clip);
+        // Scrolled left past the clip, and a narrow layout width: the text
+        // overflows its max_width (it doesn't wrap), and that overflow is
+        // visible where the clip allows.
+        list.text(
+            crate::text::TextBlock::new("scrolled", -500.0, 20.0)
+                .with_max_width(50.0)
+                .with_wrap(crate::text::WrapMode::None),
+        );
+        // Scrolled up by more than any fixed "tall enough" box.
+        list.text(crate::text::TextBlock::new("tall", 10.0, -5000.0));
+        // A block clip of its own still narrows the active clip.
+        list.text(
+            crate::text::TextBlock::new("own clip", 0.0, 0.0)
+                .with_clip(Rect::new(50.0, 0.0, 500.0, 500.0)),
+        );
+        list.pop_clip();
+
+        assert_eq!(list.texts[0].clip, Some(clip));
+        assert_eq!(list.texts[1].clip, Some(clip));
+        assert_eq!(list.texts[2].clip, Some(Rect::new(50.0, 20.0, 60.0, 40.0)));
+    }
+
+    #[test]
     fn push_clip_intersects_but_exact_replaces() {
         let mut list = DrawList::new();
         // Parent clip.
@@ -3034,6 +3142,91 @@ mod tests {
             has_colour(override_yellow),
             "explicit Colour underline should use the override"
         );
+    }
+
+    /// The underline quads `block` emits, as `(x, width, colour)`.
+    fn underlines(block: crate::text::TextBlock) -> Vec<(f32, f32, [f32; 4])> {
+        let mut list = DrawList::with_font_system(crate::shared_font_system());
+        list.text(block);
+        list.chrome_instances()
+            .map(|c| (c.rect[0], c.rect[2], c.bg))
+            .collect()
+    }
+
+    fn range(r: std::ops::Range<usize>, underline: crate::Underline) -> crate::TextStyleRange {
+        crate::TextStyleRange {
+            range: r,
+            color: None,
+            underline,
+        }
+    }
+
+    #[test]
+    fn style_ranges_draw_their_underlines_under_their_own_bytes() {
+        use crate::text::{TextBlock, Underline};
+        let block = || TextBlock::new("my-agent-ui", 0.0, 0.0).with_size(20.0);
+        let whole = underlines(
+            block().with_style_ranges(vec![range(0..11, Underline::Color([1.0, 0.0, 0.0, 1.0]))]),
+        );
+        let part = underlines(block().with_style_ranges(vec![range(3..8, Underline::Inherit)]));
+        assert_eq!(whole.len(), 1, "one underline for the whole label");
+        assert_eq!(whole[0].2, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(part.len(), 1);
+        let (x, w, _) = part[0];
+        assert!(
+            x > whole[0].0 && x + w < whole[0].0 + whole[0].1,
+            "inside the label"
+        );
+    }
+
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn underlines_are_measured_in_the_blocks_font() {
+        use crate::text::{TextBlock, Underline};
+        let fs = crate::shared_font_system();
+        let mono = crate::bundled_mono_font(&fs);
+        assert!(mono.is_some());
+        let under = |font| {
+            underlines(
+                TextBlock::new("illicit", 0.0, 0.0)
+                    .with_size(20.0)
+                    .with_font_opt(font)
+                    .with_style_ranges(vec![range(0..7, Underline::Inherit)]),
+            )[0]
+            .1
+        };
+        // Mono gives every letter the same advance; the sans `i`s and `l`s are
+        // narrow, so the same word is much wider in mono.
+        assert!(under(mono) > under(None) * 1.3);
+    }
+
+    #[test]
+    fn an_ellipsis_ends_the_underline_where_the_text_is_cut() {
+        use crate::text::{TextBlock, Underline};
+        let text = "a rather long project name that will not fit";
+        let full = underlines(
+            TextBlock::new(text, 0.0, 0.0)
+                .with_size(16.0)
+                .with_style_ranges(vec![range(0..text.len(), Underline::Inherit)]),
+        );
+        let cut = underlines(
+            TextBlock::new(text, 0.0, 0.0)
+                .with_size(16.0)
+                .with_max_width(120.0)
+                .with_ellipsis()
+                .with_style_ranges(vec![range(0..text.len(), Underline::Inherit)]),
+        );
+        assert!(full[0].1 > 200.0, "one unwrapped line");
+        assert!(cut[0].1 < 120.0, "stops before the ellipsis: {}", cut[0].1);
+        // A range entirely past the cut draws nothing.
+        let hidden = underlines(
+            TextBlock::new(text, 0.0, 0.0)
+                .with_size(16.0)
+                .with_max_width(120.0)
+                .with_ellipsis()
+                .with_style_ranges(vec![range(30..40, Underline::Inherit)]),
+        );
+        assert!(hidden.is_empty());
     }
 
     // ---- Transform/tint stack tests ----

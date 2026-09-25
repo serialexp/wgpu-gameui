@@ -9,7 +9,7 @@ repository = "https://github.com/serialexp/wgpu-gameui"
 [dependencies]
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
-cosmic-text = "0.14"
+cosmic-text = "0.19"
 log = "0.4"
 # Grapheme-cluster segmentation for vertical (stacked) text layout — splitting a
 # label into one cluster per line. Already in the tree transitively via cosmic-text.
@@ -72,8 +72,34 @@ path = "examples/hello_ui.rs"
 [[example]]
 name = "lua_highlight_probe"
 path = "examples/lua_highlight_probe.rs"
-required-features = ["syntax-lua"]
+required-features = ["syntax-lua", "headless"]
+
+# GPU tests that create their own device through `HeadlessGpu`.
+[[test]]
+name = "alignment_gallery"
+required-features = ["headless"]
+
+[[test]]
+name = "analytic_shadows"
+required-features = ["headless"]
+
+[[test]]
+name = "analytic_shadow_browser_parity"
+required-features = ["headless"]
+
+[[test]]
+name = "render_passes"
+required-features = ["headless"]
+
+[[test]]
+name = "rounded_rect_pixel_coverage"
+required-features = ["headless"]
 
 [[bench]]
 name = "ui_stress"
 harness = false
+
+# Glyph and icon MSDFs are generated on the CPU by fdsm; unoptimised, the
+# atlas warm-up and the MSDF quality tests run about thirty times slower.
+[profile.dev.package.fdsm]
+opt-level = 3

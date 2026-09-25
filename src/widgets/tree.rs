@@ -47,6 +47,18 @@
 //! cursor — what the façade is built on, and what a scrolled outliner panel
 //! that owns its own layout would use directly.
 //!
+//! ## Look (Forge `Tree`)
+//! Rows are [`StyleKey::ListRowHeight`] tall (22 px) in the façade, indented
+//! 11 px per depth, with a small ▾/▸ caret for branches, an optional glyph
+//! ([`TreeNode::with_glyph`]) and the label in the menu size. The selected
+//! row is an accent bar with on-accent ink; hover is the row-hover wash.
+//!
+//! [`TreeNode::with_disabled`] marks a node that can't be picked (locked,
+//! missing, no permission): its glyph and label are dimmed, it is never
+//! selected (by click or arrow keys) and a disabled leaf shows no hover. A
+//! disabled branch still expands, so its children stay reachable; its action
+//! icons still fire.
+//!
 //! ## State
 //! [`TreeState`] holds the expanded set + the selected node, keyed by a
 //! caller-supplied [`TreeId`] (any per-tree-unique `u64`).
@@ -56,9 +68,13 @@
 use std::collections::HashSet;
 
 use crate::layout::Rect;
+#[cfg(feature = "phosphor-icons")]
+use crate::render::PhosphorIcon;
+use crate::style::{Ink, TextSize};
 use crate::text::TextBlock;
 use crate::{InputState, SpriteId, StyleKey};
 
+use super::list::paint_selected_row;
 use super::{DrawContext, DrawList, FocusId};
 
 /// Edge-detected keyboard-navigation keys captured for one frame.
@@ -79,6 +95,8 @@ struct NavRow {
     id: TreeId,
     depth: usize,
     branch: bool,
+    /// A disabled row is never selected; the arrow keys step over it.
+    disabled: bool,
 }
 
 /// Stable identity for a node within one tree. Any scheme unique per node per
@@ -87,13 +105,18 @@ struct NavRow {
 pub type TreeId = u64;
 
 /// Indentation added per depth level, in pixels.
-const INDENT: f32 = 14.0;
-/// Half-extent of the disclosure triangle, in pixels.
-const ARROW: f32 = 4.0;
-/// Horizontal gap after the disclosure column and around the label.
-const GAP: f32 = 6.0;
-/// Left inset before the disclosure triangle within a row.
+const INDENT: f32 = 11.0;
+/// Width of the caret's column.
+const CARET_W: f32 = 9.0;
+/// Half-extent of the caret triangle (a 5 px ▾/▸).
+pub(crate) const CARET_HALF: f32 = 2.5;
+/// Size of the glyph before the label.
+const GLYPH: f32 = 10.0;
+/// Space between the row's parts: indent, caret, icons, glyph, label.
+const GAP: f32 = 5.0;
+/// Space before the indent and after the last part (`padding: 0 8px 0 4px`).
 const ROW_INSET: f32 = 4.0;
+const ROW_INSET_RIGHT: f32 = 8.0;
 
 /// Caller-owned expansion + selection state for one tree view. Persists across
 /// frames; construct one per tree (or share it across trees whose ids don't
@@ -118,6 +141,11 @@ pub struct TreeState {
     /// caller wired keyboard focus. Set via [`set_focus_id`](Self::set_focus_id);
     /// a row interaction requests it so clicking the tree focuses it.
     focus_id: Option<FocusId>,
+    /// Enter/Space report the selected row as opened instead of toggling it
+    /// (see [`set_enter_opens`](Self::set_enter_opens)).
+    enter_opens: bool,
+    /// The row Enter/Space opened this frame, when `enter_opens`.
+    opened: Option<TreeId>,
 }
 
 impl TreeState {
@@ -200,6 +228,24 @@ impl TreeState {
         self.focus_id = Some(id);
     }
 
+    /// Make Enter/Space open the selected row instead of toggling it: the
+    /// row is then reported by [`opened`](Self::opened), and branches expand
+    /// and collapse with Right/Left and their caret only. Use it when a row
+    /// has an action of its own (open the folder, show the asset); leave it
+    /// off (the default) for a tree whose rows only hold children.
+    pub fn set_enter_opens(&mut self, enter_opens: bool) {
+        self.enter_opens = enter_opens;
+    }
+
+    /// The enabled row Enter/Space opened in the last
+    /// [`end_frame`](Self::end_frame), when
+    /// [`set_enter_opens`](Self::set_enter_opens) is on. Cleared by the next
+    /// [`begin_frame`](Self::begin_frame). A double-click opens a row through
+    /// [`TreeNodeOutput::opened`] instead.
+    pub fn opened(&self) -> Option<TreeId> {
+        self.opened
+    }
+
     /// The tree's keyboard [`FocusId`], if one was set.
     pub fn focus_id(&self) -> Option<FocusId> {
         self.focus_id
@@ -228,12 +274,19 @@ impl TreeState {
         };
         self.prev_keys = raw;
         self.nav.clear();
+        self.opened = None;
     }
 
     /// Register a visible row in this frame's navigation order. Called by
-    /// [`TreeNode::draw`]; rarely needed directly.
-    pub fn register_nav(&mut self, id: TreeId, depth: usize, branch: bool) {
-        self.nav.push(NavRow { id, depth, branch });
+    /// [`TreeNode::draw`]; rarely needed directly. A `disabled` row is never
+    /// selected by the arrow keys.
+    pub fn register_nav(&mut self, id: TreeId, depth: usize, branch: bool, disabled: bool) {
+        self.nav.push(NavRow {
+            id,
+            depth,
+            branch,
+            disabled,
+        });
     }
 
     /// End a frame: when `focused`, resolve this frame's arrow-key navigation
@@ -245,10 +298,13 @@ impl TreeState {
     /// effect the same frame it is resolved; the moved selection/expansion shows
     /// on the next draw (one-frame latency, like Tab).
     ///
-    /// Semantics: Down/Up move the selection to the next/previous visible row;
-    /// Right expands a collapsed branch then descends into the first child; Left
-    /// collapses an expanded branch then ascends to the parent; Enter/Space
-    /// toggle the selected branch.
+    /// Semantics: Down/Up move the selection to the next/previous enabled
+    /// visible row; Right expands a collapsed branch then descends into the
+    /// first child; Left collapses an expanded branch then ascends to the
+    /// parent; Enter/Space toggle the selected branch, or open the selected
+    /// row (see [`set_enter_opens`](Self::set_enter_opens)). Disabled rows
+    /// are never selected: Down/Up step over them, and Right/Left stay put
+    /// when the child/parent is disabled.
     pub fn end_frame(&mut self, focused: bool) {
         let keys = self.keys;
         let nav = std::mem::take(&mut self.nav);
@@ -260,60 +316,88 @@ impl TreeState {
         let cur = self
             .selected
             .and_then(|s| nav.iter().position(|n| n.id == s));
+        let enabled = |n: &&NavRow| !n.disabled;
 
         if keys.down {
-            let next = match cur {
-                Some(i) => (i + 1).min(nav.len() - 1),
-                None => 0,
-            };
-            self.selected = Some(nav[next].id);
+            // The next enabled row; at the end, stay put.
+            let from = cur.map_or(0, |i| i + 1);
+            if let Some(n) = nav[from..].iter().find(enabled) {
+                self.selected = Some(n.id);
+            }
         } else if keys.up {
-            let prev = match cur {
-                Some(i) => i.saturating_sub(1),
-                None => nav.len() - 1,
-            };
-            self.selected = Some(nav[prev].id);
+            let to = cur.unwrap_or(nav.len());
+            if let Some(n) = nav[..to].iter().rev().find(enabled) {
+                self.selected = Some(n.id);
+            }
         } else if keys.right {
             if let Some(i) = cur {
-                let NavRow { id, depth, branch } = nav[i];
+                let NavRow {
+                    id, depth, branch, ..
+                } = nav[i];
                 if branch {
                     if !self.is_expanded(id) {
                         self.set_expanded(id, true);
-                    } else if nav.get(i + 1).is_some_and(|n| n.depth > depth) {
-                        self.selected = Some(nav[i + 1].id);
+                    } else if let Some(child) =
+                        nav.get(i + 1).filter(|n| n.depth > depth && !n.disabled)
+                    {
+                        self.selected = Some(child.id);
                     }
                 }
             }
         } else if keys.left {
             if let Some(i) = cur {
-                let NavRow { id, depth, branch } = nav[i];
+                let NavRow {
+                    id, depth, branch, ..
+                } = nav[i];
                 if branch && self.is_expanded(id) {
                     self.set_expanded(id, false);
                 } else if depth > 0 {
                     // Ascend to the nearest earlier row one level shallower.
-                    if let Some(p) = nav[..i].iter().rposition(|n| n.depth == depth - 1) {
+                    if let Some(p) = nav[..i]
+                        .iter()
+                        .rposition(|n| n.depth == depth - 1)
+                        .filter(|&p| !nav[p].disabled)
+                    {
                         self.selected = Some(nav[p].id);
                     }
                 }
             }
-        } else if keys.activate {
-            cur.map(|i| nav[i])
-                .filter(|row| row.branch)
-                .map(|row| row.id)
-                .into_iter()
-                .for_each(|id| self.toggle(id));
+        } else if keys.activate
+            && let Some(row) = cur.map(|i| nav[i])
+        {
+            if self.enter_opens {
+                self.opened = (!row.disabled).then_some(row.id);
+            } else if row.branch {
+                self.toggle(row.id);
+            }
         }
     }
 }
 
-/// Where an action icon's image comes from. Borrowed, so an action slice costs
-/// no allocation. Mirrors the [`crate::Image`] source split.
+/// Where a row glyph's or action icon's image comes from. Borrowed, so an
+/// action slice costs no allocation. Mirrors the [`crate::Image`] source split.
 #[derive(Debug, Clone, Copy)]
 pub enum TreeIcon<'a> {
     /// A pre-resolved sprite handle (supports tint).
     Sprite(SpriteId),
-    /// A string-keyed sprite, resolved by name at render time.
+    /// A string-keyed sprite, resolved by name at render time (no tint).
     Key(&'a str),
+    /// A built-in vector icon (supports tint).
+    #[cfg(feature = "phosphor-icons")]
+    Phosphor(PhosphorIcon),
+}
+
+impl TreeIcon<'_> {
+    /// Draw the icon fit into `rect`, multiplied by `tint` where the source
+    /// supports it.
+    fn draw(&self, list: &mut DrawList, rect: Rect, tint: [f32; 4]) {
+        match self {
+            TreeIcon::Sprite(sprite) => list.image(*sprite, rect, tint),
+            TreeIcon::Key(key) => list.icon(key, rect.x, rect.y, rect.width, rect.height),
+            #[cfg(feature = "phosphor-icons")]
+            TreeIcon::Phosphor(icon) => super::Icon::new(*icon).tint(tint).draw(rect, list),
+        }
+    }
 }
 
 /// One action icon in a tree row's leading or trailing column. The caller picks
@@ -326,7 +410,7 @@ pub struct TreeAction<'a> {
     pub id: u32,
     /// The icon image.
     pub icon: TreeIcon<'a>,
-    /// Multiplied into the sampled colour (sprite source only).
+    /// Multiplied into the icon's colour (sprite and vector sources).
     pub tint: [f32; 4],
 }
 
@@ -349,7 +433,17 @@ impl<'a> TreeAction<'a> {
         }
     }
 
-    /// Set the icon tint (sprite source only).
+    /// An action showing a built-in vector icon, untinted.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn phosphor(id: u32, icon: PhosphorIcon) -> Self {
+        Self {
+            id,
+            icon: TreeIcon::Phosphor(icon),
+            tint: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+
+    /// Set the icon tint (sprite and vector sources).
     pub fn with_tint(mut self, tint: [f32; 4]) -> Self {
         self.tint = tint;
         self
@@ -359,6 +453,7 @@ impl<'a> TreeAction<'a> {
 /// Per-frame configuration for one tree row. Lightweight, built fresh each
 /// frame like [`crate::Slider`] / [`crate::Dropdown`]; the action slices are
 /// borrowed so a row costs no allocation.
+#[derive(Debug, Clone, Copy)]
 pub struct TreeNode<'a> {
     label: &'a str,
     leaf: bool,
@@ -369,6 +464,8 @@ pub struct TreeNode<'a> {
     trailing: &'a [TreeAction<'a>],
     slot_size: Option<f32>,
     label_color: Option<[f32; 4]>,
+    glyph: Option<TreeIcon<'a>>,
+    disabled: bool,
 }
 
 /// Result of drawing one tree row.
@@ -392,6 +489,10 @@ pub struct TreeNodeOutput {
     /// A leading/trailing action icon was clicked this frame; carries its
     /// [`TreeAction::id`]. Mutually exclusive with `clicked`/`toggled`.
     pub action: Option<u32>,
+    /// The row body was double-clicked this frame: open what the row stands
+    /// for. Implies `clicked`; never set for a disabled row, or for a
+    /// double-click on the caret or an action icon.
+    pub opened: bool,
 }
 
 impl<'a> TreeNode<'a> {
@@ -407,6 +508,8 @@ impl<'a> TreeNode<'a> {
             trailing: &[],
             slot_size: None,
             label_color: None,
+            glyph: None,
+            disabled: false,
         }
     }
 
@@ -469,12 +572,27 @@ impl<'a> TreeNode<'a> {
     }
 
     /// Override the label colour (sRGB-encoded RGBA). When unset the label uses
-    /// `theme.text` (or `theme.background` when selected, for contrast against
-    /// the accent fill). When set, this colour is used in every state — the
-    /// caller is responsible for picking something readable on a selected row.
-    /// Lets an outliner colour-code rows by kind (group / object / section).
+    /// [`Ink::Title`] (or [`StyleKey::OnAccent`] when selected). When set,
+    /// this colour is used in every state but disabled — the caller is
+    /// responsible for picking something readable on a selected row. Lets an
+    /// outliner colour-code rows by kind (group / object / section).
     pub fn with_label_color(mut self, color: [f32; 4]) -> Self {
         self.label_color = Some(color);
+        self
+    }
+
+    /// A glyph before the label (a folder, a file kind), tinted
+    /// [`Ink::Muted`], on-accent when selected, dimmed when disabled.
+    pub fn with_glyph(mut self, glyph: TreeIcon<'a>) -> Self {
+        self.glyph = Some(glyph);
+        self
+    }
+
+    /// Mark the node unavailable: dimmed, never selected, and (as a leaf) not
+    /// hovered. A disabled branch still expands and its action icons still
+    /// fire; a right-click is still reported, without selecting it.
+    pub fn with_disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 
@@ -482,6 +600,10 @@ impl<'a> TreeNode<'a> {
     /// interaction. The row's content is indented by `depth * INDENT`; the
     /// selection/hover highlight spans the full `rect` width regardless of
     /// depth. Action-icon slots are excluded from the body hit area.
+    ///
+    /// The selected row is the accent bar while the tree holds keyboard
+    /// focus (or has no [`TreeState::set_focus_id`] wired), and the held
+    /// wash otherwise — the same as [`List`](super::List).
     pub fn draw(
         &self,
         id: TreeId,
@@ -493,10 +615,11 @@ impl<'a> TreeNode<'a> {
         let s = ctx.styles();
         let theme = ctx.theme;
         let input = ctx.input;
+        let off = self.disabled;
 
         let expanded_before = state.resolve_expanded(id, self.default_open);
         // Register this row in the frame's navigation order (arrow-key nav).
-        state.register_nav(id, self.depth, !self.leaf);
+        state.register_nav(id, self.depth, !self.leaf, off);
 
         // Honor layer capture so a tree under a modal/popup ignores clicks meant
         // for the overlay. Snapshot the click edge so we can request focus (a
@@ -505,31 +628,45 @@ impl<'a> TreeNode<'a> {
         let mx = input.mouse_x;
         let my = input.mouse_y;
         let mouse_clicked = input.mouse_clicked;
+        let mouse_double_clicked = input.mouse_double_clicked;
         let mouse_right_clicked = input.mouse_right_clicked;
         let row_hovered = mouse_in && rect.contains(mx, my);
-        let selected = state.is_selected(id);
+        // A disabled leaf has nothing to click, so it shows no hover.
+        let show_hover = row_hovered && !(off && self.leaf);
+        let selected = !off && state.is_selected(id);
+        let focused = state.focus_id.is_none_or(|f| ctx.focus.is_focused(f));
+        let on_accent = selected && focused;
 
         // ---- layout -------------------------------------------------------
+        // A flex row: inset, indent, caret, leading icons, glyph, label, and
+        // the trailing icons at the far end, `GAP` apart (the indent's gap
+        // is there even at depth 0).
         let slot = self
             .slot_size
             .unwrap_or(rect.height)
             .min(rect.height)
             .max(1.0);
         let slot_y = rect.y + (rect.height - slot) * 0.5;
-        let indent = self.depth as f32 * INDENT;
-        let disclosure_left = rect.x + ROW_INSET + indent;
-        let arrow_cx = disclosure_left + ARROW;
-        let arrow_cy = rect.y + rect.height * 0.5;
-        let disclosure_right = arrow_cx + ARROW + GAP; // end of triangle column
+        let cy = rect.y + rect.height * 0.5;
+        let indent_left = rect.x + ROW_INSET + self.depth as f32 * INDENT;
+        let caret_left = indent_left + GAP;
+        let disclosure_right = caret_left + CARET_W + GAP;
 
         let leading_x = disclosure_right;
         let leading_w = self.leading.len() as f32 * slot;
-        let label_x = leading_x + leading_w + if self.leading.is_empty() { 0.0 } else { GAP };
+        let glyph_x = leading_x + leading_w + if self.leading.is_empty() { 0.0 } else { GAP };
+        let label_x = glyph_x
+            + if self.glyph.is_some() {
+                GLYPH + GAP
+            } else {
+                0.0
+            };
 
+        let row_right = rect.x + rect.width - ROW_INSET_RIGHT;
         let trailing_w = self.trailing.len() as f32 * slot;
-        let trailing_x0 = rect.x + rect.width - ROW_INSET - trailing_w;
+        let trailing_x0 = row_right - trailing_w;
         let label_right = if self.trailing.is_empty() {
-            rect.x + rect.width - ROW_INSET
+            row_right
         } else {
             trailing_x0 - GAP
         };
@@ -542,37 +679,51 @@ impl<'a> TreeNode<'a> {
 
         // ---- full-row highlight (selection wins over hover) ---------------
         if selected {
+            paint_selected_row(list, &s, rect, focused);
+        } else if show_hover {
             list.quad(
                 rect.x,
                 rect.y,
                 rect.width,
                 rect.height,
-                s.color(StyleKey::Accent),
-            );
-        } else if row_hovered {
-            list.quad(
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                s.color(StyleKey::ButtonHover),
+                s.color(StyleKey::RowHover),
             );
         }
 
-        let text_color = self.label_color.unwrap_or(if selected {
-            s.color(StyleKey::Background)
+        let label_color = if off {
+            s.ink(Ink::Disabled)
+        } else if let Some(color) = self.label_color {
+            color
+        } else if on_accent {
+            s.color(StyleKey::OnAccent)
+        } else if selected {
+            s.ink(Ink::Max)
         } else {
-            s.color(StyleKey::Text)
-        });
-        let arrow_color = if selected {
-            s.color(StyleKey::Background)
+            s.ink(Ink::Title)
+        };
+        let caret_color = if on_accent {
+            s.ink(Ink::OnAccentSecond)
         } else {
-            s.color(StyleKey::TextDim)
+            s.ink(Ink::Caption)
+        };
+        let glyph_color = if off {
+            s.ink(Ink::DisabledGlyph)
+        } else if on_accent {
+            s.color(StyleKey::OnAccent)
+        } else {
+            s.ink(Ink::Muted)
         };
 
-        // ---- disclosure triangle ------------------------------------------
+        // ---- caret --------------------------------------------------------
         if !self.leaf {
-            draw_disclosure(list, arrow_cx, arrow_cy, expanded_before, arrow_color);
+            draw_disclosure(
+                list,
+                caret_left + CARET_W * 0.5,
+                cy,
+                CARET_HALF,
+                expanded_before,
+                caret_color,
+            );
         }
 
         // ---- action icons (drawn here; clicks resolved below) -------------
@@ -594,19 +745,20 @@ impl<'a> TreeNode<'a> {
             }
         }
 
-        // ---- label --------------------------------------------------------
-        let text_x = label_x;
-        let text_y = list.vcentered_text_y(
-            rect.y,
-            rect.height,
-            s.scalar(StyleKey::FontSize),
-            theme.font.as_ref(),
-            self.label,
-        );
+        // ---- glyph and label ----------------------------------------------
+        if let Some(glyph) = &self.glyph {
+            glyph.draw(
+                list,
+                Rect::new(glyph_x, cy - GLYPH * 0.5, GLYPH, GLYPH),
+                glyph_color,
+            );
+        }
+        let size = s.text_size(TextSize::Menu);
+        let text_y = list.x_centered_text_y(cy, size, theme.font.as_ref());
         list.text(
-            TextBlock::new(self.label, text_x, text_y)
-                .with_size(s.scalar(StyleKey::FontSize))
-                .with_color_f32(text_color)
+            TextBlock::new(self.label, label_x, text_y)
+                .with_size(size)
+                .with_color_f32(label_color)
                 .with_max_width(label_max_w)
                 .with_ellipsis()
                 .with_font_opt(theme.font.clone()),
@@ -615,20 +767,26 @@ impl<'a> TreeNode<'a> {
         // ---- interaction precedence: action > disclosure > body -----------
         // Secondary clicks deliberately bypass that precedence: regardless of
         // which visual subregion they land on, they select/focus the row and do
-        // not invoke the primary action associated with that subregion.
+        // not invoke the primary action associated with that subregion. A
+        // disabled row is never selected, but a click on a disabled branch
+        // still toggles it where an enabled one would.
         let right_clicked = mouse_right_clicked && row_hovered;
         let mut toggled = false;
         let mut body_clicked = false;
         if right_clicked {
-            state.select(id);
+            if !off {
+                state.select(id);
+            }
         } else if mouse_clicked && row_hovered && action.is_none() {
-            let in_disclosure = mx >= disclosure_left && mx < disclosure_right;
+            let in_disclosure = mx >= indent_left && mx < disclosure_right;
             if !self.leaf && in_disclosure {
                 state.toggle(id);
                 toggled = true;
             } else {
-                state.select(id);
-                body_clicked = true;
+                if !off {
+                    state.select(id);
+                    body_clicked = true;
+                }
                 if self.toggle_on_label && !self.leaf {
                     state.toggle(id);
                     toggled = true;
@@ -651,39 +809,48 @@ impl<'a> TreeNode<'a> {
         TreeNodeOutput {
             expanded,
             toggled,
-            hovered: row_hovered,
+            hovered: show_hover,
             clicked: body_clicked,
             right_clicked,
             action,
+            opened: body_clicked && mouse_double_clicked,
         }
     }
 }
 
-/// Draw the disclosure triangle centred at `(cx, cy)`: pointing right when
-/// collapsed, down when expanded. Filled, sized to `ARROW`.
-fn draw_disclosure(list: &mut DrawList, cx: f32, cy: f32, expanded: bool, color: [f32; 4]) {
+/// Draw a filled disclosure triangle centred at `(cx, cy)`, `half` px either
+/// side of its axis: pointing right when collapsed, down when expanded. Shared
+/// by the tree and the dock-section headers.
+pub(crate) fn draw_disclosure(
+    list: &mut DrawList,
+    cx: f32,
+    cy: f32,
+    half: f32,
+    expanded: bool,
+    color: [f32; 4],
+) {
     if expanded {
         // ▼ — apex down.
         list.triangle(
-            (cx - ARROW, cy - ARROW * 0.6),
-            (cx + ARROW, cy - ARROW * 0.6),
-            (cx, cy + ARROW * 0.7),
+            (cx - half, cy - half * 0.6),
+            (cx + half, cy - half * 0.6),
+            (cx, cy + half * 0.7),
             color,
         );
     } else {
         // ▶ — apex right.
         list.triangle(
-            (cx - ARROW * 0.6, cy - ARROW),
-            (cx - ARROW * 0.6, cy + ARROW),
-            (cx + ARROW * 0.7, cy),
+            (cx - half * 0.6, cy - half),
+            (cx - half * 0.6, cy + half),
+            (cx + half * 0.7, cy),
             color,
         );
     }
 }
 
 /// Draw one action icon into its `slot`, inset slightly, with a translucent
-/// hover overlay. Alloc-free — calls the draw list's sprite/key paths directly
-/// rather than constructing an [`crate::Image`].
+/// hover overlay. Alloc-free — calls the draw list's sprite/key/icon paths
+/// directly rather than constructing an [`crate::Image`].
 fn draw_action(list: &mut DrawList, slot: Rect, icon: &TreeIcon, tint: [f32; 4], hovered: bool) {
     let inset = (slot.height * 0.18).min(4.0);
     let r = Rect::new(
@@ -692,10 +859,7 @@ fn draw_action(list: &mut DrawList, slot: Rect, icon: &TreeIcon, tint: [f32; 4],
         (slot.width - inset * 2.0).max(1.0),
         (slot.height - inset * 2.0).max(1.0),
     );
-    match icon {
-        TreeIcon::Sprite(sprite) => list.image(*sprite, r, tint),
-        TreeIcon::Key(key) => list.icon(key, r.x, r.y, r.width, r.height),
-    }
+    icon.draw(list, r, tint);
     if hovered {
         list.quad(
             slot.x,
@@ -710,6 +874,7 @@ fn draw_action(list: &mut DrawList, slot: Rect, icon: &TreeIcon, tint: [f32; 4],
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::text_color;
     use crate::{FocusState, InputState, Theme};
 
     fn theme() -> Theme {
@@ -718,6 +883,23 @@ mod tests {
 
     fn row() -> Rect {
         Rect::new(0.0, 0.0, 200.0, 20.0)
+    }
+
+    fn styles() -> crate::StyleResolver<'static> {
+        crate::StyleResolver::new(Box::leak(Box::new(theme())))
+    }
+
+    /// Whether a solid quad of `color` was painted.
+    fn has_fill(list: &DrawList, color: [f32; 4]) -> bool {
+        list.chrome_instances().any(|c| c.bg == color)
+    }
+
+    fn hover_body() -> InputState {
+        InputState {
+            mouse_x: 90.0,
+            mouse_y: 10.0,
+            ..InputState::default()
+        }
     }
 
     /// Draw one node into a fresh context; return the populated list + output.
@@ -1040,33 +1222,174 @@ mod tests {
 
     #[test]
     fn label_color_overrides_default_text_color() {
-        use cosmic_text::Color;
-
-        // Default path: the label takes the theme text colour.
+        // Default path: the label takes the title ink.
         let mut s = TreeState::new();
         let (def_list, _) = draw_node(&TreeNode::leaf("Node"), 1, row(), &mut s, &idle());
         let def_color = def_list.texts.first().expect("label emitted").color;
-        let [tr, tg, tb, ta] = crate::color::to_rgba8(theme().text);
-        assert_eq!(
-            def_color,
-            Color::rgba(tr, tg, tb, ta),
-            "default path uses theme.text"
-        );
+        assert_eq!(def_color, text_color(styles().ink(Ink::Title)), "title ink");
 
         // Overridden path: a distinctive colour wins.
         let mut s2 = TreeState::new();
         let node = TreeNode::leaf("Node").with_label_color([0.1, 0.9, 0.3, 1.0]);
         let (list, _) = draw_node(&node, 1, row(), &mut s2, &idle());
         let col = list.texts.first().expect("label emitted").color;
-        let [r, g, b, a] = crate::color::to_rgba8([0.1, 0.9, 0.3, 1.0]);
         assert_eq!(
             col,
-            Color::rgba(r, g, b, a),
+            text_color([0.1, 0.9, 0.3, 1.0]),
             "label_color is applied verbatim"
         );
-        assert_ne!(
-            col, def_color,
-            "override differs from the default text colour"
+
+        // Disabled beats the override.
+        let mut s3 = TreeState::new();
+        let (list, _) = draw_node(&node.with_disabled(true), 1, row(), &mut s3, &idle());
+        let col = list.texts.first().expect("label emitted").color;
+        assert_eq!(col, text_color(styles().ink(Ink::Disabled)));
+    }
+
+    #[test]
+    fn rows_follow_the_design_geometry() {
+        // Depth 0: 4 inset, the indent's 5 gap, a 9 px caret column, a 5 gap.
+        let label_x = |node: TreeNode| {
+            let mut s = TreeState::new();
+            let (list, _) = draw_node(&node, 1, row(), &mut s, &idle());
+            list.texts.first().expect("label emitted").x
+        };
+        assert_eq!(label_x(TreeNode::leaf("a")), 23.0);
+        assert_eq!(label_x(TreeNode::leaf("a").with_depth(2)), 23.0 + 22.0);
+        // A glyph takes 10 px and a gap.
+        assert_eq!(
+            label_x(TreeNode::leaf("a").with_glyph(TreeIcon::Key("folder"))),
+            38.0
+        );
+        // The label runs to 8 px from the right edge, in the menu size.
+        let mut s = TreeState::new();
+        let (list, _) = draw_node(&TreeNode::leaf("a"), 1, row(), &mut s, &idle());
+        let label = list.texts.first().expect("label emitted");
+        assert_eq!(label.max_width, 200.0 - 8.0 - 23.0);
+        assert_eq!(label.font_size, styles().text_size(TextSize::Menu));
+    }
+
+    #[test]
+    fn a_selected_row_is_the_accent_bar_with_on_accent_ink() {
+        let s_ = styles();
+        let mut s = TreeState::new();
+        s.select(1);
+        let (list, _) = draw_node(&TreeNode::new("b"), 1, row(), &mut s, &idle());
+        let fill = s_.color(StyleKey::Accent);
+        assert!(has_fill(&list, fill), "accent bar");
+        assert_eq!(
+            list.texts[0].color,
+            text_color(s_.color(StyleKey::OnAccent))
+        );
+        assert!(
+            list.vertices
+                .iter()
+                .any(|v| v.color == s_.ink(Ink::OnAccentSecond)),
+            "the caret dims on the accent"
+        );
+    }
+
+    #[test]
+    fn an_unfocused_tree_holds_its_selection_without_the_accent() {
+        let s_ = styles();
+        let mut state = TreeState::new();
+        state.set_focus_id(77);
+        state.select(1);
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let th = theme();
+        let input = idle();
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &th, &input, 800.0, 600.0);
+        TreeNode::leaf("a").draw(1, row(), &mut state, &mut ctx);
+        let accent = s_.color(StyleKey::Accent);
+        let held = s_.color(StyleKey::RowHeld);
+        assert!(!has_fill(&list, accent));
+        assert!(has_fill(&list, held));
+        assert_eq!(list.texts[0].color, text_color(s_.ink(Ink::Max)));
+    }
+
+    #[test]
+    fn hover_is_the_row_hover_wash() {
+        let mut s = TreeState::new();
+        let (list, out) = draw_node(&TreeNode::leaf("a"), 1, row(), &mut s, &hover_body());
+        assert!(out.hovered);
+        let wash = styles().color(StyleKey::RowHover);
+        assert!(has_fill(&list, wash));
+    }
+
+    #[test]
+    fn a_disabled_leaf_is_never_hovered_or_selected() {
+        let mut s = TreeState::new();
+        let node = TreeNode::leaf("locked").with_disabled(true);
+        let (list, out) = draw_node(&node, 1, row(), &mut s, &click_body());
+        assert!(!out.hovered);
+        assert!(!out.clicked);
+        assert_eq!(s.selected(), None);
+        let wash = styles().color(StyleKey::RowHover);
+        assert!(!has_fill(&list, wash));
+
+        // A right-click is reported (for a context menu) but doesn't select.
+        let (_, out) = draw_node(&node, 1, row(), &mut s, &right_click_at(90.0, 10.0));
+        assert!(out.right_clicked);
+        assert_eq!(s.selected(), None);
+
+        // A stale selection on a node that became disabled isn't painted.
+        s.select(1);
+        let (list, _) = draw_node(&node, 1, row(), &mut s, &idle());
+        let accent = styles().color(StyleKey::Accent);
+        assert!(!has_fill(&list, accent));
+    }
+
+    #[test]
+    fn a_disabled_branch_still_expands_but_never_selects() {
+        let mut s = TreeState::new();
+        let node = TreeNode::new("locked").with_disabled(true);
+        let (_, out) = draw_node(&node, 1, row(), &mut s, &click_at(12.0, 10.0));
+        assert!(out.toggled && out.expanded, "the caret works");
+        let (_, out) = draw_node(
+            &node.with_toggle_on_label(true),
+            1,
+            row(),
+            &mut s,
+            &click_body(),
+        );
+        assert!(out.hovered, "a disabled branch shows hover");
+        assert!(out.toggled && !out.expanded, "a label click toggles too");
+        assert!(!out.clicked);
+        assert_eq!(s.selected(), None);
+    }
+
+    #[test]
+    fn a_disabled_rows_actions_still_fire() {
+        let mut s = TreeState::new();
+        let acts = [TreeAction::key(9, "eye")];
+        let node = TreeNode::leaf("locked")
+            .with_disabled(true)
+            .with_leading(&acts);
+        let (_, out) = draw_node(&node, 1, row(), &mut s, &click_at(30.0, 10.0));
+        assert_eq!(out.action, Some(9));
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn the_glyph_is_muted_on_accent_when_selected_and_dim_when_disabled() {
+        use crate::render::PhosphorIcon;
+        let s_ = styles();
+        let glyph_tint = |node: TreeNode, selected: bool| {
+            let mut s = TreeState::new();
+            if selected {
+                s.select(1);
+            }
+            let (list, _) = draw_node(&node, 1, row(), &mut s, &idle());
+            assert_eq!(list.icons_msdf.len(), 1);
+            list.icons_msdf[0].tint
+        };
+        let folder = TreeNode::leaf("src").with_glyph(TreeIcon::Phosphor(PhosphorIcon::Folder));
+        assert_eq!(glyph_tint(folder, false), s_.ink(Ink::Muted));
+        assert_eq!(glyph_tint(folder, true), s_.color(StyleKey::OnAccent));
+        assert_eq!(
+            glyph_tint(folder.with_disabled(true), true),
+            s_.ink(Ink::DisabledGlyph)
         );
     }
 
@@ -1102,7 +1425,14 @@ mod tests {
     /// Register a flat list of `(id, depth, branch)` rows as this frame's nav ring.
     fn register_rows(s: &mut TreeState, rows: &[(TreeId, usize, bool)]) {
         for &(id, depth, branch) in rows {
-            s.register_nav(id, depth, branch);
+            s.register_nav(id, depth, branch, false);
+        }
+    }
+
+    /// Like [`register_rows`], with each row's disabled flag.
+    fn register_rows_disabled(s: &mut TreeState, rows: &[(TreeId, usize, bool, bool)]) {
+        for &(id, depth, branch, disabled) in rows {
+            s.register_nav(id, depth, branch, disabled);
         }
     }
 
@@ -1230,6 +1560,82 @@ mod tests {
     }
 
     #[test]
+    fn enter_opens_instead_of_toggling_when_asked() {
+        let mut s = TreeState::new();
+        s.set_enter_opens(true);
+        s.select(1);
+        s.begin_frame(&nav_input(false, false, false, false, true));
+        register_rows(&mut s, &[(1, 0, true), (2, 0, false)]);
+        s.end_frame(true);
+        assert_eq!(s.opened(), Some(1), "Enter reports the selected row");
+        assert!(!s.is_expanded(1), "and leaves its expansion alone");
+        // A leaf opens too, on the next press.
+        s.select(2);
+        s.begin_frame(&InputState::default());
+        assert_eq!(s.opened(), None, "the report lasts one frame");
+        s.end_frame(true);
+        s.begin_frame(&nav_input(false, false, false, false, true));
+        register_rows(&mut s, &[(1, 0, true), (2, 0, false)]);
+        s.end_frame(true);
+        assert_eq!(s.opened(), Some(2));
+    }
+
+    #[test]
+    fn enter_opens_nothing_without_focus_a_selection_or_on_a_disabled_row() {
+        let mut s = TreeState::new();
+        s.set_enter_opens(true);
+        s.select(1);
+        s.begin_frame(&nav_input(false, false, false, false, true));
+        register_rows(&mut s, &[(1, 0, true)]);
+        s.end_frame(false);
+        assert_eq!(s.opened(), None, "unfocused");
+        s.clear_selection();
+        s.begin_frame(&InputState::default());
+        s.end_frame(true);
+        s.begin_frame(&nav_input(false, false, false, false, true));
+        register_rows(&mut s, &[(1, 0, true)]);
+        s.end_frame(true);
+        assert_eq!(s.opened(), None, "no selection");
+        // Arrow keys never select a disabled row, but a caller can.
+        s.select(3);
+        s.begin_frame(&InputState::default());
+        s.end_frame(true);
+        s.begin_frame(&nav_input(false, false, false, false, true));
+        register_rows_disabled(&mut s, &[(3, 0, false, true)]);
+        s.end_frame(true);
+        assert_eq!(s.opened(), None, "disabled");
+    }
+
+    #[test]
+    fn a_double_click_on_the_body_opens_the_row() {
+        let node = TreeNode::new("Folder");
+        let mut state = TreeState::new();
+        let mut double = click_body();
+        double.mouse_double_clicked = true;
+        let (_, out) = draw_node(&node, 1, row(), &mut state, &double);
+        assert!(out.opened && out.clicked, "{out:?}");
+        assert!(state.is_selected(1));
+        assert!(!state.is_expanded(1), "opening is not toggling");
+        // A single click only selects.
+        let (_, out) = draw_node(&node, 2, row(), &mut state, &click_body());
+        assert!(!out.opened && out.clicked);
+    }
+
+    #[test]
+    fn double_clicks_on_the_caret_or_a_disabled_row_open_nothing() {
+        let mut state = TreeState::new();
+        let mut caret = click_at(12.0, 10.0);
+        caret.mouse_double_clicked = true;
+        let (_, out) = draw_node(&TreeNode::new("Folder"), 1, row(), &mut state, &caret);
+        assert!(out.toggled && !out.opened, "{out:?}");
+        let mut body = click_body();
+        body.mouse_double_clicked = true;
+        let disabled = TreeNode::leaf("Locked").with_disabled(true);
+        let (_, out) = draw_node(&disabled, 2, row(), &mut state, &body);
+        assert!(!out.opened, "{out:?}");
+    }
+
+    #[test]
     fn nav_is_noop_when_not_focused() {
         let mut s = TreeState::new();
         s.select(1);
@@ -1264,6 +1670,66 @@ mod tests {
         register_rows(&mut s, &[(1, 0, false), (2, 0, false), (3, 0, false)]);
         s.end_frame(true);
         assert!(s.is_selected(3), "a fresh press steps again");
+    }
+
+    #[test]
+    fn arrows_step_over_disabled_rows() {
+        let rows = [
+            (1, 0, false, false),
+            (2, 0, false, true),
+            (3, 0, false, false),
+            (4, 0, false, true),
+        ];
+        let mut s = TreeState::new();
+        s.select(1);
+        s.begin_frame(&nav_input(false, true, false, false, false));
+        register_rows_disabled(&mut s, &rows);
+        s.end_frame(true);
+        assert!(s.is_selected(3), "Down skips the disabled row");
+
+        // Down at the last enabled row stays put.
+        s.begin_frame(&nav_input(false, false, false, false, false));
+        s.end_frame(true);
+        s.begin_frame(&nav_input(false, true, false, false, false));
+        register_rows_disabled(&mut s, &rows);
+        s.end_frame(true);
+        assert!(s.is_selected(3));
+
+        s.begin_frame(&nav_input(false, false, false, false, false));
+        s.end_frame(true);
+        s.begin_frame(&nav_input(true, false, false, false, false));
+        register_rows_disabled(&mut s, &rows);
+        s.end_frame(true);
+        assert!(s.is_selected(1), "Up skips it too");
+
+        // Nothing selected: Up picks the last enabled row.
+        let mut s = TreeState::new();
+        s.begin_frame(&nav_input(true, false, false, false, false));
+        register_rows_disabled(&mut s, &rows);
+        s.end_frame(true);
+        assert!(s.is_selected(3));
+    }
+
+    #[test]
+    fn right_and_left_stop_at_disabled_children_and_parents() {
+        let mut s = TreeState::new();
+        s.set_expanded(1, true);
+        s.select(1);
+        s.begin_frame(&nav_input(false, false, false, true, false));
+        register_rows_disabled(&mut s, &[(1, 0, true, false), (2, 1, false, true)]);
+        s.end_frame(true);
+        assert!(
+            s.is_selected(1),
+            "Right doesn't descend into a disabled child"
+        );
+
+        let mut s = TreeState::new();
+        s.set_expanded(1, true);
+        s.select(2);
+        s.begin_frame(&nav_input(false, false, true, false, false));
+        register_rows_disabled(&mut s, &[(1, 0, true, true), (2, 1, false, false)]);
+        s.end_frame(true);
+        assert!(s.is_selected(2), "Left doesn't ascend to a disabled parent");
     }
 
     #[test]

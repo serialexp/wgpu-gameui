@@ -140,6 +140,26 @@ icons! {
     ArrowCounterClockwise = '\u{e038}', "arrow-counter-clockwise";
     /// Ruler (measurement / size).
     Ruler = '\u{e6b8}', "ruler";
+    /// Right-pointing caret (a collapsed tree node or section).
+    CaretRight = '\u{e13a}', "caret-right";
+    /// Magnifying glass (search).
+    MagnifyingGlass = '\u{e30c}', "magnifying-glass";
+    /// Two circular arrows, clockwise (refresh / rescan).
+    ArrowsClockwise = '\u{e094}', "arrows-clockwise";
+    /// House (go to the home folder or start page).
+    House = '\u{e2c2}', "house";
+    /// Closed folder with a tab (a directory).
+    Folder = '\u{e24a}', "folder";
+    /// Open folder (an expanded directory).
+    FolderOpen = '\u{e256}', "folder-open";
+    /// Plain folder (a project or collection).
+    FolderSimple = '\u{e25a}', "folder-simple";
+    /// Blank page (a file).
+    File = '\u{e230}', "file";
+    /// Speech bubble (a conversation or session).
+    ChatCircle = '\u{e168}', "chat-circle";
+    /// Square split in two panes, side by side (an empty layout slot).
+    SquareSplitHorizontal = '\u{e870}', "square-split-horizontal";
 }
 
 impl PhosphorIcon {

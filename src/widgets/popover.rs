@@ -184,12 +184,8 @@ pub fn draw_sheet(
         let dim = s.color(StyleKey::TextDim);
         let mut y = body.y + 24.0;
         for line in lines {
-            let (tw, th) = {
-                // Wrap into the body width.
-                let m = list.measure_text(line, font_size, Some(body.width - 16.0));
-                m
-            };
-            let _ = tw;
+            // Wrap into the body width.
+            let (_, th) = list.measure_text(line, font_size, Some(body.width - 16.0));
             let ly = list.vcentered_text_y(y, th, font_size, s.theme().font.as_ref(), line);
             list.text(
                 TextBlock::new(*line, body.x + 8.0, ly)

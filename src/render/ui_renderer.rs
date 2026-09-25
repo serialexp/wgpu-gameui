@@ -59,6 +59,36 @@ struct OrderedColorUpload {
     circle_offset: u64,
 }
 
+/// One run of a draw list's ordered paint stream, uploaded and ready to draw
+/// inside the list's single render pass.
+enum PreparedRun {
+    /// Consecutive color commands, `paint_cmds[range]`, drawn from the frame's
+    /// [`OrderedColorUpload`].
+    Color(std::ops::Range<usize>),
+    /// Atlas sprites or nine-slice panels.
+    Instanced(InstancedRun),
+    /// MSDF text or vector icons.
+    Msdf(crate::text::PreparedMsdf),
+}
+
+/// Which textured-instance pipeline an [`InstancedRun`] draws with.
+#[derive(Clone, Copy)]
+enum InstancedKind {
+    Icon,
+    NineSlice,
+}
+
+/// Uploaded icon or nine-slice instances: `count` records in `buffer` from
+/// `offset`, sampling the sprite atlas bound by `atlas` (both captured at
+/// upload, so a buffer that grows later in the frame doesn't disturb them).
+struct InstancedRun {
+    kind: InstancedKind,
+    buffer: wgpu::Buffer,
+    offset: u64,
+    count: u32,
+    atlas: wgpu::BindGroup,
+}
+
 /// Per-instance icon/image record — matches `vs_icon` in `ui.wgsl`.
 ///
 /// Icons, sprites, and cropped images all flow through this path. The four
@@ -176,13 +206,16 @@ const NINE_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_arra
 
 /// Detects the "freshly-constructed `DrawList`/`LayerStack` every frame" footgun.
 ///
-/// The text-measure cache (and the shaped-glyph cache) lives **on the
-/// `DrawList`**. A caller that builds a new list every frame — e.g.
-/// `LayerStack::new()` inside the render loop — throws that cache away each frame,
-/// so every label is re-shaped through glyphon on every frame. That is invisible
-/// in correctness terms but can cost *milliseconds* (it made one HUD cost ~11ms a
-/// frame instead of <1ms). The fix is always the same: build one list/stack once
-/// and reuse it (`clear()` resets geometry while keeping the warm cache).
+/// The text caches — shaped layouts and font metrics — live on the font
+/// system a list shares ([`SharedFontSystem`](crate::SharedFontSystem)), so a
+/// list made with `with_font_system` every frame only reallocates its buffers.
+/// But `DrawList::new()` and `LayerStack::new()` build a font system of their
+/// own, loading every system font, and a list built through them every frame
+/// — e.g. `LayerStack::new()` inside the render loop — re-shapes every label on
+/// every frame. That is invisible in correctness terms but can cost
+/// *milliseconds* (it made one HUD cost ~11ms a frame instead of <1ms). The
+/// fix is always the same: build one list/stack once and reuse it (`clear()`
+/// resets geometry while keeping its buffers and font system).
 ///
 /// We can't see the cache directly from the renderer, but we can see identity:
 /// each [`DrawList`] carries a unique, never-reused [`id`](DrawList::id). A reused
@@ -250,8 +283,9 @@ pub struct RenderStats {
     pub color_runs: usize,
     /// Analytic shadow instances submitted.
     pub shadow_instances: usize,
-    /// Render passes opened for maximal consecutive color command runs.
-    pub color_passes: usize,
+    /// Render passes opened: one per ordered draw list, plus one per batch on
+    /// the unordered compatibility path.
+    pub render_passes: usize,
     /// Text runs.
     pub text_runs: usize,
     /// Atlas-image, nine-slice, and vector-icon runs.
@@ -1090,6 +1124,13 @@ impl UiRenderer {
         );
     }
 
+    /// The counters for the frame so far: everything rendered since the last
+    /// [`begin_frame`](Self::begin_frame). The same value the latest render call
+    /// returned.
+    pub fn frame_stats(&self) -> RenderStats {
+        self.frame_stats
+    }
+
     /// Open a frame: everything rendered until the next `begin_frame` is expected to
     /// reach the GPU through a single `Queue::submit`.
     ///
@@ -1252,13 +1293,12 @@ impl UiRenderer {
     fn warn_stale_list(method: &str, kind: &str) {
         log::warn!(
             "wgpu-gameui: `UiRenderer::{method}` has been called with a \
-             freshly-constructed `{kind}` for {}+ consecutive frames. The \
-             text-measure and shaped-glyph caches live ON the `DrawList`, so a \
-             list rebuilt every frame can never warm them — every label is \
-             re-shaped through glyphon every frame (this can cost milliseconds \
-             per frame). Construct ONE `{kind}` and reuse it across frames, \
-             calling `.clear()` each frame to reset geometry while keeping the \
-             warm caches.",
+             freshly-constructed `{kind}` for {}+ consecutive frames. Each one \
+             reallocates its buffers, and one built with `new()` also builds \
+             its own font system, so every label is re-shaped every frame \
+             (this can cost milliseconds per frame). Construct ONE `{kind}` \
+             and reuse it across frames, calling `.clear()` each frame to reset \
+             geometry while keeping its buffers and warm text caches.",
             StaleListDetector::WARN_AFTER,
         );
     }
@@ -1449,7 +1489,8 @@ impl UiRenderer {
         if draw_list.paint_cmds.is_empty() {
             let nine = self.build_nine_slice_instances(&draw_list.nine_slices);
             if !nine.is_empty() {
-                self.draw_nine_slices(device, queue, encoder, view, &nine);
+                let run = self.upload_nine_slices(device, queue, &nine);
+                self.draw_instanced_pass(encoder, view, &run);
             }
             if !draw_list.vertices.is_empty() && !draw_list.indices.is_empty() {
                 self.draw_color(
@@ -1463,13 +1504,26 @@ impl UiRenderer {
             }
             let icons = self.build_icon_instances(&draw_list.icons);
             if !icons.is_empty() {
-                self.draw_icons(device, queue, encoder, view, &icons);
+                let run = self.upload_icons(device, queue, &icons);
+                self.draw_instanced_pass(encoder, view, &run);
             }
             #[cfg(feature = "phosphor-icons")]
-            self.text_renderer
-                .render_icons(device, queue, encoder, view, &draw_list.icons_msdf);
-            self.text_renderer
-                .render(device, queue, encoder, view, &draw_list.texts);
+            if let Some(run) = self
+                .text_renderer
+                .upload_icons(device, queue, &draw_list.icons_msdf)
+            {
+                self.frame_stats.render_passes += 1;
+                let mut pass = super::load_pass(encoder, view, "msdf icon pass");
+                self.text_renderer.draw_prepared(&mut pass, &run);
+            }
+            if let Some(run) = self
+                .text_renderer
+                .upload_texts(device, queue, &draw_list.texts)
+            {
+                self.frame_stats.render_passes += 1;
+                let mut pass = super::load_pass(encoder, view, "msdf text pass");
+                self.text_renderer.draw_prepared(&mut pass, &run);
+            }
             return;
         }
 
@@ -1484,64 +1538,22 @@ impl UiRenderer {
             .prepare_icons(device, queue, &draw_list.icons_msdf);
 
         let color_upload = self.upload_ordered_color(device, queue, draw_list);
-        let mut command = 0;
-        while command < draw_list.paint_cmds.len() {
-            let cmd = &draw_list.paint_cmds[command];
-            match cmd {
-                PaintCmd::Soup { .. } | PaintCmd::Analytic { .. } | PaintCmd::Circle { .. } => {
-                    let start = command;
-                    while command < draw_list.paint_cmds.len()
-                        && matches!(
-                            draw_list.paint_cmds[command],
-                            PaintCmd::Soup { .. }
-                                | PaintCmd::Analytic { .. }
-                                | PaintCmd::Circle { .. }
-                        )
-                    {
-                        command += 1;
-                    }
-                    self.frame_stats.color_passes += 1;
-                    self.draw_color_interleaved(
-                        encoder,
-                        view,
-                        &draw_list.paint_cmds[start..command],
+        let runs = self.upload_ordered_runs(device, queue, draw_list);
+        if !runs.is_empty() {
+            // Every run's data is uploaded; draw them in paint order in one pass.
+            self.frame_stats.render_passes += 1;
+            let mut pass = super::load_pass(encoder, view, "ui paint stream pass");
+            for run in &runs {
+                match run {
+                    PreparedRun::Color(commands) => self.draw_color_commands(
+                        &mut pass,
+                        &draw_list.paint_cmds[commands.clone()],
                         color_upload,
-                    );
-                    continue;
+                    ),
+                    PreparedRun::Instanced(run) => self.draw_instanced(&mut pass, run),
+                    PreparedRun::Msdf(run) => self.text_renderer.draw_prepared(&mut pass, run),
                 }
-                PaintCmd::NineSlice { draws } => {
-                    let instances = self.build_nine_slice_instances(
-                        &draw_list.nine_slices[draws.start as usize..draws.end as usize],
-                    );
-                    if !instances.is_empty() {
-                        self.draw_nine_slices(device, queue, encoder, view, &instances);
-                    }
-                }
-                PaintCmd::Icon { draws } => {
-                    let instances = self.build_icon_instances(
-                        &draw_list.icons[draws.start as usize..draws.end as usize],
-                    );
-                    if !instances.is_empty() {
-                        self.draw_icons(device, queue, encoder, view, &instances);
-                    }
-                }
-                #[cfg(feature = "phosphor-icons")]
-                PaintCmd::IconMsdf { draws } => self.text_renderer.render_icons(
-                    device,
-                    queue,
-                    encoder,
-                    view,
-                    &draw_list.icons_msdf[draws.start as usize..draws.end as usize],
-                ),
-                PaintCmd::Text { draws } => self.text_renderer.render(
-                    device,
-                    queue,
-                    encoder,
-                    view,
-                    &draw_list.texts[draws.start as usize..draws.end as usize],
-                ),
             }
-            command += 1;
         }
         // Public arrays can still be appended directly after normal API calls.
         let committed = draw_list.soup_committed_indices as usize;
@@ -1725,20 +1737,8 @@ impl UiRenderer {
         self.color_vbo_offset = v_off + std::mem::size_of_val(verts) as u64;
         self.color_ibo_offset = i_off + std::mem::size_of_val(indices) as u64;
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui color pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+        self.frame_stats.render_passes += 1;
+        let mut pass = super::load_pass(encoder, view, "ui color pass");
         pass.set_pipeline(&self.color_pipeline);
         pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
         // Index 0 maps to the first vertex of this pass's slice (base_vertex 0
@@ -1865,27 +1865,15 @@ impl UiRenderer {
     }
 
     /// Draw a maximal consecutive sequence of color commands in one render pass.
-    fn draw_color_interleaved(
+    /// Draw a run of consecutive color commands (soup, analytic, circles) from
+    /// the frame's ordered color upload into the shared pass.
+    fn draw_color_commands(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
+        pass: &mut wgpu::RenderPass<'_>,
         commands: &[PaintCmd],
         upload: OrderedColorUpload,
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui color primitives pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+        // The previous run may have bound another uniform at group 0.
         pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
 
         // Draw a soup index sub-range with the color pipeline.
@@ -1901,7 +1889,7 @@ impl UiRenderer {
 
         for cmd in commands {
             match cmd {
-                PaintCmd::Soup { indices } => draw_soup(&mut pass, indices.clone()),
+                PaintCmd::Soup { indices } => draw_soup(pass, indices.clone()),
                 PaintCmd::Analytic { instances } => {
                     pass.set_pipeline(&self.analytic_pipeline);
                     pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
@@ -1933,48 +1921,54 @@ impl UiRenderer {
         }
     }
 
-    /// Draw all icons/images as a single instanced call: the chrome unit-quad
+    /// Upload icon/image instances for one instanced draw: the chrome unit-quad
     /// base mesh + one [`IconInstance`] per icon. The vertex shader bilinearly
     /// interpolates the baked-in corners and the fragment samples the atlas.
-    fn draw_icons(
+    fn upload_icons(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
         instances: &[IconInstance],
-    ) {
+    ) -> InstancedRun {
         let off = self.ensure_icon_capacity(device, instances.len());
         queue.write_buffer(&self.icon_inst_buffer, off, bytemuck::cast_slice(instances));
         self.frame_stats.buffer_write_calls += 1;
         self.frame_stats.buffer_bytes_uploaded += std::mem::size_of_val(instances) as u64;
         self.icon_inst_offset = off + std::mem::size_of_val(instances) as u64;
+        InstancedRun {
+            kind: InstancedKind::Icon,
+            buffer: self.icon_inst_buffer.clone(),
+            offset: off,
+            count: instances.len() as u32,
+            atlas: self.texture_bind_group.clone(),
+        }
+    }
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui icon pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
+    /// Draw an uploaded icon or nine-slice run into the shared pass.
+    fn draw_instanced(&self, pass: &mut wgpu::RenderPass<'_>, run: &InstancedRun) {
+        pass.set_pipeline(match run.kind {
+            InstancedKind::Icon => &self.icon_pipeline,
+            InstancedKind::NineSlice => &self.nine_slice_pipeline,
         });
-        pass.set_pipeline(&self.icon_pipeline);
         pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
-        pass.set_bind_group(1, &self.texture_bind_group, &[]);
+        pass.set_bind_group(1, &run.atlas, &[]);
         pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-        pass.set_vertex_buffer(1, self.icon_inst_buffer.slice(off..));
+        pass.set_vertex_buffer(1, run.buffer.slice(run.offset..));
         pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(
-            0..CHROME_BASE_INDICES.len() as u32,
-            0,
-            0..instances.len() as u32,
-        );
+        pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, 0..run.count);
+    }
+
+    /// Draw an uploaded icon or nine-slice run in a pass of its own (the
+    /// unordered compatibility path).
+    fn draw_instanced_pass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        run: &InstancedRun,
+    ) {
+        self.frame_stats.render_passes += 1;
+        let mut pass = super::load_pass(encoder, view, "ui instanced pass");
+        self.draw_instanced(&mut pass, run);
     }
 
     /// Ensure the nine-slice instance buffer holds `count` instances at its
@@ -1998,49 +1992,105 @@ impl UiRenderer {
         off
     }
 
-    /// Draw all nine-slice panels as a single instanced call: the chrome
-    /// unit-quad base mesh + one [`NineSliceInstance`] per panel. The fragment
-    /// remaps local coords → source UV (nine-region piecewise map) and samples
-    /// the atlas.
-    fn draw_nine_slices(
+    /// Upload nine-slice panels for one instanced draw: the chrome unit-quad
+    /// base mesh + one [`NineSliceInstance`] per panel. The fragment remaps
+    /// local coords → source UV (nine-region piecewise map) and samples the
+    /// atlas.
+    fn upload_nine_slices(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
         instances: &[NineSliceInstance],
-    ) {
+    ) -> InstancedRun {
         let off = self.ensure_nine_capacity(device, instances.len());
         queue.write_buffer(&self.nine_inst_buffer, off, bytemuck::cast_slice(instances));
         self.frame_stats.buffer_write_calls += 1;
         self.frame_stats.buffer_bytes_uploaded += std::mem::size_of_val(instances) as u64;
         self.nine_inst_offset = off + std::mem::size_of_val(instances) as u64;
+        InstancedRun {
+            kind: InstancedKind::NineSlice,
+            buffer: self.nine_inst_buffer.clone(),
+            offset: off,
+            count: instances.len() as u32,
+            atlas: self.texture_bind_group.clone(),
+        }
+    }
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ui nine-slice pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pass.set_pipeline(&self.nine_slice_pipeline);
-        pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
-        pass.set_bind_group(1, &self.texture_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-        pass.set_vertex_buffer(1, self.nine_inst_buffer.slice(off..));
-        pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(
-            0..CHROME_BASE_INDICES.len() as u32,
-            0,
-            0..instances.len() as u32,
-        );
+    /// Upload every run of the ordered paint stream, in order, without opening
+    /// a pass: consecutive color commands become one [`PreparedRun::Color`]
+    /// (their data is in the frame's ordered color upload), the rest carry
+    /// their own buffers.
+    fn upload_ordered_runs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        draw_list: &DrawList,
+    ) -> Vec<PreparedRun> {
+        let cmds = &draw_list.paint_cmds;
+        let is_color = |cmd: &PaintCmd| {
+            matches!(
+                cmd,
+                PaintCmd::Soup { .. } | PaintCmd::Analytic { .. } | PaintCmd::Circle { .. }
+            )
+        };
+        let mut runs = Vec::new();
+        let mut command = 0;
+        while command < cmds.len() {
+            match &cmds[command] {
+                cmd if is_color(cmd) => {
+                    let start = command;
+                    while command < cmds.len() && is_color(&cmds[command]) {
+                        command += 1;
+                    }
+                    runs.push(PreparedRun::Color(start..command));
+                    continue;
+                }
+                PaintCmd::NineSlice { draws } => {
+                    let instances = self.build_nine_slice_instances(
+                        &draw_list.nine_slices[draws.start as usize..draws.end as usize],
+                    );
+                    if !instances.is_empty() {
+                        runs.push(PreparedRun::Instanced(
+                            self.upload_nine_slices(device, queue, &instances),
+                        ));
+                    }
+                }
+                PaintCmd::Icon { draws } => {
+                    let instances = self.build_icon_instances(
+                        &draw_list.icons[draws.start as usize..draws.end as usize],
+                    );
+                    if !instances.is_empty() {
+                        runs.push(PreparedRun::Instanced(
+                            self.upload_icons(device, queue, &instances),
+                        ));
+                    }
+                }
+                #[cfg(feature = "phosphor-icons")]
+                PaintCmd::IconMsdf { draws } => {
+                    if let Some(run) = self.text_renderer.upload_icons(
+                        device,
+                        queue,
+                        &draw_list.icons_msdf[draws.start as usize..draws.end as usize],
+                    ) {
+                        runs.push(PreparedRun::Msdf(run));
+                    }
+                }
+                PaintCmd::Text { draws } => {
+                    if let Some(run) = self.text_renderer.upload_texts(
+                        device,
+                        queue,
+                        &draw_list.texts[draws.start as usize..draws.end as usize],
+                    ) {
+                        runs.push(PreparedRun::Msdf(run));
+                    }
+                }
+                PaintCmd::Soup { .. } | PaintCmd::Analytic { .. } | PaintCmd::Circle { .. } => {
+                    unreachable!("color commands are grouped above")
+                }
+            }
+            command += 1;
+        }
+        runs
     }
 }
 

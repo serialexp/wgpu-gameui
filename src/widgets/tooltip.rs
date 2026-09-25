@@ -191,9 +191,7 @@ impl TooltipLayer {
     /// seconds until the tooltip appears); `None` when nothing is pending (no
     /// hover, or the tooltip is already visible).
     pub fn pending(&self) -> Option<f32> {
-        if self.hovered_idx.is_none() {
-            return None;
-        }
+        self.hovered_idx?;
         let delay_s = self.hover_delay_ms as f32 / 1000.0;
         let remaining = delay_s - self.hover_seconds;
         (remaining > 0.0).then_some(remaining)

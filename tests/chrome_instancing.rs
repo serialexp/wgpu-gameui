@@ -192,7 +192,12 @@ fn instanced_chrome_matches_immediate() {
     // fraction. A non-trivial number of pixels must be drawn (sanity).
     let mut differing = 0usize;
     let mut drawn = 0usize;
-    for (a, b) in img_inst.chunks_exact(4).zip(img_imm.chunks_exact(4)) {
+    for (a, b) in img_inst
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(img_imm.as_chunks::<4>().0.iter())
+    {
         let da = (a[0] as i32 - b[0] as i32).abs()
             + (a[1] as i32 - b[1] as i32).abs()
             + (a[2] as i32 - b[2] as i32).abs();
@@ -271,7 +276,9 @@ fn composable_quad_renders_affine_unequal_rounded_border_gradient_and_clip() {
     assert_eq!(pixel(180, 90), &[0, 0, 0, 255], "clip leaked to the right");
     assert_eq!(pixel(100, 45), &[0, 0, 0, 255], "clip leaked above");
     let colored = image
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rgba| rgba[0] > 20 || rgba[1] > 20 || rgba[2] > 20)
         .count();
     assert!(colored > 1_000, "too few composable quad pixels: {colored}");

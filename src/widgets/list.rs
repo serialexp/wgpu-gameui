@@ -13,6 +13,13 @@
 //! interaction (click-to-select, keyboard navigation); the closure only fills
 //! the item rect with its content.
 //!
+//! Rows are painted in the design's list recipe: a faint zebra on odd rows
+//! (opt-in), a hover wash, and a selection that depends on focus — an accent
+//! fill while the list has the keyboard, a neutral held fill otherwise, so
+//! with two lists stacked the one taking the arrow keys is obvious. Rows the
+//! caller marks [`disabled`](List::disabled) never hover, select or activate,
+//! and the arrow keys step over them.
+//!
 //! Persistent state — scroll offset, the selected set, and the keyboard cursor —
 //! lives in a caller-owned [`ListState`], matching the immediate-mode,
 //! caller-owns-state style of the rest of the crate
@@ -214,6 +221,33 @@ impl ListState {
         self.selected.clear();
         self.selected.extend(0..count);
     }
+
+    /// The only selected item, when exactly one is selected.
+    pub fn single_selected(&self) -> Option<usize> {
+        match self.selected.len() {
+            1 => self.selected.first().copied(),
+            _ => None,
+        }
+    }
+
+    /// Make the selection exactly `selection`, for a caller that owns which
+    /// item is selected (a selection kept by id rather than index). `Some(i)`
+    /// selects `i` and puts the cursor there; `None` clears the selection and
+    /// the cursor, so the next arrow key starts from the top. A no-op when the
+    /// selection already matches.
+    pub fn sync_selection(&mut self, selection: Option<usize>) {
+        if self.single_selected() == selection && (selection.is_some() || self.selected.is_empty())
+        {
+            return;
+        }
+        match selection {
+            Some(i) => self.select_one(i),
+            None => {
+                self.clear_selection();
+                self.cursor = None;
+            }
+        }
+    }
 }
 
 /// Per-item info handed to the content closure so it can style by state.
@@ -227,6 +261,11 @@ pub struct ListItem {
     pub hovered: bool,
     /// True if this item is the keyboard cursor.
     pub cursor: bool,
+    /// True if the list has keyboard focus (a selected row then wears the
+    /// accent; content should switch to on-accent inks).
+    pub focused: bool,
+    /// True if the caller marked this item [`disabled`](List::disabled).
+    pub disabled: bool,
 }
 
 /// Interaction results from one [`List::draw`].
@@ -234,8 +273,8 @@ pub struct ListItem {
 pub struct ListOutput {
     /// The item clicked this frame, if any.
     pub clicked: Option<usize>,
-    /// The item activated this frame (double-relevant for keyboard: `Enter` /
-    /// `Space` on the cursor).
+    /// The item activated this frame: double-clicked, or the cursor when the
+    /// focused list gets `Enter` / `Space`.
     pub activated: Option<usize>,
     /// The item under the pointer this frame, if any.
     pub hovered: Option<usize>,
@@ -243,9 +282,36 @@ pub struct ListOutput {
     pub mouse_over_content: bool,
 }
 
+/// Top and bottom edge lines of a selected row while the list has focus
+/// (`--row-select-inset`).
+const SELECT_EDGES_FOCUSED: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 0.28], [0.0, 0.0, 0.0, 0.25]];
+/// The same lines on the held selection of an unfocused list.
+const SELECT_EDGES_HELD: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 0.08], [0.0, 0.0, 0.0, 0.3]];
+
+/// Paint a selected row: the accent bar while its list or tree has focus,
+/// the held wash otherwise, each with its top and bottom edge lines. Shared
+/// by [`List`] and [`TreeNode`](super::TreeNode).
+pub(crate) fn paint_selected_row(
+    list: &mut DrawList,
+    style: &StyleResolver,
+    row: Rect,
+    focused: bool,
+) {
+    let (fill, [top, bottom]) = if focused {
+        (style.color(StyleKey::Accent), SELECT_EDGES_FOCUSED)
+    } else {
+        (style.color(StyleKey::RowHeld), SELECT_EDGES_HELD)
+    };
+    list.quad(row.x, row.y, row.width, row.height, fill);
+    if row.height > 2.0 {
+        list.quad(row.x, row.y, row.width, 1.0, top);
+        list.quad(row.x, row.y + row.height - 1.0, row.width, 1.0, bottom);
+    }
+}
+
 /// A virtualized list / grid. Transient — rebuild it each frame; all persistent
 /// state lives in the caller-owned [`ListState`].
-pub struct List {
+pub struct List<'a> {
     item_height: Option<f32>,
     columns: usize,
     col_gap: f32,
@@ -253,9 +319,11 @@ pub struct List {
     selection: SelectionMode,
     focused: bool,
     zebra: bool,
+    disabled: Option<&'a dyn Fn(usize) -> bool>,
+    overlay_bar: bool,
 }
 
-impl Default for List {
+impl Default for List<'_> {
     fn default() -> Self {
         Self {
             item_height: None,
@@ -265,11 +333,13 @@ impl Default for List {
             selection: SelectionMode::Single,
             focused: false,
             zebra: false,
+            disabled: None,
+            overlay_bar: false,
         }
     }
 }
 
-impl List {
+impl<'a> List<'a> {
     /// Create a list with default single-selection settings.
     pub fn new() -> Self {
         Self::default()
@@ -313,6 +383,42 @@ impl List {
     pub fn with_zebra(mut self, zebra: bool) -> Self {
         self.zebra = zebra;
         self
+    }
+
+    /// Mark items as disabled: `is_disabled(i)` is asked for the visible rows
+    /// and while the arrow keys look for the next enabled item. Disabled items
+    /// never hover, select or activate, and the arrow keys, `Home` and `End`
+    /// skip them.
+    pub fn disabled(mut self, is_disabled: &'a dyn Fn(usize) -> bool) -> Self {
+        self.disabled = Some(is_disabled);
+        self
+    }
+
+    /// Float the scrollbar over the rows instead of docking it beside them
+    /// (see [`ScrollView::overlay`]): the rows keep the full width, and the
+    /// thin thumb takes the pointer from the row under it.
+    pub fn overlay_scrollbar(mut self) -> Self {
+        self.overlay_bar = true;
+        self
+    }
+
+    fn is_disabled(&self, i: usize) -> bool {
+        self.disabled.is_some_and(|f| f(i))
+    }
+
+    /// The first enabled item from `from` stepping by `step` (inclusive of
+    /// `from`), or `None` when the steps leave `0..count` first.
+    fn enabled_from(&self, from: usize, step: isize, count: usize) -> Option<usize> {
+        let mut i = from;
+        loop {
+            if i >= count {
+                return None;
+            }
+            if !self.is_disabled(i) {
+                return Some(i);
+            }
+            i = i.checked_add_signed(step)?;
+        }
     }
 
     /// Draw the list and return interaction results.
@@ -367,31 +473,37 @@ impl List {
         if self.focused && count > 0 {
             let k = state.keys;
             let last = count - 1;
-            let base = state.cursor;
-            let mut next = base.unwrap_or(0);
-            // First key press lands on the first item rather than stepping off it.
-            if base.is_some() {
-                if k.down {
-                    next = (next + cols).min(last);
-                } else if k.up {
-                    next = next.saturating_sub(cols);
-                }
-                if cols > 1 {
-                    if k.right {
-                        next = (next + 1).min(last);
-                    } else if k.left {
-                        next = next.saturating_sub(1);
-                    }
-                }
-            }
-            if k.home {
-                next = 0;
+            // A cursor past the end (the list shrank) counts from the last item.
+            let base = state.cursor.map(|c| c.min(last));
+            let cols_step = cols as isize;
+            // The item a key asks for, stepping over disabled ones; `None` when
+            // there is no enabled item that way (the cursor then stays put).
+            let target = match base {
+                // First key press lands on the first item rather than stepping
+                // off it.
+                None if k.up || k.down || k.left || k.right => self.enabled_from(0, 1, count),
+                None => None,
+                Some(b) if k.down => b
+                    .checked_add(cols)
+                    .and_then(|n| self.enabled_from(n, cols_step, count)),
+                Some(b) if k.up => b
+                    .checked_sub(cols)
+                    .and_then(|n| self.enabled_from(n, -cols_step, count)),
+                Some(b) if cols > 1 && k.right => self.enabled_from(b + 1, 1, count),
+                Some(b) if cols > 1 && k.left => b
+                    .checked_sub(1)
+                    .and_then(|n| self.enabled_from(n, -1, count)),
+                Some(_) => None,
+            };
+            let target = if k.home {
+                self.enabled_from(0, 1, count)
             } else if k.end {
-                next = last;
-            }
+                self.enabled_from(last, -1, count)
+            } else {
+                target
+            };
 
-            let moved = k.up || k.down || k.left || k.right || k.home || k.end;
-            if moved {
+            if let Some(next) = target {
                 if selectable {
                     if self.selection == SelectionMode::Multi && input.shift_pressed {
                         let a = state.anchor.unwrap_or(next);
@@ -426,8 +538,8 @@ impl List {
                 state.scroll.clamp([rect.width, rect.height]);
             }
 
-            if k.activate && state.cursor.is_some() {
-                activated = state.cursor;
+            if k.activate {
+                activated = state.cursor.filter(|&c| c < count && !self.is_disabled(c));
             }
         }
 
@@ -435,9 +547,9 @@ impl List {
         let mouse_x = input.mouse_x;
         let mouse_y = input.mouse_y;
         let mouse_clicked = input.mouse_clicked;
+        let mouse_double_clicked = input.mouse_double_clicked;
         let ctrl = input.ctrl_pressed;
         let shift = input.shift_pressed;
-        let scroll_y = state.scroll.offset[1];
         let mouse_over_content = rect.contains(mouse_x, mouse_y) && !input.mouse_consumed;
 
         // Disjoint field borrows so the content closure can mutate selection
@@ -456,90 +568,106 @@ impl List {
         let selection_mode = self.selection;
         let zebra = self.zebra;
         let col_gap = self.col_gap;
+        let focused = self.focused;
 
-        ScrollView::new(rect)
-            .vertical_only()
-            .draw(scroll, list, style, input, |list, vp| {
-                let cell_w = if cols == 1 {
-                    vp.width
-                } else {
-                    ((vp.width - (cols - 1) as f32 * col_gap) / cols as f32).max(1.0)
-                };
-                let first_row = (scroll_y / row_pitch).floor().max(0.0) as usize;
-                let visible_rows = (vp.height / row_pitch).ceil() as usize + 1;
+        // `begin` eases the drawn offset toward the target and clamps it, so
+        // culling and hit-testing must read the offset after it, not before.
+        let mut view = ScrollView::new(rect).vertical_only();
+        if self.overlay_bar {
+            view = view.overlay();
+        }
+        let begun = view.begin(scroll, list, input);
+        let scroll_y = scroll.offset[1];
+        // An overlay thumb under the pointer has taken it from the rows.
+        let rows_hot = mouse_over_content && !input.mouse_consumed;
+        {
+            let vp = begun.inner;
+            let cell_w = if cols == 1 {
+                vp.width
+            } else {
+                ((vp.width - (cols - 1) as f32 * col_gap) / cols as f32).max(1.0)
+            };
+            let first_row = (scroll_y / row_pitch).floor().max(0.0) as usize;
+            let visible_rows = (vp.height / row_pitch).ceil() as usize + 1;
 
-                for row in first_row..(first_row + visible_rows) {
-                    let world_y = vp.y + row as f32 * row_pitch;
-                    let screen_y = world_y - scroll_y;
-                    for col in 0..cols {
-                        let idx = row * cols + col;
-                        if idx >= count {
-                            break;
-                        }
-                        let cell_x = vp.x + col as f32 * (cell_w + col_gap);
-                        let cell = Rect::new(cell_x, world_y, cell_w, item_h);
+            for row in first_row..(first_row + visible_rows) {
+                let world_y = vp.y + row as f32 * row_pitch;
+                let screen_y = world_y - scroll_y;
+                for col in 0..cols {
+                    let idx = row * cols + col;
+                    if idx >= count {
+                        break;
+                    }
+                    let cell_x = vp.x + col as f32 * (cell_w + col_gap);
+                    let cell = Rect::new(cell_x, world_y, cell_w, item_h);
 
-                        // Hit-test in screen space; gaps are dead zones.
-                        let over_cell = mouse_over_content
-                            && mouse_x >= cell_x
-                            && mouse_x < cell_x + cell_w
-                            && mouse_y >= screen_y
-                            && mouse_y < screen_y + item_h
-                            && mouse_y >= vp.y
-                            && mouse_y < vp.y + vp.height;
+                    let disabled = self.is_disabled(idx);
+                    // Hit-test in screen space; gaps are dead zones.
+                    let over_cell = !disabled
+                        && rows_hot
+                        && mouse_x >= cell_x
+                        && mouse_x < cell_x + cell_w
+                        && mouse_y >= screen_y
+                        && mouse_y < screen_y + item_h
+                        && mouse_y >= vp.y
+                        && mouse_y < vp.y + vp.height;
 
-                        if over_cell {
-                            hovered = Some(idx);
-                            if mouse_clicked {
-                                clicked = Some(idx);
-                                if selectable {
-                                    match selection_mode {
-                                        SelectionMode::Multi if ctrl => {
-                                            sel_toggle(selected, anchor, cursor, idx)
-                                        }
-                                        SelectionMode::Multi if shift => {
-                                            let a = anchor.unwrap_or(idx);
-                                            sel_range(selected, anchor, cursor, a, idx)
-                                        }
-                                        _ => sel_one(selected, anchor, cursor, idx),
+                    if over_cell {
+                        hovered = Some(idx);
+                        if mouse_clicked {
+                            clicked = Some(idx);
+                            if selectable {
+                                match selection_mode {
+                                    SelectionMode::Multi if ctrl => {
+                                        sel_toggle(selected, anchor, cursor, idx)
                                     }
-                                } else {
-                                    *cursor = Some(idx);
+                                    SelectionMode::Multi if shift => {
+                                        let a = anchor.unwrap_or(idx);
+                                        sel_range(selected, anchor, cursor, a, idx)
+                                    }
+                                    _ => sel_one(selected, anchor, cursor, idx),
                                 }
+                            } else {
+                                *cursor = Some(idx);
+                            }
+                            if mouse_double_clicked {
+                                activated = Some(idx);
                             }
                         }
+                    }
 
-                        let is_selected = selected.contains(&idx);
-                        let bg = if is_selected {
-                            style.color(StyleKey::Accent)
-                        } else if over_cell {
-                            style.color(StyleKey::ButtonHover)
+                    let is_selected = !disabled && selected.contains(&idx);
+                    if is_selected {
+                        paint_selected_row(list, style, cell, focused);
+                    } else {
+                        let bg = if over_cell {
+                            style.color(StyleKey::RowHover)
                         } else if zebra && cols == 1 && idx % 2 == 1 {
-                            let mut c = style.color(StyleKey::Panel);
-                            c[0] *= 1.12;
-                            c[1] *= 1.12;
-                            c[2] *= 1.12;
-                            c
+                            style.color(StyleKey::RowZebra)
                         } else {
                             [0.0, 0.0, 0.0, 0.0]
                         };
                         if bg[3] > 0.0 {
                             list.quad(cell.x, cell.y, cell.width, cell.height, bg);
                         }
-
-                        item(
-                            list,
-                            cell,
-                            ListItem {
-                                index: idx,
-                                selected: is_selected,
-                                hovered: over_cell,
-                                cursor: cursor_now == Some(idx),
-                            },
-                        );
                     }
+
+                    item(
+                        list,
+                        cell,
+                        ListItem {
+                            index: idx,
+                            selected: is_selected,
+                            hovered: over_cell,
+                            cursor: cursor_now == Some(idx),
+                            focused,
+                            disabled,
+                        },
+                    );
                 }
-            });
+            }
+        }
+        view.end(scroll, list, style, input, begun);
 
         list.pop_debug_scope();
         ListOutput {
@@ -821,6 +949,259 @@ mod tests {
         let out = frame(&w, rect, 16, &mut st, &mut click_at(20.0, 5.0));
         assert_eq!(out.clicked, None);
         assert_eq!(st.selected_count(), 0);
+    }
+
+    fn press(key: fn(&mut InputState)) -> InputState {
+        let mut input = idle();
+        key(&mut input);
+        input
+    }
+
+    /// Press `key` for a frame, then release it for one (edge detection).
+    fn tap(w: &List, rect: Rect, count: usize, st: &mut ListState, key: fn(&mut InputState)) {
+        frame(w, rect, count, st, &mut press(key));
+        frame(w, rect, count, st, &mut idle());
+    }
+
+    #[test]
+    fn arrow_keys_step_over_disabled_items() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
+        let off = |i: usize| matches!(i, 0 | 2 | 3 | 5);
+        let w = List::new()
+            .with_item_height(20.0)
+            .focused(true)
+            .disabled(&off);
+        let mut st = ListState::new();
+        tap(&w, rect, 6, &mut st, |i| i.key_down = true);
+        assert_eq!(
+            st.cursor(),
+            Some(1),
+            "the first key lands on the first enabled item"
+        );
+        tap(&w, rect, 6, &mut st, |i| i.key_down = true);
+        assert_eq!(st.cursor(), Some(4), "down skips 2 and 3");
+        assert!(st.is_selected(4));
+        tap(&w, rect, 6, &mut st, |i| i.key_down = true);
+        assert_eq!(
+            st.cursor(),
+            Some(4),
+            "nothing enabled below: the cursor stays"
+        );
+        tap(&w, rect, 6, &mut st, |i| i.key_up = true);
+        assert_eq!(st.cursor(), Some(1));
+        tap(&w, rect, 6, &mut st, |i| i.key_up = true);
+        assert_eq!(st.cursor(), Some(1), "nothing enabled above");
+        tap(&w, rect, 6, &mut st, |i| i.key_end = true);
+        assert_eq!(st.cursor(), Some(4), "End goes to the last enabled item");
+        tap(&w, rect, 6, &mut st, |i| i.key_home = true);
+        assert_eq!(st.cursor(), Some(1), "Home to the first enabled one");
+    }
+
+    #[test]
+    fn disabled_items_do_not_hover_select_or_activate() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
+        let off = |i: usize| i == 1;
+        let w = List::new().with_item_height(20.0).disabled(&off);
+        let mut st = ListState::new();
+        let mut double = click_at(50.0, 30.0); // row 1
+        double.mouse_double_clicked = true;
+        let out = frame(&w, rect, 4, &mut st, &mut double);
+        assert_eq!(
+            (out.hovered, out.clicked, out.activated),
+            (None, None, None)
+        );
+        assert_eq!(st.selected_count(), 0);
+
+        let mut th = theme();
+        th.row_hover = [1.0, 0.0, 0.0, 1.0];
+        let mut dl = DrawList::new();
+        let mut items = Vec::new();
+        w.draw(
+            rect,
+            4,
+            &mut st,
+            &mut dl,
+            &StyleResolver::new(&th),
+            &mut idle_at(50.0, 30.0),
+            |_, _, it| items.push(it),
+        );
+        assert!(items[1].disabled && !items[1].hovered);
+        assert!(!items[0].disabled);
+        assert!(
+            dl.chrome_instances().all(|c| c.bg != th.row_hover),
+            "no hover wash on a disabled row"
+        );
+    }
+
+    fn idle_at(x: f32, y: f32) -> InputState {
+        InputState {
+            mouse_x: x,
+            mouse_y: y,
+            ..InputState::default()
+        }
+    }
+
+    #[test]
+    fn double_click_activates_the_row() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
+        let mut st = ListState::new();
+        let mut double = click_at(50.0, 50.0); // row 2
+        double.mouse_double_clicked = true;
+        let out = frame(
+            &List::new().with_item_height(20.0),
+            rect,
+            5,
+            &mut st,
+            &mut double,
+        );
+        assert_eq!(out.activated, Some(2));
+        assert!(st.is_selected(2));
+    }
+
+    /// The fill painted behind row 0 when it is selected, with the list
+    /// focused or not.
+    fn selected_fill(focused: bool) -> [f32; 4] {
+        let rect = Rect::new(0.0, 0.0, 100.0, 60.0);
+        let th = theme();
+        let mut st = ListState::new();
+        st.select_one(0);
+        let mut dl = DrawList::new();
+        let mut seen = None;
+        List::new().with_item_height(20.0).focused(focused).draw(
+            rect,
+            3,
+            &mut st,
+            &mut dl,
+            &StyleResolver::new(&th),
+            &mut idle(),
+            |_, _, it| {
+                if it.index == 0 {
+                    seen = Some(it);
+                }
+            },
+        );
+        let it = seen.expect("row 0 drawn");
+        assert!(it.selected);
+        assert_eq!(it.focused, focused);
+        dl.chrome_instances()
+            .find(|c| c.rect[3] == 20.0)
+            .map(|c| c.bg)
+            .expect("a row-sized fill")
+    }
+
+    #[test]
+    fn selection_is_accent_with_focus_and_held_without() {
+        let th = theme();
+        assert_eq!(selected_fill(true), th.accent);
+        assert_eq!(selected_fill(false), th.row_held);
+    }
+
+    #[test]
+    fn zebra_uses_the_row_zebra_token() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 60.0);
+        let th = theme();
+        let mut dl = DrawList::new();
+        List::new().with_item_height(20.0).with_zebra(true).draw(
+            rect,
+            3,
+            &mut ListState::new(),
+            &mut dl,
+            &StyleResolver::new(&th),
+            &mut idle(),
+            |_, _, _| {},
+        );
+        let fills: Vec<_> = dl.chrome_instances().map(|c| c.bg).collect();
+        assert_eq!(fills, vec![th.row_zebra], "only the odd row");
+    }
+
+    #[test]
+    fn sync_selection_follows_the_callers_choice() {
+        let mut st = ListState::new();
+        st.sync_selection(Some(3));
+        assert_eq!((st.single_selected(), st.cursor()), (Some(3), Some(3)));
+        st.sync_selection(None);
+        assert_eq!((st.single_selected(), st.cursor()), (None, None));
+        st.select_range(1, 2);
+        st.sync_selection(None);
+        assert_eq!(st.selected_count(), 0, "a multi-selection is cleared too");
+    }
+
+    #[test]
+    fn rows_and_clicks_follow_the_offset_the_frame_draws_at() {
+        // Only the target is set (a keyboard reveal or a wheel notch does
+        // this); the scroll view moves the drawn offset toward it at the start
+        // of the frame. Culling and hit-testing must use that moved offset, or
+        // the frame draws the rows for the old position under a translation
+        // for the new one — blank, and clicks land on the wrong row.
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let w = List::new().with_item_height(20.0);
+        let th = theme();
+        for frame_dt in [0.0, 1.0 / 60.0] {
+            let mut st = ListState::new();
+            st.scroll.scroll_to(1, 1000.0);
+            let mut input = InputState {
+                frame_dt,
+                ..click_at(10.0, 30.0)
+            };
+            let mut dl = DrawList::new();
+            let mut drawn_rows = Vec::new();
+            let out = w.draw(
+                rect,
+                100,
+                &mut st,
+                &mut dl,
+                &StyleResolver::new(&th),
+                &mut input,
+                |_, _, it| drawn_rows.push(it.index),
+            );
+            let offset = st.scroll.offset[1];
+            assert!(
+                offset > 0.0,
+                "the frame moved toward the target (dt {frame_dt})"
+            );
+            let top = (offset / 20.0).floor() as usize;
+            assert_eq!(
+                drawn_rows.first(),
+                Some(&top),
+                "dt {frame_dt}, offset {offset}"
+            );
+            let bottom = ((offset + 100.0) / 20.0).ceil() as usize - 1;
+            assert!(
+                drawn_rows.contains(&bottom),
+                "dt {frame_dt}: {drawn_rows:?}"
+            );
+            let under_mouse = ((30.0 + offset) / 20.0).floor() as usize;
+            assert_eq!(
+                out.clicked,
+                Some(under_mouse),
+                "dt {frame_dt}, offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_overlay_thumb_keeps_its_click_from_the_row_under_it() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let w = List::new().with_item_height(20.0).overlay_scrollbar();
+        // The thumb floats 2 px in from the right edge, 9 px wide.
+        let mut st = ListState::new();
+        let out = frame(&w, rect, 100, &mut st, &mut click_at(93.0, 10.0));
+        assert_eq!((out.clicked, out.hovered), (None, None));
+        assert_eq!(st.selected_count(), 0);
+        // Rows keep the full width beside it.
+        let mut st = ListState::new();
+        let out = frame(&w, rect, 100, &mut st, &mut click_at(85.0, 10.0));
+        assert_eq!(out.clicked, Some(0));
+    }
+
+    #[test]
+    fn a_cursor_past_the_end_steps_from_the_last_item() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
+        let w = List::new().with_item_height(20.0).focused(true);
+        let mut st = ListState::new();
+        st.select_one(9); // the list has since shrunk to 4 items
+        tap(&w, rect, 4, &mut st, |i| i.key_up = true);
+        assert_eq!(st.cursor(), Some(2));
     }
 
     #[test]

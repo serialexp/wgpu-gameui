@@ -545,8 +545,10 @@ fn compare(reference: &[u8], gpu: &[u8], width: u32, diffs: &mut Vec<u8>) -> Met
     let mut gpu_x2 = 0.0;
     let mut gpu_y2 = 0.0;
     for (index, (expected, actual)) in reference
-        .chunks_exact(4)
-        .zip(gpu.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(gpu.as_chunks::<4>().0.iter())
         .enumerate()
     {
         let e = expected[3];
@@ -686,8 +688,8 @@ fn save_failure_images(
     let mut diff: RgbaImage = ImageBuffer::new(size.0, size.1);
     for ((pixel, expected), actual) in diff
         .pixels_mut()
-        .zip(reference.chunks_exact(4))
-        .zip(gpu.chunks_exact(4))
+        .zip(reference.as_chunks::<4>().0.iter())
+        .zip(gpu.as_chunks::<4>().0.iter())
     {
         let d = expected[3].abs_diff(actual[3]);
         *pixel = Rgba([d, d, d, 255]);

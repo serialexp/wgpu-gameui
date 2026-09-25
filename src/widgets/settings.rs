@@ -472,24 +472,23 @@ impl<'spec> SettingsForm<'spec> {
             };
             let block_rect = Rect::new(rect.x, y, rect.width, block_h);
 
-            let inner: Rect;
-            if self.group_headers {
+            let inner = if self.group_headers {
                 let g = Group::new(title).with_padding(pad);
                 // `draw` paints body + header strip and returns the content
                 // area (below the header, inset by the padding).
-                inner = g.draw(block_rect, ctx.draw_list, &s);
+                g.draw(block_rect, ctx.draw_list, &s)
             } else {
                 let mut block = s.title_block(title, rect.x, y);
                 let (_, lh) = ctx.draw_list.measure_block(&block);
                 block.y += (title_size + spacing - lh) * 0.5;
                 ctx.draw_list.text(block);
-                inner = Rect::new(
+                Rect::new(
                     rect.x,
                     y + title_size + spacing,
                     rect.width,
                     block_h - title_size - spacing,
-                );
-            }
+                )
+            };
 
             // ---- rows ----
             // Label column sized to the widest label in this section.
@@ -606,11 +605,11 @@ impl<'spec> SettingsForm<'spec> {
             Some(SettingField::Choice(_, _)) => {}
             _ => return None,
         }
-        if let Some(SettingValue::Choice(cur)) = values.get_mut(field) {
-            if *cur != idx {
-                *cur = idx;
-                return Some(field);
-            }
+        if let Some(SettingValue::Choice(cur)) = values.get_mut(field)
+            && *cur != idx
+        {
+            *cur = idx;
+            return Some(field);
         }
         None
     }
@@ -837,7 +836,7 @@ mod tests {
 
     /// Draw one frame with the given input; returns (output, list).
     fn draw_with(
-        values: &mut Vec<SettingValue>,
+        values: &mut [SettingValue],
         state: &mut SettingsFormState,
         input: &InputState,
     ) -> (SettingsFormOutput, DrawList) {

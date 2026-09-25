@@ -127,10 +127,7 @@ impl<'a> AssetGrid<'a> {
             } else {
                 s.color(StyleKey::TextDim)
             };
-            let (gw, gh) = {
-                let m = list.measure_text(self.glyph, 19.0, None);
-                m
-            };
+            let (gw, _) = list.measure_text(self.glyph, 19.0, None);
             let gy = list.vcentered_text_y(
                 thumb.y,
                 thumb.height,
@@ -144,12 +141,9 @@ impl<'a> AssetGrid<'a> {
                     .with_color_f32(glyph_color)
                     .with_font_opt(s.theme().font.clone()),
             );
-            let _ = gh;
 
             // Label (one line, ellipsized).
-            let label_color = if is_sel {
-                s.color(StyleKey::Text)
-            } else if hovered {
+            let label_color = if is_sel || hovered {
                 s.color(StyleKey::Text)
             } else {
                 s.color(StyleKey::TextDim)

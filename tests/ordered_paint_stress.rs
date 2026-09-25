@@ -137,7 +137,7 @@ fn one_draw_preserves_many_overlapping_source_over_operations() {
     assert_eq!(stats.paint_runs, 1);
     assert_eq!(stats.draw_calls, 1);
     assert_eq!(stats.color_runs, 1);
-    assert_eq!(stats.color_passes, 1);
+    assert_eq!(stats.render_passes, 1);
     assert!(reference_stats.draw_calls > PAIRS * 2);
 
     assert_eq!(
@@ -169,7 +169,9 @@ fn many_alternating_runs_do_not_produce_screen_sized_triangle() {
         return;
     };
     let white = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] > 245 && p[1] > 245 && p[2] > 245)
         .count();
     assert!(
@@ -225,7 +227,7 @@ fn alternating_shadow_chrome_and_soup_preserves_pixels_and_stats() {
     assert_eq!(stats.paint_runs, ROWS * 2 + 1);
     assert_eq!(stats.draw_calls, ROWS * 2 + 1);
     assert_eq!(stats.color_runs, ROWS * 2 + 1);
-    assert_eq!(stats.color_passes, 1);
+    assert_eq!(stats.render_passes, 1);
 
     for row in 0..ROWS {
         let y = 5 + row as u32 * 22;

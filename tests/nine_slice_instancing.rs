@@ -268,7 +268,12 @@ fn instanced_nine_slice_matches_immediate() {
 
     let mut differing = 0usize;
     let mut drawn = 0usize;
-    for (a, b) in img_inst.chunks_exact(4).zip(img_imm.chunks_exact(4)) {
+    for (a, b) in img_inst
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(img_imm.as_chunks::<4>().0.iter())
+    {
         let da = (a[0] as i32 - b[0] as i32).abs()
             + (a[1] as i32 - b[1] as i32).abs()
             + (a[2] as i32 - b[2] as i32).abs();

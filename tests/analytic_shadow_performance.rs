@@ -185,7 +185,7 @@ fn shadow_batching_and_uploads_stay_structurally_bounded() {
     assert_eq!(contiguous_stats.paint_runs, 1);
     assert_eq!(contiguous_stats.draw_calls, 1);
     assert_eq!(contiguous_stats.color_runs, 1);
-    assert_eq!(contiguous_stats.color_passes, 1);
+    assert_eq!(contiguous_stats.render_passes, 1);
     assert_eq!(contiguous_stats.buffer_reallocations, 0);
     assert_eq!(
         contiguous_stats.buffer_write_calls,
@@ -205,7 +205,7 @@ fn shadow_batching_and_uploads_stay_structurally_bounded() {
     assert_eq!(alternating_stats.paint_runs, 1);
     assert_eq!(alternating_stats.draw_calls, 1);
     assert_eq!(alternating_stats.color_runs, 1);
-    assert_eq!(alternating_stats.color_passes, 1);
+    assert_eq!(alternating_stats.render_passes, 1);
     assert_eq!(alternating_stats.buffer_reallocations, 0);
     assert_eq!(
         alternating_stats.buffer_write_calls,

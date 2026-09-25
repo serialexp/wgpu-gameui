@@ -568,8 +568,8 @@ impl<'a> Toolbar<'a> {
             ctx.screen_width.max(0.0),
             ctx.screen_height.max(0.0),
         );
-        if state.popup.is_some() {
-            let anchor = if state.popup == Some(PopupKind::Dock) {
+        if let Some(kind) = state.popup {
+            let anchor = if kind == PopupKind::Dock {
                 grip_rect
             } else {
                 overflow_rect
@@ -577,7 +577,7 @@ impl<'a> Toolbar<'a> {
             state.next_geom = Some(PopupGeometry {
                 anchor,
                 viewport,
-                kind: state.popup.unwrap(),
+                kind,
                 overflow_start,
             });
         }

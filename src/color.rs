@@ -94,6 +94,14 @@ pub fn to_rgba8(color: [f32; 4]) -> [u8; 4] {
     color.map(unit_to_u8)
 }
 
+/// The 8-bit text colour a [`TextBlock`](crate::TextBlock) stores for an
+/// `[r, g, b, a]` colour (see
+/// [`with_color_f32`](crate::TextBlock::with_color_f32)).
+pub(crate) fn text_color(color: [f32; 4]) -> cosmic_text::Color {
+    let [r, g, b, a] = to_rgba8(color);
+    cosmic_text::Color::rgba(r, g, b, a)
+}
+
 /// Decode one sRGB-encoded channel to linear light. Host boundary only — see
 /// the module docs.
 pub fn srgb_channel_to_linear(channel: f32) -> f32 {

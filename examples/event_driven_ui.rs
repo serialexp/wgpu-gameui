@@ -89,10 +89,10 @@ impl App {
 }
 
 /// Build one UI frame from the caller's disjoint state fields and return the
-/// aggregated result the host uses to schedule its next redraw. A free
-/// function over the individual parts (rather than `&mut App`) so a host can
-/// call it while the GPU state is still borrowed — the same shape `hello_ui`'s
-/// hand-rolled frame takes.
+/// aggregated result the host uses to schedule its next redraw, plus whether
+/// the Quit button was clicked. A free function over the individual parts
+/// (rather than `&mut App`) so a host can call it while the GPU state is still
+/// borrowed — the same shape `hello_ui`'s hand-rolled frame takes.
 fn build_ui(
     state: &mut UiState,
     input: &mut InputState,
@@ -100,13 +100,13 @@ fn build_ui(
     last_frame: &mut Instant,
     caret_on: bool,
     caret_remaining: f32,
-    quit: &mut bool,
     layers: &mut LayerStack,
-) -> UiFrameResult {
+) -> (UiFrameResult, bool) {
     let dt = last_frame.elapsed().as_secs_f32();
     *last_frame = Instant::now();
 
     wgpu_gameui::map_keyboard(input);
+    let mut quit = false;
     let (_, frame) = state
         .frame(input, theme, &KeyboardNav)
         .dt(dt)
@@ -126,10 +126,10 @@ fn build_ui(
             ui.pop();
             ui.push();
             ui.translate(24.0, 120.0);
-            *quit = ui.text_button("Quit (button)", None, None);
+            quit = ui.text_button("Quit (button)", None, None);
             ui.pop();
         });
-    frame
+    (frame, quit)
 }
 
 impl ApplicationHandler for App {
@@ -234,11 +234,11 @@ impl ApplicationHandler for App {
                 window.request_redraw();
             }
             WindowEvent::KeyboardInput { event: ref ke, .. } => {
-                if ke.state == ElementState::Pressed {
-                    if let PhysicalKey::Code(KeyCode::Escape) = ke.physical_key {
-                        event_loop.exit();
-                        return;
-                    }
+                if ke.state == ElementState::Pressed
+                    && let PhysicalKey::Code(KeyCode::Escape) = ke.physical_key
+                {
+                    event_loop.exit();
+                    return;
                 }
                 window.request_redraw();
             }
@@ -262,18 +262,16 @@ impl ApplicationHandler for App {
                 // Field-level borrows keep the UI build and the GPU render
                 // from fighting over `self` (same as `hello_ui`). The caret
                 // clock was advanced at the top of `window_event`.
-                let mut quit = false;
-                let (result, mut encoder) = {
+                let (result, quit, mut encoder) = {
                     let device = &gpu.device;
                     let renderer = &mut gpu.ui;
-                    let result = build_ui(
+                    let (result, quit) = build_ui(
                         &mut self.state,
                         &mut self.input,
                         &self.theme,
                         &mut self.last_frame,
                         caret_on,
                         caret_remaining,
-                        &mut quit,
                         &mut layers,
                     );
 
@@ -300,7 +298,7 @@ impl ApplicationHandler for App {
                             occlusion_query_set: None,
                         });
                     }
-                    (result, encoder)
+                    (result, quit, encoder)
                 };
                 gpu.ui.render_layers(
                     &gpu.device,

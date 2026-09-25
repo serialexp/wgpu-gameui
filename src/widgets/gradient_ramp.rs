@@ -180,8 +180,7 @@ pub fn draw(
         } else if hovered {
             s.color(StyleKey::Text)
         } else {
-            let c = s.color(StyleKey::TextDim);
-            c
+            s.color(StyleKey::TextDim)
         };
         list.triangle((hx - w, cy), (hx, cy - w), (hx, cy + w), color);
         list.triangle((hx - w, cy), (hx, cy + w), (hx + w, cy), color);

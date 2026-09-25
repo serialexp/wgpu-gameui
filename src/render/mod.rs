@@ -11,9 +11,12 @@
 //! arena owned by the frame, not by the pass: see [`uniform_arena`] for why passes
 //! in one submission must not share bytes.
 //!
-//! `UiRenderer::render` consumes a `DrawList` and emits four sub-render-passes
-//! in this order: nine-slices → colored quads → icons → text. This matches the
-//! reference implementation in citybuilder.
+//! `UiRenderer::render` consumes a `DrawList` in its paint order: every run is
+//! uploaded first, then all of them are drawn in **one** render pass, switching
+//! pipelines between runs. A pass per run would load and store the whole target
+//! each time (costly on tile-based GPUs), and on Metal each pass holds a command
+//! buffer until the submission completes — around a thousand passes in one
+//! submission exhausted the queue and hung the frame.
 
 mod atlas;
 mod blur;
@@ -52,3 +55,26 @@ pub use ui_renderer::{NineSliceMeta, RenderStats, UiRenderer};
 pub(crate) use uniform_arena::UniformArena;
 
 pub use crate::widgets::NineSliceId;
+
+/// Open a render pass on `view` that keeps what is already there and stores
+/// the result — the only kind the UI draws with.
+pub(crate) fn load_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    label: &str,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    })
+}

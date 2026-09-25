@@ -23,6 +23,10 @@ pub type ClipboardGet = Rc<RefCell<dyn FnMut() -> String>>;
 /// Shared clipboard writer used by retained text editors.
 pub type ClipboardSet = Rc<RefCell<dyn FnMut(String)>>;
 
+/// Width of the text caret, in pixels. It is drawn right of its position, so a
+/// single-line field scrolls this much further to keep it inside the box.
+const CARET_WIDTH: f32 = 1.5;
+
 /// Snap a byte index to the nearest char boundary at or below it, clamped to
 /// `s.len()`. Guards the `value[..cursor]` slice in [`compose_preedit`] against
 /// a `cursor_pos` that lands inside a multi-byte UTF-8 sequence.
@@ -234,6 +238,14 @@ pub struct TextInput {
     /// reading-start alignment + caret home edge) for direction-neutral content.
     /// Set via [`with_direction`](Self::with_direction).
     pub direction: crate::TextDirection,
+    /// Paint the field's own input well (the default). A widget that paints
+    /// its own frame around the field, like the
+    /// [`SearchField`](super::SearchField)'s round well, turns this off.
+    pub well: bool,
+    /// Left and right text insets in pixels, replacing the theme's
+    /// [`StyleKey::Padding`] on those two sides, for fields with something
+    /// beside the text (an icon, a key). `None` pads both sides evenly.
+    pub insets: Option<[f32; 2]>,
     /// Clipboard getter — returns the current clipboard contents.
     clipboard_get: Option<ClipboardGet>,
     /// Clipboard setter — writes text to the clipboard.
@@ -274,6 +286,8 @@ impl Default for TextInput {
             desired_caret_x: None,
             mask: None,
             direction: crate::TextDirection::Auto,
+            well: true,
+            insets: None,
             clipboard_get: None,
             clipboard_set: None,
             #[cfg(feature = "syntax-highlighting")]
@@ -300,31 +314,7 @@ impl TextInput {
             y,
             width,
             height,
-            value: String::new(),
-            placeholder: String::new(),
-            cursor_pos: 0,
-            selection_start: None,
-            multiline: false,
-            scroll_offset: 0.0,
-            horizontal_scroll_offset: 0.0,
-            drag_selection_anchor: None,
-            desired_caret_x: None,
-            mask: None,
-            direction: crate::TextDirection::Auto,
-            clipboard_get: None,
-            clipboard_set: None,
-            #[cfg(feature = "syntax-highlighting")]
-            syntax: None,
-            #[cfg(feature = "syntax-highlighting")]
-            syntax_cached_value: String::new(),
-            #[cfg(feature = "syntax-highlighting")]
-            syntax_ranges: std::sync::Arc::new(Vec::new()),
-            #[cfg(feature = "syntax-highlighting")]
-            syntax_range_scratch: Vec::new(),
-            #[cfg(feature = "syntax-highlighting")]
-            syntax_highlighter: Highlighter::new(),
-            #[cfg(all(test, feature = "syntax-highlighting"))]
-            syntax_rebuilds: 0,
+            ..Self::default()
         }
     }
 
@@ -338,6 +328,20 @@ impl TextInput {
     pub fn with_value(mut self, value: impl Into<String>) -> Self {
         self.value = value.into();
         self.cursor_pos = self.value.len();
+        self
+    }
+
+    /// Paint the field's own well (`true`, the default) or leave the frame to
+    /// the caller. See [`well`](Self::well).
+    pub fn with_well(mut self, well: bool) -> Self {
+        self.well = well;
+        self
+    }
+
+    /// Inset the text `left` and `right` px from the field's sides instead of
+    /// the theme padding. See [`insets`](Self::insets).
+    pub fn with_insets(mut self, left: f32, right: f32) -> Self {
+        self.insets = Some([left, right]);
         self
     }
 
@@ -896,27 +900,29 @@ impl TextInput {
 
         // ---- Geometry & layout policy ----
         let padding = s.scalar(StyleKey::Padding);
+        let [want_left, want_right] = self.insets.unwrap_or([padding, padding]);
         // Clamp padding so the inner clip always has positive area. If the
-        // theme padding exceeds what the field can afford, the text clip
-        // collapses to zero and all content becomes invisible — a silent,
-        // baffling failure mode that previously went undetected.
+        // padding exceeds what the field can afford, the text clip collapses
+        // to zero and all content becomes invisible — a silent, baffling
+        // failure mode that previously went undetected.
         let max_pad_h = (self.height / 2.0 - 1.0).max(0.0);
         let max_pad_w = (self.width / 2.0 - 1.0).max(0.0);
-        if padding > max_pad_h || padding > max_pad_w {
+        if padding > max_pad_h || want_left > max_pad_w || want_right > max_pad_w {
             log::warn!(
-                "TextInput: theme padding ({padding:.1}px) exceeds field size \
-                 ({w:.0}×{h:.0}px) — clamping to ({pw:.1}, {ph:.1}) so text stays visible. \
-                 Increase the field size or reduce StyleKey::Padding.",
+                "TextInput: padding ({padding:.1}px, sides {want_left:.1}/{want_right:.1}px) \
+                 exceeds field size ({w:.0}×{h:.0}px) — clamping to ({pw:.1}, {ph:.1}) so \
+                 text stays visible. Increase the field size or reduce the padding.",
                 w = self.width,
                 h = self.height,
                 pw = max_pad_w,
                 ph = max_pad_h,
             );
         }
-        let eff_pad_w = padding.min(max_pad_w);
+        let pad_left = want_left.min(max_pad_w);
+        let pad_right = want_right.min(max_pad_w);
         let eff_pad_h = padding.min(max_pad_h);
-        let text_x = self.x + eff_pad_w;
-        let text_max_w = self.width - eff_pad_w * 2.0;
+        let text_x = self.x + pad_left;
+        let text_max_w = self.width - pad_left - pad_right;
         // Single-line never wraps (a long value overflows + clips); multiline
         // wraps to the field width.
         let wrap = if multiline {
@@ -1018,8 +1024,8 @@ impl TextInput {
                 self.desired_caret_x = None;
             } else {
                 let click_x = input.mouse_x;
-                let text_left = self.x + eff_pad_w;
-                let text_right = self.x + self.width - eff_pad_w;
+                let text_left = text_x;
+                let text_right = self.x + self.width - pad_right;
 
                 if click_x >= text_left && click_x <= text_right {
                     let local_x = click_x - text_left + self.horizontal_scroll_offset;
@@ -1098,8 +1104,10 @@ impl TextInput {
         // switches the border to the accent + soft outer ring (see
         // `material::draw_well`). Hover keeps the resting border — the design
         // highlights focus, not hover, on wells.
-        let frame = Rect::new(self.x, self.y, self.width, self.height);
-        crate::widgets::material::draw_well(list, &s, frame, focused, false);
+        if self.well {
+            let frame = Rect::new(self.x, self.y, self.width, self.height);
+            crate::widgets::material::draw_well(list, &s, frame, focused, false);
+        }
 
         // Render-time caret layout (multiline+focused), reflecting any edits made
         // this frame — used for autoscroll, per-line selection, and the caret.
@@ -1145,16 +1153,18 @@ impl TextInput {
                 .map(|&(_, x)| x)
                 .unwrap_or_else(|| positions.last().map(|&(_, x)| x).unwrap_or(0.0));
             let content_w = positions.last().map(|&(_, x)| x).unwrap_or(0.0);
+            // A focused field scrolls far enough to show all of the caret.
+            let caret_room = if focused { CARET_WIDTH } else { 0.0 };
             if focused {
                 if caret_x < self.horizontal_scroll_offset {
                     self.horizontal_scroll_offset = caret_x;
-                } else if caret_x > self.horizontal_scroll_offset + text_max_w {
-                    self.horizontal_scroll_offset = caret_x - text_max_w;
+                } else if caret_x + caret_room > self.horizontal_scroll_offset + text_max_w {
+                    self.horizontal_scroll_offset = caret_x + caret_room - text_max_w;
                 }
             }
             self.horizontal_scroll_offset = self
                 .horizontal_scroll_offset
-                .clamp(0.0, (content_w - text_max_w).max(0.0));
+                .clamp(0.0, (content_w + caret_room - text_max_w).max(0.0));
         }
 
         // ---- Resolve drawn text ----
@@ -1314,10 +1324,16 @@ impl TextInput {
                 };
                 let caret_x = text_x + caret.x;
                 let caret_y = text_top - scroll + caret.line_top;
-                list.quad(caret_x, caret_y, 1.5, caret_h, s.color(StyleKey::Text));
+                list.quad(
+                    caret_x,
+                    caret_y,
+                    CARET_WIDTH,
+                    caret_h,
+                    s.color(StyleKey::Text),
+                );
                 // Tell the windowing layer a text field is focused (so it can
                 // enable IME) and where to anchor the IME candidate window.
-                focus.request_ime(Rect::new(caret_x, caret_y, 1.5, caret_h));
+                focus.request_ime(Rect::new(caret_x, caret_y, CARET_WIDTH, caret_h));
             } else {
                 let cursor_x = if let Some((display, _spans, caret_byte)) = &composed {
                     // Caret position is measured on the composed display string so
@@ -1352,9 +1368,15 @@ impl TextInput {
                 } else {
                     (sl_band_top, sl_band_h)
                 };
-                list.quad(cursor_x, caret_top, 1.5, caret_h, s.color(StyleKey::Text));
+                list.quad(
+                    cursor_x,
+                    caret_top,
+                    CARET_WIDTH,
+                    caret_h,
+                    s.color(StyleKey::Text),
+                );
                 // See the multiline branch: declare IME focus + caret anchor.
-                focus.request_ime(Rect::new(cursor_x, caret_top, 1.5, caret_h));
+                focus.request_ime(Rect::new(cursor_x, caret_top, CARET_WIDTH, caret_h));
             }
         }
 
@@ -1471,6 +1493,51 @@ mod tests {
         let caret = focus.ime_request().expect("focused input requests IME");
         assert!(caret.x >= theme.padding);
         assert!(caret.x <= ti.width - theme.padding + 0.1);
+    }
+
+    #[test]
+    fn scrolled_single_line_text_stays_visible_up_to_the_right_edge() {
+        let mut ti = TextInput::new(0.0, 0.0, 80.0, 24.0)
+            .with_value("a very long value that cannot fit".to_string());
+        let mut focus = FocusState::new();
+        let mut list = DrawList::new();
+        let theme = Theme::default();
+        let input = InputState::default();
+        focus.focus(1);
+        focus.begin_frame(&input);
+        draw_input(&mut ti, 1, &mut focus, &mut list, &theme, &input);
+
+        assert!(ti.horizontal_scroll_offset > 0.0);
+        let text = list.texts.last().expect("a text block was drawn");
+        assert!(text.x < theme.padding, "the text starts left of the field");
+        // The text is clipped to the field's inner box, not to a box that
+        // starts where the scrolled text starts: the end of the value, which
+        // the field scrolled into view, must not be clipped away.
+        let clip = text.clip.expect("the text is clipped");
+        assert_eq!(clip.x, theme.padding);
+        assert_eq!(clip.x + clip.width, ti.width - theme.padding);
+    }
+
+    #[test]
+    fn the_caret_at_the_end_of_a_scrolled_field_is_inside_the_box() {
+        let mut ti = TextInput::new(0.0, 0.0, 80.0, 24.0)
+            .with_value("a very long value that cannot fit".to_string());
+        let mut focus = FocusState::new();
+        let mut list = DrawList::new();
+        let theme = Theme::default();
+        let input = InputState::default();
+        focus.focus(1);
+        focus.begin_frame(&input);
+        draw_input(&mut ti, 1, &mut focus, &mut list, &theme, &input);
+
+        assert_eq!(ti.cursor_pos, ti.value.len());
+        let caret = focus.ime_request().expect("focused input requests IME");
+        // All of the caret, not just its left edge: the text is clipped at the
+        // inner box, so a caret starting on that edge is invisible.
+        assert!(
+            caret.x + caret.width <= ti.width - theme.padding + 0.01,
+            "caret {caret:?} ends past the inner box"
+        );
     }
 
     #[test]
@@ -2126,9 +2193,10 @@ mod tests {
     /// keyboard tests can exercise vertical nav / line Home-End off-screen.
     fn caret_layout(text: &str, max_width: f32) -> Vec<CaretPos> {
         let fsh = crate::text::shared_font_system();
-        let mut fs = fsh.lock().unwrap();
+        let mut shared = fsh.lock().unwrap();
+        let fs = shared.font_system();
         crate::text::text_caret_layout(
-            &mut fs,
+            fs,
             text,
             16.0,
             20.0,

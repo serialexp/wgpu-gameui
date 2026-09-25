@@ -25,14 +25,14 @@ use wgpu_gameui::{
     PopoverSide, ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode,
     Separator, Severity, Slider, Splitter, StatusCell, StyleKey, StyleOverlay, StyleResolver,
     Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection, TextInput, TextSpan,
-    Theme, Toast, ToastStack, Toggle, Tone, TooltipContent, TooltipLayer, TreeAction, TreeNode,
+    Theme, Toast, ToastStack, Toggle, TooltipContent, TooltipLayer, TreeAction, TreeNode,
     TreeState, UiContext, UiRenderer, UiState, Underline, VectorField, VectorScrub, ease,
     lerp_color,
 };
 use wgpu_gameui::{
     EmptyState, STATUS_BAR_HEIGHT, badge, chip, dots, draw_combo_trigger, draw_curve_editor,
-    draw_doc_tabs, draw_gradient_ramp, draw_status_bar, draw_tag_input, empty_state, keycap,
-    place_popover, skeleton, spinner,
+    draw_doc_tabs, draw_gradient_ramp, draw_status_bar, draw_tag_input, keycap, place_popover,
+    skeleton, spinner,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -635,21 +635,8 @@ fn render_widget_gallery() {
             flow.section(list, "Icons (Phosphor MSDF)");
 
             // The full curated set at a single readable size.
-            let set = [
-                ("Plus", PhosphorIcon::Plus),
-                ("Minus", PhosphorIcon::Minus),
-                ("Check", PhosphorIcon::Check),
-                ("X", PhosphorIcon::X),
-                ("CaretUp", PhosphorIcon::CaretUp),
-                ("CaretDown", PhosphorIcon::CaretDown),
-                ("Eye", PhosphorIcon::Eye),
-                ("EyeSlash", PhosphorIcon::EyeSlash),
-                ("Trash", PhosphorIcon::Trash),
-                ("Pencil", PhosphorIcon::PencilSimple),
-                ("Gear", PhosphorIcon::Gear),
-            ];
-            for (label, icon) in set {
-                let r = flow.cell(list, label, 32.0, 32.0);
+            for &icon in PhosphorIcon::ALL {
+                let r = flow.cell(list, icon.name(), 32.0, 32.0);
                 Icon::new(icon).draw(r, list);
             }
 
@@ -1631,7 +1618,7 @@ fn render_widget_gallery() {
                 (5, "Stone", true, 0),
             ];
             for (i, (id, label, leaf, depth)) in rows.iter().enumerate() {
-                let row = Rect::new(r.x, r.y + i as f32 * 21.0, r.width, 20.0);
+                let row = Rect::new(r.x, r.y + i as f32 * 22.0, r.width, 22.0);
                 let mut tctx = DrawContext::new(list, &mut focus, &theme, &idle, W as f32, 600.0);
                 TreeNode::new(label)
                     .with_leaf(*leaf)
@@ -1639,6 +1626,60 @@ fn render_widget_gallery() {
                     .with_leading(&leading)
                     .with_trailing(&trailing)
                     .draw(*id, row, &mut tree, &mut tctx);
+            }
+        }
+
+        // The Forge tree: Phosphor glyphs per node, a trailing eye, the
+        // accent selection ("Metal"), a disabled leaf ("locked.mat", with its
+        // dim glyph) and the hover wash ("Foliage", under the pointer).
+        #[cfg(feature = "phosphor-icons")]
+        {
+            use wgpu_gameui::{Ink, TreeIcon};
+            let r = flow.cell(
+                list,
+                "Tree — glyphs · selected · disabled · hovered",
+                220.0,
+                132.0,
+            );
+            {
+                list.quad(r.x, r.y, r.width, r.height, theme.panel);
+                const VIS: u32 = 1;
+                let mut tree = TreeState::new();
+                tree.set_expanded(1, true);
+                tree.select(3);
+                let rows: [(u64, &str, bool, usize, bool); 6] = [
+                    (1, "Materials", false, 0, false),
+                    (2, "wood.mat", true, 1, false),
+                    (3, "metal.mat", true, 1, false),
+                    (4, "locked.mat", true, 1, true),
+                    (5, "Foliage", false, 0, false),
+                    (6, "stone.mat", true, 0, false),
+                ];
+                let hover = InputState {
+                    mouse_x: r.x + 80.0,
+                    mouse_y: r.y + 4.0 * 22.0 + 11.0,
+                    ..InputState::default()
+                };
+                let eye_tint = StyleResolver::new(&theme).ink(Ink::Empty);
+                let trailing = [TreeAction::phosphor(VIS, PhosphorIcon::Eye).with_tint(eye_tint)];
+                for (i, &(id, label, leaf, depth, disabled)) in rows.iter().enumerate() {
+                    let glyph = match (leaf, tree.is_expanded(id)) {
+                        (true, _) => PhosphorIcon::File,
+                        (false, true) => PhosphorIcon::FolderOpen,
+                        (false, false) => PhosphorIcon::Folder,
+                    };
+                    let row = Rect::new(r.x, r.y + i as f32 * 22.0, r.width, 22.0);
+                    let mut tctx =
+                        DrawContext::new(list, &mut focus, &theme, &hover, W as f32, 600.0);
+                    TreeNode::new(label)
+                        .with_leaf(leaf)
+                        .with_depth(depth)
+                        .with_glyph(TreeIcon::Phosphor(glyph))
+                        .with_disabled(disabled)
+                        .with_slot_size(14.0)
+                        .with_trailing(&trailing)
+                        .draw(id, row, &mut tree, &mut tctx);
+                }
             }
         }
 
@@ -1809,7 +1850,9 @@ fn render_widget_gallery() {
                         // Debug: outline the cell rect handed to the closure, so
                         // the item's content padding is visible.
                         list.rect_outline(cell, 1.0, [1.0, 0.25, 0.8, 0.9]);
-                        let c = if it.selected {
+                        // Dark ink only on the focused accent fill; the held
+                        // (unfocused) selection is a light wash.
+                        let c = if it.selected && it.focused {
                             (20, 24, 34)
                         } else {
                             (200, 210, 230)
@@ -1881,7 +1924,7 @@ fn render_widget_gallery() {
             let r = flow.cell(list, "Virtualized (1000)", 150.0, 110.0);
             list.rounded_rect(r, 4.0, [0.06, 0.07, 0.10, 1.0]);
             let mut state = ListState::new();
-            state.scroll.offset[1] = 420.0; // scrolled partway
+            state.scroll.snap_to(1, 420.0); // scrolled partway
             let mut idle_in = InputState {
                 mouse_x: -1.0,
                 mouse_y: -1.0,
@@ -1913,6 +1956,104 @@ fn render_widget_gallery() {
                     );
                 },
             );
+        }
+
+        // ---- ListView (the design's dense sidebar list) -----------------
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(
+                list,
+                "ListView — highlight · focus-aware selection · two-line · empty",
+            );
+            use wgpu_gameui::{ListRow, ListView};
+
+            let projects = [
+                ListRow::new("agent-ui"),
+                ListRow::new("claude-code-ui"),
+                ListRow::new("wgpu-gameui"),
+                ListRow::new("magic-agents"),
+                ListRow::new("old-agent-prototype").disabled(true),
+                ListRow::new("serialexp"),
+            ];
+            let sessions = [
+                ListRow::new("Fix websocket reconnect")
+                    .subtitle("01a01043 · 38 msgs")
+                    .meta("2h"),
+                ListRow::new("Port the sidebar to gameui")
+                    .subtitle("7c2e91f0 · 112 msgs")
+                    .meta("1d"),
+                ListRow::new("Untitled")
+                    .subtitle("e41b77aa · 0 msgs")
+                    .meta("3w"),
+            ];
+            let folders = [
+                ListRow::new("crates")
+                    .glyph(PhosphorIcon::Folder)
+                    .mono(true),
+                ListRow::new("docs").glyph(PhosphorIcon::Folder).mono(true),
+                ListRow::new("Cargo.toml")
+                    .glyph(PhosphorIcon::File)
+                    .mono(true),
+            ];
+            // (label, rows, view, selected, hovered row)
+            type Case<'a> = (
+                &'a str,
+                &'a [ListRow<'a>],
+                ListView<'a>,
+                Option<usize>,
+                Option<usize>,
+            );
+            let cases: [Case; 5] = [
+                (
+                    "Focused · highlight \"ag\" · hover",
+                    &projects,
+                    ListView::new().highlight("ag").focused(true),
+                    Some(0),
+                    Some(3),
+                ),
+                (
+                    "Unfocused (held selection)",
+                    &projects,
+                    ListView::new().highlight("ag"),
+                    Some(0),
+                    None,
+                ),
+                (
+                    "Two-line (sessions)",
+                    &sessions,
+                    ListView::new().two_line(true).focused(true),
+                    Some(1),
+                    None,
+                ),
+                ("Glyphs · mono", &folders, ListView::new(), Some(0), None),
+                (
+                    "Empty",
+                    &[],
+                    ListView::new().empty("No projects match \"zz\""),
+                    None,
+                    None,
+                ),
+            ];
+            for (label, rows, view, selected, hover) in cases {
+                let r = flow.cell(list, label, 200.0, 140.0);
+                list.rounded_rect(r, 2.0, [0.06, 0.07, 0.085, 1.0]);
+                let row_h = view.row_height(&StyleResolver::new(&theme));
+                let mut view_input = InputState {
+                    mouse_x: hover.map_or(-1.0, |_| r.x + 40.0),
+                    mouse_y: hover.map_or(-1.0, |i| r.y + (i as f32 + 0.5) * row_h),
+                    ..InputState::default()
+                };
+                view.draw(
+                    r,
+                    rows.len(),
+                    selected,
+                    &mut ListState::new(),
+                    list,
+                    &StyleResolver::new(&theme),
+                    &mut view_input,
+                    |i| rows[i],
+                );
+            }
         }
 
         // ---- Instanced chrome (SDF rounded-rect) ------------------------
@@ -2461,36 +2602,39 @@ fn render_widget_gallery() {
             });
 
             // Busy states.
-            let mut bctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
-            let _ = &mut bctx;
             let r = flow.cell(list, "Skeleton", 120.0, 10.0);
             skeleton(list, &s, r, 0.3);
             let r = flow.cell(list, "Spinner + dots", 80.0, 24.0);
             spinner(list, &s, (r.x + 12.0, r.y + 12.0), 8.0, 0.4, 1.7);
             dots(list, &s, (r.x + 52.0, r.y + 12.0), 0.3);
 
-            // Empty state with a CTA button under it.
-            let r = flow.cell(list, "Empty state", 260.0, 110.0);
-            let used = empty_state(
+            // Empty states (Forge `EmptyState`): the design's own example,
+            // the agent-ui main area, and an icon glyph.
+            let r = flow.cell(
                 list,
-                &s,
-                r,
-                &EmptyState {
-                    glyph: "◈",
-                    title: "No entities",
-                    body: "Create one to get started.",
-                },
+                "Empty state — hint · action",
+                260.0,
+                EmptyState::HEIGHT,
             );
-            let cta = Rect::new(
-                used.x + (used.width - 120.0) * 0.5,
-                used.bottom() + 6.0,
-                120.0,
-                24.0,
-            );
-            let mut ectx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
-            let _ = Button::new("Create Entity")
-                .tone(Tone::Accent)
-                .draw(cta, &mut ectx);
+            EmptyState::new()
+                .title("No entities in selection")
+                .hint("Select something in the viewport, or")
+                .action("Create Entity")
+                .draw(r, &mut ctx(list, &mut focus, &theme, &input));
+            let r = flow.cell(list, "Empty state — glyph", 300.0, EmptyState::HEIGHT);
+            EmptyState::new()
+                .glyph("◫")
+                .title("No session selected")
+                .hint("Pick a session, or start a new one with +")
+                .draw(r, &mut ctx(list, &mut focus, &theme, &input));
+            #[cfg(feature = "phosphor-icons")]
+            {
+                let r = flow.cell(list, "Empty state — icon", 200.0, 120.0);
+                EmptyState::new()
+                    .icon(PhosphorIcon::MagnifyingGlass)
+                    .title("Nothing matches \u{201c}zz\u{201d}")
+                    .draw(r, &mut ctx(list, &mut focus, &theme, &input));
+            }
         }
 
         flow.section(list, "4a: gradient ramp · curve editor · popover");
@@ -2547,8 +2691,8 @@ fn render_widget_gallery() {
 
         // --- Banners & toasts ----------------------------------------------
         // Severity banners (info/success/warning/error) and a corner toast stack.
-        // The toast stack normally anchors to the screen; here we translate it
-        // into a reserved cell so it shows inline.
+        // The toast stack normally anchors to the screen; here it lays out in
+        // a reserved cell so it shows inline.
         flow.section(list, "Banners & toasts");
         {
             let style = StyleResolver::new(&theme);
@@ -2567,8 +2711,8 @@ fn render_widget_gallery() {
                 banner.draw(r, list, &style);
             }
 
-            // Inline toast stack: a faint backdrop stands in for the screen, and
-            // a transform maps the stack's (0,0) corner origin into the cell.
+            // Inline toast stack: a faint backdrop stands in for the screen,
+            // and the cell is the area the stack lays out in.
             let r = flow.cell(list, "Toast stack (top-right)", 320.0, 250.0);
             list.quad(r.x, r.y, r.width, r.height, [0.09, 0.10, 0.13, 1.0]);
             list.rect_outline(r, 1.0, [0.25, 0.28, 0.34, 1.0]);
@@ -2576,18 +2720,24 @@ fn render_widget_gallery() {
                 .with_corner(Corner::TopRight)
                 .with_width(232.0)
                 .with_margin(10.0);
-            stack.push(Toast::new(Severity::Success, "Settings saved").with_title("Saved"));
+            stack.push(
+                Toast::new(Severity::Success, "12 meshes written to /build")
+                    .with_title("Export finished"),
+            );
             stack.push(Toast::new(Severity::Info, "New update available (v1.2)"));
-            stack.push(Toast::new(Severity::Warning, "Low disk space"));
-            list.push_transform();
-            list.translate(r.x, r.y);
-            stack.draw(r.width, r.height, list, &style);
-            list.pop_transform();
+            stack.push(
+                Toast::error("missing field `message_count` at line 1 column 187")
+                    .with_title("Conversations")
+                    .until_dismissed(),
+            );
+            let input = InputState::default();
+            stack.draw(r, &mut ctx(list, &mut focus, &theme, &input));
         }
 
         // --- Toolbar ---------------------------------------------------------
-        flow.section(list, "Toolbar — 03-toolbar.html key states");
+        #[cfg(feature = "phosphor-icons")]
         {
+            flow.section(list, "Toolbar — 03-toolbar.html key states");
             use wgpu_gameui::render::PhosphorIcon;
             use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
 
@@ -2630,8 +2780,9 @@ fn render_widget_gallery() {
             }
         }
 
-        flow.section(list, "Toolbar — docked rails from 03-toolbar.html");
+        #[cfg(feature = "phosphor-icons")]
         {
+            flow.section(list, "Toolbar — docked rails from 03-toolbar.html");
             use wgpu_gameui::render::PhosphorIcon;
             use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
 
@@ -2674,8 +2825,9 @@ fn render_widget_gallery() {
         }
 
         // --- App shell -------------------------------------------------------
-        flow.section(list, "App shell (mini layout)");
+        #[cfg(feature = "phosphor-icons")]
         {
+            flow.section(list, "App shell (mini layout)");
             use wgpu_gameui::{AppShell, DockPanelState, ToolbarEdge, ToolbarState};
 
             let left = DockPanelState::new(60.0).with_range(40.0, 120.0);
@@ -2763,9 +2915,11 @@ fn render_widget_gallery() {
             let mut state = DockPanelState::new(240.0);
             state.active_tab = 0;
             let r = flow.cell(list, "Active / Hover / Idle (closable)", 240.0, 130.0);
-            let mut dock_input = InputState::default();
-            dock_input.mouse_x = r.x + 120.0;
-            dock_input.mouse_y = r.y + theme.dock_tab_height * 0.5;
+            let dock_input = InputState {
+                mouse_x: r.x + 120.0,
+                mouse_y: r.y + theme.dock_tab_height * 0.5,
+                ..InputState::default()
+            };
             let mut dctx = DrawContext::new(list, &mut focus, &theme, &dock_input, W as f32, 600.0);
             let out = DockPanel::new(DockSide::Left, &tabs)
                 .closable()
@@ -2779,6 +2933,228 @@ fn render_widget_gallery() {
                     .with_size(10.0)
                     .with_color_f32(bd),
             );
+        }
+
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(list, "IconKey — sizes 17 / 18 / 24 · tones · states");
+            use wgpu_gameui::{IconKey, Tone};
+
+            // Each key gets its own synthetic pointer, so hover and pressed
+            // show next to idle, held and disabled in the static gallery.
+            let tones = [
+                ("default", Tone::Default),
+                ("ghost", Tone::Ghost),
+                ("accent", Tone::Accent),
+                ("sunken", Tone::Sunken),
+            ];
+            let states = ["idle", "hover", "pressed", "held", "disabled"];
+            for size in [IconKey::HEADER, IconKey::STATUS, IconKey::TOOLBAR] {
+                for (tone_name, tone) in tones {
+                    let cell_w = states.len() as f32 * (size + 6.0);
+                    let label = format!("{tone_name} {size}");
+                    let r = flow.cell(list, &label, cell_w, size + 2.0);
+                    for (i, state) in states.iter().enumerate() {
+                        let key_rect =
+                            Rect::new(r.x + i as f32 * (size + 6.0), r.y, size, size + 2.0);
+                        let mut key_input = InputState::default();
+                        if matches!(*state, "hover" | "pressed") {
+                            key_input.mouse_x = key_rect.x + size * 0.5;
+                            key_input.mouse_y = key_rect.y + size * 0.5;
+                            key_input.mouse_down = *state == "pressed";
+                        }
+                        let mut kctx =
+                            DrawContext::new(list, &mut focus, &theme, &key_input, W as f32, 600.0);
+                        IconKey::new(PhosphorIcon::ArrowsClockwise, size)
+                            .tone(tone)
+                            .held(*state == "held")
+                            .enabled(*state != "disabled")
+                            .draw(key_rect, &mut kctx);
+                    }
+                }
+            }
+        }
+
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(
+                list,
+                "SearchField — empty · typed · focused · clear key hovered",
+            );
+            use wgpu_gameui::SearchField;
+
+            const SEARCH_ID: u64 = 0x5EA2;
+            let cases = [
+                ("empty", "", false, false),
+                ("typed", "agent", false, false),
+                ("focused", "agent", true, false),
+                ("clear key hovered", "agent-ui", false, true),
+            ];
+            for (label, text, focused, hover_clear) in cases {
+                let r = flow.cell(list, label, 220.0, SearchField::HEIGHT);
+                let mut field = TextInput::default()
+                    .with_placeholder("Filter projects")
+                    .with_value(text);
+                let mut field_focus = FocusState::new();
+                if focused {
+                    field_focus.request(SEARCH_ID);
+                }
+                let mut field_input = InputState::default();
+                if hover_clear {
+                    // The clear key's centre: 4 px + border from the right edge.
+                    field_input.mouse_x = r.x + r.width - 13.0;
+                    field_input.mouse_y = r.y + r.height * 0.5;
+                }
+                let mut sctx = DrawContext::new(
+                    list,
+                    &mut field_focus,
+                    &theme,
+                    &field_input,
+                    W as f32,
+                    600.0,
+                );
+                SearchField::new().draw(&mut field, SEARCH_ID, r, &mut sctx);
+            }
+        }
+
+        // ---- DockStack (the design's sidebar sections) ------------------
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(
+                list,
+                "DockStack — sections with toolbar · collapsed · hovered header · fixed · splitter hovered",
+            );
+            use wgpu_gameui::{
+                DockSection, DockStack, DockStackState, ListRow, ListView, SearchField,
+            };
+
+            let projects = [
+                "LuaJIT",
+                "agent-ui",
+                "citybuilder",
+                "claude-code-ui",
+                "codex-adventure",
+                "cool-rust-terminal",
+                "cross-notifier",
+            ];
+            let sessions = [
+                ("Fix websocket reconnect loop", "01a01043 · 38 msgs", "2h"),
+                ("Session list virtualisation", "01a01043 · 12 msgs", "5h"),
+                ("Add dark scrollbar to composer", "01a0106b · 21 msgs", "1d"),
+                ("Tauri build fails on Fedora", "3b504918 · 64 msgs", "2d"),
+            ];
+            let rescan = [PhosphorIcon::ArrowsClockwise];
+            let plus = [PhosphorIcon::Plus];
+            let sidebar = [
+                DockSection::new("Projects")
+                    .count(projects.len())
+                    .toolbar(SearchField::HEIGHT)
+                    .actions(&rescan),
+                DockSection::new("Sessions")
+                    .count(sessions.len())
+                    .weight(1.3)
+                    .actions(&plus),
+            ];
+            let sidebar_collapsed = [sidebar[0], sidebar[1].collapsed(true)];
+            let with_details = [
+                DockSection::new("Outliner").count(12),
+                DockSection::new("Layers").count(3),
+                DockSection::new("Details").fixed(36.0),
+            ];
+
+            const STACK_ID: u64 = 0xD0C5;
+            const SEARCH_ID: u64 = 0x5EA3;
+            // (label, sections, pointer)
+            type Pointer = fn(Rect) -> (f32, f32);
+            let cases: [(&str, &[DockSection], Pointer); 3] = [
+                ("Projects + Sessions", &sidebar, |_| (-1.0, -1.0)),
+                ("Collapsed · header hovered", &sidebar_collapsed, |r| {
+                    (r.x + 60.0, r.y + 11.0)
+                }),
+                ("Fixed Details · splitter hovered", &with_details, |_| {
+                    (-1.0, -1.0)
+                }),
+            ];
+            for (i, (label, sections, pointer)) in cases.into_iter().enumerate() {
+                let r = flow.cell(list, label, 244.0, 300.0);
+                list.paint_background_opaque(r, theme.chrome.dock.body.background);
+                let mut state = DockStackState::new(sections);
+                let mut capture = DragCapture::new();
+                let mut stack_focus = FocusState::new();
+                let mut stack_input = InputState {
+                    mouse_x: -1.0,
+                    mouse_y: -1.0,
+                    ..InputState::default()
+                };
+                (stack_input.mouse_x, stack_input.mouse_y) = pointer(r);
+                if i == 2 {
+                    // Point at the grip of the splitter between the first two.
+                    let at =
+                        DockStack::new(sections).layout(r, &state, &StyleResolver::new(&theme));
+                    let bar = at[1].splitter_above.expect("a splitter");
+                    stack_input.mouse_x = bar.x + bar.width * 0.5;
+                    stack_input.mouse_y = bar.y + bar.height * 0.5;
+                }
+                let out = {
+                    let mut sctx = DrawContext::new(
+                        list,
+                        &mut stack_focus,
+                        &theme,
+                        &stack_input,
+                        W as f32,
+                        600.0,
+                    );
+                    DockStack::new(sections).draw(STACK_ID, r, &mut state, &mut capture, &mut sctx)
+                };
+
+                if i < 2 {
+                    if let Some(bar) = out.sections[0].toolbar {
+                        let mut field = TextInput::default().with_placeholder("Search projects…");
+                        let mut sctx = DrawContext::new(
+                            list,
+                            &mut stack_focus,
+                            &theme,
+                            &stack_input,
+                            W as f32,
+                            600.0,
+                        );
+                        SearchField::new().draw(&mut field, SEARCH_ID, bar, &mut sctx);
+                    }
+                    let mut idle = InputState {
+                        mouse_x: -1.0,
+                        mouse_y: -1.0,
+                        ..InputState::default()
+                    };
+                    let resolver = StyleResolver::new(&theme);
+                    if let Some(body) = out.sections[0].body {
+                        ListView::new().draw(
+                            body,
+                            projects.len(),
+                            Some(3),
+                            &mut ListState::new(),
+                            list,
+                            &resolver,
+                            &mut idle,
+                            |k| ListRow::new(projects[k]).glyph(PhosphorIcon::Folder),
+                        );
+                    }
+                    if let Some(body) = out.sections[1].body {
+                        ListView::new().two_line(true).focused(true).draw(
+                            body,
+                            sessions.len(),
+                            Some(0),
+                            &mut ListState::new(),
+                            list,
+                            &resolver,
+                            &mut idle,
+                            |k| {
+                                let (title, sub, meta) = sessions[k];
+                                ListRow::new(title).subtitle(sub).meta(meta)
+                            },
+                        );
+                    }
+                }
+            }
         }
 
         flow.section(list, "Window — movable, closable, optional resize grip");
@@ -2803,9 +3179,11 @@ fn render_widget_gallery() {
                 theme.window_title_height,
                 theme.chrome.window.surface.border_widths.top,
             );
-            let mut window_input = InputState::default();
-            window_input.mouse_x = key.x + key.width * 0.5;
-            window_input.mouse_y = key.y + key.height * 0.5;
+            let window_input = InputState {
+                mouse_x: key.x + key.width * 0.5,
+                mouse_y: key.y + key.height * 0.5,
+                ..InputState::default()
+            };
             let mut dctx =
                 DrawContext::new(list, &mut focus, &theme, &window_input, W as f32, 600.0);
             let out = Window::new(9_100, "Generate recolor mask")

@@ -4,13 +4,11 @@
 //!   phase; the widget draws one frame of it).
 //! - [`spinner`]: a ring with an accent arc (app rotates it per frame).
 //! - [`dots`]: three pulsing accent dots (app supplies the pulse phase).
-//! - [`empty_state`]: centered glyph + title + body + a call-to-action slot —
-//!   drawn from a bare list + resolver because it has no interaction of its
-//!   own.
+//!
+//! The empty-state message is [`EmptyState`](super::EmptyState).
 
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
-use crate::text::TextBlock;
 
 use super::DrawList;
 
@@ -81,73 +79,6 @@ pub fn dots(list: &mut DrawList, s: &StyleResolver, center: (f32, f32), phase: f
     }
 }
 
-/// Layout + intrinsic metrics for an [`empty_state`].
-pub struct EmptyState<'a> {
-    /// Glyph or symbol shown above the title.
-    pub glyph: &'a str,
-    /// The short headline ("No entities").
-    pub title: &'a str,
-    /// The explanatory body line (wrapped).
-    pub body: &'a str,
-}
-
-/// Draw an empty-state block centered in `rect`: a dim glyph, a title, and a
-/// dim body line (wrapped). The call-to-action button is the caller's normal
-/// [`Button`](super::Button) drawn below the returned rect. Returns the rect
-/// consumed (glyph + title + body), so the caller can flow the CTA under it.
-pub fn empty_state(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    rect: Rect,
-    state: &EmptyState<'_>,
-) -> Rect {
-    let font_size = s.scalar(StyleKey::FontSize);
-    let glyph_h = font_size * 2.0;
-    let title_h = font_size * 1.3;
-    let (_, body_h) = list.measure_text(state.body, font_size * 0.9, Some(rect.width - 32.0));
-    let total = glyph_h + title_h + body_h + 12.0;
-    let y0 = rect.y + (rect.height - total).max(0.0) * 0.5;
-
-    let dim = s.color(StyleKey::TextDim);
-    let text = s.color(StyleKey::Text);
-
-    let gy = list.vcentered_text_y(y0, glyph_h, glyph_h, s.theme().font.as_ref(), state.glyph);
-    let (gw, _) = list.measure_text(state.glyph, glyph_h, None);
-    list.text(
-        TextBlock::new(state.glyph, rect.x + (rect.width - gw) * 0.5, gy)
-            .with_size(glyph_h)
-            .with_color_f32(dim)
-            .with_font_opt(s.theme().font.clone()),
-    );
-
-    let ty = list.vcentered_text_y(
-        y0 + glyph_h,
-        title_h,
-        font_size * 1.1,
-        s.theme().font.as_ref(),
-        state.title,
-    );
-    let (tw, _) = list.measure_text(state.title, font_size * 1.1, None);
-    list.text(
-        TextBlock::new(state.title, rect.x + (rect.width - tw) * 0.5, ty)
-            .with_size(font_size * 1.1)
-            .with_color_f32(text)
-            .with_font_opt(s.theme().font.clone()),
-    );
-
-    let by = y0 + glyph_h + title_h + 4.0;
-    list.text(
-        TextBlock::new(state.body, rect.x + 16.0, by)
-            .with_size(font_size * 0.9)
-            .with_color_f32(dim)
-            .with_max_width(rect.width - 32.0)
-            .with_align(crate::text::TextAlign::Center)
-            .with_font_opt(s.theme().font.clone()),
-    );
-
-    Rect::new(rect.x, y0, rect.width, total)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,28 +111,5 @@ mod tests {
         dots(&mut list, &s, (60.0, 20.0), 0.3);
         assert!(!list.circle_instances.is_empty(), "ring + dots are circles");
         assert!(!list.vertices.is_empty(), "arc chords are line quads");
-    }
-
-    #[test]
-    fn empty_state_centers_a_block_and_reports_its_extent() {
-        let theme = theme();
-        let s = StyleResolver::new(&theme);
-        let mut list = DrawList::new();
-        let rect = Rect::new(0.0, 0.0, 240.0, 160.0);
-        let used = empty_state(
-            &mut list,
-            &s,
-            rect,
-            &EmptyState {
-                glyph: "◈",
-                title: "No entities",
-                body: "Create one to get started.",
-            },
-        );
-        assert!(used.height > 0.0 && used.width == rect.width);
-        assert_eq!(list.texts.len(), 3);
-        // The block is vertically centered: top gap ≈ bottom gap.
-        assert!(used.y > rect.y, "block starts below the rect top");
-        assert!(rect.bottom() - used.bottom() > 0.0);
     }
 }

@@ -951,6 +951,7 @@ fn row_navigation_skips_separators_and_disabled_items_and_wraps() {
     assert_eq!(rig.state.highlighted_item(), Some(0), "up wraps backwards");
 }
 
+#[cfg(feature = "bundled-font")]
 #[test]
 fn open_sheet_uses_compact_separators_handoff_text_and_two_outer_shadows() {
     let mut rig = Rig::new();

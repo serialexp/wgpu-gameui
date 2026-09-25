@@ -238,6 +238,31 @@ pub enum StyleKey {
     DockSplitterWidth,
     /// Height of a movable [`Window`](crate::Window)'s title strip, in pixels.
     WindowTitleHeight,
+    // --- Forge roles (colors) ---
+    /// One step of Forge's ink ladder: the closed set of text and glyph
+    /// colours (see [`Ink`]).
+    Ink(Ink),
+    /// Search-match highlight on a dark surface (Forge `--accent-match`).
+    AccentMatch,
+    /// Every other row of a list, over its background (`--row-zebra`).
+    RowZebra,
+    /// A hovered list row (`--row-hover`).
+    RowHover,
+    /// A selected row in a list that doesn't have the keyboard: a neutral
+    /// held fill, so the focused list's accent selection stands out.
+    RowHeld,
+    /// Deep sunken surface, e.g. an empty-state box (`--well-deep`).
+    WellDeep,
+    /// Hard black edge around sunken boxes (`--edge-hard`).
+    EdgeHard,
+    // --- Forge roles (scalars) ---
+    /// One step of Forge's type scale, in pixels (see [`TextSize`]).
+    TextSize(TextSize),
+    /// Letter spacing for a text role, in em (see [`Tracking`]).
+    Tracking(Tracking),
+    /// Height of one list, tree or dock-section header row, in pixels
+    /// (`--h-list-row`).
+    ListRowHeight,
     /// A mod-defined key, addressed by the FNV-1a hash of its name (see
     /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a [`StyleOverlay`].
     Custom(u64),
@@ -312,8 +337,169 @@ impl StyleKey {
                 | DangerFaceBottomHover
                 | DangerFaceBottomPressed
                 | OnDanger
+                | Ink(_)
+                | AccentMatch
+                | RowZebra
+                | RowHover
+                | RowHeld
+                | WellDeep
+                | EdgeHard
         )
     }
+}
+
+/// Forge's ink ladder: every text and glyph colour in the design is one of
+/// these roles, from the brightest (`Max`) down to the empty-state glyph
+/// (`Empty`). Ask for the role, never restate its colour at a call site.
+/// Resolved through [`StyleKey::Ink`]; the values live in [`Theme::ink`].
+///
+/// [`Theme::ink`]: crate::Theme::ink
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Ink {
+    /// `--ink-white`.
+    White,
+    /// Active tab, pressed label, latched icon (`--ink-max`).
+    Max,
+    /// Input value, key icon hover (`--ink-value`).
+    Value,
+    /// Key label, row emphasis (`--ink-emph`).
+    Emph,
+    /// Menu and sheet items (`--ink-menu`).
+    Menu,
+    /// Menu titles, list and tree labels (`--ink-title`).
+    Title,
+    /// Panel row labels (`--ink-row`).
+    Row,
+    /// Table cells, ghost keys (`--ink-cell`).
+    Cell,
+    /// Secondary values, pressed key labels (`--ink-2`).
+    Second,
+    /// Idle key icons (`--ink-icon`).
+    Icon,
+    /// Neutral chips (`--ink-chip`).
+    Chip,
+    /// Dim input values, panel glyphs, section titles (`--ink-glyph`).
+    Glyph,
+    /// Idle tabs (`--ink-tab`).
+    Tab,
+    /// Tooltip shortcuts (`--ink-tip-hint`).
+    TipHint,
+    /// Secondary body text, idle header keys, carets (`--ink-body-2`).
+    Body2,
+    /// Status bar, descriptions, list glyphs (`--ink-muted`).
+    Muted,
+    /// Menu shortcuts (`--ink-shortcut`).
+    Shortcut,
+    /// Mono-caps field labels (`--ink-label`).
+    Label,
+    /// Panel captions and row metadata (`--ink-caption`).
+    Caption,
+    /// Dim metadata, units, counts (`--ink-dim`).
+    Dim,
+    /// Disabled labels (`--ink-disabled`).
+    Disabled,
+    /// Disabled glyphs and metadata (`--ink-disabled-glyph`).
+    DisabledGlyph,
+    /// Disabled key labels (`--ink-disabled-key`).
+    DisabledKey,
+    /// Empty-state glyphs (`--ink-empty`).
+    Empty,
+    /// The wordmark (`--ink-brand`).
+    Brand,
+    /// Page body text (`--ink-primary`).
+    Primary,
+    /// Secondary text on an accent row (`--ink-on-accent-2`). The primary
+    /// on-accent ink is [`StyleKey::OnAccent`].
+    OnAccentSecond,
+}
+
+impl Ink {
+    /// Every role, in ladder order (the index into [`Theme::ink`]).
+    ///
+    /// [`Theme::ink`]: crate::Theme::ink
+    pub const ALL: [Ink; 27] = [
+        Ink::White,
+        Ink::Max,
+        Ink::Value,
+        Ink::Emph,
+        Ink::Menu,
+        Ink::Title,
+        Ink::Row,
+        Ink::Cell,
+        Ink::Second,
+        Ink::Icon,
+        Ink::Chip,
+        Ink::Glyph,
+        Ink::Tab,
+        Ink::TipHint,
+        Ink::Body2,
+        Ink::Muted,
+        Ink::Shortcut,
+        Ink::Label,
+        Ink::Caption,
+        Ink::Dim,
+        Ink::Disabled,
+        Ink::DisabledGlyph,
+        Ink::DisabledKey,
+        Ink::Empty,
+        Ink::Brand,
+        Ink::Primary,
+        Ink::OnAccentSecond,
+    ];
+}
+
+/// Forge's type scale below body text. Body text itself is
+/// [`StyleKey::FontSize`]. Resolved through [`StyleKey::TextSize`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextSize {
+    /// Mono capitals: field labels, captions, badges, section titles (9px).
+    Caption,
+    /// Mono metadata: shortcuts, counts, readouts (10px).
+    Meta,
+    /// Dense row text (10.5px).
+    Dense,
+    /// Panel rows, tabs, tooltips, chips, key labels (11px).
+    Row,
+    /// Menu items, buttons, list labels: the chrome ceiling (11.5px).
+    Menu,
+}
+
+impl TextSize {
+    /// Every step, smallest first (the index into `Theme::text_sizes`).
+    pub const ALL: [TextSize; 5] = [
+        TextSize::Caption,
+        TextSize::Meta,
+        TextSize::Dense,
+        TextSize::Row,
+        TextSize::Menu,
+    ];
+}
+
+/// Letter spacing per text role, in em (multiply by the font size for
+/// pixels). Resolved through [`StyleKey::Tracking`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Tracking {
+    /// Badges (0.08em).
+    Badge,
+    /// Inspector property labels (0.1em).
+    Prop,
+    /// Field labels (0.14em).
+    Caption,
+    /// Panel captions and section headers (0.16em).
+    Section,
+    /// Wordmark and page headings (0.18em).
+    Brand,
+}
+
+impl Tracking {
+    /// Every role (the index into `Theme::tracking`).
+    pub const ALL: [Tracking; 5] = [
+        Tracking::Badge,
+        Tracking::Prop,
+        Tracking::Caption,
+        Tracking::Section,
+        Tracking::Brand,
+    ];
 }
 
 /// A caller-owned sparse set of style overrides layered over a [`Theme`].
@@ -333,6 +519,8 @@ pub struct StyleOverlay {
     menu_sheet: Option<crate::MenuSheetChrome>,
     toolbar: Option<crate::ToolbarChrome>,
     dock: Option<crate::DockChrome>,
+    dock_section: Option<crate::DockSectionChrome>,
+    scrollbar: Option<crate::ScrollbarChrome>,
     splitter: Option<crate::SplitterChrome>,
     status_bar: Option<crate::StatusBarChrome>,
     dropdown: Option<crate::FloatingSurfaceChrome>,
@@ -414,6 +602,24 @@ impl StyleOverlay {
     pub fn dock(&self) -> Option<crate::DockChrome> {
         self.dock
     }
+    /// Override dock-section chrome.
+    pub fn set_dock_section(&mut self, value: crate::DockSectionChrome) -> &mut Self {
+        self.dock_section = Some(value);
+        self
+    }
+    /// Return the dock-section override.
+    pub fn dock_section(&self) -> Option<crate::DockSectionChrome> {
+        self.dock_section
+    }
+    /// Override scrollbar chrome.
+    pub fn set_scrollbar(&mut self, value: crate::ScrollbarChrome) -> &mut Self {
+        self.scrollbar = Some(value);
+        self
+    }
+    /// Return the scrollbar override.
+    pub fn scrollbar(&self) -> Option<crate::ScrollbarChrome> {
+        self.scrollbar
+    }
     /// Override splitter chrome.
     pub fn set_splitter(&mut self, value: crate::SplitterChrome) -> &mut Self {
         self.splitter = Some(value);
@@ -494,6 +700,8 @@ impl StyleOverlay {
             && self.menu_sheet.is_none()
             && self.toolbar.is_none()
             && self.dock.is_none()
+            && self.dock_section.is_none()
+            && self.scrollbar.is_none()
             && self.splitter.is_none()
             && self.status_bar.is_none()
             && self.dropdown.is_none()
@@ -512,6 +720,8 @@ impl StyleOverlay {
         self.menu_sheet = None;
         self.toolbar = None;
         self.dock = None;
+        self.dock_section = None;
+        self.scrollbar = None;
         self.splitter = None;
         self.status_bar = None;
         self.dropdown = None;
@@ -625,6 +835,18 @@ impl<'a> StyleResolver<'a> {
             .and_then(StyleOverlay::dock)
             .unwrap_or(self.theme.chrome.dock)
     }
+    /// Resolve dock-section chrome in O(1).
+    pub fn dock_section(&self) -> crate::DockSectionChrome {
+        self.overlay
+            .and_then(StyleOverlay::dock_section)
+            .unwrap_or(self.theme.chrome.dock_section)
+    }
+    /// Resolve scrollbar chrome in O(1).
+    pub fn scrollbar(&self) -> crate::ScrollbarChrome {
+        self.overlay
+            .and_then(StyleOverlay::scrollbar)
+            .unwrap_or(self.theme.chrome.scrollbar)
+    }
     /// Resolve splitter chrome in O(1).
     pub fn splitter(&self) -> crate::SplitterChrome {
         self.overlay
@@ -683,6 +905,65 @@ impl<'a> StyleResolver<'a> {
             .with_size(self.scalar(StyleKey::FontSize))
             .with_color_f32(c)
             .with_font_opt(self.theme.font.clone())
+    }
+
+    /// The colour of an ink-ladder role.
+    pub fn ink(&self, role: Ink) -> [f32; 4] {
+        self.color(StyleKey::Ink(role))
+    }
+
+    /// A step of the type scale, in pixels.
+    pub fn text_size(&self, step: TextSize) -> f32 {
+        self.scalar(StyleKey::TextSize(step))
+    }
+
+    /// A sans [`TextBlock`] at a type-scale `step` in an ink `role`, in the
+    /// theme font.
+    pub fn sans_block(
+        &self,
+        content: impl Into<String>,
+        x: f32,
+        y: f32,
+        step: TextSize,
+        role: Ink,
+    ) -> TextBlock {
+        TextBlock::new(content, x, y)
+            .with_size(self.text_size(step))
+            .with_color_f32(self.ink(role))
+            .with_font_opt(self.theme.font.clone())
+    }
+
+    /// A mono [`TextBlock`] at a type-scale `step` in an ink `role`, in the
+    /// theme's [`mono_font`](crate::Theme::mono_font): counts, metadata,
+    /// readouts.
+    pub fn mono_block(
+        &self,
+        content: impl Into<String>,
+        x: f32,
+        y: f32,
+        step: TextSize,
+        role: Ink,
+    ) -> TextBlock {
+        TextBlock::new(content, x, y)
+            .with_size(self.text_size(step))
+            .with_color_f32(self.ink(role))
+            .with_font_opt(self.theme.mono_font.clone())
+    }
+
+    /// A mono-capitals caption: `content` upper-cased, at the caption size,
+    /// letter-spaced by `tracking`, in an ink `role`. Section titles, field
+    /// labels, badges.
+    pub fn caption_block(
+        &self,
+        content: &str,
+        x: f32,
+        y: f32,
+        tracking: Tracking,
+        role: Ink,
+    ) -> TextBlock {
+        let size = self.text_size(TextSize::Caption);
+        self.mono_block(content.to_uppercase(), x, y, TextSize::Caption, role)
+            .with_letter_spacing(size * self.scalar(StyleKey::Tracking(tracking)))
     }
 
     /// A title [`TextBlock`] styled through the resolver: [`FontSizeTitle`](StyleKey::FontSizeTitle)
@@ -756,6 +1037,12 @@ pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::DangerFaceBottomHover,
     StyleKey::DangerFaceBottomPressed,
     StyleKey::OnDanger,
+    StyleKey::AccentMatch,
+    StyleKey::RowZebra,
+    StyleKey::RowHover,
+    StyleKey::RowHeld,
+    StyleKey::WellDeep,
+    StyleKey::EdgeHard,
 ];
 
 #[cfg(test)]
@@ -776,6 +1063,7 @@ pub(crate) const SCALAR_KEYS: &[StyleKey] = &[
     StyleKey::MenuHoverDelay,
     StyleKey::Travel,
     StyleKey::InnerShadowDepth,
+    StyleKey::ListRowHeight,
 ];
 
 /// Internal helper for [`Theme`]'s custom map type (kept here so the key/value
@@ -883,6 +1171,36 @@ mod tests {
         assert_eq!(StyleResolver::new(&theme).window(), theme.chrome.window);
         overlay.clear();
         assert_eq!(overlay.window(), None);
+
+        let mut section = theme.chrome.dock_section;
+        section.top_rule.color = [0.4, 0.3, 0.2, 1.0];
+        overlay.set_dock_section(section);
+        assert!(!overlay.is_empty());
+        assert_eq!(
+            StyleResolver::with_overlay(&theme, &overlay).dock_section(),
+            section
+        );
+        assert_eq!(
+            StyleResolver::new(&theme).dock_section(),
+            theme.chrome.dock_section
+        );
+        overlay.clear();
+        assert_eq!(overlay.dock_section(), None);
+
+        let mut scrollbar = theme.chrome.scrollbar;
+        scrollbar.thumb[1].border_color = [0.4, 0.3, 0.2, 1.0];
+        overlay.set_scrollbar(scrollbar);
+        assert!(!overlay.is_empty());
+        assert_eq!(
+            StyleResolver::with_overlay(&theme, &overlay).scrollbar(),
+            scrollbar
+        );
+        assert_eq!(
+            StyleResolver::new(&theme).scrollbar(),
+            theme.chrome.scrollbar
+        );
+        overlay.clear();
+        assert_eq!(overlay.scrollbar(), None);
     }
 
     #[test]

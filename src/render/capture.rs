@@ -277,6 +277,12 @@ impl HeadlessGpu {
         LayerStack::with_font_system(self.font_system.clone())
     }
 
+    /// The font system this context's draw lists and renderer share: for
+    /// loading fonts, or reading its [`layout_stats`](crate::SharedFontSystem::layout_stats).
+    pub fn font_system(&self) -> crate::text::FontSystemHandle {
+        self.font_system.clone()
+    }
+
     /// Render `list` and read the pixels back, on a transparent background.
     pub fn capture(&mut self, list: &DrawList, size: (u32, u32)) -> Vec<u8> {
         self.capture_on(list, size, wgpu::Color::TRANSPARENT)
