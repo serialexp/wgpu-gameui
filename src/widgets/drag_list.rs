@@ -10,8 +10,8 @@ use crate::{DrawList, InputState};
 #[cfg(feature = "phosphor-icons")]
 use crate::render::PhosphorIcon;
 
-use super::material;
 use super::{DragCapture, DragId, DrawContext};
+use super::{glyphs, material};
 
 /// Row height (`--h-drag-row`).
 pub const DRAG_ROW_HEIGHT: f32 = 23.0;
@@ -341,7 +341,7 @@ impl<'a> DragList<'a> {
         #[cfg(not(feature = "phosphor-icons"))]
         let drew_icon: Option<()> = None;
         if drew_icon.is_none() {
-            half_square(list, glyph, muted);
+            glyphs::half_square(list, glyph, HALF_SQUARE, muted);
         }
         x = glyph.right() + GAP;
 
@@ -444,16 +444,6 @@ impl<'a> DragList<'a> {
 /// The height (or width) of `n` grip dots.
 fn grip_span(n: u32) -> f32 {
     (n.max(1) - 1) as f32 * GRIP_PITCH + GRIP_DOT
-}
-
-/// Forge's default row glyph, `◧`: a square outline with its left half
-/// filled, centred in `cell`.
-fn half_square(list: &mut DrawList, cell: Rect, color: [f32; 4]) {
-    let x = (cell.x + (cell.width - HALF_SQUARE) * 0.5).round();
-    let y = (cell.y + (cell.height - HALF_SQUARE) * 0.5).round();
-    let square = Rect::new(x, y, HALF_SQUARE, HALF_SQUARE);
-    list.chrome_rect(square, 0.0, 1.0, [0.0; 4], color);
-    list.quad(x, y, (HALF_SQUARE * 0.5).ceil(), HALF_SQUARE, color);
 }
 
 #[cfg(test)]

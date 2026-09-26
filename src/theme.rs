@@ -232,6 +232,10 @@ pub struct Theme {
     pub warn_meta: [f32; 4],
     /// Something new and unseen (unread dots, dirty tabs).
     pub accent_dirty: [f32; 4],
+    /// A handle being dragged: a scrubbed property label, a splitter grip.
+    pub accent_grip: [f32; 4],
+    /// A linked file's glyph.
+    pub accent_glyph: [f32; 4],
     /// Text of a destructive action (danger menu rows).
     pub danger_text: [f32; 4],
     /// Type scale in pixels, indexed by [`TextSize`](crate::TextSize).
@@ -427,6 +431,8 @@ impl Default for Theme {
             status_ok: oklch(0.7, 0.14, 145.0, 1.0),
             warn_meta: oklch(0.82, 0.13, 75.0, 1.0),
             accent_dirty: oklch(0.78, 0.12, 200.0, 1.0),
+            accent_grip: oklch(0.82, 0.1, 200.0, 1.0),
+            accent_glyph: oklch(0.72, 0.09, 200.0, 1.0),
             danger_text: oklch(0.72, 0.15, 25.0, 1.0),
             // `typography.css`: caption, meta, dense, row, menu.
             text_sizes: [9.0, 10.0, 10.5, 11.0, 11.5],
@@ -724,6 +730,8 @@ impl Theme {
             StatusOk => StyleValue::Color(self.status_ok),
             WarnMeta => StyleValue::Color(self.warn_meta),
             AccentDirty => StyleValue::Color(self.accent_dirty),
+            AccentGrip => StyleValue::Color(self.accent_grip),
+            AccentGlyph => StyleValue::Color(self.accent_glyph),
             DangerText => StyleValue::Color(self.danger_text),
             TextSize(step) => StyleValue::Scalar(self.text_sizes[step as usize]),
             Tracking(role) => StyleValue::Scalar(self.tracking[role as usize]),
@@ -833,6 +841,8 @@ impl Theme {
             (StatusOk, StyleValue::Color(c)) => self.status_ok = c,
             (WarnMeta, StyleValue::Color(c)) => self.warn_meta = c,
             (AccentDirty, StyleValue::Color(c)) => self.accent_dirty = c,
+            (AccentGrip, StyleValue::Color(c)) => self.accent_grip = c,
+            (AccentGlyph, StyleValue::Color(c)) => self.accent_glyph = c,
             (DangerText, StyleValue::Color(c)) => self.danger_text = c,
             (TextSize(step), StyleValue::Scalar(s)) => self.text_sizes[step as usize] = s,
             (Tracking(role), StyleValue::Scalar(s)) => self.tracking[role as usize] = s,

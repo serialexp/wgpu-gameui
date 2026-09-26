@@ -42,6 +42,10 @@ use wgpu_gameui::{
     NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn,
     TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
 };
+use wgpu_gameui::{
+    INSPECTOR_WIDTH, Inspector, InspectorSelection, InspectorState, PropertyGroup, PropertyRow,
+    PropertyScrub,
+};
 #[cfg(feature = "syntax-lua")]
 use wgpu_gameui::{SyntaxHighlighting, SyntaxTheme};
 
@@ -1009,6 +1013,61 @@ fn bench_scroll_view(c: &mut Criterion) {
     group.finish();
 }
 
+/// CPU-only cost of one `Inspector` frame holding `count` property rows in
+/// groups of ten. The inspector draws every row, scrolled into view or not
+/// (the clip hides the rest), so this is its whole cost. A real inspector
+/// holds tens of rows; budget ≤ 0.5 ms at 100 rows, and cost linear in rows
+/// past that.
+fn bench_inspector(c: &mut Criterion) {
+    let harness = Harness::new();
+    let theme = Theme::default();
+    let input = InputState::default();
+    let mut list = harness.draw_list();
+    let counts: &[usize] = &[10, 100, 1_000];
+    let names = ["Position X", "Position Y", "Position Z", "Mass"];
+
+    let mut group = c.benchmark_group("inspector");
+    for &count in counts {
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
+            let inspector = Inspector::new(InspectorSelection::Single {
+                name: "Bridge_A",
+                path: Some("Level_01 / Bridge_A"),
+            })
+            .dirty(true);
+            let mut state = InspectorState::new();
+            let mut scrub = PropertyScrub::new();
+            let mut capture = DragCapture::default();
+            let mut open = vec![true; count.div_ceil(10)];
+            b.iter(|| {
+                list.clear();
+                let mut focus = FocusState::new();
+                let mut ctx =
+                    DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
+                let rect = Rect::new(0.0, 0.0, INSPECTOR_WIDTH, 600.0);
+                inspector.draw_with(rect, &mut state, &mut ctx, |body, ctx| {
+                    for (g, open) in open.iter_mut().enumerate() {
+                        PropertyGroup::new("Transform").draw_in(body, open, ctx, |rows, ctx| {
+                            for i in (g * 10)..((g + 1) * 10).min(count) {
+                                PropertyRow::new(names[i % names.len()]).unit("m").draw(
+                                    i as u64,
+                                    rows.row(),
+                                    i as f64 * 0.5,
+                                    &mut scrub,
+                                    &mut capture,
+                                    ctx,
+                                );
+                            }
+                        });
+                    }
+                });
+                std::hint::black_box(&list);
+            });
+        });
+    }
+    group.finish();
+}
+
 /// CPU-only cost of drawing one virtualized `List` with `count` logical items
 /// (the widget draws only the visible subset). Measures the culling + selection +
 /// scroll interaction cost, not the item closure (which is a no-op label).
@@ -1382,6 +1441,7 @@ criterion_group!(
     bench_text_input_edit,
     bench_lua_syntax_highlighting,
     bench_scroll_view,
+    bench_inspector,
     bench_list_virtual,
     bench_table,
     bench_ui_context_frame,

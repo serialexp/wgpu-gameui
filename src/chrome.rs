@@ -329,6 +329,28 @@ pub struct SheetChrome {
     pub backdrop: [f32; 4],
 }
 
+/// Property-inspector chrome: the opaque dock surface of an
+/// [`Inspector`](crate::Inspector), its header strip and its commit footer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InspectorChrome {
+    /// Panel surface and border (`--surface-dock-opaque`, `--rule`,
+    /// `--radius-panel`).
+    pub surface: QuadStyle,
+    /// `--shadow-inspector` in CSS order: the drop, then the lit top inset.
+    pub shadows: [BoxShadow; 2],
+    /// The header strip behind the tab and its keys
+    /// (`--surface-dock-header-opaque`).
+    pub header: Background,
+    /// The highlight just inside the header's top edge.
+    pub header_highlight: EdgeStyle,
+    /// The rule under the header.
+    pub header_rule: EdgeStyle,
+    /// The footer strip behind the commit keys (`--surface-status-opaque`).
+    pub footer: Background,
+    /// The rule along the footer's top (`--rule`).
+    pub footer_rule: EdgeStyle,
+}
+
 /// Movable in-app window chrome: a floating surface with a title strip, a
 /// close key, and an optional bottom-right resize grip. See
 /// [`Window`](crate::Window).
@@ -383,6 +405,8 @@ pub struct ChromeTheme {
     pub curve_key: FloatingSurfaceChrome,
     /// Dialog sheet and modal backdrop chrome.
     pub sheet: SheetChrome,
+    /// Property inspector chrome.
+    pub inspector: InspectorChrome,
     /// Movable window chrome.
     pub window: WindowChrome,
 }
@@ -848,6 +872,32 @@ impl Default for ChromeTheme {
                     color: [0.0, 0.0, 0.0, 0.6],
                 },
                 backdrop: crate::color::rgba8([4, 6, 8], 0.45),
+            },
+            inspector: InspectorChrome {
+                surface: QuadStyle {
+                    background: gradient([0x15, 0x19, 0x1d], [0x0f, 0x12, 0x15]),
+                    border_widths: EdgeWidths::uniform(1.0),
+                    border_color: [0.0, 0.0, 0.0, 0.6],
+                    corner_radii: CornerRadii::uniform(2.0),
+                },
+                shadows: [
+                    shadow(10.0, 26.0, [0.0, 0.0, 0.0, 0.5], false),
+                    shadow(1.0, 0.0, [1.0, 1.0, 1.0, 0.05], true),
+                ],
+                header: gradient([0x23, 0x27, 0x2b], [0x18, 0x1c, 0x20]),
+                header_highlight: EdgeStyle {
+                    thickness: 1.0,
+                    color: [1.0, 1.0, 1.0, 0.09],
+                },
+                header_rule: EdgeStyle {
+                    thickness: 1.0,
+                    color: rgb8([0x0a, 0x0b, 0x0d]),
+                },
+                footer: gradient([0x1e, 0x23, 0x28], [0x13, 0x17, 0x1b]),
+                footer_rule: EdgeStyle {
+                    thickness: 1.0,
+                    color: [0.0, 0.0, 0.0, 0.6],
+                },
             },
             // Stand-in until the window design handoff lands: the popover's
             // floating surface and elevation with the dock header's strip,

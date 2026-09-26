@@ -589,13 +589,82 @@ pub fn deep_well_ink(rect: Rect) -> Rect {
     rect.union(DEEP_WELL_LIP.ink_rect(rect))
 }
 
+/// Offset and blur of a row well's recess (`--well-inset-row`'s
+/// `inset 0 1px 3px`).
+const ROW_WELL_RECESS: ([f32; 2], f32) = ([0.0, 1.0], 3.0);
+
+/// Draw a **row well**: the short sunken box a panel row shows its value in
+/// (a property's number, a linked file, the inspector's name). `--well`
+/// fill, `--well-border` edge and a shallow recess, with no lip under it.
+/// `active` (a scrub in progress) turns the edge accent and adds the 2 px
+/// focus ring outside it; [`row_well_ink`] is the whole painted area.
+/// Returns the area inside the border.
+pub fn draw_row_well(list: &mut DrawList, s: &StyleResolver, rect: Rect, active: bool) -> Rect {
+    let radius = s.scalar(StyleKey::BorderRadius);
+    let border = s.scalar(StyleKey::BorderWidth);
+    if active {
+        list.box_shadow_outset(rect, CornerRadii::uniform(radius), row_well_ring(s));
+    }
+    let edge = if active {
+        s.color(StyleKey::Accent)
+    } else {
+        s.color(StyleKey::InputBorder)
+    };
+    list.chrome_rect(
+        rect,
+        radius,
+        border,
+        s.color(StyleKey::InputBackground),
+        edge,
+    );
+    let inner = rect.inset(border);
+    let (offset, blur) = ROW_WELL_RECESS;
+    list.box_shadow_inset(
+        inner,
+        CornerRadii::uniform((radius - border).max(0.0)),
+        BoxShadow {
+            offset,
+            blur,
+            color: s.color(StyleKey::InnerShadow),
+            inset: true,
+            ..BoxShadow::default()
+        },
+    );
+    inner
+}
+
+/// Everything [`draw_row_well`] paints for a well at `rect`: the box, and
+/// the ring around it while `active`.
+pub fn row_well_ink(rect: Rect, active: bool) -> Rect {
+    if active {
+        rect.union(
+            BoxShadow {
+                spread: WELL_RING_SPREAD,
+                ..BoxShadow::default()
+            }
+            .ink_rect(rect),
+        )
+    } else {
+        rect
+    }
+}
+
+/// The accent ring around an active row well (`0 0 0 2px --accent-ring`).
+fn row_well_ring(s: &StyleResolver) -> BoxShadow {
+    let accent = s.color(StyleKey::Accent);
+    BoxShadow {
+        spread: WELL_RING_SPREAD,
+        color: [accent[0], accent[1], accent[2], WELL_RING_ALPHA[0]],
+        ..BoxShadow::default()
+    }
+}
+
 /// Offset and blur of the well's inner shadow (`--well-inset`'s
 /// `inset 0 2px 4px`).
 #[cfg(feature = "phosphor-icons")]
 const WELL_INSET_SHADOW: ([f32; 2], f32) = ([0.0, 2.0], 4.0);
 /// Spread of the focus / invalid ring around a well (`--well-focus-ring`'s
 /// `0 0 0 2px`).
-#[cfg(feature = "phosphor-icons")]
 const WELL_RING_SPREAD: f32 = 2.0;
 /// The ring's alpha: Forge `--accent-ring` is .16, `--danger-ring` .18.
 const WELL_RING_ALPHA: [f32; 2] = [0.16, 0.18];

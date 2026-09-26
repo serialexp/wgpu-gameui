@@ -29,7 +29,9 @@ mod drop_zone;
 mod dropdown;
 mod empty_state;
 mod field_label;
+mod file_field;
 mod focus;
+mod glyphs;
 mod gradient_ramp;
 mod group;
 #[cfg(feature = "phosphor-icons")]
@@ -37,9 +39,9 @@ mod group_list;
 mod hit_zone;
 #[cfg(feature = "phosphor-icons")]
 mod icon;
-#[cfg(feature = "phosphor-icons")]
 mod icon_key;
 mod image;
+mod inspector;
 mod list;
 #[cfg(feature = "phosphor-icons")]
 mod list_view;
@@ -55,6 +57,8 @@ mod popover;
 mod pressable;
 mod progress_bar;
 mod prompt_dialog;
+mod property_group;
+mod property_row;
 mod radio;
 mod scroll_view;
 #[cfg(feature = "phosphor-icons")]
@@ -133,6 +137,7 @@ pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use empty_state::{EmptyGlyph, EmptyState};
 pub use field_label::FieldLabel;
+pub use file_field::{FileField, FileFieldOutput, FileRef};
 pub use focus::{FocusId, FocusState};
 pub use gradient_ramp::{
     GradientStop, RampOutput, draw as draw_gradient_ramp, readout as gradient_ramp_readout,
@@ -148,9 +153,12 @@ pub use group_list::{
 pub use hit_zone::{HitZone, HitZoneOutput};
 #[cfg(feature = "phosphor-icons")]
 pub use icon::Icon;
-#[cfg(feature = "phosphor-icons")]
 pub use icon_key::IconKey;
 pub use image::{Image, ImageAlign, ImageFit};
+pub use inspector::{
+    INSPECTOR_MAX_BODY_HEIGHT, INSPECTOR_WIDTH, Inspector, InspectorOutput, InspectorSelection,
+    InspectorState,
+};
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
 #[cfg(feature = "phosphor-icons")]
 pub use list_view::{ListRow, ListView, ListViewOutput};
@@ -179,6 +187,12 @@ pub use popover::{
 pub use pressable::{PressState, Pressable};
 pub use progress_bar::{INDETERMINATE_STEP, ProgressBar, ProgressFill, indeterminate_step};
 pub use prompt_dialog::{PROMPT_DIALOG_WIDTH, PromptDialog, PromptDialogState, PromptOutcome};
+pub use property_group::{
+    PROPERTY_GROUP_HEADER_HEIGHT, PROPERTY_ROW_GAP, PropertyGroup, PropertyStack,
+};
+pub use property_row::{
+    PROPERTY_LABEL_WIDTH, PROPERTY_ROW_HEIGHT, PropertyRow, PropertyRowOutput, PropertyScrub,
+};
 pub use radio::RadioGroup;
 pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};
 #[cfg(feature = "phosphor-icons")]
@@ -346,6 +360,27 @@ impl<'a> DrawContext<'a> {
     pub fn with_interactions(mut self, interactions: &'a mut crate::InteractionScene) -> Self {
         self.interactions = Some(interactions);
         self
+    }
+
+    /// This context, reborrowed, reading `input` instead of its own. For
+    /// content whose pointer lives in another space than the screen — rows
+    /// drawn under a scroll offset hit-test against the pointer moved by
+    /// that offset, since [`ScrollView`] translates the drawing but not the
+    /// input.
+    pub fn reborrow_with_input<'b>(&'b mut self, input: &'b InputState) -> DrawContext<'b> {
+        DrawContext {
+            draw_list: &mut *self.draw_list,
+            focus: &mut *self.focus,
+            theme: self.theme,
+            input,
+            screen_width: self.screen_width,
+            screen_height: self.screen_height,
+            active_layer: self.active_layer,
+            style: self.style,
+            animations: self.animations.as_deref_mut(),
+            cursor: self.cursor.as_deref_mut(),
+            interactions: self.interactions.as_deref_mut(),
+        }
     }
 
     /// Register a rectangular interactive allocation and return the response

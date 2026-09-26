@@ -261,6 +261,11 @@ pub enum StyleKey {
     WarnMeta,
     /// Something new and unseen: an unread dot, a dirty tab (`--accent-dirty`).
     AccentDirty,
+    /// A handle being dragged: a scrubbed property label, a splitter grip
+    /// (`--accent-grip`).
+    AccentGrip,
+    /// A linked file's glyph (`--accent-glyph`).
+    AccentGlyph,
     /// Text of a destructive action, such as a danger menu row
     /// (`--danger-text`).
     DangerText,
@@ -356,6 +361,8 @@ impl StyleKey {
                 | StatusOk
                 | WarnMeta
                 | AccentDirty
+                | AccentGrip
+                | AccentGlyph
                 | DangerText
         )
     }
@@ -543,6 +550,7 @@ pub struct StyleOverlay {
     toast: Option<crate::FloatingSurfaceChrome>,
     curve_key: Option<crate::FloatingSurfaceChrome>,
     sheet: Option<crate::SheetChrome>,
+    inspector: Option<crate::InspectorChrome>,
     window: Option<crate::WindowChrome>,
 }
 
@@ -716,6 +724,15 @@ impl StyleOverlay {
     pub fn sheet(&self) -> Option<crate::SheetChrome> {
         self.sheet
     }
+    /// Override property-inspector chrome.
+    pub fn set_inspector(&mut self, value: crate::InspectorChrome) -> &mut Self {
+        self.inspector = Some(value);
+        self
+    }
+    /// Return the property-inspector override.
+    pub fn inspector(&self) -> Option<crate::InspectorChrome> {
+        self.inspector
+    }
     /// Override movable-window chrome.
     pub fn set_window(&mut self, value: crate::WindowChrome) -> &mut Self {
         self.window = Some(value);
@@ -744,6 +761,7 @@ impl StyleOverlay {
             && self.toast.is_none()
             && self.curve_key.is_none()
             && self.sheet.is_none()
+            && self.inspector.is_none()
             && self.window.is_none()
     }
 
@@ -766,6 +784,7 @@ impl StyleOverlay {
         self.toast = None;
         self.curve_key = None;
         self.sheet = None;
+        self.inspector = None;
         self.window = None;
     }
 }
@@ -937,6 +956,12 @@ impl<'a> StyleResolver<'a> {
         self.overlay
             .and_then(StyleOverlay::sheet)
             .unwrap_or(self.theme.chrome.sheet)
+    }
+    /// Resolve property-inspector chrome in O(1).
+    pub fn inspector(&self) -> crate::InspectorChrome {
+        self.overlay
+            .and_then(StyleOverlay::inspector)
+            .unwrap_or(self.theme.chrome.inspector)
     }
     /// Resolve movable-window chrome in O(1).
     pub fn window(&self) -> crate::WindowChrome {
@@ -1116,6 +1141,8 @@ pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::StatusOk,
     StyleKey::WarnMeta,
     StyleKey::AccentDirty,
+    StyleKey::AccentGrip,
+    StyleKey::AccentGlyph,
     StyleKey::DangerText,
 ];
 

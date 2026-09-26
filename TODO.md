@@ -2206,3 +2206,68 @@ Coverage 67 of 77.
   `tests/view_origin.rs` lacked `required-features = ["headless"]`, and a
   `ui_context` test used `Tone`, whose import is behind `phosphor-icons`.
   The `sheen_over` re-export warned as unused without `phosphor-icons`.
+
+## 2026-09-27 — Missing Forge components, batch D (inspector)
+
+Coverage 71 of 77.
+
+- [x] **PropertyRow** (`inspector`) — `PropertyRow::new(label)` with
+  `.step(f64)`, `.precision(usize)`, `.unit(&str)`, `.mixed(bool)`,
+  `.read_only()`, `.label_width(f32)`; `draw(id: DragId, rect, value: f64,
+  &mut PropertyScrub, &mut DragCapture, ctx) -> PropertyRowOutput { value,
+  changed, scrubbing }`. As in Forge there is no typing: drag the label to
+  scrub (`step` per px, the label lights up), or step with ▴▾. One
+  `PropertyScrub` serves a whole panel. `draw_slot(rect, ctx) -> Rect`
+  draws only the label and hands back the value column, for a row holding
+  some other control (a Slider, a Checkbox). `PROPERTY_ROW_HEIGHT`,
+  `PROPERTY_LABEL_WIDTH`.
+- [x] **PropertyGroup** — `PropertyGroup::new(title).summary(&str)`;
+  `draw(header, &mut open, ctx) -> bool` for the header alone, or
+  `draw_in(&mut PropertyStack, &mut open, ctx, |rows, ctx| ..)` to take the
+  header from a stack and lay the rows under it while open.
+  `PropertyStack::new(x, y, width, gap)` hands out full-width rects:
+  `take(h)`, `row()`, `bottom()`. `PROPERTY_GROUP_HEADER_HEIGHT`,
+  `PROPERTY_ROW_GAP`.
+- [x] **FileField** — `FileField::new(label).file(Option<FileRef { name,
+  meta }>)`, `.mixed(bool)`, `.mixed_count(usize)`, `.accept(&str)`,
+  `.label_width(f32)`, `.focusable(base)`; `FileField::height(list,
+  &styles)`; `draw(rect, ctx) -> FileFieldOutput { browse, clear }`. An
+  empty well browses when clicked.
+- [x] **Inspector** — `Inspector::new(InspectorSelection::{None, Single {
+  name, path }, Multi { count }})` with `.tab(&str)`, `.dirty(bool)`,
+  `.max_body_height(f32)`, `.empty_text(title, hint)`, `.focusable(base)`
+  (pin, close, Apply, Revert, Delete = base..base + 4);
+  `height(width, &InspectorState, list, &styles)`; `draw_with(rect, &mut
+  InspectorState, ctx, |body: &mut PropertyStack, ctx| ..) ->
+  InspectorOutput { body, pin, close, apply, revert, delete }`. The body is
+  measured while drawn (`InspectorState::content_height()`), so `height`
+  and the scroll limit run a frame behind. Apply and Revert need `dirty`;
+  Delete needs a selection. `INSPECTOR_WIDTH`, `INSPECTOR_MAX_BODY_HEIGHT`.
+  Theme: `InspectorChrome` (`theme.chrome.inspector`,
+  `StyleOverlay::set_inspector`), `StyleKey::AccentGrip` /
+  `StyleKey::AccentGlyph`. Bench: `inspector` in `ui_stress` (0.11 ms at
+  100 rows, linear).
+- `DrawContext::reborrow_with_input(&input)`: the same context reading
+  another input. `ScrollView` moves drawing by the scroll offset but not
+  the pointer; the Inspector hands its body the pointer in content space
+  this way, so its rows hit-test where they are drawn.
+- `IconKey` no longer needs `phosphor-icons`: `IconKey::glyph` works
+  everywhere, only `IconKey::new(PhosphorIcon)` is gated.
+- `material::draw_row_well` / `row_well_ink` (crate-internal): the 23 px
+  row well (`--well`, `--well-inset-row`, the accent ring when active)
+  shared by PropertyRow, FileField and the Inspector's name.
+- **Fixed** (found in the gallery): a PropertyGroup summary could show "…"
+  instead of "3". Its box was `right - (right - w)` wide, which float
+  rounding can leave a hair under `w`, and the renderer cuts any text wider
+  than its box. The summary now right-aligns in all the room right of the
+  chevron.
+- [ ] **P2 — Mixed Slider and Checkbox.** Forge's Slider and Checkbox have
+  a `mixed` look for multi-selection (the inspector card's Rough and
+  Shadow rows). Ours don't yet, so a three-object Inspector shows the
+  first object's value in those rows. (Bart, 2026-09-26: a TODO, not
+  batch D.)
+- [ ] **P3 — Ellipsis has no slack.** `text::ellipsis_cut` cuts when the
+  text is wider than its box by any amount, so a box sized to measured
+  text can lose its last glyph to float rounding (the PropertyGroup bug
+  above; `SpanTabs` pads its box by 0.5 px for the same reason). A small
+  tolerance there would make every caller safe.

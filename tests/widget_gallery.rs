@@ -45,6 +45,11 @@ use wgpu_gameui::{
     stacked_bar, toolbar_band,
 };
 use wgpu_gameui::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListState};
+use wgpu_gameui::{
+    FileField, FileRef, INSPECTOR_WIDTH, Inspector, InspectorSelection, InspectorState,
+    PROPERTY_GROUP_HEADER_HEIGHT, PROPERTY_ROW_GAP, PROPERTY_ROW_HEIGHT, PropertyGroup,
+    PropertyRow, PropertyScrub, PropertyStack,
+};
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
 
@@ -97,14 +102,94 @@ fn sheet_cell(
     w: f32,
     h: f32,
 ) -> Rect {
-    let sheet = Rect::new(0.0, 0.0, w, h);
-    let ink = s
-        .sheet()
-        .shadows
+    shadowed_cell(flow, list, &s.sheet().shadows, label, w, h)
+}
+
+/// Reserve a cell for a free-standing `w`×`h` surface casting `shadows`,
+/// taking the shadows in so they don't fall on the neighbouring cells;
+/// returns the surface's rect inside the cell.
+fn shadowed_cell(
+    flow: &mut Flow,
+    list: &mut DrawList,
+    shadows: &[wgpu_gameui::BoxShadow],
+    label: &str,
+    w: f32,
+    h: f32,
+) -> Rect {
+    let surface = Rect::new(0.0, 0.0, w, h);
+    let ink = shadows
         .iter()
-        .fold(sheet, |area, shadow| area.union(shadow.ink_rect(sheet)));
+        .fold(surface, |area, shadow| area.union(shadow.ink_rect(surface)));
     let cell = flow.cell(list, label, ink.width, ink.height);
     Rect::new(cell.x - ink.x, cell.y - ink.y, w, h)
+}
+
+/// Forge's inspector card content: Transform, Material and Physics groups
+/// for a bridge, or for three bridges at once when `mixed`.
+fn inspector_body(mixed: bool) -> impl Fn(&mut PropertyStack, &mut DrawContext) {
+    move |body, ctx| {
+        let mut scrub = PropertyScrub::new();
+        let mut capture = DragCapture::default();
+        let mut open = true;
+        let summary = |one| if mixed { "—" } else { one };
+        PropertyGroup::new("Transform")
+            .summary(summary("3"))
+            .draw_in(body, &mut open, ctx, |rows, ctx| {
+                for (i, (axis, v)) in [("X", 12.4), ("Y", 0.0), ("Z", -3.25)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    PropertyRow::new(axis)
+                        .label_width(11.0)
+                        .unit("m")
+                        .mixed(mixed)
+                        .draw(700 + i as u64, rows.row(), v, &mut scrub, &mut capture, ctx);
+                }
+            });
+        let mut open = true;
+        PropertyGroup::new("Material")
+            .summary(summary("lit · 0.42"))
+            .draw_in(body, &mut open, ctx, |rows, ctx| {
+                let s = ctx.styles();
+                let file = FileRef {
+                    name: "brick_wall_02.ktx2",
+                    meta: "2048 × 2048 · BC7 · 4.1 MB",
+                };
+                let h = FileField::height(ctx.draw_list, &s);
+                FileField::new("Albedo")
+                    .file((!mixed).then_some(file))
+                    .mixed(mixed)
+                    .mixed_count(3)
+                    .draw(rows.take(h), ctx);
+                let slot = PropertyRow::new("Rough").draw_slot(rows.row(), ctx);
+                let slider = Rect::new(
+                    slot.x,
+                    slot.y + (slot.height - 16.0) * 0.5,
+                    slot.width,
+                    16.0,
+                );
+                Slider::new(0.0, 1.0).draw(0.42, 710, &mut capture, slider, ctx);
+                let slot = PropertyRow::new("Shadow").draw_slot(rows.row(), ctx);
+                let check = Rect::new(
+                    slot.x,
+                    slot.y + (slot.height - 20.0) * 0.5,
+                    slot.width,
+                    20.0,
+                );
+                Checkbox::new().draw(true, "Cast", check, ctx);
+            });
+        let mut open = true;
+        PropertyGroup::new("Physics")
+            .summary(summary("72 kg"))
+            .draw_in(body, &mut open, ctx, |rows, ctx| {
+                PropertyRow::new("Mass")
+                    .unit("kg")
+                    .step(1.0)
+                    .precision(1)
+                    .mixed(mixed)
+                    .draw(720, rows.row(), 72.0, &mut scrub, &mut capture, ctx);
+            });
+    }
 }
 
 const W: u32 = 800;
@@ -4180,6 +4265,218 @@ fn render_widget_gallery() {
                     r,
                     &mut state,
                     &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+            }
+        }
+
+        flow.section(
+            list,
+            Category::Inspector,
+            "PropertyRow",
+            "scrub the label · step ▴▾ · mixed",
+        );
+        {
+            let mut scrub = PropertyScrub::new();
+            let mut capture = DragCapture::default();
+            let rows = [
+                (
+                    "Value",
+                    PropertyRow::new("Mass").unit("kg").step(1.0).precision(1),
+                    72.0,
+                ),
+                (
+                    "Mixed",
+                    PropertyRow::new("Mass").unit("kg").mixed(true),
+                    72.0,
+                ),
+                (
+                    "Read only",
+                    PropertyRow::new("Mass").unit("kg").read_only(),
+                    72.0,
+                ),
+            ];
+            for (i, (label, row, value)) in rows.into_iter().enumerate() {
+                let r = flow.cell(list, label, 220.0, PROPERTY_ROW_HEIGHT);
+                row.draw(
+                    730 + i as u64,
+                    r,
+                    value,
+                    &mut scrub,
+                    &mut capture,
+                    &mut ctx(list, &mut focus, &theme, &input),
+                );
+            }
+
+            // A press on the label, then 24 px of drag: the label lights
+            // and the value follows at 0.1 per px.
+            let r = flow.cell(list, "Scrubbing", 220.0, PROPERTY_ROW_HEIGHT);
+            let row = PropertyRow::new("Pos X").unit("m");
+            let press = InputState {
+                mouse_x: r.x + 15.0,
+                mouse_y: r.y + PROPERTY_ROW_HEIGHT * 0.5,
+                mouse_down: true,
+                mouse_clicked: true,
+                ..InputState::default()
+            };
+            let mut scratch = DrawList::new();
+            row.draw(
+                740,
+                r,
+                12.4,
+                &mut scrub,
+                &mut capture,
+                &mut ctx(&mut scratch, &mut focus, &theme, &press),
+            );
+            let held = InputState {
+                mouse_x: press.mouse_x + 24.0,
+                mouse_clicked: false,
+                ..press.clone()
+            };
+            row.draw(
+                740,
+                r,
+                12.4,
+                &mut scrub,
+                &mut capture,
+                &mut ctx(list, &mut focus, &theme, &held),
+            );
+        }
+
+        flow.section(
+            list,
+            Category::Inspector,
+            "PropertyGroup",
+            "open · closed · hovered header",
+        );
+        {
+            let mut scrub = PropertyScrub::new();
+            let mut capture = DragCapture::default();
+            let mut group = |list: &mut DrawList, r: Rect, open: bool, input: &InputState| {
+                let mut stack = PropertyStack::new(r.x, r.y, r.width, 0.0);
+                let mut open = open;
+                PropertyGroup::new("Transform").summary("2").draw_in(
+                    &mut stack,
+                    &mut open,
+                    &mut ctx(list, &mut focus, &theme, input),
+                    |rows, ctx| {
+                        for (i, (axis, v)) in [("X", 12.4), ("Y", 0.0)].into_iter().enumerate() {
+                            PropertyRow::new(axis).label_width(11.0).unit("m").draw(
+                                750 + i as u64,
+                                rows.row(),
+                                v,
+                                &mut scrub,
+                                &mut capture,
+                                ctx,
+                            );
+                        }
+                    },
+                );
+                stack.bottom() - r.y
+            };
+            let open_h = group(
+                &mut DrawList::new(),
+                Rect::new(0.0, 0.0, 240.0, 0.0),
+                true,
+                &input,
+            );
+            assert_eq!(
+                open_h,
+                PROPERTY_GROUP_HEADER_HEIGHT + 5.0 + 2.0 * PROPERTY_ROW_HEIGHT + PROPERTY_ROW_GAP
+            );
+            let r = flow.cell(list, "Open", 240.0, open_h);
+            group(list, r, true, &input);
+            let r = flow.cell(list, "Closed", 240.0, PROPERTY_GROUP_HEADER_HEIGHT);
+            group(list, r, false, &input);
+            let r = flow.cell(list, "Hovered", 240.0, PROPERTY_GROUP_HEADER_HEIGHT);
+            let hover = InputState {
+                mouse_x: r.x + 120.0,
+                mouse_y: r.y + 10.0,
+                ..InputState::default()
+            };
+            group(list, r, false, &hover);
+        }
+
+        flow.section(
+            list,
+            Category::Inspector,
+            "FileField",
+            "linked · mixed · empty",
+        );
+        {
+            let file = FileRef {
+                name: "brick_wall_02.ktx2",
+                meta: "2048 × 2048 · BC7 · 4.1 MB",
+            };
+            let h = FileField::height(list, &s);
+            let fields = [
+                ("Linked", FileField::new("Albedo").file(Some(file))),
+                ("Mixed", FileField::new("Albedo").mixed(true).mixed_count(3)),
+                ("Empty", FileField::new("Normal")),
+            ];
+            for (label, field) in fields {
+                let r = flow.cell(list, label, 250.0, h);
+                field.draw(r, &mut ctx(list, &mut focus, &theme, &input));
+            }
+        }
+
+        flow.section(
+            list,
+            Category::Inspector,
+            "Inspector",
+            "one · three · none selected · scrolled",
+        );
+        {
+            let bridge = InspectorSelection::Single {
+                name: "Bridge_A",
+                path: Some("Level_01 / Bridge_A"),
+            };
+            let cases = [
+                (
+                    "One object, edited",
+                    Inspector::new(bridge).dirty(true),
+                    false,
+                    0.0,
+                ),
+                (
+                    "Three objects",
+                    Inspector::new(InspectorSelection::Multi { count: 3 }),
+                    true,
+                    0.0,
+                ),
+                (
+                    "Nothing selected",
+                    Inspector::new(InspectorSelection::None),
+                    false,
+                    0.0,
+                ),
+                (
+                    "Scrolled",
+                    Inspector::new(bridge).max_body_height(160.0),
+                    false,
+                    90.0,
+                ),
+            ];
+            let shadows = s.inspector().shadows;
+            for (label, inspector, mixed, scroll) in cases {
+                let body = inspector_body(mixed);
+                let mut state = InspectorState::new();
+                // A frame off-screen measures the body, as the first frame
+                // of a live inspector would.
+                let mut scratch = DrawList::new();
+                inspector.draw_with(
+                    Rect::new(0.0, 0.0, INSPECTOR_WIDTH, 600.0),
+                    &mut state,
+                    &mut ctx(&mut scratch, &mut focus, &theme, &input),
+                    &body,
+                );
+                state.scroll.snap_to(1, scroll);
+                let h = inspector.height(INSPECTOR_WIDTH, &state, list, &s);
+                let r = shadowed_cell(&mut flow, list, &shadows, label, INSPECTOR_WIDTH, h);
+                inspector.draw_with(
+                    r,
+                    &mut state,
+                    &mut ctx(list, &mut focus, &theme, &input),
+                    &body,
                 );
             }
         }

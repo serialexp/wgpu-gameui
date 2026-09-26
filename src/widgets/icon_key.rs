@@ -1,4 +1,5 @@
-//! Icon key — a square key holding one Phosphor icon (Forge `IconKey`).
+//! Icon key — a square key holding one Phosphor icon or text glyph (Forge
+//! `IconKey`).
 //!
 //! The design uses three sizes: [`IconKey::TOOLBAR`] (24), [`IconKey::STATUS`]
 //! (18, status-bar toggles) and [`IconKey::HEADER`] (17, dock and section
@@ -10,7 +11,8 @@
 //! Interaction, focus and the key material come from [`Pressable`]; this
 //! widget adds the icon and the design's per-tone icon inks.
 //!
-//! Gated behind the `phosphor-icons` feature.
+//! Icon faces ([`IconKey::new`]) need the `phosphor-icons` feature; glyph
+//! faces ([`IconKey::glyph`]) are always available.
 //!
 //! # Example
 //! ```ignore
@@ -26,17 +28,21 @@
 
 use crate::Weight;
 use crate::layout::Rect;
+#[cfg(feature = "phosphor-icons")]
 use crate::render::PhosphorIcon;
 use crate::style::{Ink, StyleKey, StyleResolver};
 use crate::text::TextBlock;
 
+#[cfg(feature = "phosphor-icons")]
+use super::Icon;
 use super::material::Tone;
-use super::{DrawContext, FocusId, Icon, PressState, Pressable};
+use super::{DrawContext, FocusId, PressState, Pressable};
 
 /// What a key's face shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KeyFace {
     /// A vector icon.
+    #[cfg(feature = "phosphor-icons")]
     Icon(PhosphorIcon),
     /// A text glyph, as Forge's `IconKey glyph="■"` draws it: sans, weight
     /// 500, carved, at 12 / 11 / 10 px for the toolbar, status and header
@@ -71,6 +77,7 @@ impl IconKey {
     pub const HEADER: f32 = 17.0;
 
     /// A default-tone key showing `icon` on a `size` px square face.
+    #[cfg(feature = "phosphor-icons")]
     pub fn new(icon: PhosphorIcon, size: f32) -> Self {
         Self::with_face(KeyFace::Icon(icon), size)
     }
@@ -168,6 +175,7 @@ impl IconKey {
     /// Side of the square the icon is fitted into, for a face `face` px tall.
     /// Matches the design's glyph sizes at the three key sizes and scales past
     /// them.
+    #[cfg(feature = "phosphor-icons")]
     fn icon_box(face: f32) -> f32 {
         if face >= Self::TOOLBAR {
             face * 11.0 / 24.0
@@ -220,6 +228,7 @@ impl IconKey {
         let s = ctx.styles();
         let ink = self.ink(&s, key.hovered, key.pressed);
         match self.face {
+            #[cfg(feature = "phosphor-icons")]
             KeyFace::Icon(icon) => {
                 let side = Self::icon_box(face.height.min(face.width));
                 let icon_rect = Rect::new(
@@ -289,12 +298,13 @@ mod tests {
         let travel = theme.get(StyleKey::Travel).unwrap().as_scalar().unwrap();
         for size in [IconKey::HEADER, IconKey::STATUS, IconKey::TOOLBAR] {
             assert_eq!(
-                IconKey::new(PhosphorIcon::Plus, size).outer_size(&s),
+                IconKey::glyph("+", size).outer_size(&s),
                 [size, size + travel]
             );
         }
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn the_icon_sits_centred_on_the_face_at_the_design_size() {
         for (size, side) in [(17.0, 9.0), (18.0, 10.0), (24.0, 11.0)] {
@@ -313,6 +323,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn the_icon_drops_with_the_face_when_pressed_or_held() {
         let theme = Theme::default();
@@ -327,6 +338,7 @@ mod tests {
         assert_eq!(held - rest, travel);
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn travel_and_radius_overrides_reach_the_key() {
         let key = IconKey::new(PhosphorIcon::X, 16.0).travel(1.0).radius(8.0);
@@ -342,11 +354,12 @@ mod tests {
     #[test]
     fn clicks_report_and_disabled_keys_ignore_them() {
         let click = input_at(8.0, 8.0, true, true);
-        let key = IconKey::new(PhosphorIcon::Plus, 17.0);
+        let key = IconKey::glyph("+", 17.0);
         assert!(draw(key, &click).1.clicked);
         assert!(!draw(key.enabled(false), &click).1.clicked);
     }
 
+    #[cfg(feature = "phosphor-icons")]
     #[test]
     fn icon_ink_follows_the_tone_and_state() {
         let theme = Theme::default();
@@ -383,6 +396,7 @@ mod tests {
         for (size, font) in [(15.0, 10.0), (17.0, 10.0), (18.0, 11.0), (24.0, 12.0)] {
             let key = IconKey::glyph("■", size).tone(Tone::Ghost);
             let (mut list, _) = draw(key, &away());
+            #[cfg(feature = "phosphor-icons")]
             assert!(list.icons_msdf.is_empty());
             assert_eq!(list.texts.len(), 1, "{size}");
             let text = list.texts[0].clone();
