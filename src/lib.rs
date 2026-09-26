@@ -110,8 +110,8 @@ pub use affine::Affine2;
 pub use animation::{AnimSlot, AnimationState, Easing, ease, lerp, lerp_color};
 pub use chrome::{
     Background, ChromeTheme, DockChrome, DockSectionChrome, Edge, EdgeStyle, EdgeWidths,
-    FloatingSurfaceChrome, GradientAxis, MenuBarChrome, MenuSheetChrome, QuadStyle,
-    ScrollbarChrome, SplitterChrome, StatusBarChrome, StructuralLine, SurfacePainter,
+    FloatingSurfaceChrome, GradientAxis, GroupListChrome, MenuBarChrome, MenuSheetChrome,
+    QuadStyle, ScrollbarChrome, SplitterChrome, StatusBarChrome, StructuralLine, SurfacePainter,
     ToolbarChrome, WindowChrome,
 };
 pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};

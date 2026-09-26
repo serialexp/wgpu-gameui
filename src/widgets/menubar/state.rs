@@ -117,6 +117,8 @@ pub(super) struct RowGeom {
     pub disabled: bool,
     /// Whether the item draws a check mark.
     pub checked: bool,
+    /// Whether the item is a destructive action (danger ink).
+    pub danger: bool,
 }
 
 impl RowGeom {
@@ -132,6 +134,7 @@ impl RowGeom {
             submenu: false,
             disabled: true,
             checked: false,
+            danger: false,
         }
     }
 }
@@ -744,6 +747,7 @@ impl MenuBarState {
                     submenu: item.is_submenu() && level + 1 < MAX_MENU_DEPTH,
                     disabled: !item.is_enabled(),
                     checked: item.is_checked(),
+                    danger: item.is_danger(),
                 });
                 content_h += row_h;
             }
@@ -864,6 +868,43 @@ impl MenuBarState {
     pub fn debug_geometry(&self) -> Option<(Rect, f32, f32)> {
         let column = self.columns.first()?;
         Some((column.rect, column.row_h, column.content_h))
+    }
+
+    /// The [`reason`](MenuItem::reason) of the disabled item under the
+    /// point `(x, y)` in an open column, with the item's row rect, so the
+    /// host can show it as a tooltip. `menus` must be the menus the bar was
+    /// drawn with. `None` when the point isn't on a disabled item with a
+    /// reason.
+    pub fn hovered_reason<'a>(
+        &self,
+        menus: &'a [Menu<'a>],
+        x: f32,
+        y: f32,
+    ) -> Option<(&'a str, Rect)> {
+        for (level, column) in self.columns.iter().enumerate() {
+            let rect = column.rect;
+            if !rect.contains(x, y) {
+                continue;
+            }
+            let scroll = self.scrolls.get(level).copied().unwrap_or(0.0);
+            let row_x = rect.x + column.sheet_padding;
+            let row_w = (rect.width - column.sheet_padding * 2.0).max(0.0);
+            let row = column.rows.iter().find(|row| {
+                let top = rect.y + column.sheet_padding + row.y - scroll;
+                !row.separator && y >= top && y < top + row.height
+            })?;
+            if !row.disabled {
+                return None;
+            }
+            let mut items = menus.get(column.menu_index)?.items();
+            for &parent in &column.path[..level] {
+                items = items.get(parent)?.children();
+            }
+            let reason = items.get(row.item_index)?.disabled_reason()?;
+            let top = rect.y + column.sheet_padding + row.y - scroll;
+            return Some((reason, Rect::new(row_x, top, row_w, row.height)));
+        }
+        None
     }
 
     /// The open column's vertical scroll offset. Exposed for tests.

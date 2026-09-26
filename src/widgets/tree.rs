@@ -50,7 +50,8 @@
 //! ## Look (Forge `Tree`)
 //! Rows are [`StyleKey::ListRowHeight`] tall (22 px) in the façade, indented
 //! 11 px per depth, with a small ▾/▸ caret for branches, an optional glyph
-//! ([`TreeNode::with_glyph`]) and the label in the menu size. The selected
+//! ([`TreeNode::with_glyph`]) or 14 px thumb (`TreeNode::with_thumb`, with
+//! the `phosphor-icons` feature) and the label in the menu size. The selected
 //! row is an accent bar with on-accent ink; hover is the row-hover wash.
 //!
 //! [`TreeNode::with_disabled`] marks a node that can't be picked (locked,
@@ -75,6 +76,8 @@ use crate::text::TextBlock;
 use crate::{InputState, SpriteId, StyleKey};
 
 use super::list::paint_selected_row;
+#[cfg(feature = "phosphor-icons")]
+use super::thumb::Thumb;
 use super::{DrawContext, DrawList, FocusId};
 
 /// Edge-detected keyboard-navigation keys captured for one frame.
@@ -112,6 +115,9 @@ const CARET_W: f32 = 9.0;
 pub(crate) const CARET_HALF: f32 = 2.5;
 /// Size of the glyph before the label.
 const GLYPH: f32 = 10.0;
+/// How opaque a disabled node's thumb is (Forge: `opacity: .45`).
+#[cfg(feature = "phosphor-icons")]
+const DISABLED_THUMB_ALPHA: f32 = 0.45;
 /// Space between the row's parts: indent, caret, icons, glyph, label.
 const GAP: f32 = 5.0;
 /// Space before the indent and after the last part (`padding: 0 8px 0 4px`).
@@ -465,6 +471,8 @@ pub struct TreeNode<'a> {
     slot_size: Option<f32>,
     label_color: Option<[f32; 4]>,
     glyph: Option<TreeIcon<'a>>,
+    #[cfg(feature = "phosphor-icons")]
+    thumb: Option<Thumb<'a>>,
     disabled: bool,
 }
 
@@ -509,6 +517,8 @@ impl<'a> TreeNode<'a> {
             slot_size: None,
             label_color: None,
             glyph: None,
+            #[cfg(feature = "phosphor-icons")]
+            thumb: None,
             disabled: false,
         }
     }
@@ -588,6 +598,24 @@ impl<'a> TreeNode<'a> {
         self
     }
 
+    /// A [`Thumb`] before the label instead of the glyph (a project's
+    /// monogram or icon). It takes the thumb's own width, switches to its
+    /// selected look on the accent bar and fades when the node is disabled.
+    #[cfg(feature = "phosphor-icons")]
+    pub fn with_thumb(mut self, thumb: Thumb<'a>) -> Self {
+        self.thumb = Some(thumb);
+        self
+    }
+
+    /// The width of what sits before the label: the thumb, else the glyph.
+    fn mark_width(&self) -> Option<f32> {
+        #[cfg(feature = "phosphor-icons")]
+        if let Some(thumb) = &self.thumb {
+            return Some(thumb.side());
+        }
+        self.glyph.map(|_| GLYPH)
+    }
+
     /// Mark the node unavailable: dimmed, never selected, and (as a leaf) not
     /// hovered. A disabled branch still expands and its action icons still
     /// fire; a right-click is still reported, without selecting it.
@@ -655,12 +683,7 @@ impl<'a> TreeNode<'a> {
         let leading_x = disclosure_right;
         let leading_w = self.leading.len() as f32 * slot;
         let glyph_x = leading_x + leading_w + if self.leading.is_empty() { 0.0 } else { GAP };
-        let label_x = glyph_x
-            + if self.glyph.is_some() {
-                GLYPH + GAP
-            } else {
-                0.0
-            };
+        let label_x = glyph_x + self.mark_width().map_or(0.0, |w| w + GAP);
 
         let row_right = rect.x + rect.width - ROW_INSET_RIGHT;
         let trailing_w = self.trailing.len() as f32 * slot;
@@ -745,8 +768,27 @@ impl<'a> TreeNode<'a> {
             }
         }
 
-        // ---- glyph and label ----------------------------------------------
-        if let Some(glyph) = &self.glyph {
+        // ---- thumb or glyph, and label ------------------------------------
+        #[cfg(feature = "phosphor-icons")]
+        let thumbed = if let Some(thumb) = &self.thumb {
+            if off {
+                list.push_tint();
+                list.multiply_tint([1.0, 1.0, 1.0, DISABLED_THUMB_ALPHA]);
+            }
+            let side = thumb.side();
+            thumb
+                .selected(on_accent)
+                .draw(glyph_x, cy - side * 0.5, list, &s);
+            if off {
+                list.pop_tint();
+            }
+            true
+        } else {
+            false
+        };
+        #[cfg(not(feature = "phosphor-icons"))]
+        let thumbed = false;
+        if let Some(glyph) = self.glyph.as_ref().filter(|_| !thumbed) {
             glyph.draw(
                 list,
                 Rect::new(glyph_x, cy - GLYPH * 0.5, GLYPH, GLYPH),
@@ -1391,6 +1433,47 @@ mod tests {
             glyph_tint(folder.with_disabled(true), true),
             s_.ink(Ink::DisabledGlyph)
         );
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn a_thumb_takes_its_own_width_and_replaces_the_glyph() {
+        use crate::render::PhosphorIcon;
+        use crate::widgets::thumb::Thumb;
+        let node = TreeNode::leaf("agent-ui")
+            .with_glyph(TreeIcon::Phosphor(PhosphorIcon::Folder))
+            .with_thumb(Thumb::new().name("agent-ui"));
+        let mut s = TreeState::new();
+        let (list, _) = draw_node(&node, 1, row(), &mut s, &idle());
+        assert!(
+            list.icons_msdf.is_empty(),
+            "the glyph gives way to the thumb"
+        );
+        // The monogram, then the label: 23 + the 14 px thumb + a 5 px gap.
+        assert_eq!(list.texts.len(), 2);
+        assert_eq!(list.texts[0].content, "AU");
+        assert_eq!(list.texts[1].x, 42.0);
+        let big = TreeNode::leaf("a").with_thumb(Thumb::new().name("a").size(18.0));
+        let mut s = TreeState::new();
+        let (list, _) = draw_node(&big, 1, row(), &mut s, &idle());
+        assert_eq!(list.texts[1].x, 46.0);
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    #[test]
+    fn a_disabled_nodes_thumb_fades_and_the_tint_is_restored() {
+        use crate::widgets::thumb::Thumb;
+        let monogram_alpha = |disabled: bool| {
+            let node = TreeNode::leaf("agent-ui")
+                .with_thumb(Thumb::new().name("agent-ui"))
+                .with_disabled(disabled);
+            let mut s = TreeState::new();
+            let (list, _) = draw_node(&node, 1, row(), &mut s, &idle());
+            assert_eq!(list.current_tint(), [1.0; 4], "the fade doesn't leak");
+            list.texts[0].color.a()
+        };
+        assert_eq!(monogram_alpha(false), 255);
+        assert_eq!(monogram_alpha(true), (0.45_f32 * 255.0).round() as u8);
     }
 
     #[test]

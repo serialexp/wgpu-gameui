@@ -25,6 +25,8 @@ mod empty_state;
 mod focus;
 mod gradient_ramp;
 mod group;
+#[cfg(feature = "phosphor-icons")]
+mod group_list;
 mod hit_zone;
 #[cfg(feature = "phosphor-icons")]
 mod icon;
@@ -51,10 +53,13 @@ mod settings;
 mod slider;
 mod splitter;
 mod status_bar;
+mod status_dot;
 mod table;
 mod tabs;
 mod tag_input;
 mod text_input;
+#[cfg(feature = "phosphor-icons")]
+mod thumb;
 mod toast;
 mod toggle;
 #[cfg(feature = "phosphor-icons")]
@@ -71,7 +76,9 @@ pub use app_shell::{
 #[cfg(feature = "phosphor-icons")]
 pub use app_shell::{SHELL_DRAG_TOOLBAR_GRIP, SHELL_TOOLBAR_ID};
 pub use asset_grid::{AssetGrid, AssetGridOutput};
-pub use badge::{ChipOutput, badge, chip, keycap};
+pub use badge::{
+    ChipOutput, HUE_CHIP_HEIGHT, badge, chip, hue_chip, hue_chip_right, hue_chip_width, keycap,
+};
 pub use banner::{Banner, Severity};
 pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
@@ -105,6 +112,12 @@ pub use gradient_ramp::{
     sample as sample_ramp,
 };
 pub use group::Group;
+#[cfg(feature = "phosphor-icons")]
+pub use group_list::{
+    GROUP_DEPTH_INDENT, GROUP_HEADER_HEIGHT, GROUP_ITEM_HEIGHT, GROUP_MORE_HEIGHT, GroupHeader,
+    GroupItem, GroupLayout, GroupList, GroupListOutput, GroupListState, GroupMenuRequest,
+    GroupMore, GroupRow, GroupRowKind,
+};
 pub use hit_zone::{HitZone, HitZoneOutput};
 #[cfg(feature = "phosphor-icons")]
 pub use icon::Icon;
@@ -139,10 +152,13 @@ pub use settings::{
 pub use slider::{Slider, SliderOutput};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
 pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};
+pub use status_dot::{STATUS_DOT_SIZE, Status, status_dot};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
 pub use tag_input::{TagOutput, draw as draw_tag_input};
 pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
+#[cfg(feature = "phosphor-icons")]
+pub use thumb::{Thumb, hue_of, initials};
 pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
 pub use toggle::Toggle;
 #[cfg(feature = "phosphor-icons")]
@@ -150,7 +166,7 @@ pub use toolbar::{
     ToolDef, Toolbar, ToolbarEdge, ToolbarEvent, ToolbarId, ToolbarItem, ToolbarOutput,
     ToolbarState,
 };
-pub use tooltip::{TooltipContent, TooltipLayer};
+pub use tooltip::{TooltipContent, TooltipHint, TooltipLayer, TooltipSide};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};
 pub use window::{

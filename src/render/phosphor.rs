@@ -160,6 +160,10 @@ icons! {
     ChatCircle = '\u{e168}', "chat-circle";
     /// Square split in two panes, side by side (an empty layout slot).
     SquareSplitHorizontal = '\u{e870}', "square-split-horizontal";
+    /// Three dots in a row (more actions for a row or item).
+    DotsThree = '\u{e1fe}', "dots-three";
+    /// Two stacked rows (a group of items, such as quiet projects).
+    Rows = '\u{e5a2}', "rows";
 }
 
 impl PhosphorIcon {

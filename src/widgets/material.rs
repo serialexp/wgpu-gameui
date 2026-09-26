@@ -35,8 +35,10 @@ pub enum Tone {
     Accent,
     /// Raised danger-gradient face (destructive controls).
     Danger,
-    /// No plinth, transparent idle fill — the face only appears on hover/press
-    /// (toolbar buttons, tabs, latch keys).
+    /// A transparent face on the plinth: at rest the key is a dark square,
+    /// and hover/press only lighten the face a little (header, field and
+    /// inline keys). With [`Material::hollow`] there is no plinth either, so
+    /// the face only appears on hover/press.
     Ghost,
     /// Sunken: dark fill with an inset shadow (checkbox troughs, toggled-off
     /// chips, pressed-in strips).
@@ -56,6 +58,9 @@ pub struct Material {
     pub pressed: bool,
     /// How far the face drops, in px. `None` uses [`StyleKey::Travel`].
     pub travel: Option<f32>,
+    /// No plinth under the face (the design's `hollow` keys: steppers and
+    /// keys sunk in a well). The face still drops by `travel` while pressed.
+    pub hollow: bool,
 }
 
 impl Material {
@@ -68,7 +73,15 @@ impl Material {
             hovered: false,
             pressed: false,
             travel: None,
+            hollow: false,
         }
+    }
+
+    /// Leave out the plinth (builder style); see [`hollow`](Self::hollow).
+    #[must_use]
+    pub fn hollow(mut self, hollow: bool) -> Self {
+        self.hollow = hollow;
+        self
     }
 
     /// Set the enabled flag (builder style).
@@ -110,6 +123,15 @@ const FACE_EDGE_ALPHA: f32 = 0.5;
 /// Ghost-tone border alphas: fainter idle, near-face-edge when active.
 const GHOST_EDGE_IDLE: f32 = 0.25;
 const GHOST_EDGE_ACTIVE: f32 = 0.4;
+/// Ghost-tone face: a flat white wash while hovered or pressed (the design's
+/// `rgba(255,255,255,0.08)` / `0.04`), transparent at rest.
+const GHOST_FILL_HOVER: f32 = 0.08;
+const GHOST_FILL_PRESSED: f32 = 0.04;
+/// Ghost-tone insets: a 1px white line under the top edge while hovered
+/// (`inset 0 1px 0 rgba(255,255,255,0.1)`), and a soft dark one while
+/// pressed (`inset 0 1px 2px rgba(0,0,0,0.3)`).
+const GHOST_HIGHLIGHT: f32 = 0.1;
+const GHOST_PRESS_SHADOW: ([f32; 2], f32, f32) = ([0.0, 1.0], 2.0, 0.3);
 /// Sunken border alpha.
 const SUNKEN_EDGE_ALPHA: f32 = 0.6;
 /// Disabled controls fade to this fraction of their material.
@@ -148,11 +170,33 @@ pub fn draw_with_radius(
     );
 
     match m.tone {
-        Tone::Ghost => draw_ghost(list, s, rect, face, radius, m),
         Tone::Sunken => draw_sunken(list, s, rect, radius, m),
-        tone => draw_raised(list, s, rect, face, radius, travel, m, tone),
+        Tone::Ghost => {
+            draw_plinth(list, s, rect, radius, m);
+            draw_ghost(list, face, radius, m);
+        }
+        tone => {
+            // The face covers the plinth except in the `travel` gap.
+            if travel > 0.0 {
+                draw_plinth(list, s, rect, radius, m);
+            }
+            draw_raised(list, s, face, radius, m, tone);
+        }
     }
     face
+}
+
+/// The dark slab a face rests on, over the whole rect; nothing when
+/// [`Material::hollow`].
+fn draw_plinth(list: &mut DrawList, s: &StyleResolver, rect: Rect, radius: f32, m: &Material) {
+    if m.hollow {
+        return;
+    }
+    let mut plinth = s.color(StyleKey::Plinth);
+    if !m.enabled {
+        plinth[3] *= DISABLED_ALPHA;
+    }
+    list.chrome_rect(rect, radius, 0.0, plinth, [0.0; 4]);
 }
 
 /// Draw the **inset shadow** shared by every sunken surface: a band fading
@@ -203,7 +247,7 @@ pub(crate) fn draw_inset_shadow(
     }
 }
 
-/// Raised tones: plinth under a sheen gradient face.
+/// Raised tones: a sheen gradient face (over the plinth the caller drew).
 ///
 /// The neutral face resolves its **base** from the state keys (`Button` /
 /// `ButtonHover` / `ButtonPressed`) and composites the white-sheen tokens
@@ -211,14 +255,11 @@ pub(crate) fn draw_inset_shadow(
 /// [`StyleKey::Button`](StyleKey::Button) still recolors buttons, while the
 /// sheen stays themeable separately. Accent/danger faces use their own opaque
 /// gradients.
-#[allow(clippy::too_many_arguments)]
 fn draw_raised(
     list: &mut DrawList,
     s: &StyleResolver,
-    rect: Rect,
     face: Rect,
     radius: f32,
-    travel: f32,
     m: &Material,
     tone: Tone,
 ) {
@@ -228,11 +269,6 @@ fn draw_raised(
         }
         c
     };
-    // Plinth: the dark slab the face rests on; visible only in the `travel`
-    // gap while the face is at rest. Hollow while pressed (the face covers it).
-    if travel > 0.0 {
-        list.chrome_rect(rect, radius, 0.0, dim(s.color(StyleKey::Plinth)), [0.0; 4]);
-    }
 
     let pressed = m.enabled && m.pressed;
     let hovered = m.enabled && m.hovered;
@@ -381,62 +417,50 @@ pub(crate) fn focus_id_for(name: &str, rect: &Rect) -> crate::FocusId {
     h
 }
 
-/// Ghost tone: no plinth, transparent at rest; hover/press paint the same white
-/// faces on a faint border.
-fn draw_ghost(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    _rect: Rect,
-    face: Rect,
-    radius: f32,
-    m: &Material,
-) {
+/// Ghost tone's face (over the plinth the caller drew): transparent at rest
+/// on a faint border; hover and press lay a flat white wash on it, with the
+/// design's own insets.
+fn draw_ghost(list: &mut DrawList, face: Rect, radius: f32, m: &Material) {
     let dim = |mut c: [f32; 4]| {
         if !m.enabled {
             c[3] *= DISABLED_ALPHA;
         }
         c
     };
-    let active = m.enabled && (m.pressed || m.hovered);
     let pressed = m.enabled && m.pressed;
-
-    let (top, bottom, highlight) = if pressed {
-        (
-            s.color(StyleKey::FaceTopPressed),
-            s.color(StyleKey::FaceBottomPressed),
-            s.color(StyleKey::EdgeHighlightPressed),
-        )
-    } else if active {
-        (
-            s.color(StyleKey::FaceTopHover),
-            s.color(StyleKey::FaceBottomHover),
-            s.color(StyleKey::EdgeHighlightHover),
-        )
+    let hovered = m.enabled && m.hovered && !pressed;
+    let fill = if pressed {
+        GHOST_FILL_PRESSED
+    } else if hovered {
+        GHOST_FILL_HOVER
     } else {
-        // Fully transparent face at rest.
-        ([0.0; 4], [0.0; 4], [0.0; 4])
+        0.0
     };
-
-    let edge_alpha = if active {
+    let edge_alpha = if pressed || hovered {
         GHOST_EDGE_ACTIVE
     } else {
         GHOST_EDGE_IDLE
     };
-    let border = [0.0, 0.0, 0.0, edge_alpha];
-    list.chrome_rect_gradient(face, radius, 1.0, dim(top), dim(bottom), dim(border));
-
+    let fill = [1.0, 1.0, 1.0, fill];
+    list.chrome_rect(
+        face,
+        radius,
+        1.0,
+        dim(fill),
+        dim([0.0, 0.0, 0.0, edge_alpha]),
+    );
     if pressed {
-        let (offset, blur) = PRESS_SHADOW;
+        let (offset, blur, alpha) = GHOST_PRESS_SHADOW;
         face_inset(
             list,
             face,
             radius,
             offset,
             blur,
-            dim(s.color(StyleKey::InnerShadow)),
+            dim([0.0, 0.0, 0.0, alpha]),
         );
-    }
-    if active {
+    } else if hovered {
+        let highlight = [1.0, 1.0, 1.0, GHOST_HIGHLIGHT];
         face_inset(list, face, radius, [0.0, BAND_H], 0.0, dim(highlight));
     }
 }
@@ -636,15 +660,17 @@ mod tests {
         let s = styles();
         // A round 16 px key: the face is 16×14, so its radius clamps to 7.
         let rect = Rect::new(0.0, 0.0, 16.0, 16.0);
-        for tone in [Tone::Default, Tone::Ghost] {
+        // A pressed raised key keeps its highlight under the press shadow; a
+        // ghost key has one or the other.
+        for (tone, pressed, shadows) in [
+            (Tone::Default, true, 2),
+            (Tone::Ghost, true, 1),
+            (Tone::Ghost, false, 1),
+        ] {
             let mut list = DrawList::new();
-            let m = Material::new(tone).hovered(true).pressed(true);
+            let m = Material::new(tone).hovered(true).pressed(pressed);
             let face = draw_with_radius(&mut list, s, rect, 8.0, &m);
-            assert_eq!(
-                list.shadow_instance_count(),
-                2,
-                "{tone:?}: press shadow + highlight"
-            );
+            assert_eq!(list.shadow_instance_count(), shadows, "{tone:?}");
             for shadow in list.shadow_instances() {
                 assert_eq!(
                     shadow.element_rect,
@@ -710,17 +736,70 @@ mod tests {
     }
 
     #[test]
-    fn ghost_is_transparent_at_rest_and_skips_the_plinth() {
+    fn ghost_is_a_transparent_face_on_the_plinth() {
         let s = styles();
         let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
         let mut list = DrawList::new();
         draw(&mut list, s, rect, &Material::new(Tone::Ghost));
-        assert_eq!(list.chrome_instance_count(), 1, "no plinth instance");
-        assert_eq!(
-            list.chrome_instance(0).unwrap().bg[3],
-            0.0,
-            "idle ghost face is fully transparent"
+        assert_eq!(list.chrome_instance_count(), 2, "plinth, then face");
+        let plinth = list.chrome_instance(0).unwrap();
+        assert_eq!(plinth.bg, s.color(StyleKey::Plinth));
+        assert_eq!(plinth.rect, [0.0, 0.0, 40.0, 20.0], "the whole rect");
+        let face = list.chrome_instance(1).unwrap();
+        assert_eq!(face.bg[3], 0.0, "idle ghost face is fully transparent");
+        assert_eq!(face.border, [0.0, 0.0, 0.0, GHOST_EDGE_IDLE]);
+        assert_eq!(list.shadow_instance_count(), 0, "no inset at rest");
+    }
+
+    #[test]
+    fn ghost_hover_and_press_wash_the_face_flat_white() {
+        let s = styles();
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        for (m, alpha) in [
+            (Material::new(Tone::Ghost).hovered(true), GHOST_FILL_HOVER),
+            (
+                Material::new(Tone::Ghost).hovered(true).pressed(true),
+                GHOST_FILL_PRESSED,
+            ),
+        ] {
+            let mut list = DrawList::new();
+            draw(&mut list, s, rect, &m);
+            let face = list.chrome_instance(1).unwrap();
+            assert_eq!(face.bg, [1.0, 1.0, 1.0, alpha]);
+            assert_eq!(face.bg, face.bg2, "flat, not a gradient");
+            assert_eq!(face.border, [0.0, 0.0, 0.0, GHOST_EDGE_ACTIVE]);
+        }
+    }
+
+    #[test]
+    fn a_hollow_key_has_no_plinth() {
+        let s = styles();
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        for tone in [Tone::Ghost, Tone::Default] {
+            let mut list = DrawList::new();
+            draw(&mut list, s, rect, &Material::new(tone).hollow(true));
+            assert_eq!(list.chrome_instance_count(), 1, "{tone:?}: the face only");
+            assert_ne!(
+                list.chrome_instance(0).unwrap().bg,
+                s.color(StyleKey::Plinth),
+                "{tone:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_ghost_fades_its_plinth_too() {
+        let s = styles();
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let mut list = DrawList::new();
+        draw(
+            &mut list,
+            s,
+            rect,
+            &Material::new(Tone::Ghost).enabled(false),
         );
+        let plinth = list.chrome_instance(0).unwrap().bg;
+        assert_eq!(plinth[3], s.color(StyleKey::Plinth)[3] * DISABLED_ALPHA);
     }
 
     #[test]

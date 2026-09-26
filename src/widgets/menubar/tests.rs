@@ -32,7 +32,9 @@ const FILE_ITEMS: &[MenuItem<'static>] = &[
     MenuItem::new("Open…").shortcut("Ctrl+O"),
     MenuItem::separator(),
     MenuItem::new("Bold").checked(true),
-    MenuItem::new("Locked").enabled(false),
+    MenuItem::new("Locked")
+        .enabled(false)
+        .reason("Nothing to unlock"),
     MenuItem::new("Open Recent").with_children(RECENT),
     MenuItem::new("Quit")
         .id(QUIT_ID)
@@ -42,6 +44,7 @@ const FILE_ITEMS: &[MenuItem<'static>] = &[
 const EDIT_ITEMS: &[MenuItem<'static>] = &[
     MenuItem::new("Copy").id(COPY_ID),
     MenuItem::new("Paste").id(202),
+    MenuItem::new("Delete").id(203).danger(true),
 ];
 
 const VIEW_ITEMS: &[MenuItem<'static>] = &[MenuItem::new("Zoom")];
@@ -1028,6 +1031,51 @@ fn selected_row_uses_dark_ink_without_a_text_shadow() {
     assert_eq!(open.font_size, 11.5);
     assert_eq!(open.color.as_rgba(), [4, 20, 24, 0xff]);
     assert!(open.shadow.is_none(), "selected dark ink is not carved");
+}
+
+#[test]
+fn a_danger_row_uses_the_danger_ink_until_highlighted() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 1);
+    rig.settle();
+    let ink = |rig: &Rig| {
+        rig.column_list()
+            .texts
+            .iter()
+            .find(|block| block.content == "Delete")
+            .expect("the Delete label")
+            .color
+            .as_rgba()
+    };
+    assert_eq!(ink(&rig), crate::color::to_rgba8(rig.theme.danger_text));
+    rig.state.set_highlighted_item(MENUS, Some(2));
+    rig.step();
+    assert_eq!(ink(&rig), [4, 20, 24, 0xff], "the accent row's ink wins");
+}
+
+#[test]
+fn a_disabled_row_reports_its_reason_under_the_pointer() {
+    let mut rig = Rig::new();
+    rig.state.open_menu_at(MENUS, 0);
+    rig.settle();
+    let rect = rig.column_rect();
+    let row_h = rig.row_height();
+    // FILE_ITEMS: 0 New, 1 Open…, 2 separator (7 px), 3 Bold, 4 Locked.
+    let locked_top = rect.y + 3.0 + row_h * 3.0 + 7.0;
+    let (reason, row) = rig
+        .state
+        .hovered_reason(MENUS, rect.x + 20.0, locked_top + row_h * 0.5)
+        .expect("Locked's reason");
+    assert_eq!(reason, "Nothing to unlock");
+    assert_eq!(row.y, locked_top);
+    assert_eq!(row.height, row_h);
+    assert_eq!(
+        rig.state
+            .hovered_reason(MENUS, rect.x + 20.0, rect.y + 3.0 + row_h * 0.5),
+        None,
+        "New is enabled"
+    );
+    assert_eq!(rig.state.hovered_reason(MENUS, W - 1.0, H - 1.0), None);
 }
 
 #[test]

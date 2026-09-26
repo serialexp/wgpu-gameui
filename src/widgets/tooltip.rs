@@ -9,6 +9,7 @@
 use crate::chrome::SurfacePainter;
 use crate::layer::LayerStack;
 use crate::layout::Rect;
+use crate::style::{Ink, TextSize};
 use crate::text::TextBlock;
 use crate::{InputState, StyleKey, StyleResolver};
 
@@ -93,6 +94,261 @@ impl TooltipContent {
         }
         self
     }
+}
+
+// ---------------------------------------------------------------------------
+// Anchored hint (Forge `Tooltip`)
+// ---------------------------------------------------------------------------
+
+/// Gap between an anchored hint and the widget it describes (`calc(100% + 7px)`).
+const HINT_OFFSET: f32 = 7.0;
+/// Horizontal padding inside an anchored hint.
+const HINT_PAD_X: f32 = 7.0;
+/// Vertical padding inside an anchored hint.
+const HINT_PAD_Y: f32 = 3.0;
+/// Gap between an anchored hint's label and its shortcut.
+const HINT_SHORTCUT_GAP: f32 = 7.0;
+
+/// Which side of its anchor an anchored [`TooltipHint`] prefers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TooltipSide {
+    /// Above the anchor, centred horizontally.
+    #[default]
+    Top,
+    /// Below the anchor, centred horizontally.
+    Bottom,
+    /// Left of the anchor, centred vertically.
+    Left,
+    /// Right of the anchor, centred vertically.
+    Right,
+}
+
+impl TooltipSide {
+    /// The side across the anchor from this one.
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+
+/// A compact label pinned beside the widget it describes, with an optional
+/// mono shortcut — the Forge `Tooltip`.
+///
+/// Unlike [`TooltipLayer`] (cursor-following, delayed, rich content), a hint
+/// has no delay and no fade and sits [`HINT_OFFSET`] pixels off one side of
+/// its anchor. The widget that owns the anchor decides *when* to show it and
+/// *which side* (a toolbar puts it on the strip's outward side); this type only
+/// measures, places, and paints. If the preferred side would leave the
+/// viewport and the opposite side fits, it flips; it is then clamped into the
+/// viewport along both axes.
+///
+/// ```ignore
+/// TooltipHint::new("Move")
+///     .shortcut("W")
+///     .side(TooltipSide::Right)
+///     .draw_into_layers(&mut layers, &styles, key_rect, viewport);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TooltipHint<'a> {
+    label: &'a str,
+    shortcut: Option<&'a str>,
+    side: TooltipSide,
+}
+
+/// The measured blocks and border box of one hint, so layout and paint share a
+/// single measurement pass.
+struct HintLayout {
+    rect: Rect,
+    label: TextBlock,
+    shortcut: Option<TextBlock>,
+}
+
+impl<'a> TooltipHint<'a> {
+    /// A hint showing `label` above its anchor, with no shortcut.
+    pub fn new(label: &'a str) -> Self {
+        Self {
+            label,
+            shortcut: None,
+            side: TooltipSide::Top,
+        }
+    }
+
+    /// Show `shortcut` after the label in the mono tip-hint ink. An empty
+    /// string means no shortcut.
+    pub fn shortcut(mut self, shortcut: &'a str) -> Self {
+        self.shortcut = (!shortcut.is_empty()).then_some(shortcut);
+        self
+    }
+
+    /// Prefer `side` of the anchor.
+    pub fn side(mut self, side: TooltipSide) -> Self {
+        self.side = side;
+        self
+    }
+
+    /// The border box this hint would occupy beside `anchor` within `viewport`.
+    pub fn layout(
+        &self,
+        list: &mut DrawList,
+        style: &StyleResolver,
+        anchor: Rect,
+        viewport: Rect,
+    ) -> Rect {
+        self.measure(list, style, anchor, viewport).rect
+    }
+
+    /// Paint the hint beside `anchor` into `list` and return its border box.
+    /// `list` should be one drawn above everything the hint may overlap —
+    /// prefer [`draw_into_layers`](Self::draw_into_layers).
+    pub fn draw(
+        &self,
+        list: &mut DrawList,
+        style: &StyleResolver,
+        anchor: Rect,
+        viewport: Rect,
+    ) -> Rect {
+        let layout = self.measure(list, style, anchor, viewport);
+        let rect = layout.rect;
+        let chrome = style.tooltip();
+        let shadow_margin = chrome.shadow.blur * 1.5;
+        list.push_debug_scope_rect(
+            "Tooltip hint",
+            Rect::new(
+                rect.x - shadow_margin,
+                rect.y - shadow_margin + chrome.shadow.offset[1],
+                rect.width + shadow_margin * 2.0,
+                rect.height + shadow_margin * 2.0,
+            ),
+        );
+        let padding_box = rect.inset(chrome.surface.border_widths.left);
+        let mut surface = SurfacePainter::new(
+            list,
+            rect,
+            padding_box,
+            chrome.surface.corner_radii,
+            chrome.surface,
+            std::slice::from_ref(&chrome.shadow),
+            &chrome.lines,
+        );
+        surface.paint_pre_content();
+        {
+            let list = surface.draw_list();
+            list.text(layout.label);
+            if let Some(shortcut) = layout.shortcut {
+                list.text(shortcut);
+            }
+        }
+        surface.paint_post_content();
+        list.pop_debug_scope();
+        rect
+    }
+
+    /// Paint the hint onto a fresh tooltip layer of `layers` (purely visual; it
+    /// never blocks input) and return its border box.
+    pub fn draw_into_layers(
+        &self,
+        layers: &mut LayerStack,
+        style: &StyleResolver,
+        anchor: Rect,
+        viewport: Rect,
+    ) -> Rect {
+        let index = layers.push_tooltip(viewport);
+        let rect = self.draw(layers.current_mut(), style, anchor, viewport);
+        layers.layers_mut()[index].rect = rect;
+        layers.pop_layer();
+        rect
+    }
+
+    fn measure(
+        &self,
+        list: &mut DrawList,
+        style: &StyleResolver,
+        anchor: Rect,
+        viewport: Rect,
+    ) -> HintLayout {
+        let border = style.tooltip().surface.border_widths;
+        let label_size = style.text_size(TextSize::Row);
+        let meta_size = style.text_size(TextSize::Meta);
+        let theme = style.theme();
+
+        let mut label = style.sans_block(self.label, 0.0, 0.0, TextSize::Row, Ink::Emph);
+        let (label_w, label_h) = list.measure_block(&label);
+        let mut shortcut = self
+            .shortcut
+            .map(|s| style.mono_block(s, 0.0, 0.0, TextSize::Meta, Ink::TipHint));
+        let (short_w, short_h) = match &shortcut {
+            Some(block) => list.measure_block(block),
+            None => (0.0, 0.0),
+        };
+
+        let content_w = label_w
+            + if shortcut.is_some() {
+                HINT_SHORTCUT_GAP + short_w
+            } else {
+                0.0
+            };
+        let width = border.left + border.right + HINT_PAD_X * 2.0 + content_w;
+        let height = border.top + border.bottom + HINT_PAD_Y * 2.0 + label_h.max(short_h);
+        let rect = place_hint(anchor, self.side, width, height, viewport);
+
+        // Label and shortcut share one baseline, set by the label's x-height
+        // band centred in the hint (see `ListView` rows for the same recipe).
+        let cy = rect.y + border.top + (rect.height - border.top - border.bottom) * 0.5;
+        let label_font = theme.font.as_ref();
+        label.x = rect.x + border.left + HINT_PAD_X;
+        label.y = list.x_centered_text_y(cy, label_size, label_font);
+        if let Some(block) = &mut shortcut {
+            let baseline = cy + label_size * list.font_vmetrics(label_font).x_ratio * 0.5;
+            let mono_baseline =
+                meta_size * list.font_vmetrics(theme.mono_font.as_ref()).baseline_ratio;
+            block.x = label.x + label_w + HINT_SHORTCUT_GAP;
+            block.y = baseline - mono_baseline;
+        }
+        HintLayout {
+            rect,
+            label,
+            shortcut,
+        }
+    }
+}
+
+/// Place a `width`×`height` hint on `side` of `anchor`, flipping to the
+/// opposite side when only that one fits, then clamping into `viewport`.
+fn place_hint(anchor: Rect, side: TooltipSide, width: f32, height: f32, viewport: Rect) -> Rect {
+    let at = |side: TooltipSide| -> Rect {
+        let cx = anchor.x + anchor.width * 0.5 - width * 0.5;
+        let cy = anchor.y + anchor.height * 0.5 - height * 0.5;
+        match side {
+            TooltipSide::Top => Rect::new(cx, anchor.y - HINT_OFFSET - height, width, height),
+            TooltipSide::Bottom => Rect::new(cx, anchor.bottom() + HINT_OFFSET, width, height),
+            TooltipSide::Left => Rect::new(anchor.x - HINT_OFFSET - width, cy, width, height),
+            TooltipSide::Right => Rect::new(anchor.right() + HINT_OFFSET, cy, width, height),
+        }
+    };
+    let fits_main = |rect: Rect, side: TooltipSide| match side {
+        TooltipSide::Top | TooltipSide::Bottom => {
+            rect.y >= viewport.y && rect.bottom() <= viewport.bottom()
+        }
+        TooltipSide::Left | TooltipSide::Right => {
+            rect.x >= viewport.x && rect.right() <= viewport.right()
+        }
+    };
+    let preferred = at(side);
+    let flipped = at(side.opposite());
+    let mut rect = if !fits_main(preferred, side) && fits_main(flipped, side.opposite()) {
+        flipped
+    } else {
+        preferred
+    };
+    // Clamp into the viewport; when the hint is larger than the viewport the
+    // leading edge wins so the label's start stays visible.
+    rect.x = rect.x.min(viewport.right() - width).max(viewport.x);
+    rect.y = rect.y.min(viewport.bottom() - height).max(viewport.y);
+    rect
 }
 
 /// A registered hover region with its tooltip content.
@@ -514,6 +770,161 @@ mod tests {
         );
         assert_eq!(list.shadow_instance_count(), 1);
         assert_eq!(list.shadow_instance(0).unwrap().color, chrome.shadow.color);
+    }
+
+    // --- Anchored hint ---------------------------------------------------
+
+    const ANCHOR: Rect = Rect {
+        x: 100.0,
+        y: 100.0,
+        width: 24.0,
+        height: 26.0,
+    };
+    const VIEWPORT: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 400.0,
+        height: 300.0,
+    };
+
+    #[test]
+    fn hint_sits_seven_px_off_its_side_centred_on_the_anchor() {
+        let (w, h) = (60.0, 20.0);
+        let cx = ANCHOR.x + ANCHOR.width * 0.5;
+        let cy = ANCHOR.y + ANCHOR.height * 0.5;
+
+        let r = place_hint(ANCHOR, TooltipSide::Right, w, h, VIEWPORT);
+        assert_eq!(r.x, ANCHOR.right() + 7.0);
+        assert_eq!(r.y + h * 0.5, cy);
+
+        let r = place_hint(ANCHOR, TooltipSide::Left, w, h, VIEWPORT);
+        assert_eq!(r.right(), ANCHOR.x - 7.0);
+        assert_eq!(r.y + h * 0.5, cy);
+
+        let r = place_hint(ANCHOR, TooltipSide::Bottom, w, h, VIEWPORT);
+        assert_eq!(r.y, ANCHOR.bottom() + 7.0);
+        assert_eq!(r.x + w * 0.5, cx);
+
+        let r = place_hint(ANCHOR, TooltipSide::Top, w, h, VIEWPORT);
+        assert_eq!(r.bottom(), ANCHOR.y - 7.0);
+        assert_eq!(r.x + w * 0.5, cx);
+    }
+
+    #[test]
+    fn hint_flips_when_only_the_opposite_side_fits() {
+        // A key hugging the right edge: its Right hint would leave the screen.
+        let anchor = Rect::new(VIEWPORT.right() - 30.0, 100.0, 24.0, 26.0);
+        let r = place_hint(anchor, TooltipSide::Right, 60.0, 20.0, VIEWPORT);
+        assert_eq!(r.right(), anchor.x - 7.0, "flipped to the left side");
+
+        // A key at the very top: its Top hint flips below.
+        let anchor = Rect::new(100.0, 2.0, 24.0, 26.0);
+        let r = place_hint(anchor, TooltipSide::Top, 60.0, 20.0, VIEWPORT);
+        assert_eq!(r.y, anchor.bottom() + 7.0, "flipped below");
+    }
+
+    #[test]
+    fn hint_keeps_its_side_and_clamps_when_neither_side_fits() {
+        // Wider than either gap beside the anchor: stays on the preferred side,
+        // pulled back inside the viewport.
+        let r = place_hint(ANCHOR, TooltipSide::Right, 390.0, 20.0, VIEWPORT);
+        assert!(r.x >= VIEWPORT.x && r.right() <= VIEWPORT.right());
+    }
+
+    #[test]
+    fn hint_is_clamped_into_the_viewport_along_the_cross_axis() {
+        // A left-docked key near the bottom: centring would hang off the screen.
+        let anchor = Rect::new(2.0, VIEWPORT.bottom() - 8.0, 24.0, 26.0);
+        let r = place_hint(anchor, TooltipSide::Right, 60.0, 20.0, VIEWPORT);
+        assert_eq!(r.bottom(), VIEWPORT.bottom());
+        assert_eq!(r.x, anchor.right() + 7.0);
+    }
+
+    #[test]
+    fn hint_paints_label_in_emph_and_shortcut_in_mono_tip_hint() {
+        let theme = crate::Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let rect = TooltipHint::new("Move")
+            .shortcut("W")
+            .side(TooltipSide::Right)
+            .draw(&mut list, &styles, ANCHOR, VIEWPORT);
+
+        assert_eq!(list.texts.len(), 2);
+        let (label, shortcut) = (&list.texts[0], &list.texts[1]);
+        assert_eq!(label.content, "Move");
+        assert_eq!(label.font_size, styles.text_size(TextSize::Row));
+        assert_eq!(label.font, theme.font);
+        assert_eq!(
+            label.color,
+            TextBlock::new("", 0.0, 0.0)
+                .with_color_f32(styles.ink(Ink::Emph))
+                .color
+        );
+        assert_eq!(shortcut.content, "W");
+        assert_eq!(shortcut.font_size, styles.text_size(TextSize::Meta));
+        assert_eq!(shortcut.font, theme.mono_font);
+        assert_eq!(
+            shortcut.color,
+            TextBlock::new("", 0.0, 0.0)
+                .with_color_f32(styles.ink(Ink::TipHint))
+                .color
+        );
+        // Label then shortcut, both inside the padded box.
+        let border = theme.chrome.tooltip.surface.border_widths.left;
+        assert_eq!(label.x, rect.x + border + 7.0);
+        assert!(shortcut.x > label.x + 7.0);
+        assert!(shortcut.x < rect.right() - 7.0);
+        // One tooltip surface with its single authored elevation.
+        assert_eq!(list.shadow_instance_count(), 1);
+    }
+
+    #[test]
+    fn hint_without_shortcut_paints_only_the_label() {
+        let theme = crate::Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let with = TooltipHint::new("Move")
+            .shortcut("W")
+            .layout(&mut list, &styles, ANCHOR, VIEWPORT);
+        let rect = TooltipHint::new("Move")
+            .shortcut("")
+            .draw(&mut list, &styles, ANCHOR, VIEWPORT);
+        assert_eq!(list.texts.len(), 1);
+        assert!(rect.width < with.width, "no shortcut slot is reserved");
+    }
+
+    #[test]
+    fn hint_on_a_layer_is_a_non_blocking_tooltip_layer() {
+        let theme = crate::Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut layers = LayerStack::new();
+        let rect = TooltipHint::new("Move")
+            .side(TooltipSide::Right)
+            .draw_into_layers(&mut layers, &styles, ANCHOR, VIEWPORT);
+        assert!(!layers.has_active_layer(), "push/pop balanced");
+        let layer = &layers.layers()[0];
+        assert_eq!(layer.kind, crate::layer::LayerKind::Tooltip);
+        assert_eq!(layer.rect, rect);
+        assert_eq!(layer.list.texts.len(), 1);
+        let over = input_at(rect.x + 2.0, rect.y + 2.0);
+        assert!(!layers.input_for_base(&over).mouse_consumed);
+    }
+
+    #[test]
+    fn hint_reads_the_tooltip_chrome_overlay() {
+        let theme = crate::Theme::default();
+        let mut chrome = theme.chrome.tooltip;
+        chrome.surface.background = crate::Background::Solid([0.2, 0.3, 0.4, 1.0]);
+        let mut overlay = crate::StyleOverlay::new();
+        overlay.set_tooltip(chrome);
+        let styles = StyleResolver::with_overlay(&theme, &overlay);
+        let mut list = DrawList::new();
+        TooltipHint::new("Move").draw(&mut list, &styles, ANCHOR, VIEWPORT);
+        assert!(
+            list.chrome_instances()
+                .any(|i| i.bg == [0.2, 0.3, 0.4, 1.0])
+        );
     }
 
     #[test]

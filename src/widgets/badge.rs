@@ -5,9 +5,13 @@
 //! - [`keycap`]: a keyboard-key cap (`⇧` `Ctrl` `F`) — raised face over a
 //!   black edge with a bottom drop line.
 //! - [`chip`]: a toggleable filter pill — raised at rest, held-in when on.
+//! - [`hue_chip`]: a small recessed mono label tinted by a hue (a session
+//!   row's provider), with a flat variant for rows on the accent.
 
+use crate::color::oklch;
 use crate::layout::Rect;
-use crate::style::{StyleKey, StyleResolver};
+use crate::shadow::{BoxShadow, CornerRadii};
+use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 use crate::text::TextBlock;
 
 use super::DrawList;
@@ -179,6 +183,109 @@ pub fn chip(
     ChipOutput { clicked }
 }
 
+/// Height of a [`hue_chip`].
+pub const HUE_CHIP_HEIGHT: f32 = 13.0;
+/// Space either side of a hue chip's text.
+const HUE_CHIP_PAD: f32 = 4.0;
+/// A hue chip's letter spacing, in em.
+const HUE_CHIP_TRACKING: f32 = 0.02;
+/// The chip's recess (`--chip-inset`): the inner shadow, and the light line
+/// under it.
+const CHIP_INSET: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
+const CHIP_LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
+
+/// The text block of a hue chip, at the origin.
+fn hue_chip_text(s: &StyleResolver, text: &str) -> TextBlock {
+    let size = s.text_size(TextSize::Caption);
+    s.mono_block(text, 0.0, 0.0, TextSize::Caption, Ink::Chip)
+        .with_letter_spacing(size * HUE_CHIP_TRACKING)
+}
+
+/// The width a [`hue_chip`] showing `text` takes.
+pub fn hue_chip_width(list: &mut DrawList, s: &StyleResolver, text: &str) -> f32 {
+    let (w, _) = list.measure_block(&hue_chip_text(s, text));
+    w + HUE_CHIP_PAD * 2.0
+}
+
+/// Draw a hue chip with its top-left corner at `(x, y)`: `text` in small
+/// mono on a recessed plate tinted by `hue` (degrees). A chip on a selected
+/// (accent) row passes `on_accent`, which flattens the plate so it reads on
+/// the brighter fill. Returns the chip's rect.
+pub fn hue_chip(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    x: f32,
+    y: f32,
+    text: &str,
+    hue: f32,
+    on_accent: bool,
+) -> Rect {
+    let block = hue_chip_text(s, text);
+    let (w, _) = list.measure_block(&block);
+    let r = Rect::new(x, y, w + HUE_CHIP_PAD * 2.0, HUE_CHIP_HEIGHT);
+    paint_hue_chip(list, s, r, block, hue, on_accent);
+    r
+}
+
+/// [`hue_chip`], placed by its top-right corner `(right, y)` instead: for a
+/// chip ending at a column edge, without measuring its text twice.
+pub fn hue_chip_right(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    right: f32,
+    y: f32,
+    text: &str,
+    hue: f32,
+    on_accent: bool,
+) -> Rect {
+    let block = hue_chip_text(s, text);
+    let (w, _) = list.measure_block(&block);
+    let width = w + HUE_CHIP_PAD * 2.0;
+    let r = Rect::new(right - width, y, width, HUE_CHIP_HEIGHT);
+    paint_hue_chip(list, s, r, block, hue, on_accent);
+    r
+}
+
+/// Paint a hue chip's plate in `r`, and its measured text `block`.
+fn paint_hue_chip(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    r: Rect,
+    mut block: TextBlock,
+    hue: f32,
+    on_accent: bool,
+) {
+    let radius = s.scalar(StyleKey::BorderRadius);
+    let (top, bottom, ink) = if on_accent {
+        let flat = oklch(0.30, 0.06, hue, 1.0);
+        (flat, flat, oklch(0.88, 0.08, hue, 1.0))
+    } else {
+        (
+            oklch(0.30, 0.055, hue, 1.0),
+            oklch(0.36, 0.07, hue, 1.0),
+            oklch(0.86, 0.09, hue, 1.0),
+        )
+    };
+    list.chrome_rect_gradient(r, radius, 0.0, top, bottom, [0.0; 4]);
+    list.quad(r.x, r.bottom(), r.width, 1.0, CHIP_LIP);
+    list.box_shadow_inset(
+        r,
+        CornerRadii::uniform(radius),
+        BoxShadow {
+            offset: [0.0, 1.0],
+            blur: 3.0,
+            color: CHIP_INSET,
+            inset: true,
+            ..BoxShadow::default()
+        },
+    );
+    block = block.with_color_f32(ink);
+    block.x = r.x + HUE_CHIP_PAD;
+    // Centre the line box, as the design's flex row does.
+    block.y = crate::text::vcentered_line_y(r.y, r.height, block.font_size);
+    list.text(block);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +438,44 @@ mod tests {
             &far,
         );
         assert!(!out.clicked);
+    }
+
+    #[test]
+    fn a_hue_chip_is_tinted_and_flattens_on_the_accent() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let mut plain = DrawList::new();
+        let r = hue_chip(&mut plain, &s, 5.0, 7.0, "codex", 160.0, false);
+        assert_eq!((r.x, r.y, r.height), (5.0, 7.0, HUE_CHIP_HEIGHT));
+        assert!((r.width - hue_chip_width(&mut plain, &s, "codex")).abs() < 0.01);
+        let face = plain.chrome_instance(0).unwrap();
+        assert_eq!(face.bg, oklch(0.30, 0.055, 160.0, 1.0));
+        assert_ne!(face.bg, face.bg2, "a gradient at rest");
+        assert_eq!(plain.shadow_instance_count(), 1, "the recess");
+        let text = plain.texts.iter().find(|t| t.content == "codex").unwrap();
+        assert_eq!(
+            text.color,
+            crate::color::text_color(oklch(0.86, 0.09, 160.0, 1.0))
+        );
+        assert_eq!(text.x, 5.0 + HUE_CHIP_PAD);
+
+        let mut accent = DrawList::new();
+        hue_chip(&mut accent, &s, 0.0, 0.0, "codex", 160.0, true);
+        let face = accent.chrome_instance(0).unwrap();
+        assert_eq!(face.bg, face.bg2, "flat on the accent");
+    }
+
+    #[test]
+    fn a_right_anchored_hue_chip_ends_at_its_edge() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let w = hue_chip_width(&mut list, &s, "codex");
+        let r = hue_chip_right(&mut list, &s, 100.0, 7.0, "codex", 160.0, false);
+        assert!((r.right() - 100.0).abs() < 0.01);
+        assert!((r.width - w).abs() < 0.01);
+        assert_eq!((r.y, r.height), (7.0, HUE_CHIP_HEIGHT));
+        let text = list.texts.iter().find(|t| t.content == "codex").unwrap();
+        assert_eq!(text.x, r.x + HUE_CHIP_PAD);
     }
 }

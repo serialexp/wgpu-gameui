@@ -211,6 +211,27 @@ pub struct DockChrome {
     pub active_tab_inset: BoxShadow,
 }
 
+/// Chrome of a [`GroupList`](crate::GroupList): its opaque group headers
+/// (rows scroll under them), the rule between rows, and the recessed toolbar
+/// strip a sidebar puts above the list.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupListChrome {
+    /// Group header fill (Forge `--surface-dock-header-opaque`).
+    pub header: Background,
+    /// Highlight just inside a header's top edge (`--hi-card`).
+    pub header_highlight: EdgeStyle,
+    /// Rule under a header (`--edge-dark`).
+    pub header_rule: EdgeStyle,
+    /// Rule under every item and "more" row.
+    pub row_rule: EdgeStyle,
+    /// Toolbar strip wash.
+    pub toolbar: Background,
+    /// Rule under the toolbar strip.
+    pub toolbar_rule: EdgeStyle,
+    /// Light line just below the toolbar rule (`--rule-hi`).
+    pub toolbar_highlight: EdgeStyle,
+}
+
 /// Chrome of the collapsible sections stacked inside a dock (see
 /// [`DockStack`](crate::DockStack)): a raised header bar per section and an
 /// optional recessed toolbar strip under it. The washes are translucent, laid
@@ -325,6 +346,8 @@ pub struct ChromeTheme {
     pub dock: DockChrome,
     /// Chrome of the sections stacked inside a dock.
     pub dock_section: DockSectionChrome,
+    /// Chrome of a grouped list (headers, row rules, toolbar strip).
+    pub group_list: GroupListChrome,
     /// Scrollbar thumb chrome.
     pub scrollbar: ScrollbarChrome,
     /// Splitter chrome.
@@ -669,6 +692,21 @@ impl Default for ChromeTheme {
                     toolbar: Background::Solid([0.0, 0.0, 0.0, 0.14]),
                     toolbar_rule: edge([0.0, 0.0, 0.0, 0.5]),
                     toolbar_highlight: edge([1.0, 1.0, 1.0, 0.035]),
+                }
+            },
+            group_list: {
+                let edge = |color| EdgeStyle {
+                    thickness: 1.0,
+                    color,
+                };
+                GroupListChrome {
+                    header: gradient([0x23, 0x27, 0x2b], [0x18, 0x1c, 0x20]),
+                    header_highlight: edge([1.0, 1.0, 1.0, 0.055]),
+                    header_rule: edge([0.0, 0.0, 0.0, 0.6]),
+                    row_rule: edge([0.0, 0.0, 0.0, 0.25]),
+                    toolbar: Background::Solid([0.0, 0.0, 0.0, 0.25]),
+                    toolbar_rule: edge([0.0, 0.0, 0.0, 0.6]),
+                    toolbar_highlight: edge([1.0, 1.0, 1.0, 0.06]),
                 }
             },
             scrollbar: {

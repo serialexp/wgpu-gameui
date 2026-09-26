@@ -12,6 +12,33 @@ Use this as the working backlog for the package. Cross items off as PRs land.
 
 ---
 
+## Per-frame text allocations (found 2026-09-25, GroupList perf test)
+
+- [ ] **P1 — A `TextBlock` costs 3 heap allocations to build.** Found while
+      measuring `GroupList` (`tests/group_list_performance.rs`); it applies to
+      every widget that draws text, every frame. The three are: the owned
+      `content: String`; `style_ranges: Arc::new(Vec::new())`, which allocates
+      even when empty; and `FontHandle(String)`, cloned from the theme by
+      `StyleResolver::{sans,mono}_block`. Options to decide between (Bart):
+      a shared empty `Arc` (or `Option<Arc<…>>`) for `style_ranges`;
+      `FontHandle(Arc<str>)` so clones are free; and, bigger, borrowed or
+      `Cow`/`Arc<str>` content. The GroupList perf test derives its bound from
+      the measured per-block cost, so it tightens automatically.
+
+---
+
+## Hollow keys (found 2026-09-25, ghost plinth change)
+
+- [ ] **The design's NumberField steppers and Toolbar keys are default-tone
+      hollow keys; gameui draws them as ghost hollow keys.** Ghost keys now sit
+      on the plinth like the Forge `Key` (`Material::hollow` leaves it out). The
+      stepper (`number_input.rs`) and toolbar overflow key (`toolbar.rs`) were
+      ghost before and stay ghost + hollow, so they look as they did. Matching
+      the design means a raised default-tone face with no plinth; check it
+      against Forge `NumberField.jsx` / `Toolbar.jsx` and the gallery first.
+
+---
+
 ## Cross-notifier follow-up audit (2026-08-19)
 
 These items came from regressions found while migrating cross-notifier to gameui.
@@ -1383,14 +1410,25 @@ new systems designed to compose with it and the existing widgets.
       Drive `ToolbarState::begin_frame` → `push_open_layer` → base draw →
       `draw_open_layer` → `end_frame` around `LayerStack`; popup actions return
       `ToolbarEvent` and application selection/toggles remain caller-owned.
-      Icons use `Icon` (PhosphorIcon or custom font); hover remains output for an
-      external `TooltipLayer`. State is caller-owned `ToolbarState { edge,
-      active_tool, active_toggles, .. }`. Headless tests cover interaction,
+      Icons use `Icon` (PhosphorIcon or custom font). State is caller-owned
+      `ToolbarState { edge, active_tool, active_toggles, .. }`. Headless tests cover interaction,
       orientation-aware geometry, overflow, popup selection, key materials, and
       the grip's translucent-white ridges/black counter-edge.
       API: `ToolbarId`, `ToolbarEdge` (`Left`/`Right`/`Top`/`Bottom`), `ToolDef`,
       `ToolbarItem` (`Tool`/`Toggle`/`Separator`), `ToolbarEvent`, `ToolbarState`,
       `Toolbar`, `ToolbarOutput`.
+- [x] **Toolbar key tooltips** (2026-09-25). Before this, the toolbar only
+      reported `ToolbarOutput::hovered` and nothing ever drew a tooltip. Now the
+      base draw records the hovered key, and `ToolbarState::draw_open_layer`
+      paints its tooltip on a tooltip layer above the sheet. It shows the label
+      and the shortcut (mono, `Ink::TipHint`), 7px off the strip's outward
+      side, with no delay and no fade (Forge `03-toolbar.html`). It is hidden
+      while a sheet is open or any `DragCapture` drag is in flight, and it still
+      shows on disabled keys. The painter is the reusable
+      `TooltipHint::new(label).shortcut(s).side(TooltipSide::…)` with
+      `.draw` / `.draw_into_layers` / `.layout`: anchored, flips to the opposite
+      side when only that side fits, and is clamped into the viewport. Gallery
+      row: "Toolbar — tooltip on hover".
 
 - [x] **Dock panel** (`src/widgets/dock_panel.rs`) — tabbed, closable panel
       chrome for left/right/bottom docks. `DockPanel::new(side, tabs).closable()

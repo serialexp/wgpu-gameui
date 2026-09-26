@@ -435,6 +435,27 @@ fn render_widget_gallery() {
     // runs unconditionally, so deferred init is sound (and avoids a dead store).
     let tooltip_rect;
     let content_bottom;
+    // Hovered toolbars whose tooltips paint after the base layer, through the
+    // toolbar's own overlay step (`draw_open_layer`) exactly as a host would —
+    // so the items and states outlive the base scope. One docked left (tooltip
+    // to the right), one docked top (tooltip below).
+    #[cfg(feature = "phosphor-icons")]
+    let tip_toolbar_items = [
+        wgpu_gameui::ToolbarItem::tool(1, Icon::new(PhosphorIcon::Diamond), "Select", "Q"),
+        wgpu_gameui::ToolbarItem::tool(2, Icon::new(PhosphorIcon::ArrowClockwise), "Move", "W"),
+        wgpu_gameui::ToolbarItem::separator(),
+        wgpu_gameui::ToolbarItem::toggle(
+            5,
+            Icon::new(PhosphorIcon::Eraser),
+            "Snap to grid",
+            "Shift+G",
+        ),
+    ];
+    #[cfg(feature = "phosphor-icons")]
+    let mut tip_toolbars = [
+        wgpu_gameui::ToolbarState::new(wgpu_gameui::ToolbarEdge::Left),
+        wgpu_gameui::ToolbarState::new(wgpu_gameui::ToolbarEdge::Top),
+    ];
     // Reserved cell for the backdrop-blur demo; filled after layout (the blur is
     // a renderer pass, not a DrawList record, so it runs in the encoder below).
     let blur_rect;
@@ -1680,6 +1701,44 @@ fn render_widget_gallery() {
             }
         }
 
+        // The V2 Disk tab: project folders under "Projects" carry their
+        // monogram thumb, the selected one ("agent-ui") in its accent look,
+        // a disabled one faded.
+        #[cfg(feature = "phosphor-icons")]
+        {
+            use wgpu_gameui::{Thumb, TreeIcon};
+            let r = flow.cell(list, "Tree — project thumbs", 220.0, 110.0);
+            list.quad(r.x, r.y, r.width, r.height, theme.panel);
+            let mut tree = TreeState::new();
+            tree.set_expanded(1, true);
+            tree.select(2);
+            let idle = InputState {
+                mouse_x: -1.0,
+                mouse_y: -1.0,
+                ..InputState::default()
+            };
+            let rows: [(u64, &str, usize, bool, bool); 5] = [
+                (1, "Projects", 0, false, false),
+                (2, "agent-ui", 1, true, false),
+                (3, "wgpu-gameui", 1, true, false),
+                (4, "archived", 1, true, true),
+                (5, ".dotfiles", 0, false, false),
+            ];
+            for (i, &(id, label, depth, project, disabled)) in rows.iter().enumerate() {
+                let row = Rect::new(r.x, r.y + i as f32 * 22.0, r.width, 22.0);
+                let mut tctx = DrawContext::new(list, &mut focus, &theme, &idle, W as f32, 600.0);
+                let mut node = TreeNode::new(label)
+                    .with_depth(depth)
+                    .with_disabled(disabled);
+                node = if project {
+                    node.with_thumb(Thumb::new().name(label))
+                } else {
+                    node.with_glyph(TreeIcon::Phosphor(PhosphorIcon::Folder))
+                };
+                node.draw(id, row, &mut tree, &mut tctx);
+            }
+        }
+
         // Context menu state, shown over a viewport swatch. Its modal layer is
         // drawn after the base scope, matching the production integration path.
         let context_area = flow.cell(list, "Context menu (cursor anchored)", 700.0, 150.0);
@@ -2050,6 +2109,198 @@ fn render_widget_gallery() {
                     &mut view_input,
                     |i| rows[i],
                 );
+            }
+        }
+
+        // ---- GroupList · Thumb · status dot · hue chip (V2 sidebar) -----
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(
+                list,
+                "GroupList — grouped sessions · Thumb · status dots · hue chips",
+            );
+            use wgpu_gameui::{
+                GroupHeader, GroupItem, GroupLayout, GroupList, GroupListState, GroupMore,
+                GroupRow, Status, Thumb, hue_chip, status_dot,
+            };
+            let s = StyleResolver::new(&theme);
+            let rows = [
+                GroupRow::Header(
+                    GroupHeader::new("agent-ui")
+                        .count("3 / 5")
+                        .thumb(Thumb::new().name("agent-ui")),
+                ),
+                GroupRow::Item(
+                    GroupItem::new("Session context menu close option")
+                        .subtitle("@merry-tiger · 447 msgs · 1 comp")
+                        .chip("claude opus", 45.0)
+                        .meta("now")
+                        .status(Status::Running),
+                ),
+                GroupRow::Item(
+                    GroupItem::new("README repo description")
+                        .subtitle("@warm-otter · 6002 msgs · 15 comp")
+                        .chip("claude opus", 45.0)
+                        .meta("40m"),
+                ),
+                GroupRow::Item(
+                    GroupItem::new("Async I/O audit (all kinds)")
+                        .subtitle("@brisk-lynx · 1204 msgs · 3 comp")
+                        .chip("gothab · codex", 255.0)
+                        .meta("1h")
+                        .status(Status::Unread),
+                ),
+                GroupRow::More(GroupMore::new("2 older", "3d – 8d")),
+                GroupRow::Header(
+                    GroupHeader::new("AJME-54")
+                        .count("1 / 1")
+                        .thumb(Thumb::new().name("AJME-54")),
+                ),
+                GroupRow::Item(
+                    GroupItem::new("The human has a comment on PR 12")
+                        .subtitle("@calm-fox · 1169 msgs · 9 comp")
+                        .chip("claude opus", 45.0)
+                        .meta("6m")
+                        .status(Status::Waiting),
+                ),
+                GroupRow::Header(
+                    GroupHeader::new("quiet projects")
+                        .count("2")
+                        .thumb(Thumb::new().glyph(PhosphorIcon::Rows))
+                        .mono(false)
+                        .dim(true),
+                ),
+                GroupRow::Header(
+                    GroupHeader::new("claude-code-ui")
+                        .count("1")
+                        .open(true)
+                        .depth(1)
+                        .thumb(Thumb::new().name("claude-code-ui")),
+                ),
+                GroupRow::Item(
+                    GroupItem::new("86d6a50a")
+                        .subtitle("@wise-otter · 197 msgs")
+                        .chip("claude opus", 45.0)
+                        .meta("9d")
+                        .dim(true)
+                        .depth(1),
+                ),
+                GroupRow::Header(
+                    GroupHeader::new("dotfiles")
+                        .count("1")
+                        .open(false)
+                        .depth(1)
+                        .thumb(Thumb::new().name("dotfiles")),
+                ),
+            ];
+            let layout = GroupLayout::from_kinds(rows.iter().map(GroupRow::kind));
+            // (label, selected, hovered row)
+            let cases = [
+                (
+                    "Sidebar · selected · running · waiting · unread",
+                    Some(2),
+                    None,
+                ),
+                ("Hovered row (⋯ key)", Some(1), Some(3)),
+            ];
+            for (label, selected, hover) in cases {
+                let r = flow.cell(list, label, 272.0, layout.height());
+                list.rounded_rect(r, 0.0, [0.06, 0.07, 0.085, 1.0]);
+                let mut input = InputState {
+                    mouse_x: hover.map_or(-1.0, |_| r.x + 120.0),
+                    mouse_y: hover.map_or(-1.0, |i| r.y + layout.top(i) + 10.0),
+                    ..InputState::default()
+                };
+                GroupList::new().draw(
+                    r,
+                    &layout,
+                    selected,
+                    &mut GroupListState::new(),
+                    list,
+                    &s,
+                    &mut input,
+                    |i| rows[i],
+                );
+            }
+
+            let r = flow.cell(
+                list,
+                "Thumb — monogram 10/14/24 · swatch · glyph · slot",
+                240.0,
+                60.0,
+            );
+            let mut x = r.x;
+            for size in [10.0, 14.0, 24.0] {
+                Thumb::new()
+                    .name("agent-ui")
+                    .size(size)
+                    .draw(x, r.y, list, &s);
+                x += size + 8.0;
+            }
+            Thumb::new()
+                .color([0.8, 0.4, 0.2, 1.0])
+                .draw(x, r.y, list, &s);
+            x += 22.0;
+            Thumb::new()
+                .glyph(PhosphorIcon::Rows)
+                .draw(x, r.y, list, &s);
+            x += 22.0;
+            Thumb::new().size(24.0).draw(x, r.y, list, &s);
+            // On an accent row.
+            let accent = Rect::new(r.x, r.y + 34.0, 240.0, 22.0);
+            list.quad(
+                accent.x,
+                accent.y,
+                accent.width,
+                accent.height,
+                theme.accent,
+            );
+            let mut x = accent.x + 6.0;
+            for thumb in [
+                Thumb::new().name("sorry-pulumi2"),
+                Thumb::new().glyph(PhosphorIcon::Folder),
+                Thumb::new(),
+            ] {
+                thumb.selected(true).draw(x, accent.y + 4.0, list, &s);
+                x += 22.0;
+            }
+
+            let r = flow.cell(
+                list,
+                "Status dots · hue chips (plain / on accent)",
+                300.0,
+                60.0,
+            );
+            let mut x = r.x + 4.0;
+            for status in [
+                Status::Running,
+                Status::Waiting,
+                Status::Unread,
+                Status::Idle,
+            ] {
+                status_dot(list, &s, (x, r.y + 8.0), status);
+                x += 16.0;
+            }
+            let mut x = r.x;
+            for (text, hue) in [
+                ("claude opus", 45.0),
+                ("vertex", 230.0),
+                ("codex", 160.0),
+                ("gothab · codex", 255.0),
+            ] {
+                x = hue_chip(list, &s, x, r.y + 22.0, text, hue, false).right() + 6.0;
+            }
+            let accent = Rect::new(r.x, r.y + 40.0, 300.0, 20.0);
+            list.quad(
+                accent.x,
+                accent.y,
+                accent.width,
+                accent.height,
+                theme.accent,
+            );
+            let mut x = accent.x + 4.0;
+            for (text, hue) in [("claude opus", 45.0), ("codex", 160.0)] {
+                x = hue_chip(list, &s, x, accent.y + 3.5, text, hue, true).right() + 6.0;
             }
         }
 
@@ -2821,6 +3072,59 @@ fn render_widget_gallery() {
             toolbar.draw(r2, &mut state, &mut capture, 0x7B02, &mut tctx2);
         }
 
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(list, "Toolbar — tooltip on hover (03-toolbar.html)");
+            use wgpu_gameui::{DragCapture, Toolbar};
+
+            let toolbar = Toolbar::new(&tip_toolbar_items);
+            let btn = theme.toolbar_button_size;
+            let pad = theme.toolbar_padding;
+            // The hovered key is the second one (Move, as in the handoff). It
+            // starts one key past the first key's preferred prefix.
+            let prefix = Toolbar::new(&tip_toolbar_items[..1]);
+            let labels = ["Docked left — hovering Move", "Docked top — hovering Snap"];
+            for (index, state) in tip_toolbars.iter_mut().enumerate() {
+                let edge = state.edge;
+                let vertical = edge.is_vertical();
+                let cross = toolbar.preferred_cross_for_edge(btn, pad, edge);
+                let extent = toolbar.preferred_extent_for_edge(btn, pad, edge);
+                // Reserve the tooltip's room on the strip's outward side so it
+                // does not paint over the neighbouring cell.
+                let (w, h) = if vertical {
+                    (cross + 80.0, extent)
+                } else {
+                    (extent + 40.0, cross + 34.0)
+                };
+                let cell = flow.cell(list, labels[index], w, h);
+                let rail = if vertical {
+                    Rect::new(cell.x, cell.y, cross, extent)
+                } else {
+                    Rect::new(cell.x, cell.y, extent, cross)
+                };
+                let (hover_id, mouse) = if vertical {
+                    let start = prefix.preferred_extent_for_edge(btn, pad, edge) - pad + 2.0;
+                    (2, [rail.x + cross * 0.5, rail.y + start + btn * 0.5])
+                } else {
+                    // Snap is the last key; hover the middle of its face.
+                    let end = extent - pad;
+                    (5, [rail.x + end - btn * 0.5, rail.y + cross * 0.5])
+                };
+                let hover = InputState {
+                    mouse_x: mouse[0],
+                    mouse_y: mouse[1],
+                    ..Default::default()
+                };
+                let mut capture = DragCapture::new();
+                // The tooltip clamps into the screen; the gallery is far taller
+                // than one window, so give it the whole canvas.
+                let mut tctx =
+                    DrawContext::new(list, &mut focus, &theme, &hover, W as f32, 100_000.0);
+                let out = toolbar.draw(rail, state, &mut capture, 0x7C00 + index as u64, &mut tctx);
+                assert_eq!(out.hovered, Some(hover_id), "{}", labels[index]);
+            }
+        }
+
         // --- App shell -------------------------------------------------------
         #[cfg(feature = "phosphor-icons")]
         {
@@ -3308,6 +3612,21 @@ fn render_widget_gallery() {
         };
         menu_state.draw_open_layers(&mut layers, slots, MENUS, &mut menu_env);
         menu_state.end_frame(&mut focus);
+    }
+
+    // Hovered toolbars: each paints its key's tooltip on a tooltip layer.
+    #[cfg(feature = "phosphor-icons")]
+    {
+        let styles = StyleResolver::new(&theme);
+        for state in &mut tip_toolbars {
+            state.draw_open_layer(
+                &mut layers,
+                None,
+                &tip_toolbar_items,
+                &styles,
+                &InputState::default(),
+            );
+        }
     }
 
     // Tooltip layer, hovering the reserved target.

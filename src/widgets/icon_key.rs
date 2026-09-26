@@ -45,6 +45,7 @@ pub struct IconKey {
     focus_id: Option<FocusId>,
     travel: Option<f32>,
     radius: Option<f32>,
+    hollow: bool,
 }
 
 impl IconKey {
@@ -66,12 +67,19 @@ impl IconKey {
             focus_id: None,
             travel: None,
             radius: None,
+            hollow: false,
         }
     }
 
     /// Wear another material [`Tone`] (ghost keys sit in headers and fields).
     pub fn tone(mut self, tone: Tone) -> Self {
         self.tone = tone;
+        self
+    }
+
+    /// Leave out the plinth under the face; see [`Button::hollow`].
+    pub fn hollow(mut self, hollow: bool) -> Self {
+        self.hollow = hollow;
         self
     }
 
@@ -158,7 +166,8 @@ impl IconKey {
         let mut button = Button::new("")
             .tone(self.tone)
             .held(self.held)
-            .enabled(self.enabled);
+            .enabled(self.enabled)
+            .hollow(self.hollow);
         if let Some(id) = self.focus_id {
             button = button.focusable(id);
         }

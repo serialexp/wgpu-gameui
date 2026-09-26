@@ -4,8 +4,9 @@
 //! clicks and hover are resolved inline; its dock chooser and overflow sheet
 //! follow the crate's deferred popup-layer protocol so they paint above the base
 //! UI and block it correctly. The grip handle's drag is arbitrated through a
-//! caller-owned [`DragCapture`]; tooltips are reported via the output for the
-//! caller's own [`TooltipLayer`](crate::TooltipLayer).
+//! caller-owned [`DragCapture`]. The hovered key's tooltip (label + shortcut,
+//! on the strip's outward side) is painted by the same overlay step, on a
+//! tooltip layer, via [`TooltipHint`].
 //!
 //! # State ownership
 //!
@@ -38,6 +39,7 @@ use crate::style::{StyleKey, StyleResolver};
 use crate::widgets::drag::{DragCapture, DragId};
 use crate::widgets::icon::Icon;
 use crate::widgets::material::{self, Material, Tone};
+use crate::widgets::tooltip::{TooltipHint, TooltipSide};
 use crate::{InputState, LayerStack};
 
 use super::{DrawContext, DrawList};
@@ -156,6 +158,20 @@ enum PopupKind {
     Overflow,
 }
 
+/// The key whose tooltip shows this frame, recorded by the base draw and
+/// painted by [`ToolbarState::draw_open_layer`] on a tooltip layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ToolHint {
+    /// Index into the toolbar's item slice.
+    item: usize,
+    /// The hovered key's layout rect, plinth travel included.
+    anchor: Rect,
+    /// Screen bounds the tooltip is kept inside.
+    viewport: Rect,
+    /// The strip's outward side, where the tooltip sits.
+    side: TooltipSide,
+}
+
 /// Caller-owned toolbar state, persisted across frames.
 pub struct ToolbarState {
     /// Which edge the toolbar currently docks to.
@@ -173,6 +189,8 @@ pub struct ToolbarState {
     popup: Option<PopupKind>,
     geom: Option<PopupGeometry>,
     next_geom: Option<PopupGeometry>,
+    /// Hovered key's tooltip, rebuilt by every base draw (same frame).
+    hint: Option<ToolHint>,
     escape: bool,
     mouse_clicked: bool,
     click_claimed: bool,
@@ -189,6 +207,7 @@ impl ToolbarState {
             popup: None,
             geom: None,
             next_geom: None,
+            hint: None,
             escape: false,
             mouse_clicked: false,
             click_claimed: false,
@@ -339,6 +358,15 @@ impl<'a> Toolbar<'a> {
         let padding = s.scalar(StyleKey::ToolbarPadding);
         let travel = s.scalar(StyleKey::Travel);
         let vertical = state.edge.is_vertical();
+        let viewport = Rect::new(
+            0.0,
+            0.0,
+            ctx.screen_width.max(0.0),
+            ctx.screen_height.max(0.0),
+        );
+        // The tooltip belongs to this frame's hover only; drawing without
+        // hovering a key must never leave last frame's tooltip behind.
+        state.hint = None;
 
         ctx.push_debug_scope_rect("Toolbar", rect);
         self.draw_rail(rect, state.edge, toolbar_chrome, ctx.draw_list);
@@ -486,7 +514,18 @@ impl<'a> Toolbar<'a> {
                     } else {
                         ToolKind::Modal
                     };
-                    self.draw_tool_button(tool, kind, tool_rect, state, &mut output, ctx);
+                    let pointer_over =
+                        self.draw_tool_button(tool, kind, tool_rect, state, &mut output, ctx);
+                    // Any in-flight drag (the grip's, or a splitter sweeping
+                    // across the strip) is not a hover, so it shows no tooltip.
+                    if pointer_over && drag_capture.is_free() && !tool.label.is_empty() {
+                        state.hint = Some(ToolHint {
+                            item: item_index,
+                            anchor: tool_rect,
+                            viewport,
+                            side: outward_side(state.edge),
+                        });
+                    }
                     cursor += tool_main_extent(button_size, travel, vertical) + ITEM_GAP;
                 }
                 ToolbarItem::Separator => {
@@ -562,12 +601,11 @@ impl<'a> Toolbar<'a> {
             state.click_claimed = true;
         }
 
-        let viewport = Rect::new(
-            0.0,
-            0.0,
-            ctx.screen_width.max(0.0),
-            ctx.screen_height.max(0.0),
-        );
+        // An open sheet owns the strip's attention; a tooltip beside it would
+        // only compete with (or sit under) the sheet.
+        if state.popup.is_some() {
+            state.hint = None;
+        }
         if let Some(kind) = state.popup {
             let anchor = if kind == PopupKind::Dock {
                 grip_rect
@@ -678,6 +716,9 @@ impl<'a> Toolbar<'a> {
         }
     }
 
+    /// Draw one key and report its hover/click. Returns whether the pointer is
+    /// over the key — disabled keys included, since their tooltip is how a user
+    /// learns what the greyed-out tool is.
     fn draw_tool_button(
         &self,
         tool: &ToolDef<'_>,
@@ -686,7 +727,7 @@ impl<'a> Toolbar<'a> {
         state: &ToolbarState,
         output: &mut ToolbarOutput,
         ctx: &mut DrawContext,
-    ) {
+    ) -> bool {
         let input = ctx.input;
         let s = ctx.styles();
 
@@ -694,8 +735,8 @@ impl<'a> Toolbar<'a> {
             ToolKind::Modal => state.active_tool == Some(tool.id),
             ToolKind::Toggle => state.toggle_is_active(tool.id),
         };
-        let hovered =
-            tool.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
+        let pointer_over = !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
+        let hovered = tool.enabled && pointer_over;
         let pressed = hovered && input.mouse_down;
         let clicked = hovered && input.mouse_clicked;
 
@@ -745,6 +786,7 @@ impl<'a> Toolbar<'a> {
                 ToolKind::Toggle => ToolbarEvent::ToggleActivated(tool.id),
             });
         }
+        pointer_over
     }
 
     fn draw_rail(
@@ -819,7 +861,9 @@ impl<'a> Toolbar<'a> {
     ) {
         let hovered =
             !ctx.input.mouse_consumed && rect.contains(ctx.input.mouse_x, ctx.input.mouse_y);
+        // Hollow, like the keys in the well beside it.
         let material = Material::new(Tone::Ghost)
+            .hollow(true)
             .hovered(hovered)
             .pressed(hovered && ctx.input.mouse_down);
         let face = material::draw_with_radius(
@@ -981,7 +1025,8 @@ pub struct ToolbarOutput {
     pub clicked: Option<u64>,
     /// Typed toolbar intent. Apply it to caller-owned application state.
     pub event: Option<ToolbarEvent>,
-    /// Tool that is hovered this frame (for external [`TooltipLayer`](crate::TooltipLayer)).
+    /// Enabled tool that is hovered this frame. Informational: the toolbar
+    /// paints its own tooltip in [`ToolbarState::draw_open_layer`].
     pub hovered: Option<u64>,
     /// Whether the grip handle is being dragged.
     pub grip_dragging: bool,
@@ -1057,10 +1102,60 @@ fn popup_rect(geometry: PopupGeometry) -> Rect {
     Rect::new(x, y.max(geometry.viewport.y), size[0], size[1])
 }
 
+/// The side of a key facing away from the edge the strip docks to.
+fn outward_side(edge: ToolbarEdge) -> TooltipSide {
+    match edge {
+        ToolbarEdge::Left => TooltipSide::Right,
+        ToolbarEdge::Right => TooltipSide::Left,
+        ToolbarEdge::Top => TooltipSide::Bottom,
+        ToolbarEdge::Bottom => TooltipSide::Top,
+    }
+}
+
 impl ToolbarState {
-    /// Draw the open dock or overflow sheet into its popup layer. `items` must be
-    /// the same borrowed item sequence passed to the toolbar's base draw.
+    /// Draw the toolbar's overlays after the base UI: the open dock or overflow
+    /// sheet into its popup layer, then the hovered key's tooltip on a tooltip
+    /// layer above it. `items` must be the same borrowed item sequence passed
+    /// to the toolbar's base draw this frame.
+    ///
+    /// The tooltip follows the Forge handoff: no delay, no fade, the key's
+    /// label with its shortcut in mono, 7px off the strip's outward side. It is
+    /// hidden while a sheet is open or a drag is in flight.
     pub fn draw_open_layer(
+        &mut self,
+        layers: &mut LayerStack,
+        popup: Option<usize>,
+        items: &[ToolbarItem<'_>],
+        style: &StyleResolver,
+        input: &InputState,
+    ) -> Option<ToolbarEvent> {
+        let event = self.draw_sheet_layer(layers, popup, items, style, input);
+        self.draw_hint_layer(layers, items, style);
+        event
+    }
+
+    /// Paint the hovered key's tooltip, if the base draw recorded one.
+    fn draw_hint_layer(
+        &self,
+        layers: &mut LayerStack,
+        items: &[ToolbarItem<'_>],
+        style: &StyleResolver,
+    ) {
+        let Some(hint) = self.hint else {
+            return;
+        };
+        let tool = match items.get(hint.item) {
+            Some(ToolbarItem::Tool(tool) | ToolbarItem::Toggle(tool)) => tool,
+            // A different item slice than the base draw saw: nothing to label.
+            Some(ToolbarItem::Separator) | None => return,
+        };
+        TooltipHint::new(tool.label)
+            .shortcut(tool.shortcut)
+            .side(hint.side)
+            .draw_into_layers(layers, style, hint.anchor, hint.viewport);
+    }
+
+    fn draw_sheet_layer(
         &mut self,
         layers: &mut LayerStack,
         popup: Option<usize>,
@@ -1950,6 +2045,191 @@ mod tests {
                 .any(|quad| quad.bg == [0.41, 0.42, 0.43, 1.0])
         );
         assert_eq!(layers.layers()[0].list.shadow_instance_count(), 2);
+    }
+
+    // --- Tooltip ---------------------------------------------------------
+
+    /// The toolbar rect and the first key's centre for a strip docked to `edge`
+    /// of the 800×600 test screen. Each strip starts 100px along its edge so a
+    /// tooltip centred on the first key is not clamped by the screen corner.
+    fn docked(edge: ToolbarEdge) -> (Rect, [f32; 2]) {
+        let along_v = 100.0 + 2.0 + grip_main_extent(true) + ITEM_GAP + 13.0;
+        let along_h = 100.0 + 2.0 + grip_main_extent(false) + ITEM_GAP + 13.0;
+        match edge {
+            ToolbarEdge::Left => (Rect::new(0.0, 100.0, 28.0, 200.0), [14.0, along_v]),
+            ToolbarEdge::Right => (Rect::new(772.0, 100.0, 28.0, 200.0), [786.0, along_v]),
+            ToolbarEdge::Top => (Rect::new(100.0, 0.0, 300.0, 28.0), [along_h, 14.0]),
+            ToolbarEdge::Bottom => (Rect::new(100.0, 572.0, 300.0, 28.0), [along_h, 586.0]),
+        }
+    }
+
+    /// The tooltip layer one frame produced: its rect and text contents.
+    struct Tip {
+        rect: Rect,
+        texts: Vec<String>,
+    }
+
+    /// Draw one frame (base + overlays) and return the tooltip layer, if any.
+    fn frame_tooltip(
+        items: &[ToolbarItem<'_>],
+        state: &mut ToolbarState,
+        capture: &mut DragCapture,
+        input: &crate::InputState,
+    ) -> Option<Tip> {
+        let theme = Theme::default();
+        let mut focus = FocusState::default();
+        let mut base = DrawList::new();
+        let (rect, _) = docked(state.edge);
+        Toolbar::new(items).draw(
+            rect,
+            state,
+            capture,
+            99,
+            &mut ctx(&mut base, &mut focus, &theme, input),
+        );
+        let mut layers = LayerStack::new();
+        state.draw_open_layer(&mut layers, None, items, &StyleResolver::new(&theme), input);
+        let layer = layers
+            .layers()
+            .iter()
+            .find(|l| l.kind == crate::layer::LayerKind::Tooltip)?;
+        Some(Tip {
+            rect: layer.rect,
+            texts: layer.list.texts.iter().map(|t| t.content.clone()).collect(),
+        })
+    }
+
+    fn hover(point: [f32; 2]) -> crate::InputState {
+        crate::InputState {
+            mouse_x: point[0],
+            mouse_y: point[1],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hovered_key_shows_its_label_and_shortcut() {
+        let items = sample_items();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let (_, key) = docked(ToolbarEdge::Left);
+        let tip = frame_tooltip(&items, &mut state, &mut DragCapture::new(), &hover(key))
+            .expect("hovering a key shows its tooltip");
+        assert_eq!(tip.texts, ["Add", "A"]);
+    }
+
+    #[test]
+    fn tooltip_sits_seven_px_off_the_strips_outward_side() {
+        let items = sample_items();
+        for edge in [
+            ToolbarEdge::Left,
+            ToolbarEdge::Right,
+            ToolbarEdge::Top,
+            ToolbarEdge::Bottom,
+        ] {
+            let mut state = ToolbarState::new(edge);
+            let (rail, key) = docked(edge);
+            let tip = frame_tooltip(&items, &mut state, &mut DragCapture::new(), &hover(key))
+                .unwrap_or_else(|| panic!("{edge:?}: tooltip expected"))
+                .rect;
+            let anchor = state.hint.expect("hint recorded").anchor;
+            assert!(
+                anchor.contains(key[0], key[1]),
+                "anchored to the hovered key"
+            );
+            // 7px off the key's outward face, clear of the rail itself.
+            match edge {
+                ToolbarEdge::Left => {
+                    assert_eq!(tip.x, anchor.right() + 7.0);
+                    assert!(tip.x >= rail.right());
+                }
+                ToolbarEdge::Right => {
+                    assert_eq!(tip.right(), anchor.x - 7.0);
+                    assert!(tip.right() <= rail.x);
+                }
+                ToolbarEdge::Top => {
+                    assert_eq!(tip.y, anchor.bottom() + 7.0);
+                    assert!(tip.y >= rail.bottom());
+                }
+                ToolbarEdge::Bottom => {
+                    assert_eq!(tip.bottom(), anchor.y - 7.0);
+                    assert!(tip.bottom() <= rail.y);
+                }
+            }
+            // Centred on the key along the strip.
+            let (centre, key_centre) = if edge.is_vertical() {
+                (tip.y + tip.height * 0.5, anchor.y + anchor.height * 0.5)
+            } else {
+                (tip.x + tip.width * 0.5, anchor.x + anchor.width * 0.5)
+            };
+            assert!((centre - key_centre).abs() < 1e-3, "{edge:?}: {tip:?}");
+        }
+    }
+
+    #[test]
+    fn tooltip_follows_this_frames_hover_only() {
+        let items = sample_items();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let (_, key) = docked(ToolbarEdge::Left);
+        assert!(frame_tooltip(&items, &mut state, &mut capture, &hover(key)).is_some());
+        assert!(
+            frame_tooltip(&items, &mut state, &mut capture, &hover([400.0, 400.0])).is_none(),
+            "moving off the key hides the tooltip on the very next frame"
+        );
+    }
+
+    #[test]
+    fn no_tooltip_over_the_grip_or_with_consumed_input() {
+        let items = sample_items();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        let (rail, _) = docked(ToolbarEdge::Left);
+        let grip = [14.0, rail.y + 2.0 + grip_main_extent(true) * 0.5];
+        assert!(frame_tooltip(&items, &mut state, &mut capture, &hover(grip)).is_none());
+
+        let (_, key) = docked(ToolbarEdge::Left);
+        let mut input = hover(key);
+        input.mouse_consumed = true;
+        assert!(frame_tooltip(&items, &mut state, &mut capture, &input).is_none());
+    }
+
+    #[test]
+    fn no_tooltip_while_a_drag_is_in_flight() {
+        let items = sample_items();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let mut capture = DragCapture::new();
+        // Some other widget (a splitter, say) owns the pointer and sweeps
+        // across the strip with the button held.
+        assert!(capture.try_begin(1234));
+        let (_, key) = docked(ToolbarEdge::Left);
+        let mut input = hover(key);
+        input.mouse_down = true;
+        assert!(frame_tooltip(&items, &mut state, &mut capture, &input).is_none());
+    }
+
+    #[test]
+    fn no_tooltip_while_a_sheet_is_open() {
+        let items = sample_items();
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        state.popup = Some(PopupKind::Dock);
+        let (_, key) = docked(ToolbarEdge::Left);
+        assert!(frame_tooltip(&items, &mut state, &mut DragCapture::new(), &hover(key)).is_none());
+    }
+
+    #[test]
+    fn disabled_key_still_explains_itself() {
+        let items = vec![ToolbarItem::Tool(ToolDef {
+            id: 1,
+            icon: Icon::new(crate::render::PhosphorIcon::Plus),
+            label: "Add",
+            shortcut: "A",
+            enabled: false,
+        })];
+        let mut state = ToolbarState::new(ToolbarEdge::Left);
+        let (_, key) = docked(ToolbarEdge::Left);
+        let tip = frame_tooltip(&items, &mut state, &mut DragCapture::new(), &hover(key))
+            .expect("a disabled key still shows its tooltip");
+        assert_eq!(tip.texts, ["Add", "A"]);
     }
 
     #[test]

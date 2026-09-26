@@ -137,6 +137,7 @@ impl ImageButton {
                     hovered,
                     pressed,
                     tone: Tone::default(),
+                    hollow: false,
                 },
             );
         }

@@ -326,14 +326,16 @@ impl NumberInput {
             let can_click = !mouse_consumed;
             // Square corners so the steppers sit flush against the field and each
             // other without rounded inner edges.
-            // The design's steppers are hollow (ghost) keys with 1px travel —
-            // transparent at rest, only showing a face on hover/press. The
-            // border-left separator is drawn once below; each half gets a
-            // compact triangular caret.
+            // Hollow ghost keys with 1px travel: no plinth, transparent at
+            // rest, only showing a face on hover/press. (The design's
+            // steppers are hollow default-tone keys, with a raised face at
+            // rest; see TODO.md.) The border-left separator is drawn once
+            // below; each half gets a compact triangular caret.
             let stepper_btn = || {
                 Button::new("")
                     .with_radius(0.0)
                     .tone(Tone::Ghost)
+                    .hollow(true)
                     .with_travel(1.0)
             };
             #[cfg(feature = "phosphor-icons")]

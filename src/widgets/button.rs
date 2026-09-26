@@ -32,6 +32,8 @@ pub(crate) struct ButtonVisual {
     pub pressed: bool,
     /// Which face the chrome wears (default neutral).
     pub tone: Tone,
+    /// No plinth under the face (see [`Material::hollow`]).
+    pub hollow: bool,
 }
 
 impl ButtonVisual {
@@ -73,7 +75,8 @@ pub(crate) fn draw_chrome(
         .enabled(v.enabled)
         .hovered(v.hovered)
         .pressed(v.pressed)
-        .travel(travel);
+        .travel(travel)
+        .hollow(v.hollow);
     material::draw_with_radius(list, s, rect, radius, &m);
 }
 
@@ -201,6 +204,8 @@ pub struct Button {
     travel: Option<f32>,
     /// Wear the pressed face while not being pressed (a latched key).
     held: bool,
+    /// No plinth under the face (see [`Material::hollow`]).
+    hollow: bool,
 }
 
 impl Button {
@@ -216,6 +221,7 @@ impl Button {
             anim_id: None,
             travel: None,
             held: false,
+            hollow: false,
         }
     }
 
@@ -279,10 +285,18 @@ impl Button {
 
     /// Paint this button in a non-default material
     /// [`Tone`](super::material::Tone): `Accent` (primary, teal gradient face),
-    /// `Danger` (destructive, red gradient face), or `Ghost` (transparent until
-    /// hovered — toolbar/menu keys).
+    /// `Danger` (destructive, red gradient face), or `Ghost` (a transparent
+    /// face on the plinth — header, field and inline keys).
     pub fn tone(mut self, tone: Tone) -> Self {
         self.tone = Some(tone);
+        self
+    }
+
+    /// Leave out the plinth under the face (the design's `hollow` keys,
+    /// such as steppers and keys sunk in a well). A hollow ghost key only
+    /// shows a face while hovered or pressed.
+    pub fn hollow(mut self, hollow: bool) -> Self {
+        self.hollow = hollow;
         self
     }
 
@@ -380,6 +394,7 @@ impl Button {
             hovered,
             pressed: looks_pressed,
             tone,
+            hollow: self.hollow,
         };
 
         // `styles()` returns an 'a-lifetimed resolver that borrows nothing of
@@ -493,6 +508,7 @@ impl Button {
                 hovered,
                 pressed,
                 tone: Tone::default(),
+                hollow: false,
             },
         );
         draw_label(list, &s, rect, label, enabled, Tone::default());

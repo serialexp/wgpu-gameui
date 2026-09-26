@@ -300,6 +300,8 @@ pub struct MenuItem<'a> {
     separator: bool,
     enabled: bool,
     checked: bool,
+    danger: bool,
+    reason: Option<&'a str>,
     accel: Option<Accelerator>,
     accel_text: Option<&'a str>,
 }
@@ -314,6 +316,8 @@ impl<'a> MenuItem<'a> {
             separator: false,
             enabled: true,
             checked: false,
+            danger: false,
+            reason: None,
             accel: None,
             accel_text: None,
         }
@@ -328,6 +332,8 @@ impl<'a> MenuItem<'a> {
             separator: true,
             enabled: false,
             checked: false,
+            danger: false,
+            reason: None,
             accel: None,
             accel_text: None,
         }
@@ -357,6 +363,22 @@ impl<'a> MenuItem<'a> {
     /// Render a check mark in the item's check gutter.
     pub const fn checked(mut self, on: bool) -> Self {
         self.checked = on;
+        self
+    }
+
+    /// Mark a destructive action: its label is drawn in the danger ink
+    /// (until it's highlighted, when it wears the accent like any row).
+    pub const fn danger(mut self, on: bool) -> Self {
+        self.danger = on;
+        self
+    }
+
+    /// Why the item is disabled, shown to the user when they point at it
+    /// (see [`MenuBarState::hovered_reason`](super::MenuBarState::hovered_reason)
+    /// and [`ContextMenuState::hovered_reason`](crate::ContextMenuState::hovered_reason)).
+    /// Ignored while the item is enabled.
+    pub const fn reason(mut self, reason: &'a str) -> Self {
+        self.reason = Some(reason);
         self
     }
 
@@ -394,6 +416,17 @@ impl<'a> MenuItem<'a> {
     /// Whether the item is checked (and so draws its check mark).
     pub fn is_checked(&self) -> bool {
         self.checked
+    }
+
+    /// Whether the item is a destructive action.
+    pub fn is_danger(&self) -> bool {
+        self.danger
+    }
+
+    /// Why the item is disabled: the [`reason`](Self::reason) of a disabled
+    /// item, `None` for an enabled item or a separator.
+    pub fn disabled_reason(&self) -> Option<&'a str> {
+        self.reason.filter(|_| !self.enabled && !self.separator)
     }
 
     /// Whether this item opens a child column rather than activating.

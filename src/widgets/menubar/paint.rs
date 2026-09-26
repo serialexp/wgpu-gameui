@@ -289,6 +289,10 @@ pub(super) fn draw_columns<'a>(
             // Text and geometry colours are both plain sRGB (see `crate::color`).
             let disabled_text = (0x5d, 0x65, 0x6c);
             let text = (0xdb, 0xe1, 0xe7);
+            let danger_text = {
+                let [r, g, b, _] = crate::color::to_rgba8(s.color(StyleKey::DangerText));
+                (r, g, b)
+            };
             let selected_bg = s.color(StyleKey::Accent);
             let tick = s.color(StyleKey::AccentTick);
             // Forge `--ink-shortcut`: shortcut hints and submenu arrows.
@@ -377,6 +381,8 @@ pub(super) fn draw_columns<'a>(
                     disabled_text
                 } else if highlighted {
                     (4, 20, 24)
+                } else if row.danger {
+                    danger_text
                 } else {
                     text
                 };

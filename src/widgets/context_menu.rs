@@ -65,6 +65,8 @@ pub struct ContextMenuState {
     previous_pointer: Option<(f32, f32)>,
     last_pointer: Option<(f32, f32)>,
     depth_truncations: usize,
+    /// The row height the open columns were last laid out with.
+    row_h: f32,
     up: bool,
     down: bool,
     left: bool,
@@ -153,6 +155,50 @@ impl ContextMenuState {
     /// Number of child-open attempts truncated at [`MAX_MENU_DEPTH`].
     pub fn depth_truncations(&self) -> usize {
         self.depth_truncations
+    }
+
+    /// The [`reason`](MenuItem::reason) of the disabled item under the point
+    /// `(x, y)` in an open column, with the item's row rect, so the host can
+    /// show it as a tooltip. `menu` must be the menu last drawn. `None` when
+    /// the menu is closed or the point isn't on a disabled item with a reason.
+    pub fn hovered_reason<'m>(
+        &self,
+        menu: &ContextMenu<'m>,
+        x: f32,
+        y: f32,
+    ) -> Option<(&'m str, Rect)> {
+        if !self.open || self.row_h <= 0.0 {
+            return None;
+        }
+        let mut items = menu.items;
+        for (level, rect) in self.rects.iter().enumerate() {
+            if level > 0 {
+                items = items.get(*self.open_path.get(level - 1)?)?.children();
+            }
+            if !rect.contains(x, y) {
+                continue;
+            }
+            let mut top = rect.y + SHEET_PADDING;
+            for item in items {
+                let height = if item.is_separator() {
+                    SEPARATOR_HEIGHT
+                } else {
+                    self.row_h
+                };
+                let row = Rect::new(
+                    rect.x + SHEET_PADDING,
+                    top,
+                    rect.width - SHEET_PADDING * 2.0,
+                    height,
+                );
+                if row.contains(x, y) {
+                    return item.disabled_reason().map(|reason| (reason, row));
+                }
+                top += height;
+            }
+            return None;
+        }
+        None
     }
 
     /// Capture navigation intents used by an open menu. Call before focus and
@@ -307,6 +353,7 @@ impl ContextMenuState {
         }
 
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
+        self.row_h = row_h;
         layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
         let keyboard_handled =
             self.up || self.down || self.left || self.right || self.confirm || self.cancel;
@@ -674,6 +721,9 @@ fn paint_items(
             (0x5d, 0x65, 0x6c)
         } else if selected {
             (4, 20, 24)
+        } else if item.is_danger() {
+            let [r, g, b, _] = crate::color::to_rgba8(styles.color(StyleKey::DangerText));
+            (r, g, b)
         } else {
             (0xdb, 0xe1, 0xe7)
         };
@@ -1210,5 +1260,73 @@ mod tests {
             .expect("activation");
         assert_eq!(activation.id, 7);
         assert!(!state.is_open());
+    }
+
+    #[test]
+    fn danger_rows_use_the_danger_ink_until_highlighted() {
+        const ROWS: &[MenuItem<'static>] = &[
+            MenuItem::new("Rename…"),
+            MenuItem::new("Close Session").danger(true),
+        ];
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let menu = ContextMenu::new(ROWS);
+        let rect = Rect::new(0.0, 0.0, 218.0, 60.0);
+        let ink = |list: &DrawList, label: &str| {
+            list.texts
+                .iter()
+                .find(|t| t.content == label)
+                .unwrap()
+                .color
+                .as_rgba()
+        };
+        let mut list = DrawList::new();
+        paint_items(&mut list, rect, menu.items, menu.platform, &styles, None);
+        assert_eq!(
+            ink(&list, "Close Session"),
+            crate::color::to_rgba8(theme.danger_text)
+        );
+        assert_eq!(ink(&list, "Rename…"), [0xdb, 0xe1, 0xe7, 0xff]);
+        let mut list = DrawList::new();
+        paint_items(&mut list, rect, menu.items, menu.platform, &styles, Some(1));
+        assert_eq!(ink(&list, "Close Session"), [4, 20, 24, 0xff]);
+    }
+
+    #[test]
+    fn a_disabled_row_reports_its_reason_under_the_pointer() {
+        const ROWS: &[MenuItem<'static>] = &[
+            MenuItem::new("Rename…")
+                .enabled(false)
+                .reason("not available yet"),
+            MenuItem::new("Regenerate Title").enabled(false),
+            MenuItem::new("Close Session").reason("ignored while enabled"),
+        ];
+        let theme = Theme::default();
+        let menu = ContextMenu::new(ROWS);
+        let mut state = ContextMenuState::new();
+        state.open_at(20.0, 20.0);
+        assert_eq!(
+            state.hovered_reason(&menu, 40.0, 30.0),
+            None,
+            "not laid out yet"
+        );
+        context_frame(&mut state, &menu, &theme, InputState::default(), 0.0);
+        let rect = state.rect().unwrap();
+        let row_h = theme
+            .get(StyleKey::MenuRowHeight)
+            .unwrap()
+            .as_scalar()
+            .unwrap();
+        let row_y = |i: f32| rect.y + SHEET_PADDING + row_h * (i + 0.5);
+        let (reason, row) = state
+            .hovered_reason(&menu, rect.x + 30.0, row_y(0.0))
+            .expect("the disabled row's reason");
+        assert_eq!(reason, "not available yet");
+        assert_eq!(row.y, rect.y + SHEET_PADDING);
+        assert_eq!(state.hovered_reason(&menu, rect.x + 30.0, row_y(1.0)), None);
+        assert_eq!(state.hovered_reason(&menu, rect.x + 30.0, row_y(2.0)), None);
+        assert_eq!(state.hovered_reason(&menu, rect.x - 5.0, row_y(0.0)), None);
+        state.close();
+        assert_eq!(state.hovered_reason(&menu, rect.x + 30.0, row_y(0.0)), None);
     }
 }

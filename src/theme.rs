@@ -226,6 +226,14 @@ pub struct Theme {
     pub well_deep: [f32; 4],
     /// Hard black edge around sunken boxes.
     pub edge_hard: [f32; 4],
+    /// A healthy or running state (status dots, a connected light).
+    pub status_ok: [f32; 4],
+    /// A state waiting on the user (status dots, warning meta text).
+    pub warn_meta: [f32; 4],
+    /// Something new and unseen (unread dots, dirty tabs).
+    pub accent_dirty: [f32; 4],
+    /// Text of a destructive action (danger menu rows).
+    pub danger_text: [f32; 4],
     /// Type scale in pixels, indexed by [`TextSize`](crate::TextSize).
     pub text_sizes: [f32; crate::TextSize::ALL.len()],
     /// Letter spacing in em, indexed by [`Tracking`](crate::Tracking).
@@ -416,6 +424,10 @@ impl Default for Theme {
             row_held: [1.0, 1.0, 1.0, 0.1],
             well_deep: [0.0, 0.0, 0.0, 0.4],
             edge_hard: [0.0, 0.0, 0.0, 0.65],
+            status_ok: oklch(0.7, 0.14, 145.0, 1.0),
+            warn_meta: oklch(0.82, 0.13, 75.0, 1.0),
+            accent_dirty: oklch(0.78, 0.12, 200.0, 1.0),
+            danger_text: oklch(0.72, 0.15, 25.0, 1.0),
             // `typography.css`: caption, meta, dense, row, menu.
             text_sizes: [9.0, 10.0, 10.5, 11.0, 11.5],
             // Badge, prop, caption, section, brand.
@@ -709,6 +721,10 @@ impl Theme {
             RowHeld => StyleValue::Color(self.row_held),
             WellDeep => StyleValue::Color(self.well_deep),
             EdgeHard => StyleValue::Color(self.edge_hard),
+            StatusOk => StyleValue::Color(self.status_ok),
+            WarnMeta => StyleValue::Color(self.warn_meta),
+            AccentDirty => StyleValue::Color(self.accent_dirty),
+            DangerText => StyleValue::Color(self.danger_text),
             TextSize(step) => StyleValue::Scalar(self.text_sizes[step as usize]),
             Tracking(role) => StyleValue::Scalar(self.tracking[role as usize]),
             ListRowHeight => StyleValue::Scalar(self.list_row_height),
@@ -814,6 +830,10 @@ impl Theme {
             (RowHeld, StyleValue::Color(c)) => self.row_held = c,
             (WellDeep, StyleValue::Color(c)) => self.well_deep = c,
             (EdgeHard, StyleValue::Color(c)) => self.edge_hard = c,
+            (StatusOk, StyleValue::Color(c)) => self.status_ok = c,
+            (WarnMeta, StyleValue::Color(c)) => self.warn_meta = c,
+            (AccentDirty, StyleValue::Color(c)) => self.accent_dirty = c,
+            (DangerText, StyleValue::Color(c)) => self.danger_text = c,
             (TextSize(step), StyleValue::Scalar(s)) => self.text_sizes[step as usize] = s,
             (Tracking(role), StyleValue::Scalar(s)) => self.tracking[role as usize] = s,
             (ListRowHeight, StyleValue::Scalar(s)) => self.list_row_height = s,

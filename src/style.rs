@@ -255,6 +255,15 @@ pub enum StyleKey {
     WellDeep,
     /// Hard black edge around sunken boxes (`--edge-hard`).
     EdgeHard,
+    /// A healthy or running state: a status dot, a connected light (`--ok`).
+    StatusOk,
+    /// A state waiting on the user, as a dot or meta text (`--warn-meta`).
+    WarnMeta,
+    /// Something new and unseen: an unread dot, a dirty tab (`--accent-dirty`).
+    AccentDirty,
+    /// Text of a destructive action, such as a danger menu row
+    /// (`--danger-text`).
+    DangerText,
     // --- Forge roles (scalars) ---
     /// One step of Forge's type scale, in pixels (see [`TextSize`]).
     TextSize(TextSize),
@@ -344,6 +353,10 @@ impl StyleKey {
                 | RowHeld
                 | WellDeep
                 | EdgeHard
+                | StatusOk
+                | WarnMeta
+                | AccentDirty
+                | DangerText
         )
     }
 }
@@ -520,6 +533,7 @@ pub struct StyleOverlay {
     toolbar: Option<crate::ToolbarChrome>,
     dock: Option<crate::DockChrome>,
     dock_section: Option<crate::DockSectionChrome>,
+    group_list: Option<crate::GroupListChrome>,
     scrollbar: Option<crate::ScrollbarChrome>,
     splitter: Option<crate::SplitterChrome>,
     status_bar: Option<crate::StatusBarChrome>,
@@ -611,6 +625,15 @@ impl StyleOverlay {
     pub fn dock_section(&self) -> Option<crate::DockSectionChrome> {
         self.dock_section
     }
+    /// Override grouped-list chrome.
+    pub fn set_group_list(&mut self, value: crate::GroupListChrome) -> &mut Self {
+        self.group_list = Some(value);
+        self
+    }
+    /// Return the grouped-list override.
+    pub fn group_list(&self) -> Option<crate::GroupListChrome> {
+        self.group_list
+    }
     /// Override scrollbar chrome.
     pub fn set_scrollbar(&mut self, value: crate::ScrollbarChrome) -> &mut Self {
         self.scrollbar = Some(value);
@@ -701,6 +724,7 @@ impl StyleOverlay {
             && self.toolbar.is_none()
             && self.dock.is_none()
             && self.dock_section.is_none()
+            && self.group_list.is_none()
             && self.scrollbar.is_none()
             && self.splitter.is_none()
             && self.status_bar.is_none()
@@ -721,6 +745,7 @@ impl StyleOverlay {
         self.toolbar = None;
         self.dock = None;
         self.dock_section = None;
+        self.group_list = None;
         self.scrollbar = None;
         self.splitter = None;
         self.status_bar = None;
@@ -840,6 +865,12 @@ impl<'a> StyleResolver<'a> {
         self.overlay
             .and_then(StyleOverlay::dock_section)
             .unwrap_or(self.theme.chrome.dock_section)
+    }
+    /// Resolve grouped-list chrome in O(1).
+    pub fn group_list(&self) -> crate::GroupListChrome {
+        self.overlay
+            .and_then(StyleOverlay::group_list)
+            .unwrap_or(self.theme.chrome.group_list)
     }
     /// Resolve scrollbar chrome in O(1).
     pub fn scrollbar(&self) -> crate::ScrollbarChrome {
@@ -1043,6 +1074,10 @@ pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::RowHeld,
     StyleKey::WellDeep,
     StyleKey::EdgeHard,
+    StyleKey::StatusOk,
+    StyleKey::WarnMeta,
+    StyleKey::AccentDirty,
+    StyleKey::DangerText,
 ];
 
 #[cfg(test)]

@@ -74,6 +74,11 @@ name = "lua_highlight_probe"
 path = "examples/lua_highlight_probe.rs"
 required-features = ["syntax-lua", "headless"]
 
+# CPU-only scale tests of widgets behind a feature.
+[[test]]
+name = "group_list_performance"
+required-features = ["phosphor-icons"]
+
 # GPU tests that create their own device through `HeadlessGpu`.
 [[test]]
 name = "alignment_gallery"
