@@ -2193,7 +2193,9 @@ Coverage 67 of 77.
   The ghost goes on top: `draw_ghost_layer(&mut LayerStack, ..)` (a tooltip
   layer, never takes input) or `draw_ghost(&mut DrawList, ..)`. A press
   that never moves reorders nothing. `DRAG_ROW_HEIGHT`. Rows past the
-  well's bottom aren't drawn, so a long list costs only its visible rows.
+  well's bottom aren't drawn, so a long list costs only its visible rows
+  (bench `drag_list` in `ui_stress`: ~4 µs a frame at 1,000 and at 100,000
+  items).
 - `material::draw_deep_well` / `deep_well_ink` (crate-internal): the tall
   sunken well shared by DragList and AlertDialog's detail block.
 - `DrawList::dot_grid(origin, (cols, rows), dot, pitch, color) -> Rect`,

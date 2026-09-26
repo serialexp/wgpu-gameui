@@ -43,8 +43,8 @@ use wgpu_gameui::{
     TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
 };
 use wgpu_gameui::{
-    INSPECTOR_WIDTH, Inspector, InspectorSelection, InspectorState, PropertyGroup, PropertyRow,
-    PropertyScrub,
+    DragItem, DragList, DragListState, INSPECTOR_WIDTH, Inspector, InspectorSelection,
+    InspectorState, PropertyGroup, PropertyRow, PropertyScrub,
 };
 #[cfg(feature = "syntax-lua")]
 use wgpu_gameui::{SyntaxHighlighting, SyntaxTheme};
@@ -1068,6 +1068,44 @@ fn bench_inspector(c: &mut Criterion) {
     group.finish();
 }
 
+/// CPU-only cost of one `DragList` frame with `count` items in a 400 px
+/// well. Rows past the well's bottom aren't drawn, so the cost should stay
+/// flat as `count` grows; budget ≤ 0.1 ms at any count.
+fn bench_drag_list(c: &mut Criterion) {
+    let harness = Harness::new();
+    let theme = Theme::default();
+    let input = InputState::default();
+    let mut list = harness.draw_list();
+    let counts: &[usize] = &[10, 1_000, 100_000];
+    let labels: Vec<String> = (0..100_000).map(|i| format!("Layer {i}")).collect();
+
+    let mut group = c.benchmark_group("drag_list");
+    for &count in counts {
+        group.throughput(Throughput::Elements(count as u64));
+        let items: Vec<DragItem> = labels[..count].iter().map(|l| DragItem::new(l)).collect();
+        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
+            let drag_list = DragList::new(&items);
+            let mut state = DragListState::new();
+            let mut capture = DragCapture::default();
+            b.iter(|| {
+                list.clear();
+                let mut focus = FocusState::new();
+                let mut ctx =
+                    DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
+                drag_list.draw(
+                    1,
+                    Rect::new(0.0, 0.0, 240.0, 400.0),
+                    &mut state,
+                    &mut capture,
+                    &mut ctx,
+                );
+                std::hint::black_box(&list);
+            });
+        });
+    }
+    group.finish();
+}
+
 /// CPU-only cost of drawing one virtualized `List` with `count` logical items
 /// (the widget draws only the visible subset). Measures the culling + selection +
 /// scroll interaction cost, not the item closure (which is a no-op label).
@@ -1442,6 +1480,7 @@ criterion_group!(
     bench_lua_syntax_highlighting,
     bench_scroll_view,
     bench_inspector,
+    bench_drag_list,
     bench_list_virtual,
     bench_table,
     bench_ui_context_frame,
