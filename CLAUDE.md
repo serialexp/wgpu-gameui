@@ -19,15 +19,18 @@ A widget isn't done until **all** of these are true — treat it as the checklis
    `DrawList` (inspect `list.icons` / `list.vertices`) — no GPU needed. Respect
    `InputState::mouse_consumed` for anything clickable (layer capture).
 3. **Widget gallery.** Add a row to `tests/widget_gallery.rs` so the widget is
-   visible in the rendered PNG. This is mandatory, not optional — the gallery is
-   how we eyeball every widget at once and catch layout/visual regressions.
+   visible in the rendered gallery. This is mandatory, not optional — the gallery
+   is how we eyeball every widget and catch layout/visual regressions.
    Render and *look at the result*:
    ```
    DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
    ```
-   Writes `test_output/widget_gallery.png`. Rendering it has already caught real
-   bugs (e.g. a too-large default padding that shrank an icon to a speck) that
-   the unit tests passed straight through — so don't skip the eyeball pass.
+   Writes one PNG per section to `test_output/widget_gallery/<section>.png`, one
+   per labeled cell to `test_output/widget_gallery/components/`, and
+   `test_output/widget_gallery/index.html` to browse them (filter, zoom). Open
+   your section's PNG and look at it. Rendering has already caught real bugs
+   (e.g. a too-large default padding that shrank an icon to a speck) that the
+   unit tests passed straight through — so don't skip the eyeball pass.
 4. **TODO.md.** Check off the item and note the resulting API.
 
 ## Conventions

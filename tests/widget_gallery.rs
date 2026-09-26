@@ -1,12 +1,13 @@
-//! Headless offscreen render of all widgets → PNG for visual inspection.
+//! Headless offscreen render of all widgets → PNGs for visual inspection.
 //!
 //! Ignored by default (needs a GPU adapter). Run with:
 //! ```
 //! cargo test -p wgpu-gameui --test widget_gallery -- --ignored --nocapture
 //! ```
-//! Writes `test_output/widget_gallery.png`, one focused image per section under
-//! `test_output/widget_gallery/`, and one image per labeled component preview
-//! under `test_output/widget_gallery/components/`.
+//! Writes one focused image per section under `test_output/widget_gallery/`,
+//! one image per labeled component preview under
+//! `test_output/widget_gallery/components/`, and
+//! `test_output/widget_gallery/index.html` to browse them all.
 //!
 //! Layout is driven by [`Flow`] — a left-to-right, wrapping grid of labeled
 //! cells. Each preview reserves a cell (which draws its label) and gets back a
@@ -112,7 +113,7 @@ impl Flow {
         }
         let file_stem = section_file_stem(title);
         self.sections
-            .push(GallerySection::new(file_stem.clone(), section_top));
+            .push(GallerySection::new(title, file_stem.clone(), section_top));
         self.current_section = Some(file_stem);
         self.cur_y += 24.0;
         section_top
@@ -147,7 +148,7 @@ impl Flow {
                 .as_deref()
                 .expect("gallery cells must belong to a section");
             self.components
-                .push(GalleryComponent::new(section, label, content));
+                .push(GalleryComponent::new(section, label, content, cell_w));
         }
         self.cur_x += cell_w + self.col_gap;
         self.row_h = self.row_h.max(LABEL_H + h);
@@ -174,26 +175,34 @@ impl Flow {
 
 #[derive(Clone)]
 struct GallerySection {
+    /// The section heading, as drawn.
+    title: String,
     file_stem: String,
     top: f32,
     bottom: f32,
 }
 
 struct GalleryComponent {
+    /// File stem of the section the component belongs to.
     section: String,
+    /// The cell label, as drawn.
+    label: String,
     file_stem: String,
     rect: Rect,
 }
 
 impl GalleryComponent {
-    fn new(section: &str, label: &str, content: Rect) -> Self {
+    /// `cell_w` is the cell's full width: its content's or its label's,
+    /// whichever is wider, so the crop never cuts the label off.
+    fn new(section: &str, label: &str, content: Rect, cell_w: f32) -> Self {
         Self {
             section: section.to_owned(),
+            label: label.to_owned(),
             file_stem: section_file_stem(label),
             rect: Rect::new(
                 content.x,
                 content.y - LABEL_H,
-                content.width,
+                cell_w,
                 content.height + LABEL_H,
             ),
         }
@@ -201,8 +210,9 @@ impl GalleryComponent {
 }
 
 impl GallerySection {
-    fn new(file_stem: String, top: f32) -> Self {
+    fn new(title: &str, file_stem: String, top: f32) -> Self {
         Self {
+            title: title.to_owned(),
             file_stem,
             top,
             bottom: top,
@@ -252,11 +262,20 @@ fn save_gallery_images(
     }
     std::fs::create_dir_all(&component_dir).expect("create gallery image directories");
 
+    let mut section_pages = Vec::with_capacity(sections.len());
+    let mut section_index = std::collections::HashMap::with_capacity(sections.len());
     for section in sections {
         assert!(
             section.bottom > section.top,
             "gallery section {} is empty",
             section.file_stem
+        );
+        // The stem is the section's PNG name and its anchor in the index.
+        let previous = section_index.insert(section.file_stem.as_str(), section_pages.len());
+        assert!(
+            previous.is_none(),
+            "two gallery sections are both named {:?}",
+            section.title
         );
         let section_img = crop_with_margin(
             img,
@@ -270,11 +289,11 @@ fn save_gallery_images(
         );
         let path = format!("{output_dir}/{}.png", section.file_stem);
         section_img.save(&path).expect("save gallery section PNG");
-        eprintln!(
-            "wrote {path} ({}x{})",
-            section_img.width(),
-            section_img.height()
-        );
+        section_pages.push(IndexSection {
+            section,
+            size: section_img.dimensions(),
+            components: Vec::new(),
+        });
     }
 
     let mut file_stem_counts = std::collections::BTreeMap::new();
@@ -292,11 +311,158 @@ fn save_gallery_images(
         component_img
             .save(&path)
             .expect("save gallery component PNG");
+        let page = section_index[component.section.as_str()];
+        section_pages[page].components.push(IndexComponent {
+            label: &component.label,
+            file: format!("components/{file_stem}.png"),
+            size: component_img.dimensions(),
+        });
     }
+
+    let index = format!("{output_dir}/index.html");
+    std::fs::write(&index, gallery_index_html(&section_pages)).expect("write gallery index");
     eprintln!(
-        "wrote {} focused component images under {component_dir}",
+        "wrote {} section and {} component images, browse them at {index}",
+        sections.len(),
         components.len()
     );
+}
+
+/// One section of the gallery index page, with its images.
+struct IndexSection<'a> {
+    section: &'a GallerySection,
+    /// Section image size in pixels.
+    size: (u32, u32),
+    components: Vec<IndexComponent<'a>>,
+}
+
+/// One component image on the gallery index page.
+struct IndexComponent<'a> {
+    label: &'a str,
+    /// Path relative to the index page.
+    file: String,
+    /// Image size in pixels.
+    size: (u32, u32),
+}
+
+/// Escape text for HTML element content and quoted attribute values.
+fn html_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A self-contained page for browsing the gallery: a filterable list of
+/// sections on the left, and each section's image with its component
+/// images (folded) on the right, at a chosen pixel zoom.
+fn gallery_index_html(sections: &[IndexSection]) -> String {
+    use std::fmt::Write as _;
+
+    let mut nav = String::new();
+    let mut body = String::new();
+    for page in sections {
+        let stem = &page.section.file_stem;
+        let title = html_escape(&page.section.title);
+        let (w, h) = page.size;
+        writeln!(nav, r##"<li><a href="#{stem}">{title}</a></li>"##).unwrap();
+        writeln!(
+            body,
+            r##"<section id="{stem}" data-title="{title}">
+<h2><a href="#{stem}">{title}</a></h2>
+<a href="{stem}.png"><img src="{stem}.png" style="--w:{w};--h:{h}" alt="{title}"></a>"##
+        )
+        .unwrap();
+        if !page.components.is_empty() {
+            writeln!(
+                body,
+                "<details><summary>{} components</summary><div class=\"grid\">",
+                page.components.len()
+            )
+            .unwrap();
+            for component in &page.components {
+                let label = html_escape(component.label);
+                let file = &component.file;
+                let (w, h) = component.size;
+                writeln!(
+                    body,
+                    r#"<figure><a href="{file}"><img src="{file}" style="--w:{w};--h:{h}" alt="{label}"></a><figcaption>{label}</figcaption></figure>"#
+                )
+                .unwrap();
+            }
+            body.push_str("</div></details>\n");
+        }
+        body.push_str("</section>\n");
+    }
+
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wgpu-gameui widget gallery</title>
+<style>
+:root {{ --zoom: 1; color-scheme: dark; }}
+body {{ margin: 0; display: flex; background: #0b0d10; color: #c8d0d8;
+  font: 13px/1.4 system-ui, sans-serif; }}
+nav {{ position: sticky; top: 0; height: 100vh; overflow-y: auto; flex: none;
+  width: 280px; padding: 12px; box-sizing: border-box; border-right: 1px solid #222; }}
+nav input, nav select {{ width: 100%; box-sizing: border-box; margin-bottom: 8px; }}
+nav ul {{ list-style: none; margin: 0; padding: 0; }}
+nav li a {{ display: block; padding: 2px 4px; color: #9ab; text-decoration: none; }}
+nav li a:hover {{ background: #1a1f25; color: #def; }}
+main {{ flex: 1; padding: 12px 24px; min-width: 0; }}
+section {{ margin-bottom: 32px; scroll-margin-top: 12px; }}
+h2 {{ font-size: 15px; margin: 0 0 8px; }}
+h2 a {{ color: #78b4ff; text-decoration: none; }}
+img {{ display: block; image-rendering: pixelated;
+  width: calc(var(--w) * var(--zoom) * 1px); height: calc(var(--h) * var(--zoom) * 1px); }}
+details {{ margin-top: 8px; }}
+summary {{ cursor: pointer; color: #9ab; }}
+.grid {{ display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; align-items: flex-start; }}
+figure {{ margin: 0; }}
+figcaption {{ color: #8a96a3; font-size: 12px; margin-top: 4px; }}
+.hidden {{ display: none; }}
+</style>
+</head>
+<body>
+<nav>
+<input id="filter" type="search" placeholder="Filter sections" autofocus>
+<select id="zoom">
+<option value="1">Zoom 1×</option><option value="2">Zoom 2×</option>
+<option value="3">Zoom 3×</option><option value="4">Zoom 4×</option>
+</select>
+<ul>
+{nav}</ul>
+</nav>
+<main>
+{body}</main>
+<script>
+const filter = document.getElementById("filter");
+filter.addEventListener("input", () => {{
+  const query = filter.value.toLowerCase();
+  for (const section of document.querySelectorAll("section")) {{
+    const hide = !section.dataset.title.toLowerCase().includes(query);
+    section.classList.toggle("hidden", hide);
+    document.querySelector(`nav a[href="#${{section.id}}"]`).parentElement
+      .classList.toggle("hidden", hide);
+  }}
+}});
+document.getElementById("zoom").addEventListener("change", (event) => {{
+  document.documentElement.style.setProperty("--zoom", event.target.value);
+}});
+</script>
+</body>
+</html>
+"##
+    )
 }
 
 fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) -> Vec<u8> {
@@ -314,7 +480,7 @@ fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) 
 }
 
 #[test]
-#[ignore = "needs a GPU adapter; writes a PNG for manual inspection"]
+#[ignore = "needs a GPU adapter; writes PNGs and an index page for manual inspection"]
 fn render_widget_gallery() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -3915,11 +4081,9 @@ fn render_widget_gallery() {
         pixels.extend_from_slice(&data[start..start + row_stride]);
     }
 
-    std::fs::create_dir_all("test_output").unwrap();
+    // The whole canvas is only cut up into section and component images;
+    // it is not saved itself.
     let img = image::RgbaImage::from_raw(W, h, pixels).expect("image from raw");
-    img.save("test_output/widget_gallery.png")
-        .expect("save png");
-    eprintln!("wrote test_output/widget_gallery.png ({W}x{h})");
     save_gallery_images(&img, &gallery_sections, &gallery_components);
 
     // Sanity: at least some pixels are not the theme clear color.

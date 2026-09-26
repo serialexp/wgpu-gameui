@@ -152,9 +152,9 @@ A headless render of the full widget set is checked into the test suite:
 
 ```
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery.png
-#      + test_output/widget_gallery/*.png (one focused image per section)
+# writes test_output/widget_gallery/*.png (one focused image per section)
 #      + test_output/widget_gallery/components/*.png (one per labeled preview)
+#      + test_output/widget_gallery/index.html (browse them all)
 #      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 ```
 
@@ -494,11 +494,11 @@ write_png("frame.png", &rgba, (800, 600))?;
 # Unit tests (791 tests, headless, no GPU)
 cargo test --lib
 
-# Widget gallery (headless GPU render → full, section, and component PNGs + layout dump)
+# Widget gallery (headless GPU render → section and component PNGs, an index page, and a layout dump)
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery.png
-#      + test_output/widget_gallery/*.png (one focused image per section)
+# writes test_output/widget_gallery/*.png (one focused image per section)
 #      + test_output/widget_gallery/components/*.png (one per labeled preview)
+#      + test_output/widget_gallery/index.html (browse them all)
 #      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 
 # Benchmarks (CPU-only groups need no GPU; render groups do)
