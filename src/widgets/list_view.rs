@@ -227,6 +227,24 @@ impl<'a> ListView<'a> {
         if query.is_empty() {
             return None;
         }
+        if text.is_ascii() && query.is_ascii() {
+            // The common case, byte by byte: the same answer as
+            // `match_range_unicode` (lowercasing ASCII gives ASCII), without
+            // a Unicode lowercase per character per position. Non-ASCII text
+            // takes the long way, since some of its characters lowercase to
+            // ASCII (the Kelvin sign K to k).
+            let (text, query) = (text.as_bytes(), query.as_bytes());
+            return text
+                .windows(query.len())
+                .position(|window| window.eq_ignore_ascii_case(query))
+                .map(|start| start..start + query.len());
+        }
+        Self::match_range_unicode(text, query)
+    }
+
+    /// [`match_range`](Self::match_range) for any text: each character
+    /// lowercased the Unicode way.
+    fn match_range_unicode(text: &str, query: &str) -> Option<Range<usize>> {
         text.char_indices().find_map(|(start, _)| {
             let mut rest = text[start..].char_indices();
             for q in query.chars() {
@@ -708,5 +726,39 @@ mod tests {
         assert_eq!(ListView::match_range("abc", ""), None);
         assert_eq!(ListView::match_range("abc", "abcd"), None);
         assert_eq!(ListView::match_range("abc", "x"), None);
+    }
+
+    #[test]
+    fn match_range_handles_non_ascii_text_and_queries() {
+        // The Kelvin sign lowercases to an ASCII k.
+        assert_eq!(ListView::match_range("\u{212A}ey", "key"), Some(0..5));
+        assert_eq!(ListView::match_range("über-app", "APP"), Some(6..9));
+        assert_eq!(ListView::match_range("app", "äpp"), None);
+        assert_eq!(ListView::match_range("ÄPP", "äpp"), Some(0..4));
+    }
+
+    #[test]
+    fn the_ascii_match_agrees_with_the_unicode_one() {
+        let texts = [
+            "",
+            "a",
+            "Agent-UI",
+            "my-agent-ui",
+            "AaAaB",
+            "x_y-Z 09",
+            "ababab",
+        ];
+        let queries = [
+            "a", "A", "ui", "UI", "aab", "AB", "-z 0", "babab", "abababa", "x",
+        ];
+        for text in texts {
+            for query in queries {
+                assert_eq!(
+                    ListView::match_range(text, query),
+                    ListView::match_range_unicode(text, query),
+                    "{text:?} / {query:?}"
+                );
+            }
+        }
     }
 }
