@@ -2178,3 +2178,31 @@ Built from the Forge Design System's `components/*` sources. Coverage
   backdrop (3 px) and the sheet (18 px). `DrawList` can't sample the
   framebuffer, so `Modal` only exposes `MODAL_BACKDROP_BLUR` /
   `SHEET_BLUR` for the app's `UiRenderer::blur_backdrop` pass.
+
+## 2026-09-26 — Missing Forge components, batch C (DragList)
+
+Coverage 67 of 77.
+
+- [x] **DragList** (`data`) — `DragList::new(&[DragItem])`,
+  `DragList::height(rows, &styles)`, `draw(id: DragId, rect, &mut
+  DragListState, &mut DragCapture, ctx) -> DragListOutput { moved:
+  Option<DragMove>, dragging }`. `DragItem::new(label)`, plus
+  `.icon(PhosphorIcon)` with `phosphor-icons` (the default glyph is a
+  half-filled square drawn with shapes). `DragMove { from, to }::apply(&mut
+  [T])` reorders the caller's data. `DragListState::dragging()` / `slot()`.
+  The ghost goes on top: `draw_ghost_layer(&mut LayerStack, ..)` (a tooltip
+  layer, never takes input) or `draw_ghost(&mut DrawList, ..)`. A press
+  that never moves reorders nothing. `DRAG_ROW_HEIGHT`. Rows past the
+  well's bottom aren't drawn, so a long list costs only its visible rows.
+- `material::draw_deep_well` / `deep_well_ink` (crate-internal): the tall
+  sunken well shared by DragList and AlertDialog's detail block.
+- `DrawList::dot_grid(origin, (cols, rows), dot, pitch, color) -> Rect`,
+  shared by the DragHandle and DragList grips.
+- **Fixed:** the debug report flagged a layer (popup, tooltip, modal) as
+  `sibling_overlap` with the base content under it. A layer is stacked
+  above the base on purpose; layer roots are no longer compared with
+  their neighbours. The gallery drops 13 false warnings (101 problems).
+- **Fixed:** `--no-default-features --all-targets` didn't build:
+  `tests/view_origin.rs` lacked `required-features = ["headless"]`, and a
+  `ui_context` test used `Tone`, whose import is behind `phosphor-icons`.
+  The `sheen_over` re-export warned as unused without `phosphor-icons`.

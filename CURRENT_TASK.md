@@ -19,7 +19,8 @@ Batches, smallest first; one commit per batch:
 - [x] B — dialogs: Modal, AlertDialog, ConfirmDialog, PromptDialog, Sheet.
       Notes in TODO.md "Missing Forge components, batch B". Coverage is
       66 of 77.
-- [ ] C — DragList
+- [x] C — DragList. Notes in TODO.md "Missing Forge components, batch C".
+      Coverage 67 of 77.
 - [ ] D — inspector: PropertyRow, PropertyGroup, FileField, Inspector
 - [ ] E — mobile: AppBar, TabBar
 - [ ] F — CommandPalette
@@ -42,7 +43,12 @@ Batches, smallest first; one commit per batch:
   gallery with `CARGO_TARGET_DIR=/tmp/gameui-head-target`, and diff
   `code name` pairs from `test_output/widget_gallery.debug.json`, sorted,
   with `#<digits>` normalised to `#N`. After batch B the list equals
-  3cbe69e's (113 problems).
+  3cbe69e's (113 problems). After batch C it is that list minus 13 false
+  `sibling_overlap`s between layers and the base (101 problems); a copy
+  of the batch B list is `/tmp/probs-b.txt` while it lasts.
+- Widgets whose ghost/popup floats over other content draw it on a layer
+  after the base pass (the gallery does this for DragList's ghost), so the
+  debug report sees it stacked, not as a sibling.
 - Raised surfaces (Sheet, Toast) declare their shadow in their debug scope
   via `BoxShadow::ink_rect`; gallery cells for free-standing sheets reserve
   the shadow's room (`sheet_cell`) so it doesn't fall on neighbours.

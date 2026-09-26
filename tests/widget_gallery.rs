@@ -44,6 +44,7 @@ use wgpu_gameui::{
     draw_status_bar, draw_tag_input, inline_meter, keycap, place_popover, skeleton, spinner,
     stacked_bar, toolbar_band,
 };
+use wgpu_gameui::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListState};
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
 
@@ -1313,6 +1314,14 @@ fn render_widget_gallery() {
     // a renderer pass, not a DrawList record, so it runs in the encoder below).
     let blur_rect;
 
+    // The drag list's rows, and its mid-drag state and pointer, kept past the
+    // base pass so its ghost can go on a tooltip layer like a host's would.
+    let drag_items: Vec<DragItem> = ["Sky", "Hills", "Trees", "Player", "HUD"]
+        .iter()
+        .map(|l| DragItem::new(l))
+        .collect();
+    let drag_ghost: (DragListState, InputState);
+
     // =====================================================================
     // Build the base layer. The `list` borrow on `layers` is released at the
     // end of this scope so we can add tooltip layers afterwards.
@@ -2531,6 +2540,61 @@ fn render_widget_gallery() {
             draw(204, 30.0, &mut mm_field, mm_rect);
             // The ":" separator between the two fields.
             list.text(TextBlock::new(":", r.x + field_w, r.y + 4.0).with_size(theme.font_size));
+        }
+
+        // Drag list: reorderable rows. At rest, then mid-drag — "Hills"
+        // pressed and pulled down, dimmed in place, the accent line on the
+        // slot under "Player", and the ghost following the pointer (drawn on
+        // its tooltip layer after the base pass).
+        flow.section(list, Category::Data, "DragList", "at rest, mid-drag");
+        {
+            let drag_list = DragList::new(&drag_items);
+            let s = StyleResolver::new(&theme);
+            let list_h = DragList::height(drag_items.len(), &s);
+
+            let r = flow.cell(list, "At rest", 200.0, list_h);
+            drag_list.draw(
+                300,
+                r,
+                &mut DragListState::new(),
+                &mut DragCapture::default(),
+                &mut ctx(list, &mut focus, &theme, &input),
+            );
+
+            // Room under the list for the ghost's drop shadow.
+            let r = flow.cell(list, "Dragging", 200.0, list_h + 40.0);
+            let rows = Rect::new(r.x, r.y, r.width, list_h);
+            let row_y = |i: f32| rows.y + 1.0 + 3.0 + (i + 0.5) * DRAG_ROW_HEIGHT;
+            let mut state = DragListState::new();
+            let mut capture = DragCapture::default();
+            let press = InputState {
+                mouse_x: rows.x + 40.0,
+                mouse_y: row_y(1.0),
+                mouse_down: true,
+                mouse_clicked: true,
+                ..InputState::default()
+            };
+            let mut scratch = DrawList::new();
+            drag_list.draw(
+                301,
+                rows,
+                &mut state,
+                &mut capture,
+                &mut ctx(&mut scratch, &mut focus, &theme, &press),
+            );
+            let held = InputState {
+                mouse_y: row_y(3.0) + 4.0,
+                mouse_clicked: false,
+                ..press.clone()
+            };
+            drag_list.draw(
+                301,
+                rows,
+                &mut state,
+                &mut capture,
+                &mut ctx(list, &mut focus, &theme, &held),
+            );
+            drag_ghost = (state, held);
         }
 
         // Tree view (outliner): a seeded hierarchy — an expanded branch with
@@ -5383,6 +5447,17 @@ fn render_widget_gallery() {
                 &InputState::default(),
             );
         }
+    }
+
+    // The drag list's ghost, on a tooltip layer over the mid-drag list.
+    {
+        let (state, held) = &drag_ghost;
+        DragList::new(&drag_items).draw_ghost_layer(
+            &mut layers,
+            state,
+            &StyleResolver::new(&theme),
+            held,
+        );
     }
 
     // Tooltip layer, hovering the reserved target.

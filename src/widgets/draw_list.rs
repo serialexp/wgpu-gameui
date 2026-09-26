@@ -1624,6 +1624,35 @@ impl DrawList {
         self.quad(line.x, line.y, line.width, line.height, color);
     }
 
+    /// Paint a grid of `grid.0` columns × `grid.1` rows of square `dot`-px
+    /// dots, `pitch` px apart centre to centre, top-left at `origin`: the
+    /// grip on drag handles and draggable rows. Returns the grid's box.
+    pub fn dot_grid(
+        &mut self,
+        origin: [f32; 2],
+        grid: (u32, u32),
+        dot: f32,
+        pitch: f32,
+        color: [f32; 4],
+    ) -> Rect {
+        let (cols, rows) = grid;
+        for r in 0..rows {
+            for c in 0..cols {
+                let x = origin[0] + c as f32 * pitch;
+                let y = origin[1] + r as f32 * pitch;
+                self.quad(x, y, dot, dot, color);
+            }
+        }
+        let span = |n: u32| {
+            if n == 0 {
+                0.0
+            } else {
+                (n - 1) as f32 * pitch + dot
+            }
+        };
+        Rect::new(origin[0], origin[1], span(cols), span(rows))
+    }
+
     fn push_chrome_instance(
         &mut self,
         rect: Rect,

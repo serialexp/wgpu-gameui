@@ -261,14 +261,8 @@ impl DragHandle {
         }
         let ox = rect.x + (rect.width - grid_w) / 2.0;
         let oy = rect.y + (rect.height - grid_h) / 2.0;
-        let list = &mut *ctx.draw_list;
-        for r in 0..rows {
-            for c in 0..cols {
-                let x = ox + c as f32 * (dot + gap);
-                let y = oy + r as f32 * (dot + gap);
-                list.quad(x, y, dot, dot, color);
-            }
-        }
+        ctx.draw_list
+            .dot_grid([ox, oy], (cols, rows), dot, dot + gap, color);
     }
 }
 

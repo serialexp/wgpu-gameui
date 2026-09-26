@@ -23,6 +23,7 @@ mod dock_panel;
 mod dock_stack;
 mod drag;
 mod drag_handle;
+mod drag_list;
 mod draw_list;
 mod drop_zone;
 mod dropdown;
@@ -120,6 +121,7 @@ pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockT
 pub use dock_stack::{DockSection, DockSectionOutput, DockStack, DockStackOutput, DockStackState};
 pub use drag::{DragCapture, DragId};
 pub use drag_handle::{DragHandle, DragHandleOutput};
+pub use drag_list::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListOutput, DragListState, DragMove};
 #[cfg(feature = "phosphor-icons")]
 pub use draw_list::IconMsdf;
 pub(crate) use draw_list::PaintCmd;
@@ -152,6 +154,8 @@ pub use image::{Image, ImageAlign, ImageFit};
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
 #[cfg(feature = "phosphor-icons")]
 pub use list_view::{ListRow, ListView, ListViewOutput};
+// Used by `Thumb` and by tests outside `widgets`.
+#[cfg(any(test, feature = "phosphor-icons"))]
 pub(crate) use material::sheen_over;
 pub use material::{Material, Tone};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};

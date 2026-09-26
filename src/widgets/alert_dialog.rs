@@ -1,11 +1,10 @@
 //! AlertDialog — one message, one key (Forge `AlertDialog`).
 
 use crate::layout::Rect;
-use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 use crate::text::TextBlock;
 
-use super::material::Tone;
+use super::material::{self, Tone};
 use super::{
     DrawContext, DrawList, FocusId, Modal, ModalState, ScrollState, ScrollView, Severity,
     SheetAction,
@@ -21,9 +20,6 @@ const DETAIL_PAD: (f32, f32) = (8.0, 6.0);
 const DETAIL_GAP: f32 = 8.0;
 /// Detail line height, in em.
 const DETAIL_LEADING: f32 = 1.5;
-/// The detail well's recess (`--well-inset-tall`) and lit lip.
-const RECESS: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
-const LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
 
 /// Caller-owned alert state: the modal and the detail block's scroll.
 #[derive(Clone, Debug, Default)]
@@ -211,37 +207,7 @@ fn draw_detail(
 ) {
     let s = ctx.styles();
     let list = &mut *ctx.draw_list;
-    let radius = s.scalar(StyleKey::BorderRadius);
-    let border = s.scalar(StyleKey::BorderWidth);
-    let radii = CornerRadii::uniform(radius);
-    list.box_shadow_outset(
-        rect,
-        radii,
-        BoxShadow {
-            offset: [0.0, 1.0],
-            color: LIP,
-            ..BoxShadow::default()
-        },
-    );
-    list.chrome_rect(
-        rect,
-        radius,
-        border,
-        s.color(StyleKey::WellDeep),
-        s.color(StyleKey::EdgeHard),
-    );
-    let viewport = rect.inset(border);
-    list.box_shadow_inset(
-        viewport,
-        CornerRadii::uniform((radius - border).max(0.0)),
-        BoxShadow {
-            offset: [0.0, 2.0],
-            blur: 5.0,
-            color: RECESS,
-            inset: true,
-            ..BoxShadow::default()
-        },
-    );
+    let viewport = material::draw_deep_well(list, &s, rect);
     scroll.content_size = [viewport.width, text_h + 2.0 * DETAIL_PAD.1];
     let mut input = ctx.input.clone();
     let text_w = (viewport.width - 2.0 * DETAIL_PAD.0).max(0.0);

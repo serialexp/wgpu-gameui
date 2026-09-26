@@ -22,6 +22,7 @@
 
 use crate::DrawList;
 use crate::layout::Rect;
+use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{StyleKey, StyleResolver};
 
 /// Which face a control wears.
@@ -374,7 +375,6 @@ fn face_inset(
     blur: f32,
     color: [f32; 4],
 ) {
-    use crate::{BoxShadow, CornerRadii};
     let radius = radius.min(face.width.min(face.height) * 0.5);
     list.box_shadow_inset(
         face.inset(1.0),
@@ -538,6 +538,57 @@ pub fn draw_well_simple(
     );
 }
 
+/// The deep well's recess (`--well-inset-tall`'s `inset 0 2px 5px`) and lit
+/// lower lip (`0 1px 0 rgba(255,255,255,.07)`).
+const DEEP_WELL_RECESS: ([f32; 2], f32, [f32; 4]) = ([0.0, 2.0], 5.0, [0.0, 0.0, 0.0, 0.6]);
+/// The lit lip under a deep well's bottom edge (`0 1px 0` white at 7%).
+const DEEP_WELL_LIP: BoxShadow = BoxShadow {
+    offset: [0.0, 1.0],
+    blur: 0.0,
+    spread: 0.0,
+    color: [1.0, 1.0, 1.0, 0.07],
+    inset: false,
+};
+
+/// Draw a **deep well**: the tall sunken box that holds a block of content
+/// rather than one value (an alert's detail text, a drag list's rows).
+/// `--well-deep` fill, a hard edge, a tall recess inside and a lit lip under
+/// the bottom edge. Returns the area inside the border, where the content
+/// goes. The lip paints just outside `rect`; [`deep_well_ink`] is the whole
+/// painted area, for a debug scope to declare.
+pub fn draw_deep_well(list: &mut DrawList, s: &StyleResolver, rect: Rect) -> Rect {
+    let radius = s.scalar(StyleKey::BorderRadius);
+    let border = s.scalar(StyleKey::BorderWidth);
+    list.box_shadow_outset(rect, CornerRadii::uniform(radius), DEEP_WELL_LIP);
+    list.chrome_rect(
+        rect,
+        radius,
+        border,
+        s.color(StyleKey::WellDeep),
+        s.color(StyleKey::EdgeHard),
+    );
+    let inner = rect.inset(border);
+    let (offset, blur, color) = DEEP_WELL_RECESS;
+    list.box_shadow_inset(
+        inner,
+        CornerRadii::uniform((radius - border).max(0.0)),
+        BoxShadow {
+            offset,
+            blur,
+            color,
+            inset: true,
+            ..BoxShadow::default()
+        },
+    );
+    inner
+}
+
+/// Everything [`draw_deep_well`] paints for a well at `rect`: the box and
+/// the lip under it.
+pub fn deep_well_ink(rect: Rect) -> Rect {
+    rect.union(DEEP_WELL_LIP.ink_rect(rect))
+}
+
 /// Offset and blur of the well's inner shadow (`--well-inset`'s
 /// `inset 0 2px 4px`).
 #[cfg(feature = "phosphor-icons")]
@@ -568,7 +619,6 @@ pub fn draw_well_rounded(
     focused: bool,
     invalid: bool,
 ) {
-    use crate::{BoxShadow, CornerRadii};
     let radius = radius.min(rect.width.min(rect.height) * 0.5).max(0.0);
     let border_w = s.scalar(StyleKey::BorderWidth);
     let ring = if invalid {
