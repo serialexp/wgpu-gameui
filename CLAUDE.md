@@ -96,8 +96,13 @@ Preview what the next release would be, at any time, without changing anything:
 npx just-release               # dry-run unless CI=1 is set
 ```
 
-Two things to know:
+Three things to know:
 
+- **We are on 0.x.** 1.0.0 was published too early and is yanked; releases
+  continue from 0.6.0. On 0.x just-release (≥ 0.19) bumps the *minor* for a
+  breaking change (`feat!` → 0.7.0), so `!` / `BREAKING CHANGE:` are safe to
+  use honestly. Going to 1.0.0 is a deliberate `Release-As: 1.0.0`, never a
+  side effect.
 - **A prerelease cycle** starts from the *Release* workflow's manual
   `workflow_dispatch` run with `prerelease: alpha` (or `beta`/`rc`). Once a
   version carries a prerelease segment every run just increments the counter;

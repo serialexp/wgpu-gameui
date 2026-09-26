@@ -40,7 +40,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-wgpu-gameui = "0.1"
+wgpu-gameui = "0.6"
 ```
 
 The default features bundle IBM Plex Sans as the deterministic UI default,
