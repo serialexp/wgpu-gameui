@@ -18,17 +18,31 @@ A widget isn't done until **all** of these are true — treat it as the checklis
 2. **Unit tests.** Cover the geometry/state logic with headless tests against a
    `DrawList` (inspect `list.icons` / `list.vertices`) — no GPU needed. Respect
    `InputState::mouse_consumed` for anything clickable (layer capture).
-3. **Widget gallery.** Add a row to `tests/widget_gallery.rs` so the widget is
-   visible in the rendered gallery. This is mandatory, not optional — the gallery
-   is how we eyeball every widget and catch layout/visual regressions.
+3. **Widget gallery.** Add a section to `tests/widget_gallery.rs` so the widget
+   is visible in the rendered gallery. This is mandatory, not optional — the
+   gallery is how we eyeball every widget and catch layout/visual regressions.
+   The gallery is organized like the Forge design system: one section per
+   component, filed under a category.
+   ```rust
+   flow.section(list, Category::Forms, "Switch", "on / off, labeled");
+   let r = flow.cell(list, "Off", 80.0, 16.0); // then draw into `r`
+   ```
+   Use the Forge component name when Forge has the component (the list is
+   `FORGE_COMPONENTS` in the test), so it counts as covered on the index
+   page. Our own widgets go in the closest Forge category (the index marks
+   them "not in Forge"); text and icons go in `Foundations`, rendering and
+   layout machinery in `Engine`. Each (category, component) pair may appear
+   only once — add cells to the existing section instead of a second one.
    Render and *look at the result*:
    ```
    DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
    ```
-   Writes one PNG per section to `test_output/widget_gallery/<section>.png`, one
-   per labeled cell to `test_output/widget_gallery/components/`, and
-   `test_output/widget_gallery/index.html` to browse them (filter, zoom). Open
-   your section's PNG and look at it. Rendering has already caught real bugs
+   Writes one PNG per section to
+   `test_output/widget_gallery/<category>/<Component>.png`, one per labeled
+   cell to `test_output/widget_gallery/<category>/<Component>/`, and
+   `test_output/widget_gallery/index.html` to browse them (filter, zoom, and
+   which Forge components are still missing). Open your section's PNG and
+   look at it. Rendering has already caught real bugs
    (e.g. a too-large default padding that shrank an icon to a speck) that the
    unit tests passed straight through — so don't skip the eyeball pass.
 4. **TODO.md.** Check off the item and note the resulting API.

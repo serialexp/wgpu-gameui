@@ -115,15 +115,166 @@ pub fn keycap(list: &mut DrawList, s: &StyleResolver, rect: Rect, label: &str, m
     r
 }
 
+/// Height of a [`badge_toned`] (Forge Badge: 9px mono caps, `1px 7px 2px`
+/// padding inside a 1px edge).
+pub const BADGE_HEIGHT: f32 = 15.0;
+/// Space left and right of a toned badge's text.
+const BADGE_PAD: f32 = 7.0;
+/// Letter spacing of a toned badge (`--track-badge`), in em.
+const BADGE_TRACKING: f32 = 0.08;
+
+/// Forge hues (`--hue-*`), in degrees.
+const HUE_ACCENT: f32 = 200.0;
+const HUE_DANGER: f32 = 25.0;
+const HUE_WARN: f32 = 75.0;
+const HUE_WARN_INK: f32 = 85.0;
+const HUE_OK: f32 = 145.0;
+
+/// The tones of a Forge `Badge`: a sunken mono chip stamped into the surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BadgeTone {
+    /// Neutral (`draft`): a dark well with the neutral chip ink.
+    #[default]
+    Draft,
+    /// Done / succeeded (`baked`, green).
+    Baked,
+    /// Out of date / attention (`stale`, amber).
+    Stale,
+    /// Failed (`error`, red).
+    Error,
+    /// Happening now (`live`, accent).
+    Live,
+}
+
+/// A toned badge's plate: gradient top and bottom, ink, edge, and recess.
+struct BadgePaint {
+    top: [f32; 4],
+    bottom: [f32; 4],
+    ink: [f32; 4],
+    edge: [f32; 4],
+    /// The inner shadow's blur and alpha (`--chip-inset[-neutral]`).
+    inset: (f32, f32),
+}
+
+impl BadgeTone {
+    fn paint(self, s: &StyleResolver) -> BadgePaint {
+        let edge_hard = [0.0, 0.0, 0.0, 0.65];
+        match self {
+            BadgeTone::Draft => BadgePaint {
+                top: [0.0, 0.0, 0.0, 0.45],
+                bottom: [1.0, 1.0, 1.0, 0.05],
+                ink: s.ink(Ink::Chip),
+                edge: [0.0, 0.0, 0.0, 0.6],
+                inset: (2.0, 0.55),
+            },
+            BadgeTone::Baked => BadgePaint {
+                top: oklch(0.42, 0.1, HUE_OK, 1.0),
+                bottom: oklch(0.5, 0.12, HUE_OK, 1.0),
+                ink: oklch(0.92, 0.11, HUE_OK, 1.0),
+                edge: edge_hard,
+                inset: (3.0, 0.5),
+            },
+            BadgeTone::Stale => BadgePaint {
+                top: oklch(0.44, 0.09, HUE_WARN, 1.0),
+                bottom: oklch(0.53, 0.11, HUE_WARN, 1.0),
+                ink: oklch(0.93, 0.11, HUE_WARN_INK, 1.0),
+                edge: edge_hard,
+                inset: (3.0, 0.5),
+            },
+            BadgeTone::Error => BadgePaint {
+                top: oklch(0.36, 0.13, HUE_DANGER, 1.0),
+                bottom: oklch(0.45, 0.15, HUE_DANGER, 1.0),
+                ink: oklch(0.9, 0.11, HUE_DANGER, 1.0),
+                edge: [0.0, 0.0, 0.0, 0.7],
+                inset: (3.0, 0.55),
+            },
+            BadgeTone::Live => BadgePaint {
+                top: oklch(0.4, 0.07, HUE_ACCENT, 1.0),
+                bottom: oklch(0.48, 0.08, HUE_ACCENT, 1.0),
+                ink: oklch(0.92, 0.09, HUE_ACCENT, 1.0),
+                edge: edge_hard,
+                inset: (3.0, 0.5),
+            },
+        }
+    }
+}
+
+/// The text block of a toned badge, uppercased as Forge's `text-transform`
+/// does, at the origin.
+fn badge_text(s: &StyleResolver, text: &str) -> TextBlock {
+    let size = s.text_size(TextSize::Caption);
+    s.mono_block(text.to_uppercase(), 0.0, 0.0, TextSize::Caption, Ink::Chip)
+        .with_letter_spacing(size * BADGE_TRACKING)
+}
+
+/// The width a [`badge_toned`] showing `text` takes.
+pub fn badge_toned_width(list: &mut DrawList, s: &StyleResolver, text: &str) -> f32 {
+    let (w, _) = list.measure_block(&badge_text(s, text));
+    w + BADGE_PAD * 2.0
+}
+
+/// Draw a Forge badge with its top-left corner at `(x, y)`: `text` in 9px
+/// mono capitals on a sunken plate in `tone`. Returns the badge's rect
+/// ([`BADGE_HEIGHT`] tall).
+pub fn badge_toned(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    x: f32,
+    y: f32,
+    text: &str,
+    tone: BadgeTone,
+) -> Rect {
+    let mut block = badge_text(s, text);
+    let (w, _) = list.measure_block(&block);
+    let r = Rect::new(x, y, w + BADGE_PAD * 2.0, BADGE_HEIGHT);
+    let paint = tone.paint(s);
+    let radius = s.scalar(StyleKey::BorderRadius);
+    list.chrome_rect_gradient(r, radius, 1.0, paint.top, paint.bottom, paint.edge);
+    list.box_shadow_inset(
+        r.inset(1.0),
+        CornerRadii::uniform(0.0),
+        BoxShadow {
+            offset: [0.0, 1.0],
+            blur: paint.inset.0,
+            color: [0.0, 0.0, 0.0, paint.inset.1],
+            inset: true,
+            ..BoxShadow::default()
+        },
+    );
+    list.quad(r.x, r.bottom(), r.width, 1.0, CHIP_LIP);
+    block = block
+        .with_color_f32(paint.ink)
+        .with_shadow(0, 0, 0, 153, 0.0, -1.0, 0.0);
+    block.x = r.x + BADGE_PAD;
+    // `padding: 1px 7px 2px`: the line sits half a pixel above centre.
+    block.y = crate::text::vcentered_line_y(r.y, r.height - 1.0, block.font_size);
+    list.text(block);
+    r
+}
+
+/// Height of a [`chip`] (`--h-chip`).
+pub const CHIP_HEIGHT: f32 = 18.0;
+/// Space left and right of a chip's label (`padding: 2px 9px 3px`).
+const CHIP_PAD: f32 = 9.0;
+
 /// Outcome of drawing a [`chip`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChipOutput {
     /// The chip was clicked this frame (caller flips its `on` state).
     pub clicked: bool,
+    /// The rect drawn.
+    pub rect: Rect,
 }
 
-/// Draw a filter chip: a pill that is raised when off and held-in when on
-/// (the design's log filter row). Click handling honors
+/// The width a [`chip`] labelled `label` takes.
+pub fn chip_width(list: &mut DrawList, s: &StyleResolver, label: &str) -> f32 {
+    let (w, _) = list.measure_text(label, s.text_size(TextSize::Dense), None);
+    w + CHIP_PAD * 2.0
+}
+
+/// Draw a Forge `FilterChip` at the left of `rect`, centred vertically: a
+/// latching pill key, up (key face) when off and held down in the well
+/// (accent chip) when on. Click handling honors
 /// [`InputState::mouse_consumed`](crate::InputState::mouse_consumed).
 pub fn chip(
     list: &mut DrawList,
@@ -133,54 +284,64 @@ pub fn chip(
     on: bool,
     input: &crate::InputState,
 ) -> ChipOutput {
-    let font_size = s.scalar(StyleKey::FontSize) * 0.85;
+    let font_size = s.text_size(TextSize::Dense);
     let (tw, _) = list.measure_text(label, font_size, None);
-    let h = 17.0f32.max(font_size + 7.0).min(rect.height);
-    let w = (tw + 16.0).min(rect.width);
+    let h = CHIP_HEIGHT.min(rect.height);
+    let w = (tw + CHIP_PAD * 2.0).min(rect.width);
     let r = Rect::new(rect.x, rect.y + (rect.height - h) * 0.5, w, h);
     let radius = 9.0f32.min(h * 0.5);
 
-    let hovered = rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
+    let hovered = r.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
     let clicked = hovered && input.mouse_clicked;
-    if hovered {
-        // Chips draw from a bare list+style path; emit the pointer request
-        // through the same channel other widgets use is impossible here, so
-        // hover feedback is purely visual.
-    }
-
-    if on {
-        // Held in the well: dark accent base, inset shadow, accent text.
-        let base = s.color(StyleKey::Accent);
-        let top = material::sheen_over(base, [0.0, 0.0, 0.0, 0.45]);
-        list.chrome_rect_gradient(r, radius, 1.0, top, base, [0.0, 0.0, 0.0, 0.65]);
-        draw_inset_shadow(list, s, r, s.scalar(StyleKey::InnerShadowDepth), 1.0);
-    } else {
-        let base = if hovered {
-            s.color(StyleKey::ButtonHover)
-        } else {
-            s.color(StyleKey::Button)
-        };
-        let top = material::sheen_over(base, s.color(StyleKey::FaceTop));
-        let bottom = material::sheen_over(base, s.color(StyleKey::FaceBottom));
-        list.chrome_rect_gradient(r, radius, 1.0, top, bottom, [0.0, 0.0, 0.0, 0.5]);
-        // A pill's top edge is curved; a straight, full-width 1px highlight
-        // reads as a conspicuous white slash. The face gradient already carries
-        // the design's restrained sheen, so don't add the keycap-only band.
-    }
 
     let fg = if on {
-        s.color(StyleKey::OnAccent)
+        // Held in the well: the accent chip, pressed in.
+        let top = oklch(0.42, 0.07, HUE_ACCENT, 1.0);
+        let bottom = oklch(0.52, 0.09, HUE_ACCENT, 1.0);
+        list.chrome_rect_gradient(r, radius, 1.0, top, bottom, [0.0, 0.0, 0.0, 0.65]);
+        list.box_shadow_inset(
+            r.inset(1.0),
+            CornerRadii::uniform((radius - 1.0).max(0.0)),
+            BoxShadow {
+                offset: [0.0, 2.0],
+                blur: 4.0,
+                color: [0.0, 0.0, 0.0, 0.5],
+                inset: true,
+                ..BoxShadow::default()
+            },
+        );
+        oklch(0.93, 0.08, HUE_ACCENT, 1.0)
     } else {
-        s.color(StyleKey::Text)
+        // Up: the key face (`--key-face`, lighter on hover).
+        let (top, bottom) = if hovered {
+            (
+                s.color(StyleKey::FaceTopHover),
+                s.color(StyleKey::FaceBottomHover),
+            )
+        } else {
+            (s.color(StyleKey::FaceTop), s.color(StyleKey::FaceBottom))
+        };
+        let base = s.color(StyleKey::Button);
+        list.chrome_rect_gradient(
+            r,
+            radius,
+            1.0,
+            material::sheen_over(base, top),
+            material::sheen_over(base, bottom),
+            [0.0, 0.0, 0.0, 0.5],
+        );
+        // A pill's top edge is curved; a straight, full-width 1px highlight
+        // reads as a conspicuous white slash, so the face gradient carries
+        // the sheen alone.
+        s.ink(Ink::Icon)
     };
-    let text_y = list.vcentered_text_y(r.y, r.height, font_size, s.theme().font.as_ref(), label);
+    let text_y = crate::text::vcentered_line_y(r.y, r.height - 1.0, font_size);
     list.text(
-        TextBlock::new(label, r.x + 8.0, text_y)
-            .with_size(font_size)
+        s.sans_block(label, r.x + CHIP_PAD, text_y, TextSize::Dense, Ink::Icon)
             .with_color_f32(fg)
-            .with_font_opt(s.theme().font.clone()),
+            .with_shadow(0, 0, 0, 153, 0.0, -1.0, 0.0),
     );
-    ChipOutput { clicked }
+    ChipOutput { clicked, rect: r }
 }
 
 /// Height of a [`hue_chip`].
@@ -463,6 +624,73 @@ mod tests {
         hue_chip(&mut accent, &s, 0.0, 0.0, "codex", 160.0, true);
         let face = accent.chrome_instance(0).unwrap();
         assert_eq!(face.bg, face.bg2, "flat on the accent");
+    }
+
+    #[test]
+    fn a_toned_badge_is_uppercase_and_takes_its_tone() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let r = badge_toned(&mut list, &s, 4.0, 6.0, "running", BadgeTone::Live);
+        assert_eq!((r.x, r.y, r.height), (4.0, 6.0, BADGE_HEIGHT));
+        assert!((r.width - badge_toned_width(&mut list, &s, "running")).abs() < 0.01);
+        let face = list.chrome_instance(0).unwrap();
+        assert_eq!(face.bg, oklch(0.4, 0.07, HUE_ACCENT, 1.0));
+        assert_eq!(face.bg2, oklch(0.48, 0.08, HUE_ACCENT, 1.0));
+        let text = list.texts.iter().find(|t| t.content == "RUNNING").unwrap();
+        assert_eq!(text.x, 4.0 + BADGE_PAD);
+        assert_eq!(
+            text.color,
+            crate::color::text_color(oklch(0.92, 0.09, HUE_ACCENT, 1.0))
+        );
+        assert_eq!(list.shadow_instance_count(), 1, "the recess");
+
+        let mut other = DrawList::new();
+        badge_toned(&mut other, &s, 0.0, 0.0, "exit 1", BadgeTone::Error);
+        assert_ne!(
+            other.chrome_instance(0).unwrap().bg,
+            face.bg,
+            "each tone has its own plate"
+        );
+    }
+
+    #[test]
+    fn an_on_chip_is_the_accent_chip_and_reports_its_rect() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let out = chip(
+            &mut list,
+            &s,
+            Rect::new(10.0, 0.0, 200.0, 28.0),
+            "all sessions",
+            true,
+            &crate::InputState::default(),
+        );
+        assert_eq!(out.rect.height, CHIP_HEIGHT);
+        assert_eq!(out.rect.y, 5.0, "centred in its rect");
+        assert!((out.rect.width - chip_width(&mut list, &s, "all sessions")).abs() < 0.01);
+        assert_eq!(
+            list.chrome_instance(0).unwrap().bg,
+            oklch(0.42, 0.07, HUE_ACCENT, 1.0)
+        );
+        // A click beside the pill but inside the rect is not a click on it.
+        let beside = crate::InputState {
+            mouse_x: 205.0,
+            mouse_y: 14.0,
+            mouse_clicked: true,
+            ..Default::default()
+        };
+        let mut quiet = DrawList::new();
+        let out = chip(
+            &mut quiet,
+            &s,
+            Rect::new(10.0, 0.0, 200.0, 28.0),
+            "all sessions",
+            false,
+            &beside,
+        );
+        assert!(!out.clicked);
     }
 
     #[test]

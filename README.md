@@ -148,13 +148,16 @@ and preserve the exact editable string. Other grammars can use
 > **List and Table** stay raw widgets (no façade verb) because their
 > closure-based row/cell APIs don't fit the simple auto-advance verb model.
 
-A headless render of the full widget set is checked into the test suite:
+A headless render of the full widget set is checked into the test suite. It is
+organized like the Forge design system: one section per component, grouped by
+category (forms, keys, layout, data, feedback, …, plus `foundations` and
+`engine` for text, icons and rendering machinery).
 
 ```
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery/*.png (one focused image per section)
-#      + test_output/widget_gallery/components/*.png (one per labeled preview)
-#      + test_output/widget_gallery/index.html (browse them all)
+# writes test_output/widget_gallery/<category>/<Component>.png (one per component)
+#      + test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
+#      + test_output/widget_gallery/index.html (browse them all, see Forge coverage)
 #      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 ```
 
@@ -494,11 +497,11 @@ write_png("frame.png", &rgba, (800, 600))?;
 # Unit tests (791 tests, headless, no GPU)
 cargo test --lib
 
-# Widget gallery (headless GPU render → section and component PNGs, an index page, and a layout dump)
+# Widget gallery (headless GPU render → per-component PNGs, an index page, and a layout dump)
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery/*.png (one focused image per section)
-#      + test_output/widget_gallery/components/*.png (one per labeled preview)
-#      + test_output/widget_gallery/index.html (browse them all)
+# writes test_output/widget_gallery/<category>/<Component>.png (one per component)
+#      + test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
+#      + test_output/widget_gallery/index.html (browse them all, see Forge coverage)
 #      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
 
 # Benchmarks (CPU-only groups need no GPU; render groups do)

@@ -98,17 +98,29 @@ struct AnalyticVsOut {
 @vertex
 fn vs_analytic(in: AnalyticVsIn) -> AnalyticVsOut {
     var out: AnalyticVsOut;
-    let local = in.p2.xy + in.corner * in.p2.zw;
-    var world: vec2<f32>;
+    // `p0` is the forward linear part [a, b, c, d] of the affine, row-major
+    // like `Affine2` (x' = a·x + b·y + tx, y' = c·x + d·y + ty); `p1.xy` is
+    // the translation and `p2` the local rect.
+    var local: vec2<f32>;
     if (in.kind == 0u) {
-        world = vec2<f32>(in.p0.x * local.x + in.p0.z * local.y + in.p1.x,
-                          in.p0.y * local.x + in.p0.w * local.y + in.p1.y);
-        out.local = in.corner * in.p2.zw;
+        // Chrome. The edge's anti-aliasing ramp reaches ~1px past the rect, so
+        // under rotation/scale pad the quad by 2 screen px (converted to local
+        // units per axis) or the outer half of that ramp is never rasterized
+        // and the edges look hard. Translate-only chrome keeps its exact quad.
+        var pad = vec2<f32>(0.0);
+        if (any(in.p0 != vec4<f32>(1.0, 0.0, 0.0, 1.0))) {
+            let axis_scale = vec2<f32>(length(in.p0.xz), length(in.p0.yw));
+            pad = vec2<f32>(2.0) / max(axis_scale, vec2<f32>(1e-4));
+        }
+        let cell = in.corner * (in.p2.zw + 2.0 * pad) - pad;
+        local = in.p2.xy + cell;
+        out.local = cell;
     } else {
-        world = vec2<f32>(in.p0.x * local.x + in.p0.y * local.y + in.p1.x,
-                          in.p0.z * local.x + in.p0.w * local.y + in.p1.y);
+        local = in.p2.xy + in.corner * in.p2.zw;
         out.local = local;
     }
+    let world = vec2<f32>(in.p0.x * local.x + in.p0.y * local.y + in.p1.x,
+                          in.p0.z * local.x + in.p0.w * local.y + in.p1.y);
     out.clip_position = uniforms.view_proj * vec4<f32>(world, 0.0, 1.0);
     out.world = world;
     out.p0 = in.p0; out.p1 = in.p1; out.p2 = in.p2; out.p3 = in.p3;

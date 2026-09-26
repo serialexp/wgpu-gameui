@@ -67,6 +67,27 @@ pub struct ProgressBar {
     /// Caller-owned color policy. Defaults to [`ProgressFill::default`] (stat
     /// banding); set via [`with_fill`](Self::with_fill) for solid or custom bands.
     pub fill: ProgressFill,
+    /// `Some(step)` draws Forge's indeterminate sweep at that step of its
+    /// clock instead of a fill (see [`ProgressBar::indeterminate`]).
+    pub sweep: Option<u64>,
+}
+
+/// How often an indeterminate bar's sweep moves (Forge steps it from a
+/// 120 ms clock rather than animating it every frame).
+pub const INDETERMINATE_STEP: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// The step of the indeterminate clock `elapsed` after it started.
+pub fn indeterminate_step(elapsed: std::time::Duration) -> u64 {
+    (elapsed.as_millis() / INDETERMINATE_STEP.as_millis()) as u64
+}
+
+/// The sweep's width, as a share of the track.
+const SWEEP_W: f32 = 0.34;
+
+/// Where the sweep's left edge is at `step`, as a share of the track: it
+/// enters from the left, 3% a step, and wraps once it has left on the right.
+fn sweep_left(step: u64) -> f32 {
+    ((step * 3) % 134) as f32 / 100.0 - SWEEP_W
 }
 
 impl ProgressBar {
@@ -76,6 +97,18 @@ impl ProgressBar {
             value: value.clamp(0.0, 1.0),
             show_text: false,
             fill: ProgressFill::default(),
+            sweep: None,
+        }
+    }
+
+    /// An indeterminate bar (Forge `ProgressBar indeterminate`): a 34% wide
+    /// accent sweep crossing the track, at `step` of its clock
+    /// ([`indeterminate_step`]). The caller redraws every
+    /// [`INDETERMINATE_STEP`] while one shows.
+    pub fn indeterminate(step: u64) -> Self {
+        Self {
+            sweep: Some(step),
+            ..Self::new(0.0)
         }
     }
 
@@ -125,6 +158,32 @@ impl ProgressBar {
             style.scalar(StyleKey::InnerShadowDepth),
             1.0,
         );
+
+        if let Some(step) = self.sweep {
+            // `linear-gradient(90deg, transparent, --accent-sweep,
+            // transparent)` at 0.85 opacity, clipped by the track.
+            let inner = track.inset(1.0);
+            if inner.width > 0.0 && inner.height > 0.0 {
+                let sweep = crate::color::oklch(0.78, 0.1, 200.0, 0.85);
+                let clear = [sweep[0], sweep[1], sweep[2], 0.0];
+                let w = inner.width * SWEEP_W;
+                let x = inner.x + inner.width * sweep_left(step);
+                list.push_clip(inner);
+                list.horizontal_gradient(
+                    Rect::new(x, inner.y, w * 0.5, inner.height),
+                    clear,
+                    sweep,
+                );
+                list.horizontal_gradient(
+                    Rect::new(x + w * 0.5, inner.y, w * 0.5, inner.height),
+                    sweep,
+                    clear,
+                );
+                list.pop_clip();
+            }
+            list.pop_debug_scope();
+            return;
+        }
 
         // Fill - color from the caller-owned policy, painted as the accent
         // gradient (brighter at the top) with a 1px top highlight.
@@ -244,6 +303,41 @@ mod tests {
         // top (the visual layering around it is covered by the gallery).
         let style = StyleResolver::new(theme);
         bar.fill.color(bar.value, &style)
+    }
+
+    #[test]
+    fn the_sweep_steps_across_and_wraps() {
+        assert_eq!(indeterminate_step(std::time::Duration::from_millis(0)), 0);
+        assert_eq!(indeterminate_step(std::time::Duration::from_millis(119)), 0);
+        assert_eq!(indeterminate_step(std::time::Duration::from_millis(240)), 2);
+        assert!(
+            (sweep_left(0) + SWEEP_W).abs() < 1e-6,
+            "starts off the left"
+        );
+        assert!((sweep_left(1) - (0.03 - SWEEP_W)).abs() < 1e-6);
+        // 134% of travel: at step 44 only 2% is left on the track; 45 wraps.
+        assert!((sweep_left(44) - 0.98).abs() < 1e-6, "leaving on the right");
+        assert!((sweep_left(45) - (0.01 - SWEEP_W)).abs() < 1e-6, "wrapped");
+    }
+
+    #[test]
+    fn an_indeterminate_bar_draws_a_clipped_sweep_and_no_fill() {
+        let theme = theme();
+        let style = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        ProgressBar::indeterminate(20).draw(Rect::new(0.0, 0.0, 200.0, 7.0), &mut list, &style);
+        assert_eq!(
+            list.chrome_instance_count(),
+            ProgressBar::indeterminate(0).sweep.map_or(0, |_| {
+                let mut plain = DrawList::new();
+                // A bare track draws the same chrome as the sweep's.
+                ProgressBar::new(0.0).draw(Rect::new(0.0, 0.0, 200.0, 7.0), &mut plain, &style);
+                plain.chrome_instance_count()
+            }),
+            "only the track is chrome; the sweep is two gradient quads"
+        );
+        assert!(!list.vertices.is_empty(), "the sweep's gradient quads");
+        assert_eq!(list.clip_len(), 0, "its clip is popped");
     }
 
     #[test]

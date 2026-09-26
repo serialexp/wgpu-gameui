@@ -2,14 +2,16 @@
 //!
 //! `DrawList::chrome_rect` rasterizes a button's rounded background + border
 //! from a signed distance field in one instanced draw, instead of tessellating
-//! ~80 vertices into the colored soup. This test renders the same grid of
-//! buttons two ways — once via `chrome_rect` (instanced), once via the immediate
-//! `rounded_rect` + `rounded_rect_outline` primitives — reads both frames back,
-//! and asserts the images match within a tolerance.
+//! ~80 vertices into the colored soup. One test renders the same grid of
+//! buttons two ways — once via `chrome_rect` (one combined instance), once as a
+//! separate `rounded_rect` fill + `rounded_rect_outline` — and asserts the
+//! images match within a small tolerance (the border's anti-aliased edge
+//! blends differently when drawn as its own layer).
 //!
-//! They are *not* bit-exact: the SDF path anti-aliases its edges (a feature),
-//! so the corners and 1px borders differ by design. We therefore allow a small
-//! fraction of pixels to differ and require the bulk (flat interiors) to match.
+//! Rotated and scaled chrome also stays a single SDF instance: the shader
+//! applies the affine. `rotated_chrome_uses_the_sdf_path_and_lands_where_the_
+//! transform_says` checks every pixel of a rotated shape against the analytic
+//! one, including the anti-aliased band just outside the edge.
 //!
 //! GPU-only, like `widget_gallery` — run with:
 //! ```
@@ -168,7 +170,8 @@ fn instanced_chrome_matches_immediate() {
         instanced.chrome_rect(*r, RADIUS, THICKNESS, BG, BORDER);
     }
 
-    // Immediate path: exactly what `chrome_rect`'s fallback emits.
+    // Reference: the same chrome as a separate fill + outline (two SDF
+    // instances per button instead of one combined instance).
     let mut immediate = DrawList::with_font_system(font_system.clone());
     for r in &rects {
         immediate.rounded_rect(*r, RADIUS, BG);
@@ -222,6 +225,154 @@ fn instanced_chrome_matches_immediate() {
         frac * 100.0,
         6.0
     );
+}
+
+/// Signed distance from `p` to a rounded rect at the origin with `size` and a
+/// uniform corner `radius` (negative inside). Same formula as the shader.
+fn rounded_rect_distance(p: [f32; 2], size: [f32; 2], radius: f32) -> f32 {
+    let q = [
+        (p[0] - size[0] * 0.5).abs() - size[0] * 0.5 + radius,
+        (p[1] - size[1] * 0.5).abs() - size[1] * 0.5 + radius,
+    ];
+    let outside = (q[0].max(0.0).powi(2) + q[1].max(0.0).powi(2)).sqrt();
+    outside + q[0].max(q[1]).min(0.0) - radius
+}
+
+/// One way of drawing a white rounded rect at `rect` (local space).
+type DrawRotated = fn(&mut DrawList, Rect);
+
+/// Render one white rounded rect under `translate(center) · rotate(angle) ·
+/// scale(s, s)` and check every pixel against the analytic shape: pixels well
+/// inside are full white, pixels well outside are untouched black, and the
+/// thin band just *outside* the edge is partly lit — the anti-aliasing ramp
+/// reaches past the edge, so the instance quad must be padded to draw it.
+/// A transposed matrix (the shape turning the wrong way) fails the inside and
+/// outside checks.
+fn assert_rotated_shape(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    ui: &mut UiRenderer,
+    name: &str,
+    draw: DrawRotated,
+    angle: f32,
+    s: f32,
+) {
+    let size = [140.0f32, 70.0];
+    let center = [W as f32 * 0.5, H as f32 * 0.5];
+    let mut list = DrawList::with_font_system(wgpu_gameui::shared_font_system());
+    list.translate(center[0], center[1]);
+    list.rotate(angle);
+    list.scale(s, s);
+    draw(
+        &mut list,
+        Rect::new(-size[0] * 0.5, -size[1] * 0.5, size[0], size[1]),
+    );
+    assert_eq!(
+        list.chrome_instance_count(),
+        1,
+        "{name}: a rotated shape should be one SDF instance, not tessellated"
+    );
+    let image = render_list(device, queue, ui, &list);
+    image::RgbaImage::from_raw(W, H, image.clone()).and_then(|i| {
+        i.save(format!("test_output/chrome_rotated_{name}.png"))
+            .ok()
+    });
+
+    let (sin, cos) = angle.sin_cos();
+    let (mut inside, mut outside, mut fringe) = (0, 0, 0);
+    for y in 0..H {
+        for x in 0..W {
+            // Pixel centre back into the rect's local space (inverse of
+            // translate · rotate · scale), measured from the rect's top-left.
+            let dx = x as f32 + 0.5 - center[0];
+            let dy = y as f32 + 0.5 - center[1];
+            let lx = (cos * dx + sin * dy) / s + size[0] * 0.5;
+            let ly = (-sin * dx + cos * dy) / s + size[1] * 0.5;
+            // Uniform scale: screen distance is local distance times `s`.
+            let d = rounded_rect_distance([lx, ly], size, 10.0) * s;
+            let v = image[((y * W + x) * 4) as usize];
+            if d < -1.5 {
+                inside += 1;
+                assert!(
+                    v >= 250,
+                    "{name}: ({x},{y}) is {d:.2}px inside but only {v}"
+                );
+            } else if d > 1.5 {
+                outside += 1;
+                assert_eq!(v, 0, "{name}: ({x},{y}) is {d:.2}px outside but lit {v}");
+            } else if d > 0.1 && d < 0.6 {
+                fringe += 1;
+                assert!(
+                    v > 0,
+                    "{name}: ({x},{y}) is {d:.2}px outside the edge, unlit (AA cut off)"
+                );
+            }
+        }
+    }
+    assert!(
+        inside > 5_000 && outside > 50_000 && fringe > 100,
+        "{name}: {inside}/{outside}/{fringe}"
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn rotated_chrome_uses_the_sdf_path_and_lands_where_the_transform_says() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter (run under DISPLAY=:0)");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("rotated chrome device"),
+            ..Default::default()
+        },
+        None,
+    ))
+    .expect("request device");
+    let mut ui = UiRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu_gameui::shared_font_system(),
+    );
+    std::fs::create_dir_all("test_output").ok();
+
+    let cases: [(&str, DrawRotated); 5] = [
+        ("paint_quad", |list, r| {
+            list.paint_quad(
+                r,
+                QuadStyle {
+                    background: Background::Solid([1.0; 4]),
+                    border_widths: EdgeWidths::default(),
+                    border_color: [1.0; 4],
+                    corner_radii: CornerRadii::uniform(10.0),
+                },
+            )
+        }),
+        ("rounded_rect", |list, r| {
+            list.rounded_rect(r, 10.0, [1.0; 4])
+        }),
+        ("chrome_rect", |list, r| {
+            list.chrome_rect(r, 10.0, 2.0, [1.0; 4], [1.0; 4])
+        }),
+        ("chrome_rect_gradient", |list, r| {
+            list.chrome_rect_gradient(r, 10.0, 2.0, [1.0; 4], [1.0; 4], [1.0; 4])
+        }),
+        // A 40px border on a 70px-tall rect leaves no inner hole, so the
+        // outline covers the whole shape and the same pixel checks apply.
+        ("rounded_rect_outline", |list, r| {
+            list.rounded_rect_outline(r, 10.0, 40.0, [1.0; 4])
+        }),
+    ];
+    for (name, draw) in cases {
+        assert_rotated_shape(&device, &queue, &mut ui, name, draw, 0.35, 1.0);
+        let scaled = format!("{name}_scaled");
+        assert_rotated_shape(&device, &queue, &mut ui, &scaled, draw, -0.6, 1.5);
+    }
 }
 
 #[test]

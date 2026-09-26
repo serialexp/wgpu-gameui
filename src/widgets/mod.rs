@@ -3,6 +3,7 @@
 mod app_shell;
 mod asset_grid;
 mod badge;
+mod band;
 mod banner;
 mod binding;
 mod breadcrumb;
@@ -40,6 +41,7 @@ mod list_view;
 mod material;
 mod menu_screens;
 mod menubar;
+mod meter;
 mod number_input;
 mod panel;
 mod popover;
@@ -51,9 +53,11 @@ mod search_field;
 mod separator;
 mod settings;
 mod slider;
+mod span_tabs;
 mod splitter;
 mod status_bar;
 mod status_dot;
+mod status_zones;
 mod table;
 mod tabs;
 mod tag_input;
@@ -67,6 +71,8 @@ mod toolbar;
 mod tooltip;
 mod tree;
 mod vector_field;
+mod waffle;
+mod well_chip;
 mod window;
 
 pub use app_shell::{
@@ -77,8 +83,10 @@ pub use app_shell::{
 pub use app_shell::{SHELL_DRAG_TOOLBAR_GRIP, SHELL_TOOLBAR_ID};
 pub use asset_grid::{AssetGrid, AssetGridOutput};
 pub use badge::{
-    ChipOutput, HUE_CHIP_HEIGHT, badge, chip, hue_chip, hue_chip_right, hue_chip_width, keycap,
+    BADGE_HEIGHT, BadgeTone, CHIP_HEIGHT, ChipOutput, HUE_CHIP_HEIGHT, badge, badge_toned,
+    badge_toned_width, chip, chip_width, hue_chip, hue_chip_right, hue_chip_width, keycap,
 };
+pub use band::toolbar_band;
 pub use banner::{Banner, Severity};
 pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
@@ -136,10 +144,14 @@ pub use menubar::{
     MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger,
     Modifiers, SubmenuSide, blocker_regions, place_popup,
 };
+pub use meter::{BarSegment, INLINE_METER_HEIGHT, MeterFill, inline_meter, stacked_bar};
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};
-pub use popover::{Popover, PopoverOutput, PopoverSide, measure_sheet_height, place_popover};
-pub use progress_bar::{ProgressBar, ProgressFill};
+pub use popover::{
+    POPOVER_CONTENT_TOP, POPOVER_PAD, POPOVER_TITLE_H, Popover, PopoverFrame, PopoverOutput,
+    PopoverSide, draw_frame as draw_popover_frame, measure_sheet_height, place_popover,
+};
+pub use progress_bar::{INDETERMINATE_STEP, ProgressBar, ProgressFill, indeterminate_step};
 pub use radio::RadioGroup;
 pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};
 #[cfg(feature = "phosphor-icons")]
@@ -150,9 +162,11 @@ pub use settings::{
     default_values,
 };
 pub use slider::{Slider, SliderOutput};
+pub use span_tabs::{SPAN_TABS_HEIGHT, SpanTab, SpanTabs};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
 pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};
 pub use status_dot::{STATUS_DOT_SIZE, Status, status_dot};
+pub use status_zones::{StatusBarOutput, StatusPart, StatusToggle, StatusZone, ZonedStatusBar};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
 pub use tag_input::{TagOutput, draw as draw_tag_input};
@@ -169,6 +183,10 @@ pub use toolbar::{
 pub use tooltip::{TooltipContent, TooltipHint, TooltipLayer, TooltipSide};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};
+pub use waffle::{
+    WAFFLE_CELL, WAFFLE_LEGEND_ROW, Waffle, WaffleCategory, WaffleFill, WaffleOutput,
+};
+pub use well_chip::{WELL_CHIP_HEIGHT, WellChip, WellChipOutput, WellChipPart};
 pub use window::{
     DEFAULT_WINDOW_MIN_SIZE, WINDOW_CLOSE_KEY_INSET, WINDOW_RESIZE_GRIP_SIZE, Window, WindowOutput,
     WindowState,

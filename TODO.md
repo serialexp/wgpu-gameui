@@ -12,6 +12,57 @@ Use this as the working backlog for the package. Cross items off as PRs land.
 
 ---
 
+## Gallery foundations cards (2026-09-26)
+
+- [ ] **Draw Forge's Foundations cards in the widget gallery, from `Theme`.**
+      Forge has cards for Colors (accent roles, axis tints, ink ladder,
+      semantic hues, host surfaces, washes), Depth (two-line edges, key
+      states, raised/sunken/floating), Focus, Motion, Spacing (radius,
+      heights, gaps) and Type (carved text, Plex Sans, Plex Mono). Drawing
+      them from our `Theme` would show at a glance when a token drifts from
+      the design. Follow-up to the Forge-style gallery reorganization (see
+      CURRENT_TASK.md).
+- [ ] **Clear the gallery's debug-report problems.** The gallery writes
+      `test_output/widget_gallery.debug.txt`; it lists 104 problems (113
+      before the reorganization, so these are older). Errors:
+      `dropped_degenerate` in CurveEditor, Toast (3) and Window (primitives
+      with non-positive size); `missing_paint` in DragHandle (2), List and
+      ScrollView (a reserved box that drew nothing). Warnings:
+      `invisible_alpha` (5), `overflows_declared` (5), `sibling_overlap`
+      (5), `near_miss_alignment` (2). Each is either a real widget bug or a
+      false positive in the report; sort them out one by one.
+
+---
+
+## Rotated quads and circles still tessellate (found 2026-09-26)
+
+- [ ] **Decide whether rotated `quad()` and circles should go SDF too.**
+      Rotated chrome, rounded rects and outlines are now one SDF instance
+      (smooth edges). `DrawList::quad` still falls back to hard-edged soup
+      triangles under rotation/scale, and `circle`/`circle_outline` fall back
+      to a triangle fan (circles only care about scale, since rotation
+      doesn't change them). Trade-off for quads: SDF edges are anti-aliased,
+      so two rotated quads that share an edge would show a faint seam, while
+      soup quads meet exactly. Circles would need the instance to carry a
+      scale (or the full affine) instead of a post-transform centre.
+
+---
+
+## Widgets that measure text in another font than they draw (found 2026-09-26)
+
+- [ ] **Check every `measure_text(.., None)` caller against the font its
+      text is drawn in.** `measure_text` shapes in the default sans. Mono
+      text measured that way comes out too narrow (the agent-ui status bar,
+      chips and dock cards overlapped until they switched to
+      `StyleResolver::mono_width`), and any widget drawing with
+      `theme.font` is measured wrong once a theme sets that font. About 40
+      callers remain (badge, breadcrumb, combo_box, context_menu hints,
+      doc_tabs, panel, radio, status_bar, table, tabs, tag_input, tooltip,
+      asset_grid, progress_bar, popover). For each: measure the block it
+      draws (`measure_block`), or use `mono_width`/`sans_width`.
+
+---
+
 ## Per-frame text allocations (found 2026-09-25, GroupList perf test)
 
 - [ ] **P1 — A `TextBlock` costs 3 heap allocations to build.** Found while
@@ -1270,7 +1321,13 @@ designed components we didn't have. Fantasy Theme sheet intentionally ignored.
       `DrawList::chrome_rect_gradient(rect, radius, thickness, bg, bg2, border)`
       is the normal chrome entry point (`chrome_rect` = flat special case).
       Instance stride 6×vec4; fallback (rotated transforms) composites
-      `rounded_rect` + `vertical_gradient`.
+      `rounded_rect` + `vertical_gradient`. *(2026-09-26: that fallback is
+      gone — it painted a square gradient over the rounded fill and had no
+      AA. Rotated/scaled `chrome_rect(_gradient)`, `rounded_rect`,
+      `rect_outline` and `rounded_rect_outline` are now one SDF instance; the
+      chrome vertex shader reads the affine row-major like `Affine2` (it was
+      transposed, so rotations turned the wrong way) and pads the quad by 2px
+      when rotated/scaled so the AA ramp outside the edge is drawn.)*
 - [x] **New material tokens on `Theme`/`StyleKey`** (all resolver/overlay
       addressable, round-trip tested): `plinth`, `travel` (scalar),
       `face_top/_hover/_pressed`, `face_bottom/…`, `edge_highlight(+hover/

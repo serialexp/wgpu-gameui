@@ -24,9 +24,11 @@
 //! }
 //! ```
 
+use crate::Weight;
 use crate::layout::Rect;
 use crate::render::PhosphorIcon;
 use crate::style::{Ink, StyleKey, StyleResolver};
+use crate::text::TextBlock;
 
 use super::material::Tone;
 use super::{Button, DrawContext, FocusId, Icon};
@@ -34,10 +36,25 @@ use super::{Button, DrawContext, FocusId, Icon};
 /// Disabled keys fade to this fraction (the design's `opacity: 0.45`).
 const DISABLED_ALPHA: f32 = 0.45;
 
-/// A square key with a vector icon. See the [module docs](self).
+/// What a key's face shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyFace {
+    /// A vector icon.
+    Icon(PhosphorIcon),
+    /// A text glyph, as Forge's `IconKey glyph="■"` draws it: sans, weight
+    /// 500, carved, at 12 / 11 / 10 px for the toolbar, status and header
+    /// sizes.
+    Glyph(&'static str),
+}
+
+/// The design's `--carve` text shadow: black at 50%, 1 px up.
+const CARVE_ALPHA: u8 = 128;
+
+/// A square key with a vector icon or a text glyph. See the
+/// [module docs](self).
 #[derive(Clone, Copy, Debug)]
 pub struct IconKey {
-    icon: PhosphorIcon,
+    face: KeyFace,
     size: f32,
     tone: Tone,
     held: bool,
@@ -58,8 +75,18 @@ impl IconKey {
 
     /// A default-tone key showing `icon` on a `size` px square face.
     pub fn new(icon: PhosphorIcon, size: f32) -> Self {
+        Self::with_face(KeyFace::Icon(icon), size)
+    }
+
+    /// A default-tone key showing a text `glyph` (such as "■" or "›") on a
+    /// `size` px square face, for the glyphs the icon set lacks.
+    pub fn glyph(glyph: &'static str, size: f32) -> Self {
+        Self::with_face(KeyFace::Glyph(glyph), size)
+    }
+
+    fn with_face(face: KeyFace, size: f32) -> Self {
         Self {
-            icon,
+            face,
             size,
             tone: Tone::Default,
             held: false,
@@ -139,6 +166,18 @@ impl IconKey {
         }
     }
 
+    /// A text glyph's size on a face `face` px tall (Forge `IconKey`'s
+    /// `fontSize`).
+    fn glyph_size(face: f32) -> f32 {
+        if face >= Self::TOOLBAR {
+            12.0
+        } else if face >= Self::STATUS {
+            11.0
+        } else {
+            10.0
+        }
+    }
+
     /// The icon ink for this key's tone and state.
     fn ink(&self, s: &StyleResolver, hovered: bool, pressed: bool) -> [f32; 4] {
         let down = pressed || self.held;
@@ -190,17 +229,37 @@ impl IconKey {
             rect.width,
             (rect.height - travel).max(0.0),
         );
-        let side = Self::icon_box(face.height.min(face.width));
-        let icon_rect = Rect::new(
-            face.x + (face.width - side) * 0.5,
-            face.y + (face.height - side) * 0.5,
-            side,
-            side,
-        );
         let hovered = self.enabled && response.hovered;
-        Icon::new(self.icon)
-            .tint(self.ink(&s, hovered, response.pressed))
-            .draw(icon_rect, ctx.draw_list);
+        let ink = self.ink(&s, hovered, response.pressed);
+        match self.face {
+            KeyFace::Icon(icon) => {
+                let side = Self::icon_box(face.height.min(face.width));
+                let icon_rect = Rect::new(
+                    face.x + (face.width - side) * 0.5,
+                    face.y + (face.height - side) * 0.5,
+                    side,
+                    side,
+                );
+                Icon::new(icon).tint(ink).draw(icon_rect, ctx.draw_list);
+            }
+            KeyFace::Glyph(glyph) => {
+                let size = Self::glyph_size(face.height.min(face.width));
+                let font = s.theme().font.as_ref();
+                let y = ctx
+                    .draw_list
+                    .vcentered_text_y(face.y, face.height, size, font, glyph);
+                let mut block = TextBlock::new(glyph, 0.0, y)
+                    .with_size(size)
+                    .with_weight(Weight::MEDIUM)
+                    .with_color_f32(ink)
+                    .with_shadow(0, 0, 0, CARVE_ALPHA, 0.0, -1.0, 0.0)
+                    .with_font_opt(font.cloned());
+                // Measured at the weight it draws in.
+                let (w, _) = ctx.draw_list.measure_block(&block);
+                block.x = face.x + (face.width - w) * 0.5;
+                ctx.draw_list.text(block);
+            }
+        }
         response
     }
 }
@@ -327,5 +386,34 @@ mod tests {
         let mut faded = s.ink(Ink::Emph);
         faded[3] *= DISABLED_ALPHA;
         assert_eq!(tint(key.enabled(false), &hover), faded);
+    }
+
+    #[test]
+    fn a_glyph_key_centres_its_glyph_at_the_design_size_and_ink() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        for (size, font) in [(15.0, 10.0), (17.0, 10.0), (18.0, 11.0), (24.0, 12.0)] {
+            let key = IconKey::glyph("■", size).tone(Tone::Ghost);
+            let (mut list, _) = draw(key, &away());
+            assert!(list.icons_msdf.is_empty());
+            assert_eq!(list.texts.len(), 1, "{size}");
+            let text = list.texts[0].clone();
+            assert_eq!((text.content.as_str(), text.font_size), ("■", font));
+            let cell = TextBlock::new("", 0.0, 0.0).with_color_f32(s.ink(Ink::Cell));
+            assert_eq!(text.color, cell.color);
+            let (w, _) = list.measure_block(&text);
+            assert!(
+                (text.x + w * 0.5 - size * 0.5).abs() < 0.01,
+                "{size}: centred, not ellipsized"
+            );
+        }
+    }
+
+    #[test]
+    fn a_glyph_drops_with_the_face_when_pressed() {
+        let key = IconKey::glyph("›", 15.0).tone(Tone::Ghost).travel(1.0);
+        let rest = draw(key, &away()).0.texts[0].y;
+        let pressed = draw(key, &input_at(7.0, 7.0, true, false)).0.texts[0].y;
+        assert_eq!(pressed - rest, 1.0);
     }
 }

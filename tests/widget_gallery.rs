@@ -31,9 +31,12 @@ use wgpu_gameui::{
     lerp_color,
 };
 use wgpu_gameui::{
-    EmptyState, STATUS_BAR_HEIGHT, badge, chip, dots, draw_combo_trigger, draw_curve_editor,
-    draw_doc_tabs, draw_gradient_ramp, draw_status_bar, draw_tag_input, keycap, place_popover,
-    skeleton, spinner,
+    BADGE_HEIGHT, BadgeTone, BarSegment, EmptyState, Ink, MeterFill, SPAN_TABS_HEIGHT,
+    STATUS_BAR_HEIGHT, SpanTab, SpanTabs, Status, StatusPart, StatusToggle, StatusZone, TextSize,
+    WELL_CHIP_HEIGHT, Waffle, WaffleCategory, WaffleFill, WellChip, WellChipPart, ZonedStatusBar,
+    badge, badge_toned, badge_toned_width, chip, dots, draw_combo_trigger, draw_curve_editor,
+    draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar, draw_tag_input,
+    inline_meter, keycap, place_popover, skeleton, spinner, stacked_bar, toolbar_band,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -55,6 +58,192 @@ const LABEL_SIZE: f32 = 11.0;
 /// reserves enough horizontal room to not collide with the next cell.
 const LABEL_CHAR_W: f32 = 6.0;
 
+/// A category of the gallery catalogue. The component categories are the
+/// Forge Design System's groups (its `components/<group>/` folders);
+/// `Foundations` holds type, text and icons, and `Engine` holds rendering
+/// and layout machinery Forge has no component for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Category {
+    Foundations,
+    Chrome,
+    Data,
+    Dialogs,
+    Editors,
+    Feedback,
+    Forms,
+    Inspector,
+    Keys,
+    Layout,
+    Palette,
+    Settings,
+    Sidebar,
+    Windows,
+    Engine,
+}
+
+impl Category {
+    /// Every category, in index-page order.
+    const ALL: [Category; 15] = [
+        Category::Foundations,
+        Category::Chrome,
+        Category::Data,
+        Category::Dialogs,
+        Category::Editors,
+        Category::Feedback,
+        Category::Forms,
+        Category::Inspector,
+        Category::Keys,
+        Category::Layout,
+        Category::Palette,
+        Category::Settings,
+        Category::Sidebar,
+        Category::Windows,
+        Category::Engine,
+    ];
+
+    /// The category's name: its directory under
+    /// `test_output/widget_gallery/`, and (for the component categories)
+    /// Forge's folder name.
+    fn name(self) -> &'static str {
+        match self {
+            Category::Foundations => "foundations",
+            Category::Chrome => "chrome",
+            Category::Data => "data",
+            Category::Dialogs => "dialogs",
+            Category::Editors => "editors",
+            Category::Feedback => "feedback",
+            Category::Forms => "forms",
+            Category::Inspector => "inspector",
+            Category::Keys => "keys",
+            Category::Layout => "layout",
+            Category::Palette => "palette",
+            Category::Settings => "settings",
+            Category::Sidebar => "sidebar",
+            Category::Windows => "windows",
+            Category::Engine => "engine",
+        }
+    }
+}
+
+/// The Forge Design System's components, by category, as listed in its
+/// `_ds_manifest.json` (Claude Design project "Forge Design System",
+/// 2026-09-26). The index page lists the ones the gallery has no section for
+/// as missing. Update it when Forge gains or renames a component.
+const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
+    (
+        Category::Chrome,
+        &[
+            "Console",
+            "ContextMenu",
+            "DockPanel",
+            "MenuBar",
+            "MenuSheet",
+            "StatusBar",
+        ],
+    ),
+    (
+        Category::Data,
+        &[
+            "AssetGrid",
+            "Badge",
+            "CountBubble",
+            "DragList",
+            "DropZone",
+            "ListView",
+            "Table",
+            "Thumb",
+            "Tree",
+        ],
+    ),
+    (
+        Category::Dialogs,
+        &["AlertDialog", "ConfirmDialog", "PromptDialog"],
+    ),
+    (
+        Category::Editors,
+        &["ColorPicker", "CurveEditor", "GradientRamp"],
+    ),
+    (
+        Category::Feedback,
+        &[
+            "Banner",
+            "BusyDots",
+            "EmptyState",
+            "Placeholder",
+            "Skeleton",
+            "Spinner",
+            "StatusIcon",
+            "Toast",
+            "Tooltip",
+        ],
+    ),
+    (
+        Category::Forms,
+        &[
+            "Checkbox",
+            "ComboBox",
+            "Dropdown",
+            "FieldLabel",
+            "NumberField",
+            "ProgressBar",
+            "Radio",
+            "SearchField",
+            "Slider",
+            "Switch",
+            "TagInput",
+            "TextArea",
+            "TextField",
+            "VectorField",
+        ],
+    ),
+    (
+        Category::Inspector,
+        &["FileField", "Inspector", "PropertyGroup", "PropertyRow"],
+    ),
+    (
+        Category::Keys,
+        &[
+            "Button",
+            "FilterChip",
+            "IconKey",
+            "Key",
+            "Keycap",
+            "Toolbar",
+        ],
+    ),
+    (
+        Category::Layout,
+        &[
+            "Breadcrumb",
+            "DocumentTabs",
+            "Group",
+            "Modal",
+            "Pager",
+            "Panel",
+            "Popover",
+            "ScrollArea",
+            "SegmentedTabs",
+            "Separator",
+            "Sheet",
+            "SpanTabs",
+            "Splitter",
+        ],
+    ),
+    (Category::Palette, &["CommandPalette"]),
+    (Category::Settings, &["SettingRow", "SettingsPanel"]),
+    (Category::Sidebar, &["DockSection", "DockStack"]),
+    (Category::Windows, &["FloatingWindow"]),
+];
+
+/// Forge's components in `category`, in Forge's order (empty for
+/// `Foundations` and `Engine`).
+fn forge_components(category: Category) -> &'static [&'static str] {
+    FORGE_COMPONENTS
+        .iter()
+        .find(|(c, _)| *c == category)
+        .map_or(&[], |(_, names)| *names)
+}
+
 /// A wrapping grid of labeled preview cells.
 ///
 /// `cell` reserves a `w`×`h` content box, draws its label just above it, and
@@ -69,9 +258,10 @@ struct Flow {
     row_h: f32,
     col_gap: f32,
     row_gap: f32,
-    current_section: Option<String>,
+    /// Index into `sections` of the section cells go to.
+    current_section: Option<usize>,
     sections: Vec<GallerySection>,
-    components: Vec<GalleryComponent>,
+    cells: Vec<GalleryCell>,
 }
 
 impl Flow {
@@ -87,12 +277,22 @@ impl Flow {
             row_gap: 16.0,
             current_section: None,
             sections: Vec::new(),
-            components: Vec::new(),
+            cells: Vec::new(),
         }
     }
 
-    /// Break to a new row and draw a section header.
-    fn section(&mut self, list: &mut DrawList, title: &'static str) -> f32 {
+    /// Break to a new row and draw a section header for one catalogue entry:
+    /// `component` in `category`, with an optional one-line `subtitle` (`""`
+    /// for none). Use Forge's component name where Forge has the component,
+    /// so the index page can tell which Forge components are missing. Each
+    /// `(category, component)` gets exactly one section.
+    fn section(
+        &mut self,
+        list: &mut DrawList,
+        category: Category,
+        component: &'static str,
+        subtitle: &'static str,
+    ) -> f32 {
         if self.cur_x > self.x0 {
             self.cur_y += self.row_h;
         }
@@ -102,19 +302,33 @@ impl Flow {
         }
         self.cur_x = self.x0;
         self.row_h = 0.0;
+        let heading = TextBlock::new(component, self.x0, self.cur_y)
+            .with_size(15.0)
+            .with_color(120, 180, 255);
+        let (heading_w, _) = list.measure_block(&heading);
+        list.text(heading);
+        let tag = if subtitle.is_empty() {
+            category.name().to_owned()
+        } else {
+            format!("{} · {subtitle}", category.name())
+        };
         list.text(
-            TextBlock::new(title, self.x0, self.cur_y)
-                .with_size(15.0)
-                .with_color(120, 180, 255),
+            TextBlock::new(tag, self.x0 + heading_w + 10.0, self.cur_y + 3.0)
+                .with_size(LABEL_SIZE)
+                .with_color(110, 120, 135),
         );
         let section_top = self.cur_y;
         if let Some(previous) = self.sections.last_mut() {
             previous.bottom = section_top - self.row_gap * 1.5;
         }
-        let file_stem = section_file_stem(title);
-        self.sections
-            .push(GallerySection::new(title, file_stem.clone(), section_top));
-        self.current_section = Some(file_stem);
+        self.current_section = Some(self.sections.len());
+        self.sections.push(GallerySection {
+            category,
+            component,
+            subtitle,
+            top: section_top,
+            bottom: section_top,
+        });
         self.cur_y += 24.0;
         section_top
     }
@@ -142,13 +356,12 @@ impl Flow {
                 .with_color(150, 160, 180),
         );
         let content = Rect::new(self.cur_x, self.cur_y + LABEL_H, w, h);
+        let section = self
+            .current_section
+            .expect("gallery cells must belong to a section");
         if !label.is_empty() {
-            let section = self
-                .current_section
-                .as_deref()
-                .expect("gallery cells must belong to a section");
-            self.components
-                .push(GalleryComponent::new(section, label, content, cell_w));
+            self.cells
+                .push(GalleryCell::new(section, label, content, cell_w));
         }
         self.cur_x += cell_w + self.col_gap;
         self.row_h = self.row_h.max(LABEL_H + h);
@@ -162,8 +375,8 @@ impl Flow {
     /// row starts below it instead of underneath it.
     fn reserve(&mut self, content_h: f32) {
         self.row_h = self.row_h.max(LABEL_H + content_h);
-        if let Some(component) = self.components.last_mut() {
-            component.rect.height = component.rect.height.max(LABEL_H + content_h);
+        if let Some(cell) = self.cells.last_mut() {
+            cell.rect.height = cell.rect.height.max(LABEL_H + content_h);
         }
     }
 
@@ -173,32 +386,33 @@ impl Flow {
     }
 }
 
-#[derive(Clone)]
+/// One catalogue entry: a component's section of the canvas.
 struct GallerySection {
-    /// The section heading, as drawn.
-    title: String,
-    file_stem: String,
+    category: Category,
+    component: &'static str,
+    subtitle: &'static str,
     top: f32,
     bottom: f32,
 }
 
-struct GalleryComponent {
-    /// File stem of the section the component belongs to.
-    section: String,
+/// One labeled preview cell inside a section.
+struct GalleryCell {
+    /// Index of the section the cell belongs to.
+    section: usize,
     /// The cell label, as drawn.
     label: String,
     file_stem: String,
     rect: Rect,
 }
 
-impl GalleryComponent {
+impl GalleryCell {
     /// `cell_w` is the cell's full width: its content's or its label's,
     /// whichever is wider, so the crop never cuts the label off.
-    fn new(section: &str, label: &str, content: Rect, cell_w: f32) -> Self {
+    fn new(section: usize, label: &str, content: Rect, cell_w: f32) -> Self {
         Self {
-            section: section.to_owned(),
+            section,
             label: label.to_owned(),
-            file_stem: section_file_stem(label),
+            file_stem: file_stem(label),
             rect: Rect::new(
                 content.x,
                 content.y - LABEL_H,
@@ -209,18 +423,8 @@ impl GalleryComponent {
     }
 }
 
-impl GallerySection {
-    fn new(title: &str, file_stem: String, top: f32) -> Self {
-        Self {
-            title: title.to_owned(),
-            file_stem,
-            top,
-            bottom: top,
-        }
-    }
-}
-
-fn section_file_stem(title: &str) -> String {
+/// A lowercase, dash-separated file name for `title`.
+fn file_stem(title: &str) -> String {
     let mut stem = String::with_capacity(title.len());
     let mut needs_separator = false;
     for ch in title.chars() {
@@ -246,37 +450,38 @@ fn crop_with_margin(img: &image::RgbaImage, rect: Rect, margin: u32) -> image::R
     image::imageops::crop_imm(img, left, top, right - left, bottom - top).to_image()
 }
 
-fn save_gallery_images(
-    img: &image::RgbaImage,
-    sections: &[GallerySection],
-    components: &[GalleryComponent],
-) {
+/// Cut the canvas into one image per section
+/// (`<group>/<Component>.png`) and one per labeled cell
+/// (`<group>/<Component>/<label>.png`), and write `index.html` to browse
+/// them by group, with Forge's missing components listed.
+fn save_gallery_images(img: &image::RgbaImage, sections: &[GallerySection], cells: &[GalleryCell]) {
     let output_dir = "test_output/widget_gallery";
-    let component_dir = format!("{output_dir}/components");
-    // Start from an empty directory so a renamed or removed section/component
+    // Start from an empty directory so a renamed or removed section or cell
     // never leaves a stale PNG behind.
     match std::fs::remove_dir_all(output_dir) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => panic!("wipe {output_dir}: {err}"),
     }
-    std::fs::create_dir_all(&component_dir).expect("create gallery image directories");
 
-    let mut section_pages = Vec::with_capacity(sections.len());
-    let mut section_index = std::collections::HashMap::with_capacity(sections.len());
+    let mut seen = std::collections::HashSet::with_capacity(sections.len());
+    let mut entries = Vec::with_capacity(sections.len());
     for section in sections {
+        let (category, component) = (section.category.name(), section.component);
         assert!(
             section.bottom > section.top,
-            "gallery section {} is empty",
-            section.file_stem
+            "gallery section {category}/{component} is empty"
         );
-        // The stem is the section's PNG name and its anchor in the index.
-        let previous = section_index.insert(section.file_stem.as_str(), section_pages.len());
         assert!(
-            previous.is_none(),
-            "two gallery sections are both named {:?}",
-            section.title
+            seen.insert((section.category, component)),
+            "two gallery sections are both {category}/{component}; merge them"
         );
+        assert!(
+            !component.is_empty() && component.chars().all(|c| c.is_ascii_alphanumeric()),
+            "gallery component {component:?} must be a PascalCase name"
+        );
+        std::fs::create_dir_all(format!("{output_dir}/{category}/{component}"))
+            .expect("create gallery image directories");
         let section_img = crop_with_margin(
             img,
             Rect::new(
@@ -287,57 +492,75 @@ fn save_gallery_images(
             ),
             10,
         );
-        let path = format!("{output_dir}/{}.png", section.file_stem);
-        section_img.save(&path).expect("save gallery section PNG");
-        section_pages.push(IndexSection {
+        let file = format!("{category}/{component}.png");
+        section_img
+            .save(format!("{output_dir}/{file}"))
+            .expect("save gallery section PNG");
+        entries.push(IndexEntry {
             section,
+            file,
             size: section_img.dimensions(),
-            components: Vec::new(),
+            cells: Vec::new(),
         });
     }
 
-    let mut file_stem_counts = std::collections::BTreeMap::new();
-    for component in components {
-        let component_img = crop_with_margin(img, component.rect, 6);
-        let base = format!("{}--{}", component.section, component.file_stem);
-        let count = file_stem_counts.entry(base.clone()).or_insert(0usize);
+    // Per section, a repeated label gets a `-2`, `-3`, … suffix.
+    let mut stem_counts = std::collections::HashMap::new();
+    for cell in cells {
+        let entry = &mut entries[cell.section];
+        let count = stem_counts
+            .entry((cell.section, cell.file_stem.as_str()))
+            .or_insert(0usize);
         *count += 1;
-        let file_stem = if *count == 1 {
-            base
+        let stem = if *count == 1 {
+            cell.file_stem.clone()
         } else {
-            format!("{base}-{}", *count)
+            format!("{}-{}", cell.file_stem, *count)
         };
-        let path = format!("{component_dir}/{file_stem}.png");
-        component_img
-            .save(&path)
-            .expect("save gallery component PNG");
-        let page = section_index[component.section.as_str()];
-        section_pages[page].components.push(IndexComponent {
-            label: &component.label,
-            file: format!("components/{file_stem}.png"),
-            size: component_img.dimensions(),
+        let file = format!(
+            "{}/{}/{stem}.png",
+            entry.section.category.name(),
+            entry.section.component
+        );
+        let cell_img = crop_with_margin(img, cell.rect, 6);
+        cell_img
+            .save(format!("{output_dir}/{file}"))
+            .expect("save gallery cell PNG");
+        entry.cells.push(IndexCell {
+            label: &cell.label,
+            file,
+            size: cell_img.dimensions(),
         });
     }
 
     let index = format!("{output_dir}/index.html");
-    std::fs::write(&index, gallery_index_html(&section_pages)).expect("write gallery index");
+    std::fs::write(&index, gallery_index_html(&entries)).expect("write gallery index");
+    let covered = FORGE_COMPONENTS
+        .iter()
+        .flat_map(|(category, names)| names.iter().map(move |name| (*category, *name)))
+        .filter(|key| seen.contains(key))
+        .count();
+    let forge_total: usize = FORGE_COMPONENTS.iter().map(|(_, names)| names.len()).sum();
     eprintln!(
-        "wrote {} section and {} component images, browse them at {index}",
+        "wrote {} section and {} cell images ({covered} of {forge_total} Forge components), \
+         browse them at {index}",
         sections.len(),
-        components.len()
+        cells.len()
     );
 }
 
-/// One section of the gallery index page, with its images.
-struct IndexSection<'a> {
+/// One section on the gallery index page, with its images.
+struct IndexEntry<'a> {
     section: &'a GallerySection,
+    /// Section image path, relative to the index page.
+    file: String,
     /// Section image size in pixels.
     size: (u32, u32),
-    components: Vec<IndexComponent<'a>>,
+    cells: Vec<IndexCell<'a>>,
 }
 
-/// One component image on the gallery index page.
-struct IndexComponent<'a> {
+/// One cell image on the gallery index page.
+struct IndexCell<'a> {
     label: &'a str,
     /// Path relative to the index page.
     file: String,
@@ -360,47 +583,123 @@ fn html_escape(text: &str) -> String {
     out
 }
 
-/// A self-contained page for browsing the gallery: a filterable list of
-/// sections on the left, and each section's image with its component
-/// images (folded) on the right, at a chosen pixel zoom.
-fn gallery_index_html(sections: &[IndexSection]) -> String {
+/// A self-contained page for browsing the gallery. On the left, a
+/// filterable list of the groups and their components, with Forge's missing
+/// ones greyed out; on the right, each component's section image with its
+/// cell images (folded), at a chosen pixel zoom.
+fn gallery_index_html(entries: &[IndexEntry]) -> String {
     use std::fmt::Write as _;
 
     let mut nav = String::new();
     let mut body = String::new();
-    for page in sections {
-        let stem = &page.section.file_stem;
-        let title = html_escape(&page.section.title);
-        let (w, h) = page.size;
-        writeln!(nav, r##"<li><a href="#{stem}">{title}</a></li>"##).unwrap();
+    let mut missing_total = Vec::new();
+    for category in Category::ALL {
+        let g = category.name();
+        let forge = forge_components(category);
+        let mut in_group: Vec<&IndexEntry> = entries
+            .iter()
+            .filter(|e| e.section.category == category)
+            .collect();
+        // Forge's components in Forge's order, then gameui's own by name.
+        in_group.sort_by_key(|e| {
+            let forge_index = forge.iter().position(|name| *name == e.section.component);
+            (forge_index.unwrap_or(usize::MAX), e.section.component)
+        });
+        let missing: Vec<&str> = forge
+            .iter()
+            .copied()
+            .filter(|name| !in_group.iter().any(|e| e.section.component == *name))
+            .collect();
+        if in_group.is_empty() && missing.is_empty() {
+            continue;
+        }
+        missing_total.extend(missing.iter().map(|name| (g, *name)));
+
+        let count = if forge.is_empty() {
+            in_group.len().to_string()
+        } else {
+            format!("{} / {}", forge.len() - missing.len(), forge.len())
+        };
         writeln!(
-            body,
-            r##"<section id="{stem}" data-title="{title}">
-<h2><a href="#{stem}">{title}</a></h2>
-<a href="{stem}.png"><img src="{stem}.png" style="--w:{w};--h:{h}" alt="{title}"></a>"##
+            nav,
+            r##"<div class="group"><h3><a href="#{g}">{g}</a> <span class="count">{count}</span></h3><ul>"##
         )
         .unwrap();
-        if !page.components.is_empty() {
+        writeln!(body, r#"<div class="group" id="{g}"><h2>{g}</h2>"#).unwrap();
+        for entry in &in_group {
+            let section = entry.section;
+            let c = section.component;
+            let id = format!("{g}-{c}");
+            let own = !forge.is_empty() && !forge.contains(&c);
+            let tag = if own {
+                r#" <span class="tag">not in Forge</span>"#
+            } else {
+                ""
+            };
+            writeln!(nav, r##"<li><a href="#{id}">{c}</a>{tag}</li>"##).unwrap();
+
+            let mut search = format!("{g} {c} {}", section.subtitle);
+            for cell in &entry.cells {
+                search.push(' ');
+                search.push_str(cell.label);
+            }
+            let search = html_escape(&search);
+            let subtitle = html_escape(section.subtitle);
+            let file = &entry.file;
+            let (w, h) = entry.size;
             writeln!(
                 body,
-                "<details><summary>{} components</summary><div class=\"grid\">",
-                page.components.len()
+                r##"<section id="{id}" data-search="{search}">
+<h3><a href="#{id}">{c}</a> <span class="subtitle">{subtitle}</span>{tag}</h3>
+<img src="{file}" style="--w:{w};--h:{h}" alt="{c}">"##
             )
             .unwrap();
-            for component in &page.components {
-                let label = html_escape(component.label);
-                let file = &component.file;
-                let (w, h) = component.size;
+            if !entry.cells.is_empty() {
                 writeln!(
                     body,
-                    r#"<figure><a href="{file}"><img src="{file}" style="--w:{w};--h:{h}" alt="{label}"></a><figcaption>{label}</figcaption></figure>"#
+                    "<details><summary>{} cells</summary><div class=\"grid\">",
+                    entry.cells.len()
                 )
                 .unwrap();
+                for cell in &entry.cells {
+                    let label = html_escape(cell.label);
+                    let file = &cell.file;
+                    let (w, h) = cell.size;
+                    writeln!(
+                        body,
+                        r#"<figure><img src="{file}" style="--w:{w};--h:{h}" alt="{label}"><figcaption>{label}</figcaption></figure>"#
+                    )
+                    .unwrap();
+                }
+                body.push_str("</div></details>\n");
             }
-            body.push_str("</div></details>\n");
+            body.push_str("</section>\n");
         }
-        body.push_str("</section>\n");
+        for name in &missing {
+            writeln!(nav, r#"<li class="missing">{name}</li>"#).unwrap();
+        }
+        if !missing.is_empty() {
+            writeln!(
+                body,
+                r#"<p class="missing">Missing Forge components: {}</p>"#,
+                missing.join(", ")
+            )
+            .unwrap();
+        }
+        nav.push_str("</ul></div>\n");
+        body.push_str("</div>\n");
     }
+
+    let forge_total: usize = FORGE_COMPONENTS.iter().map(|(_, names)| names.len()).sum();
+    let covered = forge_total - missing_total.len();
+    let missing_list = missing_total
+        .iter()
+        .map(|(g, name)| format!(r##"<a href="#{g}">{g}</a>/{name}"##))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let summary = format!(
+        r#"<p class="summary">Forge coverage: <b>{covered} of {forge_total}</b> components. Missing: {missing_list}</p>"#
+    );
 
     format!(
         r##"<!doctype html>
@@ -415,15 +714,34 @@ body {{ margin: 0; display: flex; background: #0b0d10; color: #c8d0d8;
 nav {{ position: sticky; top: 0; height: 100vh; overflow-y: auto; flex: none;
   width: 280px; padding: 12px; box-sizing: border-box; border-right: 1px solid #222; }}
 nav input, nav select {{ width: 100%; box-sizing: border-box; margin-bottom: 8px; }}
+nav h3 {{ font-size: 12px; margin: 12px 0 2px; text-transform: uppercase; letter-spacing: 0.08em; }}
+nav h3 a {{ color: #c8d0d8; text-decoration: none; }}
 nav ul {{ list-style: none; margin: 0; padding: 0; }}
-nav li a {{ display: block; padding: 2px 4px; color: #9ab; text-decoration: none; }}
+nav li {{ display: flex; align-items: baseline; gap: 6px; }}
+nav li a {{ padding: 1px 4px; color: #9ab; text-decoration: none; }}
 nav li a:hover {{ background: #1a1f25; color: #def; }}
+nav li.missing {{ padding: 1px 4px; color: #5a636c; text-decoration: line-through; }}
+.count {{ color: #6a737b; font-weight: normal; letter-spacing: 0; }}
+.tag {{ font-size: 10px; color: #8a7a55; border: 1px solid #4a4030; border-radius: 3px;
+  padding: 0 4px; font-weight: normal; }}
 main {{ flex: 1; padding: 12px 24px; min-width: 0; }}
-section {{ margin-bottom: 32px; scroll-margin-top: 12px; }}
-h2 {{ font-size: 15px; margin: 0 0 8px; }}
-h2 a {{ color: #78b4ff; text-decoration: none; }}
-img {{ display: block; image-rendering: pixelated;
+.summary {{ color: #9ab; margin: 0 0 16px; }}
+.summary a {{ color: #9ab; }}
+h2 {{ font-size: 13px; margin: 24px 0 12px; padding-bottom: 4px; border-bottom: 1px solid #222;
+  text-transform: uppercase; letter-spacing: 0.08em; color: #c8d0d8; scroll-margin-top: 12px; }}
+section {{ margin-bottom: 28px; scroll-margin-top: 12px; }}
+h3 {{ font-size: 15px; margin: 0 0 8px; }}
+h3 a {{ color: #78b4ff; text-decoration: none; }}
+.subtitle {{ color: #8a96a3; font-size: 12px; font-weight: normal; }}
+p.missing {{ color: #6a737b; }}
+main img {{ display: block; image-rendering: pixelated; cursor: zoom-in;
   width: calc(var(--w) * var(--zoom) * 1px); height: calc(var(--h) * var(--zoom) * 1px); }}
+#lightbox {{ position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; background: rgb(0 0 0 / 0.88);
+  cursor: zoom-out; }}
+#lightbox.hidden {{ display: none; }}
+#lightbox img {{ image-rendering: pixelated; }}
+#lightbox p {{ margin: 0; color: #9ab; }}
 details {{ margin-top: 8px; }}
 summary {{ cursor: pointer; color: #9ab; }}
 .grid {{ display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; align-items: flex-start; }}
@@ -434,35 +752,77 @@ figcaption {{ color: #8a96a3; font-size: 12px; margin-top: 4px; }}
 </head>
 <body>
 <nav>
-<input id="filter" type="search" placeholder="Filter sections" autofocus>
+<input id="filter" type="search" placeholder="Filter components" autofocus>
 <select id="zoom">
 <option value="1">Zoom 1×</option><option value="2">Zoom 2×</option>
 <option value="3">Zoom 3×</option><option value="4">Zoom 4×</option>
 </select>
-<ul>
-{nav}</ul>
-</nav>
+{nav}</nav>
 <main>
+{summary}
 {body}</main>
+<div id="lightbox" class="hidden"><img alt=""><p></p></div>
 <script>
 const filter = document.getElementById("filter");
 filter.addEventListener("input", () => {{
   const query = filter.value.toLowerCase();
-  for (const section of document.querySelectorAll("section")) {{
-    const hide = !section.dataset.title.toLowerCase().includes(query);
+  for (const section of document.querySelectorAll("main section")) {{
+    const hide = !section.dataset.search.toLowerCase().includes(query);
     section.classList.toggle("hidden", hide);
     document.querySelector(`nav a[href="#${{section.id}}"]`).parentElement
       .classList.toggle("hidden", hide);
   }}
+  for (const item of document.querySelectorAll("nav li.missing")) {{
+    item.classList.toggle("hidden", !item.textContent.toLowerCase().includes(query));
+  }}
+  // A group with nothing left to show folds away while filtering.
+  for (const group of document.querySelectorAll(".group")) {{
+    const empty = !group.querySelector("section:not(.hidden), li:not(.hidden)");
+    group.classList.toggle("hidden", query !== "" && empty);
+  }}
 }});
 document.getElementById("zoom").addEventListener("change", (event) => {{
   document.documentElement.style.setProperty("--zoom", event.target.value);
+}});
+// Clicking an image shows it big on this page (never a new tab). It is
+// scaled to fit the window: whole-number steps when it fits at 1× or more so
+// the pixels stay crisp, shrunk to fit otherwise. Click or Escape closes it.
+const lightbox = document.getElementById("lightbox");
+const lightboxImg = lightbox.querySelector("img");
+const lightboxCaption = lightbox.querySelector("p");
+function openLightbox(img) {{
+  const w = img.naturalWidth, h = img.naturalHeight;
+  let scale = Math.min((innerWidth - 48) / w, (innerHeight - 72) / h);
+  if (scale >= 1) scale = Math.floor(scale);
+  lightboxImg.src = img.src;
+  lightboxImg.style.width = `${{w * scale}}px`;
+  lightboxImg.style.height = `${{h * scale}}px`;
+  lightboxCaption.textContent = `${{img.alt}} · ${{w}}×${{h}} at ${{Math.round(scale * 100)}}%`;
+  lightbox.classList.remove("hidden");
+}}
+document.querySelector("main").addEventListener("click", (event) => {{
+  if (event.target.tagName === "IMG") openLightbox(event.target);
+}});
+lightbox.addEventListener("click", () => lightbox.classList.add("hidden"));
+document.addEventListener("keydown", (event) => {{
+  if (event.key === "Escape") lightbox.classList.add("hidden");
 }});
 </script>
 </body>
 </html>
 "##
     )
+}
+
+/// Size of the axis-aligned box around a `size` rect rotated by `angle`, plus
+/// 2px for the anti-aliased edge — the cell a rotated sample needs.
+fn rotated_bounds(size: [f32; 2], angle: f32) -> [f32; 2] {
+    let (s, c) = angle.sin_cos();
+    let (s, c) = (s.abs(), c.abs());
+    [
+        size[0] * c + size[1] * s + 2.0,
+        size[0] * s + size[1] * c + 2.0,
+    ]
 }
 
 fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) -> Vec<u8> {
@@ -537,7 +897,7 @@ fn render_widget_gallery() {
     let theme = Theme::default();
     let mut input = InputState::default();
     let gallery_sections;
-    let gallery_components;
+    let gallery_cells;
 
     // Focus owner for the text inputs. Seed the first as focused so the rendered
     // PNG shows a caret; `begin_frame`/`end_frame` bracket the draws below.
@@ -651,7 +1011,7 @@ fn render_widget_gallery() {
         // list to stage the chain, then for real with that geometry promoted. The
         // open menu comes from the real input path — an Alt tap plus Down — so the
         // PNG exercises arming and opening rather than a seam.
-        flow.section(list, "Menubar — 01-menu-bar.html states");
+        flow.section(list, Category::Chrome, "MenuBar", "01-menu-bar.html states");
 
         let resting_rect = flow.cell(list, "Resting", 220.0, 26.0);
         let mut resting_state = MenuBarState::new();
@@ -681,6 +1041,12 @@ fn render_widget_gallery() {
             &mut DrawContext::new(list, &mut focus, &theme, &armed_input, W as f32, 600.0),
         );
 
+        flow.section(
+            list,
+            Category::Chrome,
+            "MenuSheet",
+            "02-menu-sheet.html, opened from the bar",
+        );
         let menu_rect = flow.cell(list, "Title open + menu sheet", 220.0, 26.0);
         {
             let mut scratch = DrawList::new();
@@ -734,7 +1100,12 @@ fn render_widget_gallery() {
         }
 
         // ---- Primitives -------------------------------------------------
-        flow.section(list, "Primitives");
+        flow.section(
+            list,
+            Category::Engine,
+            "Primitives",
+            "DrawList shapes, nine-slice, sprites",
+        );
 
         let r = flow.cell(list, "Rounded rect", 120.0, 44.0);
         list.rounded_rect(r, 8.0, [0.25, 0.40, 0.65, 1.0]);
@@ -767,15 +1138,17 @@ fn render_widget_gallery() {
         let r = flow.cell(list, "Rect outline", 120.0, 44.0);
         list.rect_outline(r, 2.0, [0.55, 0.75, 0.95, 1.0]);
 
-        // Rotated rounded rect: a non-translate transform falls back to the soup
-        // tessellator, proving the rounded-rect primitive still draws correctly
-        // off-axis (instanced fast path is translate-only).
-        let r = flow.cell(list, "Rounded rect (rotated)", 120.0, 44.0);
+        // Rotated rounded rect: still one SDF instance — the shader applies the
+        // rotation, so the edges stay anti-aliased. The cell fits the rotated
+        // bounds so the shape doesn't cover its label.
+        let (angle, size) = (0.18, [120.0, 44.0]);
+        let bounds = rotated_bounds(size, angle);
+        let r = flow.cell(list, "Rounded rect (rotated)", bounds[0], bounds[1]);
         list.push_transform();
         list.translate(r.x + r.width / 2.0, r.y + r.height / 2.0);
-        list.rotate(0.18);
+        list.rotate(angle);
         list.rounded_rect(
-            Rect::new(-r.width / 2.0, -r.height / 2.0, r.width, r.height),
+            Rect::new(-size[0] / 2.0, -size[1] / 2.0, size[0], size[1]),
             8.0,
             [0.25, 0.40, 0.65, 1.0],
         );
@@ -816,7 +1189,7 @@ fn render_widget_gallery() {
         // ---- Phosphor MSDF icons ---------------------------------------
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(list, "Icons (Phosphor MSDF)");
+            flow.section(list, Category::Foundations, "Icons", "Phosphor, MSDF");
 
             // The full curated set at a single readable size.
             for &icon in PhosphorIcon::ALL {
@@ -838,7 +1211,12 @@ fn render_widget_gallery() {
         }
 
         // ---- Text -------------------------------------------------------
-        flow.section(list, "Text");
+        flow.section(
+            list,
+            Category::Foundations,
+            "Text",
+            "outline, shadow, glow, alignment",
+        );
 
         let r = flow.cell(list, "Plain", 190.0, 20.0);
         list.text(
@@ -898,7 +1276,12 @@ fn render_widget_gallery() {
         // public knobs added on top are: a forced base `TextDirection` (for
         // direction-neutral content that would otherwise auto-resolve LTR) and
         // direction-relative `TextAlign::{Start, End}`.
-        flow.section(list, "RTL / bidi");
+        flow.section(
+            list,
+            Category::Foundations,
+            "Bidi",
+            "RTL / bidi text and input",
+        );
 
         let r = flow.cell(list, "Arabic (auto)", 200.0, 22.0);
         list.rect_outline(r, 1.0, [0.3, 0.34, 0.42, 1.0]);
@@ -1004,7 +1387,7 @@ fn render_widget_gallery() {
         // top-to-bottom, centered within the column — the casual upright look for
         // Japanese game labels (not true CJK `vertical-rl`). Shown beside the same
         // phrase laid out horizontally for contrast.
-        flow.section(list, "Vertical text");
+        flow.section(list, Category::Foundations, "VerticalText", "");
 
         let r = flow.cell(list, "Stacked JP", 40.0, 160.0);
         list.rect_outline(r, 1.0, [0.3, 0.34, 0.42, 1.0]);
@@ -1066,7 +1449,12 @@ fn render_widget_gallery() {
         // Correct centring ⇒ the red band straddles the green line: for "Hxngy"
         // the lowercase body sits centred (caps overshoot up, descenders hang
         // below); for "HX100%" the cap/digit body sits centred.
-        flow.section(list, "Vertical centering (debug)");
+        flow.section(
+            list,
+            Category::Engine,
+            "TextCentering",
+            "vertical centering debug",
+        );
         let samples: [&str; 2] = ["Hxngy", "HX100%"];
         for sample in samples {
             for size in [15.0f32, 24.0] {
@@ -1169,7 +1557,7 @@ fn render_widget_gallery() {
         // ---- Fonts ------------------------------------------------------
         // The bundled IBM Plex Sans family (registered by `shared_font_system`)
         // resolves the default sans-serif and provides real bold/italic faces.
-        flow.section(list, "Fonts");
+        flow.section(list, Category::Foundations, "Fonts", "weights and styles");
 
         let r = flow.cell(list, "Regular", 130.0, 24.0);
         list.text(
@@ -1204,7 +1592,12 @@ fn render_widget_gallery() {
         );
 
         // ---- Span-coloured text ----------------------------------------
-        flow.section(list, "Span colour + underline");
+        flow.section(
+            list,
+            Category::Foundations,
+            "TextSpans",
+            "span colour + underline",
+        );
 
         let r = flow.cell(list, "Colour spans", 200.0, 24.0);
         list.text(
@@ -1271,7 +1664,7 @@ fn render_widget_gallery() {
         // widget and auto-advances a vertical cursor. Rendered at rest (the
         // static InputState isn't interacting), so this just eyeballs layout +
         // crispness of the verb stack.
-        flow.section(list, "Interactive verbs (UiContext)");
+        flow.section(list, Category::Engine, "UiContext", "interactive verbs");
         {
             let r = flow.cell(list, "Stacked verbs", 200.0, 168.0);
             let mut vstate = UiState::new();
@@ -1519,8 +1912,7 @@ fn render_widget_gallery() {
             list.pop_transform();
         }
 
-        // ---- Widgets ----------------------------------------------------
-        flow.section(list, "Widgets");
+        flow.section(list, Category::Keys, "Button", "");
 
         let r = flow.cell(list, "Button", 100.0, 32.0);
         Button::draw_at(
@@ -1543,6 +1935,30 @@ fn render_widget_gallery() {
             &mut ctx(list, &mut focus, &theme, &input),
         );
 
+        // Forge Key tones: the accent and danger keys, enabled and disabled.
+        for (label, caption, tone, enabled) in [
+            ("Button (accent)", "Send", wgpu_gameui::Tone::Accent, true),
+            ("Button (danger)", "Stop", wgpu_gameui::Tone::Danger, true),
+            (
+                "Button (accent, disabled)",
+                "Send",
+                wgpu_gameui::Tone::Accent,
+                false,
+            ),
+            (
+                "Button (danger, disabled)",
+                "Stop",
+                wgpu_gameui::Tone::Danger,
+                false,
+            ),
+        ] {
+            let r = flow.cell(list, label, 100.0, 32.0);
+            Button::new(caption)
+                .tone(tone)
+                .enabled(enabled)
+                .draw(r, &mut ctx(list, &mut focus, &theme, &input));
+        }
+
         // Keyboard-focused button: seed a local focus owner so the focus ring is
         // visible in the PNG without disturbing the shared focus state.
         let r = flow.cell(list, "Button (focused)", 110.0, 32.0);
@@ -1561,6 +1977,7 @@ fn render_widget_gallery() {
             );
         }
 
+        flow.section(list, Category::Forms, "Checkbox", "");
         let cb = Checkbox::new();
         let r = flow.cell(list, "Checkbox", 120.0, 20.0);
         cb.draw(false, "Off", r, &mut ctx(list, &mut focus, &theme, &input));
@@ -1568,6 +1985,7 @@ fn render_widget_gallery() {
         let r = flow.cell(list, "Checkbox (checked)", 120.0, 20.0);
         cb.draw(true, "On", r, &mut ctx(list, &mut focus, &theme, &input));
 
+        flow.section(list, Category::Forms, "Radio", "");
         // Ask the group how big it needs to be rather than guessing: a
         // hand-written 76.0 here used to clip the third option's row.
         let radio_opts = ["Low", "Medium", "High"];
@@ -1581,6 +1999,7 @@ fn render_widget_gallery() {
         let r = flow.cell(list, "Radio (horizontal)", rw, rh);
         horizontal.draw(0, r, &mut ctx(list, &mut focus, &theme, &input));
 
+        flow.section(list, Category::Forms, "ProgressBar", "");
         let r = flow.cell(list, "Progress bar", 150.0, 20.0);
         ProgressBar::new(0.65).draw(r, list, &StyleResolver::new(&theme));
 
@@ -1596,6 +2015,12 @@ fn render_widget_gallery() {
             .with_fill(ProgressFill::Solid(StyleKey::Accent))
             .draw(r, list, &StyleResolver::new(&theme));
 
+        // Busy with no known end: a sweep stepped by the caller's clock
+        // (`indeterminate_step`); frozen at a step for the PNG.
+        let r = flow.cell(list, "Progress (indeterminate)", 150.0, 7.0);
+        ProgressBar::indeterminate(12).draw(r, list, &StyleResolver::new(&theme));
+
+        flow.section(list, Category::Forms, "Slider", "");
         let r = flow.cell(list, "Slider", 160.0, 24.0);
         let mut capture = DragCapture::default();
         Slider::new(0.0, 100.0).draw(
@@ -1608,6 +2033,7 @@ fn render_widget_gallery() {
 
         // Drag handle / window-mover: a labelled title bar and a bare grip
         // handle. Static (idle) here — the live delta comes from a DragTracker.
+        flow.section(list, Category::Windows, "DragHandle", "window mover");
         let r = flow.cell(list, "Drag handle (title bar)", 200.0, 24.0);
         let mut dh_cap = DragCapture::default();
         DragHandle::new().with_label("Inspector").draw(
@@ -1625,6 +2051,7 @@ fn render_widget_gallery() {
             &mut ctx(list, &mut focus, &theme, &input),
         );
 
+        flow.section(list, Category::Layout, "SegmentedTabs", "Tabs");
         let r = flow.cell(list, "Tabs", 240.0, 30.0);
         Tabs::new(&["Tab A", "Tab B", "Tab C"]).draw(
             r,
@@ -1635,6 +2062,7 @@ fn render_widget_gallery() {
             None,
         );
 
+        flow.section(list, Category::Forms, "TextField", "TextInput");
         let r = flow.cell(list, "Text input", 200.0, 28.0);
         TextInput::new(r.x, r.y, r.width, r.height)
             .with_value("Hello, wgpu-gameui!")
@@ -1682,6 +2110,7 @@ fn render_widget_gallery() {
         // Multi-line text area: focused, with two hard newlines and one line long
         // enough to wrap at the field width. Uses a local focus+input so it
         // doesn't disturb the shared focus owner above.
+        flow.section(list, Category::Forms, "TextArea", "multiline TextInput");
         let r = flow.cell(list, "Text area (multiline)", 200.0, 86.0);
         {
             const AREA_ID: u64 = 201;
@@ -1701,6 +2130,7 @@ fn render_widget_gallery() {
 
         // Number input / spin box: a focused float field showing the +/- step
         // buttons in the right column and an editable value.
+        flow.section(list, Category::Forms, "NumberField", "NumberInput");
         let r = flow.cell(list, "Number input", 140.0, 28.0);
         {
             const NUM_ID: u64 = 202;
@@ -1775,6 +2205,7 @@ fn render_widget_gallery() {
         // Each row carries a leading "visibility" icon plus trailing
         // rename/delete icons (their own hit targets), demonstrating the
         // scene/layer-outliner shape. Idle input, so nothing toggles.
+        flow.section(list, Category::Data, "Tree", "");
         let r = flow.cell(list, "Tree view (outliner)", 200.0, 110.0);
         {
             const VIS: u32 = 1;
@@ -1907,6 +2338,12 @@ fn render_widget_gallery() {
 
         // Context menu state, shown over a viewport swatch. Its modal layer is
         // drawn after the base scope, matching the production integration path.
+        flow.section(
+            list,
+            Category::Chrome,
+            "ContextMenu",
+            "05-context-menu.html",
+        );
         let context_area = flow.cell(list, "Context menu (cursor anchored)", 700.0, 150.0);
         list.vertical_gradient(
             context_area,
@@ -1919,6 +2356,7 @@ fn render_widget_gallery() {
 
         // Dropdown, seeded open: the floating list (drawn after the base scope)
         // renders above whatever cells sit below it.
+        flow.section(list, Category::Forms, "Dropdown", "");
         let r = flow.cell(list, "Dropdown (open)", 160.0, 28.0);
         dropdowns.open_for_test(DROPDOWN_ID, r, &DROPDOWN_ITEMS, 2);
         let dropdown = Dropdown::new(&DROPDOWN_ITEMS, 2);
@@ -1957,6 +2395,7 @@ fn render_widget_gallery() {
             }
         };
 
+        flow.section(list, Category::Layout, "ScrollArea", "ScrollView");
         let r = flow.cell(list, "Scroll view", 180.0, 100.0);
         list.rounded_rect(r, 4.0, [0.06, 0.07, 0.10, 1.0]);
         let mut scroll_state = ScrollState::default();
@@ -2006,6 +2445,7 @@ fn render_widget_gallery() {
                 TableCell::new("Fail"),
             ],
         ];
+        flow.section(list, Category::Data, "Table", "");
         let r = flow.cell(list, "Table", 270.0, 88.0);
         list.rounded_rect(r, 4.0, [0.06, 0.07, 0.10, 1.0]);
         Table::new(columns).draw(
@@ -2017,6 +2457,7 @@ fn render_widget_gallery() {
             &mut input,
         );
 
+        flow.section(list, Category::Keys, "ImageButton", "sprite keys");
         let r = flow.cell(list, "Image button", 40.0, 40.0);
         ImageButton::sprite(duck)
             .fit(ImageFit::Contain)
@@ -2038,7 +2479,7 @@ fn render_widget_gallery() {
             .draw(r, list, &StyleResolver::new(&theme), &input);
 
         // ---- Lists / Grids (virtualized) --------------------------------
-        flow.section(list, "Lists / Grids");
+        flow.section(list, Category::Data, "List", "virtualized list and grid");
 
         // (a) Vertical list: 12 rows, one selected + one hovered (seeded by
         // pointing the idle mouse at row 4 so the hover background shows).
@@ -2185,7 +2626,9 @@ fn render_widget_gallery() {
         {
             flow.section(
                 list,
-                "ListView — highlight · focus-aware selection · two-line · empty",
+                Category::Data,
+                "ListView",
+                "highlight · focus-aware selection · two-line · empty",
             );
             use wgpu_gameui::{ListRow, ListView};
 
@@ -2281,10 +2724,7 @@ fn render_widget_gallery() {
         // ---- GroupList · Thumb · status dot · hue chip (V2 sidebar) -----
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(
-                list,
-                "GroupList — grouped sessions · Thumb · status dots · hue chips",
-            );
+            flow.section(list, Category::Sidebar, "GroupList", "grouped sessions");
             use wgpu_gameui::{
                 GroupHeader, GroupItem, GroupLayout, GroupList, GroupListState, GroupMore,
                 GroupRow, Status, Thumb, hue_chip, status_dot,
@@ -2389,9 +2829,15 @@ fn render_widget_gallery() {
                 );
             }
 
+            flow.section(
+                list,
+                Category::Data,
+                "Thumb",
+                "leading row visual; project thumbs also show under Tree",
+            );
             let r = flow.cell(
                 list,
-                "Thumb — monogram 10/14/24 · swatch · glyph · slot",
+                "Monogram 10/14/24 · swatch · glyph · slot",
                 240.0,
                 60.0,
             );
@@ -2431,12 +2877,14 @@ fn render_widget_gallery() {
                 x += 22.0;
             }
 
-            let r = flow.cell(
+            flow.section(
                 list,
-                "Status dots · hue chips (plain / on accent)",
-                300.0,
-                60.0,
+                Category::Feedback,
+                "StatusDot",
+                "session state on a row",
             );
+            // Idle deliberately draws no dot; it holds the fourth slot empty.
+            let r = flow.cell(list, "Running · waiting · unread · (idle)", 200.0, 16.0);
             let mut x = r.x + 4.0;
             for status in [
                 Status::Running,
@@ -2447,6 +2895,9 @@ fn render_widget_gallery() {
                 status_dot(list, &s, (x, r.y + 8.0), status);
                 x += 16.0;
             }
+
+            flow.section(list, Category::Data, "HueChip", "tinted mono label");
+            let r = flow.cell(list, "Plain / on accent", 300.0, 42.0);
             let mut x = r.x;
             for (text, hue) in [
                 ("claude opus", 45.0),
@@ -2454,9 +2905,9 @@ fn render_widget_gallery() {
                 ("codex", 160.0),
                 ("gothab · codex", 255.0),
             ] {
-                x = hue_chip(list, &s, x, r.y + 22.0, text, hue, false).right() + 6.0;
+                x = hue_chip(list, &s, x, r.y + 2.0, text, hue, false).right() + 6.0;
             }
-            let accent = Rect::new(r.x, r.y + 40.0, 300.0, 20.0);
+            let accent = Rect::new(r.x, r.y + 22.0, 300.0, 20.0);
             list.quad(
                 accent.x,
                 accent.y,
@@ -2474,25 +2925,34 @@ fn render_widget_gallery() {
         // Every `Button` already routes its background+border through the
         // instanced `chrome_rect` path; this section makes the batching
         // explicit (a strip of same-shape buttons collapses to one base mesh +
-        // N instances) and shows the rotated-transform fallback still renders.
-        flow.section(list, "Instanced chrome");
+        // N instances) and shows rotated chrome staying one smooth instance.
+        flow.section(
+            list,
+            Category::Engine,
+            "InstancedChrome",
+            "SDF rounded-rect batching",
+        );
 
         for i in 0..6 {
             let r = flow.cell(list, "", 70.0, 30.0);
             Button::new(format!("#{i}")).draw(r, &mut ctx(list, &mut focus, &theme, &input));
         }
 
-        // Rotated chrome: `chrome_rect` can't express a rotation as a single
-        // axis-aligned instance, so it falls back to immediate tessellation.
-        let r = flow.cell(list, "Rotated (fallback)", 80.0, 40.0);
+        // Rotated chrome: the instance carries the whole transform and the
+        // shader rotates it, so edges stay anti-aliased and the gradient stays
+        // inside the rounded corners. The cell fits the rotated bounds.
+        let (angle, size) = (0.18, [80.0, 40.0]);
+        let bounds = rotated_bounds(size, angle);
+        let r = flow.cell(list, "Rotated, gradient", bounds[0], bounds[1]);
         list.push_transform();
         list.translate(r.x + r.width / 2.0, r.y + r.height / 2.0);
-        list.rotate(0.18);
-        list.chrome_rect(
-            Rect::new(-r.width / 2.0, -r.height / 2.0, r.width, r.height),
+        list.rotate(angle);
+        list.chrome_rect_gradient(
+            Rect::new(-size[0] / 2.0, -size[1] / 2.0, size[0], size[1]),
             8.0,
             2.0,
-            [0.30, 0.55, 0.35, 1.0],
+            [0.40, 0.65, 0.45, 1.0],
+            [0.20, 0.42, 0.26, 1.0],
             [0.80, 0.90, 0.80, 1.0],
         );
         list.pop_transform();
@@ -2503,7 +2963,7 @@ fn render_widget_gallery() {
         // didn't draw (3D viewports, world-projected regions). The gallery
         // can't show "nothing", so each cell paints its own outline + a caption
         // reporting the state `HitZone::test` returns for a synthetic pointer.
-        flow.section(list, "Hit zone (sensor)");
+        flow.section(list, Category::Engine, "HitZone", "invisible sensor");
 
         // Idle: pointer parked far away → not hovered.
         let r = flow.cell(list, "Idle (no pointer)", 150.0, 44.0);
@@ -2564,7 +3024,12 @@ fn render_widget_gallery() {
         // Per-widget restyling with NO theme clone: a scoped `StyleOverlay`
         // layered over the theme via `DrawContext::with_style`, plus a custom
         // (mod-defined) key resolved by name.
-        flow.section(list, "Styling / overrides");
+        flow.section(
+            list,
+            Category::Engine,
+            "Styling",
+            "theme, overlay and custom keys",
+        );
 
         // Baseline button — straight theme colors.
         let r = flow.cell(list, "Button (theme)", 120.0, 32.0);
@@ -2603,7 +3068,12 @@ fn render_widget_gallery() {
         // a weighted `HStack` Fill split and the wrapping `Flow` grid. Each
         // computed `Rect` is painted as a plain rounded rect so the split ratios
         // and the row-wrapping are eyeballable.
-        flow.section(list, "Layout: weighted HStack + Flow grid");
+        flow.section(
+            list,
+            Category::Engine,
+            "Layout",
+            "weighted HStack + Flow grid",
+        );
 
         // Weighted HStack — remaining width split 2:1:1 across three Fill cells.
         {
@@ -2645,7 +3115,7 @@ fn render_widget_gallery() {
         // Main-axis justification (justify-content) — the same three fixed-size
         // cells distributed six ways across a fixed-width track, so the spacing
         // policies are eyeballable stacked vertically.
-        flow.section(list, "Justify (main-axis distribution)");
+        flow.section(list, Category::Engine, "Justify", "main-axis distribution");
         for (label, mode) in [
             ("Start", MainAlign::Start),
             ("Center", MainAlign::Center),
@@ -2673,7 +3143,7 @@ fn render_widget_gallery() {
         // Thin rules, centered in their cell. Defaults pull thickness from the
         // theme border width and color from the panel-border; the third row
         // overrides both. The vertical demo splits a cell into two columns.
-        flow.section(list, "Separator / divider");
+        flow.section(list, Category::Layout, "Separator", "");
         {
             let style = StyleResolver::new(&theme);
 
@@ -2710,7 +3180,12 @@ fn render_widget_gallery() {
         }
 
         // --- Splitter ------------------------------------------------------
-        flow.section(list, "Splitter — Forge dark chrome states");
+        flow.section(
+            list,
+            Category::Layout,
+            "Splitter",
+            "Forge dark chrome states",
+        );
         {
             // Vertical idle / hover / captured-drag states plus the rotated
             // horizontal variant. The pointer leaves the dragging strip to
@@ -2751,7 +3226,7 @@ fn render_widget_gallery() {
         // SV square (white→hue across, →black down) + vertical hue spectrum,
         // optionally an alpha bar (checkerboard under an opaque→transparent
         // fade). Cursors sit at the fixed sample colors below.
-        flow.section(list, "Color picker");
+        flow.section(list, Category::Editors, "ColorPicker", "");
         {
             let mut cap = DragCapture::new();
 
@@ -2779,7 +3254,7 @@ fn render_widget_gallery() {
         // --- Gradients -----------------------------------------------------
         // Linear (horizontal / vertical / arbitrary angle) and radial fills,
         // built straight on the DrawList's per-vertex color path.
-        flow.section(list, "Gradients");
+        flow.section(list, Category::Engine, "Gradients", "");
         {
             let h = 80.0;
             let r = flow.cell(list, "Horizontal", 150.0, h);
@@ -2804,7 +3279,12 @@ fn render_widget_gallery() {
         // Text and button are measured once under the active style/font, then a
         // reusable plain-data HStack aligns their first baselines. Each arranged
         // body is drawn once through `draw_in_rect`.
-        flow.section(list, "Contextual measured layout");
+        flow.section(
+            list,
+            Category::Engine,
+            "MeasuredLayout",
+            "contextual measured layout",
+        );
         {
             let r = flow.cell(list, "Measured baseline row", 360.0, 54.0);
             let mut state = UiState::new();
@@ -2852,7 +3332,7 @@ fn render_widget_gallery() {
         // --- Group / titled panel ------------------------------------------
         // A bordered container with a header strip; `draw` returns the inner
         // content rect, which we fill with a couple of child widgets.
-        flow.section(list, "Group / titled panel");
+        flow.section(list, Category::Layout, "Group", "titled panel");
         {
             let style = StyleResolver::new(&theme);
             let r = flow.cell(list, "Group", 240.0, 130.0);
@@ -2876,79 +3356,96 @@ fn render_widget_gallery() {
         }
 
         // --- 4a design additions --------------------------------------------
-        // The new widgets ported from the "4a" UI design folder. One section
-        // per design-sheet grouping; every widget is drawn from its public API.
+        // The new widgets ported from the "4a" UI design folder, one section
+        // per component; every widget is drawn from its public API.
         let s = StyleResolver::new(&theme);
 
-        flow.section(list, "4a: toggle · badge · keycap · chip");
+        flow.section(list, Category::Forms, "Switch", "Toggle");
         {
-            let row = flow.cell(list, "", 360.0, 48.0);
-            let mut x = row.x;
-            // Toggle (off + on + labeled).
+            let off = flow.cell(list, "Off", 60.0, 18.0);
+            let on = flow.cell(list, "On, labeled", 90.0, 18.0);
             let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
-            let r = Rect::new(x, row.y + 2.0, 60.0, 18.0);
-            Toggle::new().draw(false, r, &mut tctx);
-            let r = Rect::new(x, row.y + 26.0, 90.0, 18.0);
-            Toggle::new().label("shadows").draw(true, r, &mut tctx);
-            x += 100.0;
-            // Badges (status tones from the design's table).
-            badge(
-                list,
-                &s,
-                Rect::new(x, row.y + 2.0, 70.0, 15.0),
-                "ok",
-                s.color(StyleKey::Success),
-            );
-            badge(
-                list,
-                &s,
-                Rect::new(x, row.y + 24.0, 90.0, 15.0),
-                "over",
-                s.color(StyleKey::Error),
-            );
-            x += 100.0;
-            // Keycaps.
-            let mut kx = x;
-            for cap in ["⇧", "Ctrl", "F"] {
-                kx = keycap(list, &s, Rect::new(kx, row.y + 6.0, 200.0, 22.0), cap, 18.0).right()
-                    + 4.0;
+            Toggle::new().draw(false, off, &mut tctx);
+            Toggle::new().label("shadows").draw(true, on, &mut tctx);
+        }
+
+        flow.section(list, Category::Data, "Badge", "status tones");
+        {
+            let r = flow.cell(list, "Success", 70.0, 15.0);
+            badge(list, &s, r, "ok", s.color(StyleKey::Success));
+            let r = flow.cell(list, "Error", 90.0, 15.0);
+            badge(list, &s, r, "over", s.color(StyleKey::Error));
+            // Forge Badge's tones, sized to their text.
+            for (label, text, tone) in [
+                ("Tone: draft", "queued", BadgeTone::Draft),
+                ("Tone: baked", "exit 0", BadgeTone::Baked),
+                ("Tone: stale", "killed", BadgeTone::Stale),
+                ("Tone: error", "exit 101", BadgeTone::Error),
+                ("Tone: live", "running", BadgeTone::Live),
+            ] {
+                let w = badge_toned_width(list, &s, text);
+                let r = flow.cell(list, label, w.max(70.0), BADGE_HEIGHT);
+                badge_toned(list, &s, r.x, r.y, text, tone);
             }
-            x += 150.0;
-            // Chips (filter row: first on, rest off).
-            let mut cx = x;
+        }
+
+        flow.section(list, Category::Keys, "Keycap", "");
+        {
+            let r = flow.cell(list, "⇧ · Ctrl · F", 150.0, 22.0);
+            let mut kx = r.x;
+            for cap in ["⇧", "Ctrl", "F"] {
+                kx = keycap(list, &s, Rect::new(kx, r.y, 200.0, 22.0), cap, 18.0).right() + 4.0;
+            }
+        }
+
+        flow.section(list, Category::Keys, "FilterChip", "chip");
+        {
+            // A filter row: first on, rest off.
+            let r = flow.cell(list, "On · off · off", 200.0, 20.0);
+            let mut cx = r.x;
             for (j, label) in ["info", "warn", "verbose"].iter().enumerate() {
-                let out = chip(
+                let _ = chip(
                     list,
                     &s,
-                    Rect::new(cx, row.y + 8.0, 70.0, 20.0),
+                    Rect::new(cx, r.y, 70.0, 20.0),
                     label,
                     j == 0,
                     &input,
                 );
-                let _ = out;
                 cx += 62.0;
             }
         }
 
-        flow.section(list, "4a: breadcrumb · pager · status bar");
+        flow.section(list, Category::Layout, "Breadcrumb", "");
         {
-            let r = flow.cell(list, "", 300.0, 20.0);
+            let r = flow.cell(list, "Three segments", 300.0, 20.0);
             let segs = ["World", "Region", "Forest"];
             Breadcrumb::new(&segs).draw(r, &mut {
                 DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
             });
+        }
 
-            let r = flow.cell(list, "", 150.0, 20.0);
+        flow.section(list, Category::Layout, "Pager", "");
+        {
+            let r = flow.cell(list, "Arrows", 150.0, 20.0);
             Pager::new().draw(2, 12, r, &mut {
                 DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
             });
 
-            let r = flow.cell(list, "", 300.0, 18.0);
+            let r = flow.cell(list, "Numeric", 300.0, 18.0);
             Pager::new().numeric().draw(0, 4, r, &mut {
                 DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
             });
+        }
 
-            let r = flow.cell(list, "", 400.0, STATUS_BAR_HEIGHT);
+        flow.section(list, Category::Chrome, "StatusBar", "06-status-bar.html");
+        {
+            let r = flow.cell(
+                list,
+                "Text cells, highlight, spacer",
+                400.0,
+                STATUS_BAR_HEIGHT,
+            );
             draw_status_bar(
                 r,
                 &[
@@ -2959,15 +3456,173 @@ fn render_widget_gallery() {
                 ],
                 &mut DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0),
             );
+
+            // Zoned: dock toggles, clickable zones (one pressed), and a right
+            // group of meters, a status dot and plain text.
+            let toggles = [
+                StatusToggle {
+                    glyph: "◧",
+                    on: true,
+                },
+                StatusToggle {
+                    glyph: "◨",
+                    on: false,
+                },
+            ];
+            let row = s.ink(Ink::Row);
+            let path = [StatusPart::Text("~/Projects/agent-ui")];
+            let last = [StatusPart::Text("last:"), StatusPart::Tinted("send", row)];
+            let bg = [
+                StatusPart::Dot(Status::Running),
+                StatusPart::Tinted("1 bg +2", row),
+            ];
+            let server = [
+                StatusPart::Text("server"),
+                StatusPart::Meter(36.0, MeterFill::neutral(0.3, &s)),
+                StatusPart::Value("612 MB", row, 44.0),
+            ];
+            let connected = [
+                StatusPart::Dot(Status::Running),
+                StatusPart::Text("connected"),
+            ];
+            let left = [
+                StatusZone::new(&path),
+                StatusZone::new(&last),
+                StatusZone::new(&bg).button(true),
+            ];
+            let right = [StatusZone::new(&server), StatusZone::new(&connected)];
+            let r = flow.cell(
+                list,
+                "Zoned: toggles, zones, right group",
+                760.0,
+                STATUS_BAR_HEIGHT,
+            );
+            ZonedStatusBar::new(&toggles, &left, &right).draw(r, list, &s, &input);
         }
 
-        flow.section(list, "4a: vector field · tag input · combo trigger");
+        flow.section(list, Category::Layout, "SpanTabs", "equal width");
         {
-            let r_vec = flow.cell(list, "", 280.0, 46.0);
-            let r_tags = flow.cell(list, "Tags", 220.0, 48.0);
-            let r_combo = flow.cell(list, "Combo", 170.0, 24.0);
-            let r_docs = flow.cell(list, "Doc tabs", 300.0, 24.0);
+            let tabs = [
+                SpanTab::new("Chat").glyph("›"),
+                SpanTab::new("Forum").glyph("◫").count("3"),
+                SpanTab::new("Files").glyph("◧").dirty(true),
+                SpanTab::new("Terminal").glyph("⌗").disabled(true),
+            ];
+            let r = flow.cell(
+                list,
+                "Active · count · dirty · disabled",
+                520.0,
+                SPAN_TABS_HEIGHT,
+            );
+            SpanTabs::new(&tabs).draw(r, 0, list, &s, &input);
+        }
 
+        flow.section(list, Category::Feedback, "Meter", "not in Forge");
+        {
+            let r = flow.cell(list, "Inline: neutral", 60.0, 5.0);
+            inline_meter(list, &s, r, MeterFill::neutral(0.07, &s));
+            let r = flow.cell(list, "Inline: coloured, pace tick", 120.0, 6.0);
+            inline_meter(
+                list,
+                &s,
+                r,
+                MeterFill::colored(0.44, s.color(StyleKey::Warning)).pace(0.3),
+            );
+            let r = flow.cell(list, "Stacked, auto-compact marker", 300.0, 6.0);
+            let segments = [
+                BarSegment {
+                    fraction: 0.015,
+                    color: [0.45, 0.62, 0.8, 1.0],
+                },
+                BarSegment {
+                    fraction: 0.07,
+                    color: [0.6, 0.6, 0.6, 1.0],
+                },
+                BarSegment {
+                    fraction: 0.05,
+                    color: [0.37, 0.7, 0.58, 1.0],
+                },
+                BarSegment {
+                    fraction: 0.6,
+                    color: [0.55, 0.5, 0.85, 1.0],
+                },
+            ];
+            stacked_bar(
+                list,
+                &s,
+                r,
+                &segments,
+                Some((0.8, s.color(StyleKey::Warning))),
+            );
+        }
+
+        flow.section(list, Category::Keys, "WellChip", "not in Forge");
+        {
+            let meter = [
+                WellChipPart::Meter(30.0, MeterFill::neutral(0.07, &s)),
+                WellChipPart::Text("7%", None),
+                WellChipPart::Text("5h", Some(Ink::Caption)),
+            ];
+            let context = [
+                WellChipPart::Text("opus[1m]", None),
+                WellChipPart::Text("79%", Some(Ink::Caption)),
+            ];
+            let r = flow.cell(list, "Meter and text", 90.0, WELL_CHIP_HEIGHT);
+            WellChip::new(&meter).draw(r.x, r.y, list, &s, &input);
+            let r = flow.cell(list, "Open (accent edge)", 110.0, WELL_CHIP_HEIGHT);
+            WellChip::new(&context)
+                .open(true)
+                .draw(r.x, r.y, list, &s, &input);
+        }
+
+        flow.section(list, Category::Data, "Waffle", "not in Forge");
+        {
+            let categories = [
+                WaffleCategory {
+                    name: "System prompt",
+                    amount: "3k",
+                    percent: "1.5%",
+                    fill: WaffleFill::Solid([0.45, 0.62, 0.8, 1.0]),
+                    aside: false,
+                },
+                WaffleCategory {
+                    name: "Messages",
+                    amount: "120k",
+                    percent: "60.0%",
+                    fill: WaffleFill::Solid([0.55, 0.5, 0.85, 1.0]),
+                    aside: false,
+                },
+                WaffleCategory {
+                    name: "Free space",
+                    amount: "77k",
+                    percent: "38.5%",
+                    fill: WaffleFill::Hatched,
+                    aside: true,
+                },
+            ];
+            let mut cells = [2u8; 100];
+            cells[..2].fill(0);
+            cells[2..62].fill(1);
+            let waffle = Waffle::new(&categories, &cells, 10);
+            let r = flow.cell(list, "10×10 with legend", 340.0, 124.0);
+            waffle.draw(r.x, r.y, r.width, list, &s, &input);
+            let r = flow.cell(list, "Hover fades the rest", 340.0, 124.0);
+            waffle
+                .hovered(Some(1))
+                .draw(r.x, r.y, r.width, list, &s, &input);
+        }
+
+        flow.section(list, Category::Chrome, "Band", "not in Forge");
+        {
+            let r = flow.cell(list, "Toolbar band, bottom edge", 300.0, 34.0);
+            toolbar_band(list, &s, r, wgpu_gameui::Edge::Bottom);
+            let r = flow.cell(list, "Toolbar band, top edge", 300.0, 34.0);
+            toolbar_band(list, &s, r, wgpu_gameui::Edge::Top);
+        }
+
+        flow.section(list, Category::Forms, "VectorField", "");
+        {
+            let r_vec = flow.cell(list, "Position · rotation", 280.0, 46.0);
             let mut vctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             let mut scrub: Option<VectorScrub> = None;
             let mut capture = DragCapture::new();
@@ -2976,18 +3631,28 @@ fn render_widget_gallery() {
                 ("Rotation", [0.00, 45.00, 0.00]),
             ];
             let _ = VectorField::new(&rows).draw(r_vec, &mut scrub, &mut capture, 900, &mut vctx);
+        }
 
-            // Tag input with committed tags + a draft.
+        flow.section(list, Category::Forms, "TagInput", "");
+        {
+            // Committed tags + an empty draft.
+            let r_tags = flow.cell(list, "Tags", 220.0, 48.0);
             let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             let tags = vec!["occlusion".to_string(), "static".to_string()];
             let mut draft = String::new();
             let _ = draw_tag_input(r_tags, &tags, &mut draft, false, &mut tctx);
+        }
 
-            // Combo trigger.
+        flow.section(list, Category::Forms, "ComboBox", "combo trigger");
+        {
+            let r_combo = flow.cell(list, "Combo", 170.0, 24.0);
             let mut cctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             let _ = draw_combo_trigger(r_combo, "Standard Lit", false, false, &mut cctx);
+        }
 
-            // Document tabs.
+        flow.section(list, Category::Layout, "DocumentTabs", "");
+        {
+            let r_docs = flow.cell(list, "Doc tabs", 300.0, 24.0);
             let docs = [
                 DocTab {
                     label: "Level_01",
@@ -3007,23 +3672,31 @@ fn render_widget_gallery() {
             });
         }
 
-        flow.section(list, "4a: asset grid · busy states · empty state");
+        flow.section(list, Category::Data, "AssetGrid", "");
         {
             let assets = ["Crate_A", "Barrel", "Lamp_Post", "Bridge_A"];
-            let r = flow.cell(list, "", 380.0, 96.0);
+            let r = flow.cell(list, "First selected", 380.0, 96.0);
             let _ = AssetGrid::new(&assets, "▣").draw(r, 0, &mut {
                 DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
             });
+        }
 
-            // Busy states.
-            let r = flow.cell(list, "Skeleton", 120.0, 10.0);
-            skeleton(list, &s, r, 0.3);
-            let r = flow.cell(list, "Spinner + dots", 80.0, 24.0);
-            spinner(list, &s, (r.x + 12.0, r.y + 12.0), 8.0, 0.4, 1.7);
-            dots(list, &s, (r.x + 52.0, r.y + 12.0), 0.3);
+        flow.section(list, Category::Feedback, "Skeleton", "");
+        let r = flow.cell(list, "Shimmer at 0.3", 120.0, 10.0);
+        skeleton(list, &s, r, 0.3);
 
-            // Empty states (Forge `EmptyState`): the design's own example,
-            // the agent-ui main area, and an icon glyph.
+        flow.section(list, Category::Feedback, "Spinner", "");
+        let r = flow.cell(list, "Spinner", 24.0, 24.0);
+        spinner(list, &s, (r.x + 12.0, r.y + 12.0), 8.0, 0.4, 1.7);
+
+        flow.section(list, Category::Feedback, "BusyDots", "dots");
+        let r = flow.cell(list, "Dots", 40.0, 24.0);
+        dots(list, &s, (r.x + 12.0, r.y + 12.0), 0.3);
+
+        flow.section(list, Category::Feedback, "EmptyState", "");
+        {
+            // The design's own example, the agent-ui main area, and an icon
+            // glyph.
             let r = flow.cell(
                 list,
                 "Empty state — hint · action",
@@ -3051,13 +3724,10 @@ fn render_widget_gallery() {
             }
         }
 
-        flow.section(list, "4a: gradient ramp · curve editor · popover");
+        flow.section(list, Category::Editors, "GradientRamp", "");
         {
+            // Three stops, the middle one selected.
             let r_ramp = flow.cell(list, "Ramp (handles above)", 240.0, 42.0);
-            let r_curve = flow.cell(list, "Curve", 170.0, 110.0);
-            let r_pop = flow.cell(list, "Popover", 240.0, 96.0);
-
-            // Gradient ramp with three stops.
             let mut gctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             let stops = [
                 GradientStop::new(0.0, [0.05, 0.1, 0.12, 1.0]),
@@ -3067,22 +3737,27 @@ fn render_widget_gallery() {
             let mut drag: Option<usize> = None;
             let mut capture = DragCapture::new();
             let _ = draw_gradient_ramp(r_ramp, &stops, 1, &mut drag, &mut capture, 901, &mut gctx);
+        }
 
-            // Curve editor.
+        flow.section(list, Category::Editors, "CurveEditor", "");
+        {
+            let r_curve = flow.cell(list, "Curve", 170.0, 110.0);
             let mut dctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
             let keys = [[0.0f32, 0.0], [0.35, 0.65], [0.7, 0.8], [1.0, 1.0]];
             let mut cdrag: Option<usize> = None;
             let mut ccapture = DragCapture::new();
             let _ = draw_curve_editor(r_curve, &keys, 1, &mut cdrag, &mut ccapture, 902, &mut dctx);
+        }
 
-            // Popover (drawn pointing up at an anchor stub).
-            let anchor = Rect::new(r_pop.x + 90.0, r_pop.y + r_pop.height - 24.0, 60.0, 20.0);
-            list.rounded_rect(anchor, 1.0, [0.16, 0.19, 0.22, 1.0]);
-            list.text(
-                TextBlock::new("Anchor", anchor.x + 8.0, anchor.y + 4.0)
-                    .with_size(11.0)
-                    .with_color(190, 200, 220),
-            );
+        flow.section(
+            list,
+            Category::Layout,
+            "Popover",
+            "titled sheet above an anchor",
+        );
+        {
+            // Drawn pointing up at an anchor stub. The cell is sized from the
+            // measured sheet so the popover never covers the cell label.
             let popover_lines = ["Enter a new name for the selected entity."];
             let popover_width = 212.0;
             let popover_height = wgpu_gameui::measure_sheet_height(
@@ -3091,6 +3766,25 @@ fn render_widget_gallery() {
                 &popover_lines,
                 list,
                 &s,
+            );
+            let anchor_h = 20.0;
+            let r_pop = flow.cell(
+                list,
+                "Popover",
+                240.0,
+                popover_height + 6.0 + anchor_h + 4.0,
+            );
+            let anchor = Rect::new(
+                r_pop.x + 90.0,
+                r_pop.bottom() - anchor_h - 4.0,
+                60.0,
+                anchor_h,
+            );
+            list.rounded_rect(anchor, 1.0, [0.16, 0.19, 0.22, 1.0]);
+            list.text(
+                TextBlock::new("Anchor", anchor.x + 8.0, anchor.y + 4.0)
+                    .with_size(11.0)
+                    .with_color(190, 200, 220),
             );
             let body = place_popover(
                 [anchor.x + anchor.width * 0.5, anchor.y],
@@ -3101,30 +3795,58 @@ fn render_widget_gallery() {
             Popover.draw(body, PopoverSide::Above, "Rename", &popover_lines, &mut {
                 DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
             });
+
+            // The bare frame: title bar and close key, the content left to
+            // the caller (here a meter row), opening below its anchor.
+            let r = flow.cell(list, "Frame (custom content, below)", 240.0, 96.0);
+            let frame = draw_popover_frame(
+                Rect::new(r.x, r.y + 6.0, 240.0, 90.0),
+                PopoverSide::Below,
+                "rate limit usage",
+                list,
+                &s,
+            );
+            let c = frame.content;
+            list.text(s.mono_block("5h", c.x, c.y, TextSize::Dense, Ink::Title));
+            inline_meter(
+                list,
+                &s,
+                Rect::new(c.x, c.y + 18.0, c.width, 6.0),
+                MeterFill::neutral(0.07, &s).pace(0.4),
+            );
         }
 
         // --- Banners & toasts ----------------------------------------------
         // Severity banners (info/success/warning/error) and a corner toast stack.
         // The toast stack normally anchors to the screen; here it lays out in
         // a reserved cell so it shows inline.
-        flow.section(list, "Banners & toasts");
+        flow.section(list, Category::Feedback, "Banner", "severities");
         {
             let style = StyleResolver::new(&theme);
 
-            let banners: [Banner; 4] = [
-                Banner::info("A new version is available."),
-                Banner::success("Your settings were saved.").with_title("Saved"),
-                Banner::warning("Low disk space (1.2 GB left)."),
-                Banner::error("Connection lost. Retrying…").with_title("Error"),
+            let banners: [(&str, Banner); 4] = [
+                ("Info", Banner::info("A new version is available.")),
+                (
+                    "Success, titled",
+                    Banner::success("Your settings were saved.").with_title("Saved"),
+                ),
+                ("Warning", Banner::warning("Low disk space (1.2 GB left).")),
+                (
+                    "Error, titled",
+                    Banner::error("Connection lost. Retrying…").with_title("Error"),
+                ),
             ];
-            for banner in banners {
+            for (label, banner) in banners {
                 // Size the cell to the banner's natural height so titled (two-line)
                 // banners aren't clipped.
                 let h = banner.measure_height(list, &style, 300.0);
-                let r = flow.cell(list, "", 300.0, h);
+                let r = flow.cell(list, label, 300.0, h);
                 banner.draw(r, list, &style);
             }
+        }
 
+        flow.section(list, Category::Feedback, "Toast", "corner stack");
+        {
             // Inline toast stack: a faint backdrop stands in for the screen,
             // and the cell is the area the stack lays out in.
             let r = flow.cell(list, "Toast stack (top-right)", 320.0, 250.0);
@@ -3151,7 +3873,14 @@ fn render_widget_gallery() {
         // --- Toolbar ---------------------------------------------------------
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(list, "Toolbar — 03-toolbar.html key states");
+            // One section for the toolbar; this block and the next two add
+            // its key states, docked rails, and hover tooltips.
+            flow.section(
+                list,
+                Category::Keys,
+                "Toolbar",
+                "03-toolbar.html: key states, docked rails, tooltips",
+            );
             use wgpu_gameui::render::PhosphorIcon;
             use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
 
@@ -3196,7 +3925,7 @@ fn render_widget_gallery() {
 
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(list, "Toolbar — docked rails from 03-toolbar.html");
+            // Still the Toolbar section: docked rails.
             use wgpu_gameui::render::PhosphorIcon;
             use wgpu_gameui::{DragCapture, Icon, Toolbar, ToolbarEdge, ToolbarItem, ToolbarState};
 
@@ -3240,7 +3969,7 @@ fn render_widget_gallery() {
 
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(list, "Toolbar — tooltip on hover (03-toolbar.html)");
+            // Still the Toolbar section: a tooltip on hover.
             use wgpu_gameui::{DragCapture, Toolbar};
 
             let toolbar = Toolbar::new(&tip_toolbar_items);
@@ -3294,7 +4023,7 @@ fn render_widget_gallery() {
         // --- App shell -------------------------------------------------------
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(list, "App shell (mini layout)");
+            flow.section(list, Category::Chrome, "AppShell", "mini layout");
             use wgpu_gameui::{AppShell, DockPanelState, ToolbarEdge, ToolbarState};
 
             let left = DockPanelState::new(60.0).with_range(40.0, 120.0);
@@ -3367,7 +4096,12 @@ fn render_widget_gallery() {
         }
 
         // --- Dock panel -----------------------------------------------------
-        flow.section(list, "DockPanel — 04-dock-panel.html tabs");
+        flow.section(
+            list,
+            Category::Chrome,
+            "DockPanel",
+            "04-dock-panel.html tabs",
+        );
         {
             use wgpu_gameui::{DockPanel, DockPanelState, DockSide, DockTab as DPanelTab};
 
@@ -3404,7 +4138,12 @@ fn render_widget_gallery() {
 
         #[cfg(feature = "phosphor-icons")]
         {
-            flow.section(list, "IconKey — sizes 17 / 18 / 24 · tones · states");
+            flow.section(
+                list,
+                Category::Keys,
+                "IconKey",
+                "sizes 17 / 18 / 24 · tones · states",
+            );
             use wgpu_gameui::{IconKey, Tone};
 
             // Each key gets its own synthetic pointer, so hover and pressed
@@ -3440,13 +4179,39 @@ fn render_widget_gallery() {
                     }
                 }
             }
+
+            // Text-glyph keys (Forge `IconKey glyph="■"`): the 15px inline
+            // ghost keys of dock cards, travel 1.
+            let glyphs = ["■", "›", "⋯", "+"];
+            let r = flow.cell(
+                list,
+                "glyph keys, ghost 15",
+                glyphs.len() as f32 * 21.0,
+                16.0,
+            );
+            for (i, glyph) in glyphs.into_iter().enumerate() {
+                let key_rect = Rect::new(r.x + i as f32 * 21.0, r.y, 15.0, 16.0);
+                let mut kctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+                IconKey::glyph(glyph, 15.0)
+                    .tone(Tone::Ghost)
+                    .travel(1.0)
+                    .draw(key_rect, &mut kctx);
+            }
+            let r = flow.cell(list, "glyph keys, default 24", 2.0 * 30.0, 26.0);
+            for (i, glyph) in ["■", "›"].into_iter().enumerate() {
+                let key_rect = Rect::new(r.x + i as f32 * 30.0, r.y, 24.0, 26.0);
+                let mut kctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+                IconKey::glyph(glyph, 24.0).draw(key_rect, &mut kctx);
+            }
         }
 
         #[cfg(feature = "phosphor-icons")]
         {
             flow.section(
                 list,
-                "SearchField — empty · typed · focused · clear key hovered",
+                Category::Forms,
+                "SearchField",
+                "empty · typed · focused · clear key hovered",
             );
             use wgpu_gameui::SearchField;
 
@@ -3489,7 +4254,9 @@ fn render_widget_gallery() {
         {
             flow.section(
                 list,
-                "DockStack — sections with toolbar · collapsed · hovered header · fixed · splitter hovered",
+                Category::Sidebar,
+                "DockStack",
+                "sections with toolbar · collapsed · hovered header · fixed · splitter hovered",
             );
             use wgpu_gameui::{
                 DockSection, DockStack, DockStackState, ListRow, ListView, SearchField,
@@ -3624,7 +4391,12 @@ fn render_widget_gallery() {
             }
         }
 
-        flow.section(list, "Window — movable, closable, optional resize grip");
+        flow.section(
+            list,
+            Category::Windows,
+            "FloatingWindow",
+            "movable, closable, optional resize grip",
+        );
         {
             use wgpu_gameui::{DragCapture, Window, WindowState};
 
@@ -3673,7 +4445,7 @@ fn render_widget_gallery() {
         // --- Backdrop blur (UiBlur) ----------------------------------------
         // Reserve a cell; the blur samples an app-provided "scene" texture into
         // this region (in the encoder below) and a crisp panel is drawn on top.
-        flow.section(list, "Backdrop blur (UiBlur)");
+        flow.section(list, Category::Engine, "BackdropBlur", "UiBlur");
         {
             let r = flow.cell(list, "Frosted-glass menu backdrop", 360.0, 150.0);
             flow.reserve(150.0);
@@ -3692,7 +4464,7 @@ fn render_widget_gallery() {
         // size. With a high-contrast pair the ease-out shape is legible: the
         // steps bunch toward the bright end (fast start, slow finish). Drawn via
         // the public `ease`/`lerp_color` through a per-button `StyleOverlay`.
-        flow.section(list, "Hover animation (ease-out curve)");
+        flow.section(list, Category::Engine, "HoverAnimation", "ease-out curve");
         for &t in &[0.0f32, 0.25, 0.5, 0.75, 1.0] {
             let eased = ease(Easing::EaseOut, t);
             let fill = lerp_color(theme.button, theme.accent, eased);
@@ -3706,8 +4478,11 @@ fn render_widget_gallery() {
         }
 
         // Tooltip target last: its popup floats down-and-right into the empty
-        // headroom below, overlapping no other widget.
+        // headroom below, overlapping no other widget. The reserve keeps the
+        // popup inside the section's image.
+        flow.section(list, Category::Feedback, "Tooltip", "TooltipLayer");
         let r = flow.cell(list, "Tooltip target", 120.0, 24.0);
+        flow.reserve(90.0);
         list.rounded_rect(r, 4.0, [0.25, 0.30, 0.40, 1.0]);
         list.text(
             TextBlock::new("Hover me", r.x + 8.0, r.y + 5.0)
@@ -3721,7 +4496,7 @@ fn render_widget_gallery() {
         content_bottom = flow.bottom() + 70.0;
         flow.finish_sections();
         gallery_sections = flow.sections;
-        gallery_components = flow.components;
+        gallery_cells = flow.cells;
     }
 
     // Size the target to the laid-out content first, so the tooltip layer
@@ -4084,7 +4859,7 @@ fn render_widget_gallery() {
     // The whole canvas is only cut up into section and component images;
     // it is not saved itself.
     let img = image::RgbaImage::from_raw(W, h, pixels).expect("image from raw");
-    save_gallery_images(&img, &gallery_sections, &gallery_components);
+    save_gallery_images(&img, &gallery_sections, &gallery_cells);
 
     // Sanity: at least some pixels are not the theme clear color.
     let [cr, cg, cb, _] = wgpu_gameui::color::to_rgba8(theme.background);

@@ -1568,11 +1568,18 @@ impl<'a> UiContext<'a> {
     /// omitted height uses `theme.button_height`. Pass an explicit width for
     /// fill/fixed layouts. Auto-advances by the button height.
     pub fn text_button(&mut self, label: &str, w: Option<f32>, h: Option<f32>) -> bool {
+        self.button(Button::new(label), w, h)
+    }
+
+    /// Draw `button` as built (its tone, enabled state, travel…) and report
+    /// whether it was clicked this frame; a disabled button never is. Sizing
+    /// and focus are as for [`text_button`](Self::text_button). Auto-advances
+    /// by the button height.
+    pub fn button(&mut self, button: Button, w: Option<f32>, h: Option<f32>) -> bool {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => return false,
         };
-        let button = Button::new(label);
         let (width, height) = match (w, h) {
             (Some(width), Some(height)) => (width, height),
             (width, height) => {
@@ -2821,7 +2828,12 @@ impl<'a> UiContext<'a> {
     pub fn chip_button(&mut self, label: &str, on: bool) -> ChipOutput {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
-            None => return ChipOutput { clicked: false },
+            None => {
+                return ChipOutput {
+                    clicked: false,
+                    rect: Rect::default(),
+                };
+            }
         };
         // Measure inside a scoped borrow so `self` is free for `place_rect`.
         let (w, h) = {
@@ -2829,10 +2841,8 @@ impl<'a> UiContext<'a> {
                 theme,
                 self.style_stack.last().expect("style stack is never empty"),
             );
-            let font_size = styles.scalar(StyleKey::FontSize);
-            let (tw, _) = self.backend.list_mut().measure_text(label, font_size, None);
-            let pad = 6.0;
-            (tw + pad * 2.0 + 4.0, font_size + pad * 2.0)
+            let w = crate::widgets::chip_width(self.backend.list_mut(), &styles, label);
+            (w, crate::widgets::CHIP_HEIGHT)
         };
         let world = self.place_rect(w, h);
         let inv = self.backend.list_mut().current_transform().inverse();
@@ -4489,6 +4499,22 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
             assert!(!ui.text_button("OK", Some(100.0), Some(30.0)));
         }
+    }
+
+    #[test]
+    fn a_built_button_keeps_its_tone_and_a_disabled_one_never_clicks() {
+        let theme = Theme::default();
+        let clicked = |button: Button| {
+            let input = click_at(10.0, 10.0);
+            let mut state = UiState::new();
+            let mut list = DrawList::new();
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.button(button, Some(100.0), Some(30.0))
+        };
+        assert!(clicked(Button::new("Send").tone(Tone::Accent)));
+        assert!(!clicked(
+            Button::new("Send").tone(Tone::Accent).enabled(false)
+        ));
     }
 
     #[test]

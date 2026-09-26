@@ -504,11 +504,16 @@ pub(crate) fn shape_layout(
     };
 
     let mut buffer = Buffer::new(font_system, Metrics::new(spec.font_size, spec.line_height));
-    if spec.vertical || spec.ellipsize {
-        // One cluster (or the cut line) per line, no wrapping; shrink to the
-        // content so the manual centring below governs horizontal placement.
+    if spec.vertical {
+        // One cluster per line, no wrapping; shrink to the content so the
+        // manual centring below governs horizontal placement.
         buffer.set_wrap(Wrap::None);
         buffer.set_size(None, None);
+    } else if spec.ellipsize {
+        // The cut line, never wrapped, but still aligned within `max_width`:
+        // a centred, ellipsized button label sits in the middle of its key.
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(spec.max_width, None);
     } else {
         buffer.set_wrap(spec.wrap.into());
         buffer.set_size(Some(spec.max_width.unwrap_or(f32::MAX / 4.0)), None);
@@ -625,6 +630,35 @@ mod tests {
             .values()
             .find_map(|inner| inner.get(content))
             .map_or(0, |entry| entry.bytes)
+    }
+
+    #[test]
+    fn an_ellipsized_line_keeps_its_alignment_within_its_width() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let spec = |align: TextAlign| LayoutSpec {
+            align,
+            ellipsize: true,
+            ..LayoutSpec::plain(12.0, Some(200.0))
+        };
+        let start = shape_layout(shared.font_system(), &spec(TextAlign::Start), "Send");
+        let center = shape_layout(shared.font_system(), &spec(TextAlign::Center), "Send");
+        let end = shape_layout(shared.font_system(), &spec(TextAlign::End), "Send");
+        let w = start.size.0;
+        assert_eq!(center.size, start.size, "the measured size is the text's");
+        assert!(start.glyphs[0].rel_x.abs() < 0.01);
+        assert!(
+            (center.glyphs[0].rel_x - (200.0 - w) / 2.0).abs() < 0.5,
+            "centred: {} of {w}",
+            center.glyphs[0].rel_x
+        );
+        assert!((end.glyphs[0].rel_x - (200.0 - w)).abs() < 0.5);
+
+        // Too long: cut to one line that still fits, from the left edge.
+        let long = "a label far too long for the two hundred pixels it is given here";
+        let cut = shape_layout(shared.font_system(), &spec(TextAlign::Center), long);
+        assert!(cut.size.0 <= 200.0 && cut.size.1 < 20.0, "{:?}", cut.size);
+        assert!(cut.glyphs[0].rel_x >= 0.0);
     }
 
     #[test]

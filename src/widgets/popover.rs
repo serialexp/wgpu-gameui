@@ -7,10 +7,9 @@
 
 use crate::chrome::SurfacePainter;
 use crate::layout::Rect;
-use crate::style::{StyleKey, StyleResolver};
+use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 use crate::text::TextBlock;
 
-use super::material;
 use super::{DrawContext, DrawList};
 
 /// Where the popover sits relative to its anchor.
@@ -53,20 +52,44 @@ pub fn measure_sheet_height(
 ) -> f32 {
     let font_size = s.scalar(StyleKey::FontSize);
     let _ = title;
-    let content_width = (body_width - 16.0).max(0.0);
+    let content_width = (body_width - POPOVER_PAD * 2.0).max(0.0);
     let line_stack: f32 = lines
         .iter()
         .map(|line| list.measure_text(line, font_size, Some(content_width)).1 + 4.0)
         .sum();
-    // Header runs through y=22 and the body starts at y=24. Text shaping's
-    // visual bounds can sit below the measured line box, so reserve a full 8px
-    // bottom inset after the final row gap rather than just enough height to
-    // avoid clipping descenders.
-    (36.0 + line_stack).max(34.0)
+    // The content starts under the title bar and its rule, inside the pad.
+    // Text shaping's visual bounds can sit below the measured line box, so
+    // the bottom pad follows the final row gap rather than just enough
+    // height to avoid clipping descenders.
+    POPOVER_CONTENT_TOP + POPOVER_PAD + line_stack
 }
 
-/// Draw the popover sheet (body + arrow) with a title, body text lines, and a
-/// close key in the top-right. Returns the rect of the close key so the caller
+/// Height of a popover's title bar (`padding: 7px 9px` around 9px caps).
+pub const POPOVER_TITLE_H: f32 = 25.0;
+/// Where a popover's content starts below the body's top: under the title
+/// bar's two-line rule and the pad.
+pub const POPOVER_CONTENT_TOP: f32 = POPOVER_TITLE_H + 2.0 + POPOVER_PAD;
+/// Space around a popover's content.
+pub const POPOVER_PAD: f32 = 9.0;
+/// The title bar's close key.
+const CLOSE_KEY: f32 = 15.0;
+/// The title's letter spacing (`--track-caption`), in em.
+const TITLE_TRACKING: f32 = 0.14;
+/// The title bar's rule: dark, and a light line under it.
+const TITLE_RULE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+const TITLE_RULE_HI: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
+
+/// A drawn popover frame (see [`draw_frame`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopoverFrame {
+    /// The close key, for hit-testing.
+    pub close: Rect,
+    /// Where the content goes: the body under the title bar, inside the pad.
+    pub content: Rect,
+}
+
+/// Draw the popover sheet (body + arrow) with a title and body text lines
+/// (see [`draw_frame`]). Returns the rect of the close key so the caller
 /// can hit-test it (or pass an input and let this do it — see
 /// [`PopoverOutput`]).
 pub fn draw_sheet(
@@ -77,6 +100,37 @@ pub fn draw_sheet(
     list: &mut DrawList,
     s: &StyleResolver,
 ) -> Rect {
+    let frame = draw_frame(body, side, title, list, s);
+    let font_size = s.scalar(StyleKey::FontSize);
+    let dim = s.color(StyleKey::TextDim);
+    let width = frame.content.width;
+    let mut y = frame.content.y;
+    for line in lines {
+        let (_, th) = list.measure_text(line, font_size, Some(width));
+        let ly = list.vcentered_text_y(y, th, font_size, s.theme().font.as_ref(), line);
+        list.text(
+            TextBlock::new(*line, frame.content.x, ly)
+                .with_size(font_size)
+                .with_color_f32(dim)
+                .with_max_width(width)
+                .with_font_opt(s.theme().font.clone()),
+        );
+        y += th + 4.0;
+    }
+    frame.close
+}
+
+/// Draw a Forge popover's frame: the raised sheet with its arrow toward the
+/// anchor, a title bar (mono caps title, a ghost × key, a two-line rule),
+/// and nothing inside, for the caller to fill [`PopoverFrame::content`]
+/// with any controls.
+pub fn draw_frame(
+    body: Rect,
+    side: PopoverSide,
+    title: &str,
+    list: &mut DrawList,
+    s: &StyleResolver,
+) -> PopoverFrame {
     let chrome = s.popover();
     let shadow_margin = chrome.shadow.blur * 1.5;
     // Declared scope covers body + arrow + the analytic shadow skirt.
@@ -126,7 +180,6 @@ pub fn draw_sheet(
     let close;
     {
         let list = surface.draw_list();
-        let radius = chrome.surface.corner_radii.top_left;
         // 1px inset highlight under the top edge.
         let hl = s.color(StyleKey::EdgeHighlight);
         list.quad(
@@ -137,69 +190,62 @@ pub fn draw_sheet(
             hl,
         );
 
-        // Title + close key.
-        let font_size = s.scalar(StyleKey::FontSize);
-        let title_color = s.color(StyleKey::Text);
-        let ty = list.vcentered_text_y(
-            body.y + 4.0,
-            18.0,
-            font_size,
-            s.theme().font.as_ref(),
-            title,
+        // Title bar: 9px mono caps in `--ink-glyph`, a ghost × key, and a
+        // two-line rule under it.
+        close = Rect::new(
+            body.right() - POPOVER_PAD - CLOSE_KEY,
+            body.y + (POPOVER_TITLE_H - CLOSE_KEY) * 0.5,
+            CLOSE_KEY,
+            CLOSE_KEY,
         );
+        let size = s.text_size(TextSize::Caption);
         list.text(
-            TextBlock::new(title, body.x + 8.0, ty)
-                .with_size(font_size)
-                .with_color_f32(title_color)
-                .with_ellipsis()
-                .with_max_width(body.width - 16.0 - 18.0)
-                .with_font_opt(s.theme().font.clone()),
+            s.mono_block(
+                title.to_uppercase(),
+                body.x + POPOVER_PAD,
+                crate::text::vcentered_line_y(body.y, POPOVER_TITLE_H, size),
+                TextSize::Caption,
+                Ink::Glyph,
+            )
+            .with_letter_spacing(size * TITLE_TRACKING)
+            .with_max_width((close.x - body.x - POPOVER_PAD * 2.0).max(0.0))
+            .with_ellipsis(),
         );
-
-        // Close key: a small ghost square top-right.
-        close = Rect::new(body.right() - 18.0, body.y + 4.0, 14.0, 14.0);
-        let base = s.color(StyleKey::Button);
-        let top = material::sheen_over(base, s.color(StyleKey::FaceTop));
-        let bottom = material::sheen_over(base, s.color(StyleKey::FaceBottom));
-        list.chrome_rect_gradient(close, radius, 1.0, top, bottom, [0.0, 0.0, 0.0, 0.5]);
-        let xc = s.color(StyleKey::TextDim);
-        #[cfg(feature = "phosphor-icons")]
-        {
-            let icon_rect = close.inset(3.0);
-            list.phosphor_icon(icon_rect, crate::PhosphorIcon::X, xc);
-        }
-        #[cfg(not(feature = "phosphor-icons"))]
-        {
-            let xty =
-                list.vcentered_text_y(close.y, close.height, 9.0, s.theme().font.as_ref(), "✕");
-            list.text(
-                TextBlock::new("✕", close.x + 3.0, xty)
-                    .with_size(9.0)
-                    .with_color_f32(xc)
-                    .with_font_opt(s.theme().font.clone()),
-            );
-        }
-
-        // Body lines.
-        let dim = s.color(StyleKey::TextDim);
-        let mut y = body.y + 24.0;
-        for line in lines {
-            // Wrap into the body width.
-            let (_, th) = list.measure_text(line, font_size, Some(body.width - 16.0));
-            let ly = list.vcentered_text_y(y, th, font_size, s.theme().font.as_ref(), line);
-            list.text(
-                TextBlock::new(*line, body.x + 8.0, ly)
-                    .with_size(font_size)
-                    .with_color_f32(dim)
-                    .with_max_width(body.width - 16.0)
-                    .with_font_opt(s.theme().font.clone()),
-            );
-            y += th + 4.0;
-        }
+        let x_size = s.text_size(TextSize::Row);
+        let (xw, _) = list.measure_text("×", x_size, None);
+        list.text(s.sans_block(
+            "×",
+            close.x + (CLOSE_KEY - xw) * 0.5,
+            crate::text::vcentered_line_y(close.y, close.height, x_size),
+            TextSize::Row,
+            Ink::Cell,
+        ));
+        list.quad(
+            body.x,
+            body.y + POPOVER_TITLE_H,
+            body.width,
+            1.0,
+            TITLE_RULE,
+        );
+        list.quad(
+            body.x,
+            body.y + POPOVER_TITLE_H + 1.0,
+            body.width,
+            1.0,
+            TITLE_RULE_HI,
+        );
     }
     surface.paint_post_content();
     list.pop_debug_scope();
-    close
+    PopoverFrame {
+        close,
+        content: Rect::new(
+            body.x + POPOVER_PAD,
+            body.y + POPOVER_CONTENT_TOP,
+            (body.width - POPOVER_PAD * 2.0).max(0.0),
+            (body.height - POPOVER_CONTENT_TOP - POPOVER_PAD).max(0.0),
+        ),
+    }
 }
 
 /// Outcome of a popover frame (from [`Popover::draw`]).
@@ -285,8 +331,38 @@ mod tests {
             .1;
         const BOTTOM_INSET: f32 = 8.0;
         assert!(
-            body.height - (24.0 + line_h + 4.0) >= BOTTOM_INSET,
+            body.height - (POPOVER_CONTENT_TOP + line_h + 4.0) >= BOTTOM_INSET,
             "measured popover leaves a visible bottom inset after wrapped body text"
+        );
+    }
+
+    #[test]
+    fn a_frame_gives_its_content_the_body_under_the_title() {
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let body = Rect::new(10.0, 20.0, 380.0, 300.0);
+        let frame = draw_frame(
+            body,
+            PopoverSide::Below,
+            "context usage",
+            &mut list,
+            &styles,
+        );
+        assert_eq!(
+            frame.content,
+            Rect::new(
+                10.0 + POPOVER_PAD,
+                20.0 + POPOVER_CONTENT_TOP,
+                380.0 - 2.0 * POPOVER_PAD,
+                300.0 - POPOVER_CONTENT_TOP - POPOVER_PAD
+            )
+        );
+        assert!(frame.close.right() <= body.right() - POPOVER_PAD + 0.01);
+        assert!(frame.close.bottom() <= body.y + POPOVER_TITLE_H);
+        assert!(
+            list.texts.iter().any(|t| t.content == "CONTEXT USAGE"),
+            "the title is in caps"
         );
     }
 

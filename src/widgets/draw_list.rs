@@ -12,8 +12,6 @@ use crate::text::{FontHandle, FontSystemHandle, FontVMetrics, TextBlock, TextMea
 const ANALYTIC_KIND_CHROME: u32 = 0;
 const ANALYTIC_KIND_SHADOW: u32 = 1;
 
-pub(crate) const ROUNDED_RECT_CORNER_SEGMENTS: usize = 8;
-
 /// Monotonic source of per-`DrawList` identity. Each `DrawList` gets a unique,
 /// never-reused id at construction so the renderer can detect the "freshly
 /// constructed every frame" footgun (a per-frame-new list can never warm its
@@ -637,6 +635,20 @@ impl DrawList {
         max_width: Option<f32>,
     ) -> (f32, f32) {
         self.text_measurer.measure(text, font_size, max_width)
+    }
+
+    /// Like [`measure_text`](Self::measure_text), but in `font` (`None` for the
+    /// default sans). Mono text measured with the default font comes out too
+    /// narrow, so text drawn with a theme's `mono_font` is measured here.
+    pub fn measure_text_with_font(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        font: Option<&FontHandle>,
+    ) -> (f32, f32) {
+        self.text_measurer
+            .measure_with_font(text, font_size, max_width, font)
     }
 
     /// Measure a queued [`TextBlock`] exactly as it will be laid out — font,
@@ -1347,105 +1359,15 @@ impl DrawList {
         }
     }
 
-    /// Add a rounded rectangle. Geometry is built in local space and
-    /// transformed at vertex push time, so a rotated transform produces a
-    /// rotated rounded rect.
+    /// Add a rounded rectangle as one fill-only SDF instance: the shader clamps
+    /// the radius and anti-aliases the edges. The instance carries the full
+    /// current transform, so a rotated or scaled rounded rect stays smooth.
     pub fn rounded_rect(&mut self, rect: Rect, radius: f32, color: [f32; 4]) {
         if radius <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
             self.quad(rect.x, rect.y, rect.width, rect.height, color);
             return;
         }
-
-        // Fast path: one fill-only SDF instance (the shader clamps the radius and
-        // rasterizes anti-aliased corners) instead of 5 strip quads + 4×8 corner
-        // triangles into the soup. Falls back to tessellation under rotation/scale.
-        if self.current_transform().is_translate_only() {
-            self.fill_rect_instance(rect, radius, color);
-            return;
-        }
-
-        let radius = radius.min(rect.width * 0.5).min(rect.height * 0.5);
-        let x0 = rect.x;
-        let y0 = rect.y;
-        let x1 = rect.x + rect.width;
-        let y1 = rect.y + rect.height;
-
-        // Center quad — fully inset rect, untouched by corner arcs.
-        self.quad(
-            x0 + radius,
-            y0 + radius,
-            rect.width - radius * 2.0,
-            rect.height - radius * 2.0,
-            color,
-        );
-        // Top side strip
-        self.quad(x0 + radius, y0, rect.width - radius * 2.0, radius, color);
-        // Bottom side strip
-        self.quad(
-            x0 + radius,
-            y1 - radius,
-            rect.width - radius * 2.0,
-            radius,
-            color,
-        );
-        // Left side strip
-        self.quad(x0, y0 + radius, radius, rect.height - radius * 2.0, color);
-        // Right side strip
-        self.quad(
-            x1 - radius,
-            y0 + radius,
-            radius,
-            rect.height - radius * 2.0,
-            color,
-        );
-
-        self.rounded_corner(
-            (x0 + radius, y0 + radius),
-            radius,
-            std::f32::consts::PI,
-            std::f32::consts::PI * 1.5,
-            color,
-        );
-        self.rounded_corner(
-            (x1 - radius, y0 + radius),
-            radius,
-            std::f32::consts::PI * 1.5,
-            std::f32::consts::TAU,
-            color,
-        );
-        self.rounded_corner(
-            (x1 - radius, y1 - radius),
-            radius,
-            0.0,
-            std::f32::consts::FRAC_PI_2,
-            color,
-        );
-        self.rounded_corner(
-            (x0 + radius, y1 - radius),
-            radius,
-            std::f32::consts::FRAC_PI_2,
-            std::f32::consts::PI,
-            color,
-        );
-    }
-
-    fn rounded_corner(
-        &mut self,
-        center: (f32, f32),
-        radius: f32,
-        start_angle: f32,
-        end_angle: f32,
-        color: [f32; 4],
-    ) {
-        for i in 0..ROUNDED_RECT_CORNER_SEGMENTS {
-            let t0 = i as f32 / ROUNDED_RECT_CORNER_SEGMENTS as f32;
-            let t1 = (i + 1) as f32 / ROUNDED_RECT_CORNER_SEGMENTS as f32;
-            let a0 = start_angle + (end_angle - start_angle) * t0;
-            let a1 = start_angle + (end_angle - start_angle) * t1;
-            let p0 = (center.0 + a0.cos() * radius, center.1 + a0.sin() * radius);
-            let p1 = (center.0 + a1.cos() * radius, center.1 + a1.sin() * radius);
-            self.triangle(center, p0, p1, color);
-        }
+        self.fill_rect_instance(rect, radius, color);
     }
 
     /// Add a filled convex polygon using fan triangulation from centroid.
@@ -1477,37 +1399,15 @@ impl DrawList {
     /// `rect` (the outer edge of the border coincides with `rect`, the border
     /// grows inward). Mirrors Teardown's `UiRectOutline(w, h, thickness)`.
     ///
-    /// Built from four edge quads so it transforms (rotation/scale/clip/tint)
-    /// exactly like [`DrawList::quad`].
+    /// Drawn as one outline-only SDF instance (radius 0, transparent fill) that
+    /// carries the full current transform, so rotation/scale/clip/tint all
+    /// apply. An over-thick border fills the rect instead of inverting.
     pub fn rect_outline(&mut self, rect: Rect, thickness: f32, color: [f32; 4]) {
         if thickness <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
             self.dropped_degenerate += 1;
             return;
         }
-        // Fast path: one outline-only SDF instance (radius 0, transparent fill)
-        // instead of four edge quads. Falls back to soup under rotation/scale.
-        if self.current_transform().is_translate_only() {
-            self.stroke_rect_instance(rect, 0.0, thickness, color);
-            return;
-        }
-        // Clamp so an over-thick border degenerates to a filled rect instead of
-        // overlapping itself / inverting the inner strips.
-        let t = thickness.min(rect.width * 0.5).min(rect.height * 0.5);
-        let x0 = rect.x;
-        let y0 = rect.y;
-        let x1 = rect.x + rect.width;
-
-        // Top and bottom run the full width.
-        self.quad(x0, y0, rect.width, t, color);
-        self.quad(x0, rect.y + rect.height - t, rect.width, t, color);
-
-        // Left and right fill only the gap between the top/bottom strips so the
-        // corners are not double-covered.
-        let inner_h = rect.height - 2.0 * t;
-        if inner_h > 0.0 {
-            self.quad(x0, y0 + t, t, inner_h, color);
-            self.quad(x1 - t, y0 + t, t, inner_h, color);
-        }
+        self.stroke_rect_instance(rect, 0.0, thickness, color);
     }
 
     /// Add a rounded-rectangle outline of the given `thickness`, tracing the
@@ -1530,76 +1430,10 @@ impl DrawList {
             return;
         }
 
-        // Fast path: one outline-only SDF instance (rounded, transparent fill)
-        // instead of two edge quads + four corner arcs. The shader clamps radius
-        // and thickness. Falls back to soup tessellation under rotation/scale.
-        if self.current_transform().is_translate_only() {
-            self.stroke_rect_instance(rect, radius, thickness, color);
-            return;
-        }
-
-        let radius = radius.min(rect.width * 0.5).min(rect.height * 0.5);
-        let t = thickness
-            .min(radius)
-            .min(rect.width * 0.5)
-            .min(rect.height * 0.5);
-        let x0 = rect.x;
-        let y0 = rect.y;
-        let x1 = rect.x + rect.width;
-        let y1 = rect.y + rect.height;
-
-        // Straight edges between the corner tangent points, inset inward by `t`.
-        let span_w = rect.width - radius * 2.0;
-        let span_h = rect.height - radius * 2.0;
-        if span_w > 0.0 {
-            self.quad(x0 + radius, y0, span_w, t, color); // top
-            self.quad(x0 + radius, y1 - t, span_w, t, color); // bottom
-        }
-        if span_h > 0.0 {
-            self.quad(x0, y0 + radius, t, span_h, color); // left
-            self.quad(x1 - t, y0 + radius, t, span_h, color); // right
-        }
-
-        // Corner arcs (outer radius = `radius`, inner = radius - t) using the
-        // same angular ranges as `rounded_rect` so the stroke follows the fill.
-        let inner = (radius - t).max(0.0);
-        let seg = ROUNDED_RECT_CORNER_SEGMENTS;
-        self.stroked_arc(
-            (x0 + radius, y0 + radius),
-            inner,
-            radius,
-            std::f32::consts::PI,
-            std::f32::consts::PI * 1.5,
-            seg,
-            color,
-        );
-        self.stroked_arc(
-            (x1 - radius, y0 + radius),
-            inner,
-            radius,
-            std::f32::consts::PI * 1.5,
-            std::f32::consts::TAU,
-            seg,
-            color,
-        );
-        self.stroked_arc(
-            (x1 - radius, y1 - radius),
-            inner,
-            radius,
-            0.0,
-            std::f32::consts::FRAC_PI_2,
-            seg,
-            color,
-        );
-        self.stroked_arc(
-            (x0 + radius, y1 - radius),
-            inner,
-            radius,
-            std::f32::consts::FRAC_PI_2,
-            std::f32::consts::PI,
-            seg,
-            color,
-        );
+        // One outline-only SDF instance (rounded, transparent fill). The shader
+        // clamps radius and thickness; the instance carries the full current
+        // transform, so a rotated or scaled outline stays smooth.
+        self.stroke_rect_instance(rect, radius, thickness, color);
     }
 
     /// Draw a rounded-rect chrome panel. This compatibility wrapper records one
@@ -1626,19 +1460,6 @@ impl DrawList {
         bg2: [f32; 4],
         border: [f32; 4],
     ) {
-        if !self.current_transform().is_translate_only() {
-            if radius > 0.0 {
-                self.rounded_rect(rect, radius, bg);
-                self.vertical_gradient(rect, bg, bg2);
-            } else {
-                self.quad(rect.x, rect.y, rect.width, rect.height, bg);
-                self.vertical_gradient(rect, bg, bg2);
-            }
-            if thickness > 0.0 {
-                self.rounded_rect_outline(rect, radius, thickness, border);
-            }
-            return;
-        }
         self.push_chrome_instance(
             rect,
             Background::LinearGradient {
@@ -2776,15 +2597,47 @@ mod tests {
         assert!(approx(inst.bg[3], 0.0)); // transparent fill: only the border band draws
     }
 
+    /// Assert `list` holds exactly one chrome instance, no soup, and that the
+    /// instance carries `translate(tx, ty) · rotate(angle)` with `rect` left in
+    /// local space — the shader applies the transform, so rotation stays SDF.
+    fn assert_one_rotated_instance(list: &DrawList, rect: Rect, angle: f32, tx: f32, ty: f32) {
+        assert!(
+            list.vertices.is_empty(),
+            "rotated chrome must not tessellate"
+        );
+        assert_eq!(list.chrome_instance_count(), 1);
+        let inst = list.chrome_instance(0).unwrap();
+        let (s, c) = angle.sin_cos();
+        // Row-major like `Affine2`: [a, b, c, d] with x' = a·x + b·y + tx.
+        for (got, want) in inst.linear.iter().zip([c, -s, s, c]) {
+            assert!(approx(*got, want), "linear {:?}", inst.linear);
+        }
+        assert!(approx(inst.translation[0], tx) && approx(inst.translation[1], ty));
+        assert_eq!(inst.rect, [rect.x, rect.y, rect.width, rect.height]);
+    }
+
     #[test]
-    fn rect_outline_degenerates_to_two_quads_when_thick() {
-        // Under rotation the outline falls back to the soup tessellator, where a
-        // thickness >= half height collapses the inner strip to top+bottom only.
+    fn rotated_rect_outline_is_one_instance_carrying_the_transform() {
         let mut list = DrawList::new();
-        list.rotate(std::f32::consts::FRAC_PI_4);
-        list.rect_outline(Rect::new(0.0, 0.0, 100.0, 10.0), 50.0, [1.0; 4]);
-        assert!(list.chrome_instance_count() == 0);
-        assert_eq!(list.vertices.len(), 8); // two quads
+        list.translate(30.0, 40.0);
+        list.rotate(0.4);
+        let rect = Rect::new(-50.0, -5.0, 100.0, 10.0);
+        list.rect_outline(rect, 3.0, [1.0; 4]);
+        assert_one_rotated_instance(&list, rect, 0.4, 30.0, 40.0);
+        let inst = list.chrome_instance(0).unwrap();
+        assert!(approx(inst.widths[0], 3.0));
+        assert!(approx(inst.bg[3], 0.0)); // transparent fill
+    }
+
+    #[test]
+    fn rotated_rounded_rect_outline_is_one_instance_carrying_the_transform() {
+        let mut list = DrawList::new();
+        list.translate(30.0, 40.0);
+        list.rotate(-0.7);
+        let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
+        list.rounded_rect_outline(rect, 8.0, 2.0, [1.0; 4]);
+        assert_one_rotated_instance(&list, rect, -0.7, 30.0, 40.0);
+        assert!(approx(list.chrome_instance(0).unwrap().params[0], 8.0));
     }
 
     #[test]
@@ -3430,31 +3283,12 @@ mod tests {
     }
 
     #[test]
-    fn rounded_rect_under_rotation_is_not_axis_aligned() {
+    fn rotated_rounded_rect_is_one_instance_carrying_the_transform() {
         let mut list = DrawList::new();
-        list.rotate(std::f32::consts::FRAC_PI_4); // 45 degrees
-        list.rounded_rect(Rect::new(10.0, 10.0, 20.0, 20.0), 4.0, [1.0; 4]);
-
-        // After 45° rotation, no two distinct vertices should share an x or y
-        // by accident (other than coincidentally). Check that at least some
-        // vertices have non-zero Y *and* non-zero X — i.e. the geometry isn't
-        // collapsed into an axis-aligned box.
-        let mut has_offdiag = false;
-        for v in &list.vertices {
-            if v.position[0].abs() > 0.001 && v.position[1].abs() > 0.001 {
-                // Distance from origin should match local distance from origin
-                // (rotation is rigid). For the corner at local (30,30), that
-                // distance is sqrt(1800) ~= 42.43.
-                let d = (v.position[0] * v.position[0] + v.position[1] * v.position[1]).sqrt();
-                if d > 5.0 {
-                    has_offdiag = true;
-                }
-            }
-        }
-        assert!(
-            has_offdiag,
-            "rotated rounded rect should have off-axis vertices"
-        );
+        list.rotate(std::f32::consts::FRAC_PI_4);
+        let rect = Rect::new(10.0, 10.0, 20.0, 20.0);
+        list.rounded_rect(rect, 4.0, [1.0; 4]);
+        assert_one_rotated_instance(&list, rect, std::f32::consts::FRAC_PI_4, 0.0, 0.0);
     }
 
     #[test]
@@ -3634,20 +3468,19 @@ mod tests {
     }
 
     #[test]
-    fn chrome_rect_falls_back_to_soup_under_rotation() {
+    fn rotated_chrome_rect_is_one_instance_carrying_the_transform() {
         let mut list = DrawList::new();
+        list.translate(5.0, 7.0);
         list.rotate(std::f32::consts::FRAC_PI_4);
-        list.chrome_rect(
-            Rect::new(0.0, 0.0, 40.0, 20.0),
-            6.0,
-            2.0,
-            [1.0; 4],
-            [0.5; 4],
-        );
-        // No instance recorded; geometry went into the soup, transformed.
-        assert!(list.chrome_instance_count() == 0);
-        assert!(list.paint_cmds.is_empty());
-        assert!(!list.vertices.is_empty());
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        list.chrome_rect_gradient(rect, 6.0, 2.0, [1.0; 4], [0.2; 4], [0.5; 4]);
+        assert_one_rotated_instance(&list, rect, std::f32::consts::FRAC_PI_4, 5.0, 7.0);
+        let inst = list.chrome_instance(0).unwrap();
+        // The gradient lives inside the rounded shape (one instance), not in a
+        // square quad painted over it.
+        assert_eq!(inst.bg, [1.0; 4]);
+        assert_eq!(inst.bg2, [0.2; 4]);
+        assert!(approx(inst.widths[0], 2.0));
     }
 
     #[test]

@@ -981,6 +981,27 @@ impl<'a> StyleResolver<'a> {
             .with_font_opt(self.theme.mono_font.clone())
     }
 
+    /// The single-line width of `text` as [`mono_block`](Self::mono_block)
+    /// draws it at `step`. Measuring mono text with
+    /// [`DrawList::measure_text`](crate::DrawList::measure_text) uses the
+    /// default font and comes out too narrow. No allocation.
+    pub fn mono_width(&self, list: &mut crate::DrawList, text: &str, step: TextSize) -> f32 {
+        list.measure_text_with_font(
+            text,
+            self.text_size(step),
+            None,
+            self.theme.mono_font.as_ref(),
+        )
+        .0
+    }
+
+    /// The single-line width of `text` as [`sans_block`](Self::sans_block)
+    /// draws it at `step`. No allocation.
+    pub fn sans_width(&self, list: &mut crate::DrawList, text: &str, step: TextSize) -> f32 {
+        list.measure_text_with_font(text, self.text_size(step), None, self.theme.font.as_ref())
+            .0
+    }
+
     /// A mono-capitals caption: `content` upper-cased, at the caption size,
     /// letter-spaced by `tracking`, in an ink `role`. Section titles, field
     /// labels, badges.
