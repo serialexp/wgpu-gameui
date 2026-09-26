@@ -99,7 +99,7 @@ impl DragHandle {
 
     /// A chrome-less handle: no background, no grip — just the hit zone and the
     /// drag delta. Use when you draw your own title bar and only need the
-    /// movement. Mirrors [`ImageButton::bare`](super::ImageButton).
+    /// movement. Mirrors [`Pressable::bare`](super::Pressable::bare).
     pub fn bare() -> Self {
         Self {
             label: None,

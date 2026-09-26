@@ -400,6 +400,17 @@ harden those foundations rather than create parallel replacements.
       `.bare()` drops the chrome (image is the hit target, overlay-only
       feedback); `.padding()` insets the image. Disabled dims via overlay so
       string-key sources without tint still read as disabled.
+      *Replaced by `Pressable` (2026-09-26):* `ImageButton` and the
+      `image_button_key` / `image_button_sprite` verbs are gone. An image
+      button is now an `Image` drawn in a `Pressable`'s content closure
+      (`Pressable::new().draw(rect, ctx, |key, ctx| ...)`, or the
+      `UiContext::pressable(key, w, h, content)` verb). `Pressable` is Forge's
+      `Key`: it owns hover/press/click, focus and Space/Enter, the material
+      (tone, hollow, held, travel, radius, `.bare()`), and fades its content
+      by the material's disabled alpha through the tint stack. `Button` and
+      `IconKey` are built on it. Button labels now centre on the face (1px
+      higher than before) and a disabled label fades like the rest of the
+      key instead of switching to `TextDim`.
 - [x] **P1 — Radio button group.** `RadioGroup<'a>`
       (`src/widgets/radio.rs`) draws a mutually-exclusive option set from vector
       primitives (dot = `input_background` fill + `input_border` ring; selected
@@ -1042,8 +1053,8 @@ Added `UiContext` façade verbs for previously-unwrapped widgets:
   `banner(severity, message, w)`, `group_begin(title, w, h) -> Rect`,
   `panel(w, h)` — draw through `StyleResolver` + auto-advance.
 - **Interactive:** `tabs(labels, active) -> Option<usize>`,
-  `image_button_key(key, w, h) -> bool`,
-  `image_button_sprite(sprite, w, h) -> bool`,
+  `pressable(key, w, h, content) -> bool` (was `image_button_key` /
+  `image_button_sprite`),
   `color_picker(id, &mut hsva, w) -> ColorPickerOutput`,
   `drag_handle(id, w, h) -> DragHandleOutput`.
 - **ScrollView:** `scroll_begin(w, h) -> Rect` / `scroll_end()` pair using
@@ -2044,3 +2055,15 @@ registration lifetime, resume clamp). 1071 lib tests green.
 - [ ] **P3 — `block` 0.1.6 future-incompat warning.** Every build warns
   that `block` (pulled in through the Metal backend) will be rejected by a
   future Rust; it goes away with a wgpu upgrade.
+
+## 2026-09-26 — Pressable (Forge `Key`) replaces ImageButton
+
+- [ ] **P2 — Disabled keys fade per element, not as a group.** A disabled
+  `Pressable` fades its material and its content separately (each by
+  `DISABLED_ALPHA`). Forge fades the whole key with CSS `opacity`, which
+  keeps the ink-to-face contrast. Per-element fading loses it where the ink
+  is darker than the face: a disabled accent `Button` or `IconKey` label is
+  nearly invisible (gallery `keys/Button.png`, "Button (accent,
+  disabled)"). Kept on purpose for now (Bart, 2026-09-26). The fix is real
+  group opacity: draw a disabled key into an offscreen layer and blend it at
+  `DISABLED_ALPHA`, if the renderer's layer/backdrop path can carry it.

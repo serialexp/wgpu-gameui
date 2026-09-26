@@ -20,15 +20,15 @@ use wgpu_gameui::{
     Accelerator, AssetGrid, Backdrop, Banner, BlurParams, Breadcrumb, Button, Checkbox,
     ColorEncoding, ColorPicker, ColumnWidth, ContextMenu, ContextMenuState, Corner, DocTab,
     DragCapture, DragHandle, DrawContext, DrawList, Dropdown, DropdownState, Easing, FocusState,
-    GradientStop, Group, HitZone, Hsva, ImageButton, ImageFit, InputState, InteractionScene, Key,
+    GradientStop, Group, HitZone, Hsva, Image, ImageFit, InputState, InteractionScene, Key,
     LayerStack, List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu,
     MenuBar, MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, Pager, Popover,
-    PopoverSide, ProgressBar, ProgressFill, RadioGroup, ScrollState, ScrollView, SelectionMode,
-    Separator, Severity, Slider, Splitter, StatusCell, StyleKey, StyleOverlay, StyleResolver,
-    Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock, TextDirection, TextInput, TextSpan,
-    Theme, Toast, ToastStack, Toggle, TooltipContent, TooltipLayer, TreeAction, TreeNode,
-    TreeState, UiContext, UiRenderer, UiState, Underline, VectorField, VectorScrub, ease,
-    lerp_color,
+    PopoverSide, PressState, Pressable, ProgressBar, ProgressFill, RadioGroup, ScrollState,
+    ScrollView, SelectionMode, Separator, Severity, Slider, Splitter, StatusCell, StyleKey,
+    StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock,
+    TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack, Toggle, TooltipContent,
+    TooltipLayer, TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState, Underline,
+    VectorField, VectorScrub, ease, lerp_color,
 };
 use wgpu_gameui::{
     BADGE_HEIGHT, Badge, BadgeTone, BarSegment, EmptyState, Ink, MeterFill, SPAN_TABS_HEIGHT,
@@ -1817,14 +1817,20 @@ fn render_widget_gallery() {
         }
 
         {
-            let r = flow.cell(list, "image_button_key()", 40.0, 40.0);
+            let r = flow.cell(list, "pressable() + Image", 40.0, 40.0);
             list.push_transform();
             {
                 let mut vstate = UiState::new();
                 let mut ui = UiContext::interactive(list, &input, &mut vstate, &theme);
                 ui.translate(r.x, r.y);
-                // Use the phosphor icon key present in the gallery renderer
-                let _ = ui.image_button_key("eye", 32.0, 32.0);
+                // An image button: the "eye" icon key the gallery renderer has,
+                // in a pressable.
+                let _ = ui.pressable(Pressable::new(), 32.0, 34.0, |key, ctx| {
+                    Image::key("eye")
+                        .fit(ImageFit::Contain)
+                        .natural_size(32.0, 32.0)
+                        .draw(key.face.inset(6.0), ctx.draw_list);
+                });
             }
             list.pop_transform();
         }
@@ -2457,26 +2463,48 @@ fn render_widget_gallery() {
             &mut input,
         );
 
-        flow.section(list, Category::Keys, "ImageButton", "sprite keys");
-        let r = flow.cell(list, "Image button", 40.0, 40.0);
-        ImageButton::sprite(duck)
-            .fit(ImageFit::Contain)
-            .natural_size(48.0, 48.0)
-            .draw(r, list, &StyleResolver::new(&theme), &input);
-
-        let r = flow.cell(list, "Image button (bare)", 40.0, 40.0);
-        ImageButton::sprite(board)
-            .bare()
-            .fit(ImageFit::Contain)
-            .natural_size(48.0, 48.0)
-            .draw(r, list, &StyleResolver::new(&theme), &input);
-
-        let r = flow.cell(list, "Image button (disabled)", 40.0, 40.0);
-        ImageButton::sprite(suitcase)
-            .enabled(false)
-            .fit(ImageFit::Contain)
-            .natural_size(48.0, 48.0)
-            .draw(r, list, &StyleResolver::new(&theme), &input);
+        // Forge's `Key` is our `Pressable`: the key every clickable key is
+        // built on, with the content drawn by the caller. An image button is
+        // an `Image` in a pressable.
+        flow.section(list, Category::Keys, "Key", "Pressable, holding an Image");
+        {
+            let image = |sprite| {
+                move |key: &PressState, ctx: &mut DrawContext| {
+                    Image::sprite(sprite)
+                        .fit(ImageFit::Contain)
+                        .natural_size(48.0, 48.0)
+                        .draw(key.face.inset(4.0), ctx.draw_list);
+                }
+            };
+            for (label, key, sprite) in [
+                ("Default", Pressable::new(), duck),
+                (
+                    "Ghost",
+                    Pressable::new().tone(wgpu_gameui::Tone::Ghost),
+                    board,
+                ),
+                ("Held", Pressable::new().held(true), suitcase),
+                ("Disabled", Pressable::new().enabled(false), suitcase),
+                ("Bare", Pressable::new().bare(), board),
+            ] {
+                let r = flow.cell(list, label, 40.0, 42.0);
+                key.draw(r, &mut ctx(list, &mut focus, &theme, &input), image(sprite));
+            }
+            // The pointer over the key: the face lightens, and a bare key
+            // gets its wash over the image.
+            for (label, key, sprite) in [
+                ("Default, hovered", Pressable::new(), duck),
+                ("Bare, hovered", Pressable::new().bare(), board),
+            ] {
+                let r = flow.cell(list, label, 40.0, 42.0);
+                let hover = InputState {
+                    mouse_x: r.x + 20.0,
+                    mouse_y: r.y + 20.0,
+                    ..InputState::default()
+                };
+                key.draw(r, &mut ctx(list, &mut focus, &theme, &hover), image(sprite));
+            }
+        }
 
         // ---- Lists / Grids (virtualized) --------------------------------
         flow.section(list, Category::Data, "List", "virtualized list and grid");

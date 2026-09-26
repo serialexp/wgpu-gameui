@@ -134,8 +134,10 @@ const GHOST_HIGHLIGHT: f32 = 0.1;
 const GHOST_PRESS_SHADOW: ([f32; 2], f32, f32) = ([0.0, 1.0], 2.0, 0.3);
 /// Sunken border alpha.
 const SUNKEN_EDGE_ALPHA: f32 = 0.6;
-/// Disabled controls fade to this fraction of their material.
-const DISABLED_ALPHA: f32 = 0.45;
+/// Disabled controls fade to this fraction of their material (the design's
+/// `opacity: 0.45`). [`Pressable`](super::Pressable) fades its content by
+/// the same amount.
+pub(crate) const DISABLED_ALPHA: f32 = 0.45;
 
 /// Draw the complete face-over-plinth material for `rect`.
 ///

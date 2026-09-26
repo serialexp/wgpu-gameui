@@ -54,7 +54,11 @@ A widget isn't done until **all** of these are true — treat it as the checklis
   façade that holds state is `UiContext` (the Teardown-verb layer).
 - **Dual sprite sources.** Image-bearing widgets accept both a pre-resolved
   `SpriteId` (supports tint + UV crop) and a string key resolved by name at
-  render time (no tint/crop). See `Image` / `Checkbox` / `ImageButton`.
+  render time (no tint/crop). See `Image` / `Checkbox`.
+- **Keys are Pressables.** Anything clicked like a key (`Button`, `IconKey`,
+  an image button) is a `Pressable` with content drawn in its closure; the
+  pressable owns hover/press/focus, the material, and the disabled fade.
+  Build new keys on it instead of repeating the hit testing.
 - **Theme-relative sizing.** Derive paddings/sizes from `Theme` fields rather
   than hard-coding pixels, so DPI scaling and re-theming work.
 - **Rect-native draw entry points.** Prefer `draw(rect, ...)` taking a

@@ -7,8 +7,8 @@
 //! by `travel` while pressed or [`held`](IconKey::held) — the icon rides down
 //! with it.
 //!
-//! Interaction, focus and the key material come from [`Button`]; this widget
-//! adds the icon and the design's per-tone icon inks.
+//! Interaction, focus and the key material come from [`Pressable`]; this
+//! widget adds the icon and the design's per-tone icon inks.
 //!
 //! Gated behind the `phosphor-icons` feature.
 //!
@@ -31,10 +31,7 @@ use crate::style::{Ink, StyleKey, StyleResolver};
 use crate::text::TextBlock;
 
 use super::material::Tone;
-use super::{Button, DrawContext, FocusId, Icon};
-
-/// Disabled keys fade to this fraction (the design's `opacity: 0.45`).
-const DISABLED_ALPHA: f32 = 0.45;
+use super::{DrawContext, FocusId, Icon, PressState, Pressable};
 
 /// What a key's face shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,13 +101,13 @@ impl IconKey {
         self
     }
 
-    /// Leave out the plinth under the face; see [`Button::hollow`].
+    /// Leave out the plinth under the face; see [`Pressable::hollow`].
     pub fn hollow(mut self, hollow: bool) -> Self {
         self.hollow = hollow;
         self
     }
 
-    /// Keep the key down (a latched toggle); see [`Button::held`].
+    /// Keep the key down (a latched toggle); see [`Pressable::held`].
     pub fn held(mut self, held: bool) -> Self {
         self.held = held;
         self
@@ -143,14 +140,29 @@ impl IconKey {
         self
     }
 
-    /// How far the face drops when pressed.
-    fn travel_px(&self, s: &StyleResolver) -> f32 {
-        self.travel.unwrap_or_else(|| s.scalar(StyleKey::Travel))
+    /// The pressable the key is drawn with: interaction, focus and material.
+    fn pressable(&self) -> Pressable {
+        let mut key = Pressable::new()
+            .tone(self.tone)
+            .held(self.held)
+            .enabled(self.enabled)
+            .hollow(self.hollow)
+            .name("IconKey");
+        if let Some(id) = self.focus_id {
+            key = key.focusable(id);
+        }
+        if let Some(travel) = self.travel {
+            key = key.travel(travel);
+        }
+        if let Some(radius) = self.radius {
+            key = key.radius(radius);
+        }
+        key
     }
 
     /// The rect size the key needs: its face plus the plinth travel beneath.
     pub fn outer_size(&self, s: &StyleResolver) -> [f32; 2] {
-        [self.size, self.size + self.travel_px(s)]
+        [self.size, self.size + self.pressable().travel_px(s)]
     }
 
     /// Side of the square the icon is fitted into, for a face `face` px tall.
@@ -178,10 +190,11 @@ impl IconKey {
         }
     }
 
-    /// The icon ink for this key's tone and state.
+    /// The icon ink for this key's tone and state. A disabled key's ink needs
+    /// no fade of its own; its [`Pressable`] fades the content.
     fn ink(&self, s: &StyleResolver, hovered: bool, pressed: bool) -> [f32; 4] {
         let down = pressed || self.held;
-        let mut ink = match self.tone {
+        match self.tone {
             Tone::Accent => s.color(StyleKey::OnAccent),
             Tone::Danger => s.color(StyleKey::OnDanger),
             Tone::Sunken => s.ink(Ink::Muted),
@@ -191,46 +204,21 @@ impl IconKey {
             Tone::Default if pressed => s.ink(Ink::Second),
             Tone::Default if hovered => s.ink(Ink::Max),
             Tone::Default => s.ink(Ink::Emph),
-        };
-        if !self.enabled {
-            ink[3] *= DISABLED_ALPHA;
         }
-        ink
     }
 
     /// Draw the key into `rect` (normally [`outer_size`](Self::outer_size))
     /// and return its interaction response; `clicked` includes keyboard
     /// activation while focused.
     pub fn draw(&self, rect: Rect, ctx: &mut DrawContext) -> crate::Response {
-        let mut button = Button::new("")
-            .tone(self.tone)
-            .held(self.held)
-            .enabled(self.enabled)
-            .hollow(self.hollow);
-        if let Some(id) = self.focus_id {
-            button = button.focusable(id);
-        }
-        if let Some(travel) = self.travel {
-            button = button.with_travel(travel);
-        }
-        if let Some(radius) = self.radius {
-            button = button.with_radius(radius);
-        }
-        let response = button.draw_response(rect, ctx);
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            return response;
-        }
+        self.pressable()
+            .draw(rect, ctx, |key, ctx| self.draw_face(key.face, key, ctx))
+    }
+
+    /// Draw the icon or glyph centred on `face`, in the ink for `key`'s state.
+    fn draw_face(&self, face: Rect, key: &PressState, ctx: &mut DrawContext) {
         let s = ctx.styles();
-        let travel = self.travel_px(&s);
-        let down = self.enabled && (response.pressed || self.held);
-        let face = Rect::new(
-            rect.x,
-            rect.y + if down { travel } else { 0.0 },
-            rect.width,
-            (rect.height - travel).max(0.0),
-        );
-        let hovered = self.enabled && response.hovered;
-        let ink = self.ink(&s, hovered, response.pressed);
+        let ink = self.ink(&s, key.hovered, key.pressed);
         match self.face {
             KeyFace::Icon(icon) => {
                 let side = Self::icon_box(face.height.min(face.width));
@@ -260,7 +248,6 @@ impl IconKey {
                 ctx.draw_list.text(block);
             }
         }
-        response
     }
 }
 
@@ -383,8 +370,9 @@ mod tests {
             tint(key.tone(Tone::Accent), &away()),
             s.color(StyleKey::OnAccent)
         );
+        // The pressable fades a disabled key's content, the icon included.
         let mut faded = s.ink(Ink::Emph);
-        faded[3] *= DISABLED_ALPHA;
+        faded[3] *= crate::widgets::material::DISABLED_ALPHA;
         assert_eq!(tint(key.enabled(false), &hover), faded);
     }
 

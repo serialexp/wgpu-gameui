@@ -15,7 +15,6 @@ use crate::animation::AnimationState;
 use crate::color::Hsva;
 use crate::layer::{LayerKind, LayerStack};
 use crate::layout::Rect;
-use crate::render::SpriteId;
 use crate::style::{StyleKey, StyleOverlay, StyleResolver, StyleValue};
 use crate::text::{FontHandle, TextBlock};
 use crate::theme::Theme;
@@ -24,11 +23,11 @@ use crate::widgets::{
     AssetGrid, AssetGridOutput, Badge, Banner, Breadcrumb, Button, Checkbox, ChipOutput,
     ColorPicker, ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId,
     DrawContext, Dropdown, DropdownId, DropdownState, EmptyState, FocusId, FocusState,
-    GradientStop, Group, HitZone, HitZoneOutput, ImageButton, List, ListItem, ListOutput,
-    ListState, NumberInput, Pager, PagerOutput, Panel, ProgressBar, RadioGroup, RampOutput,
-    ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Table, TableCell,
-    TableOutput, Tabs, TagOutput, TextInput, ToastStack, Toggle, TooltipLayer, TreeId, TreeNode,
-    TreeNodeOutput, TreeState, VectorField, VectorFieldOutput, VectorScrub,
+    GradientStop, Group, HitZone, HitZoneOutput, List, ListItem, ListOutput, ListState,
+    NumberInput, Pager, PagerOutput, Panel, PressState, Pressable, ProgressBar, RadioGroup,
+    RampOutput, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Table,
+    TableCell, TableOutput, Tabs, TagOutput, TextInput, ToastStack, Toggle, TooltipLayer, TreeId,
+    TreeNode, TreeNodeOutput, TreeState, VectorField, VectorFieldOutput, VectorScrub,
 };
 use crate::widgets::{
     chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton, spinner,
@@ -2318,43 +2317,49 @@ impl<'a> UiContext<'a> {
         clicked
     }
 
-    /// Draw an image button (by atlas key) and return true if clicked.
-    /// `w`/`h` are the natural image size. Auto-advances by `h`.
-    pub fn image_button_key(&mut self, key: &str, w: f32, h: f32) -> bool {
-        let (input, theme) = match self.interactive_refs() {
-            Some(v) => v,
-            None => return false,
+    /// Draw a [`Pressable`] key in a `w`×`h` rect, with `content` drawing its
+    /// face, and return true if it was clicked (or activated from the keyboard
+    /// while focused). The key joins the Tab ring. Auto-advances by `h`.
+    ///
+    /// An image button is an [`Image`](crate::Image) in a pressable:
+    /// ```ignore
+    /// if ui.pressable(Pressable::new(), 40.0, 40.0, |key, ctx| {
+    ///     Image::key("eye").fit(ImageFit::Contain).draw(key.face.inset(4.0), ctx.draw_list);
+    /// }) {
+    ///     toggle_visibility();
+    /// }
+    /// ```
+    pub fn pressable(
+        &mut self,
+        key: Pressable,
+        w: f32,
+        h: f32,
+        content: impl FnOnce(&PressState, &mut DrawContext),
+    ) -> bool {
+        let Some((input, theme)) = self.interactive_refs() else {
+            return false;
         };
         let world = self.place_rect(w, h);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
         let clicked = {
             let list = self.backend.list_mut();
-            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
-            ImageButton::key(key)
-                .natural_size(w, h)
-                .draw(local, list, &style, &local_input)
-        };
-        self.advance(h);
-        clicked
-    }
-
-    /// Draw an image button from a pre-resolved [`SpriteId`] and return true if
-    /// clicked. `w`/`h` are the natural image size. Auto-advances by `h`.
-    pub fn image_button_sprite(&mut self, sprite: SpriteId, w: f32, h: f32) -> bool {
-        let (input, theme) = match self.interactive_refs() {
-            Some(v) => v,
-            None => return false,
-        };
-        let world = self.place_rect(w, h);
-        let inv = self.backend.list_mut().current_transform().inverse();
-        let (local, local_input) = self.localize(inv, world, input);
-        let clicked = {
-            let list = self.backend.list_mut();
-            let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
-            ImageButton::sprite(sprite)
-                .natural_size(w, h)
-                .draw(local, list, &style, &local_input)
+            let state = self
+                .state
+                .as_mut()
+                .expect("pressable requires interactive state");
+            let fid = state.auto_id();
+            let UiState {
+                focus,
+                anim,
+                interactions,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_animations(anim)
+                .with_interactions(interactions);
+            key.focusable(fid).draw(local, &mut ctx, content).clicked
         };
         self.advance(h);
         clicked

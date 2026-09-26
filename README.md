@@ -130,7 +130,7 @@ cargo run --example hello_ui
 | Banner | `banner(severity, message, w)` | `Banner::draw(rect, list, style)` |
 | Color picker | `color_picker(id, hsva, w)` | `ColorPicker::draw(hsva, id, capture, rect, ctx)` |
 | Drag handle | `drag_handle(id, w, h)` | `DragHandle::draw(rect, id, capture, ctx)` |
-| Image button | `image_button_key(key, w, h)` | `ImageButton::draw(rect, list, style, input)` |
+| Pressable (any key; an image button is an `Image` in one) | `pressable(key, w, h, \|key, ctx\| ...)` | `Pressable::draw(rect, ctx, \|key, ctx\| ...)` |
 | Image | `image_box(sprite, w, h)` | `Image::draw(rect, list)` |
 | Icon | *(draw primitive)* | `DrawList::icon` / `Icon` widget |
 | Hit zone | `hit_zone(w, h)` / `hit_zone_at(rect)` | `HitZone::test(rect, input)` |

@@ -22,136 +22,26 @@ use crate::{
     AnimSlot, MeasureConstraints, MeasureContext, Measurement, StyleKey, StyleResolver, WrapMode,
 };
 
-use super::material::{self, Material, Tone};
-use super::{DrawContext, DrawList, FocusId};
+use super::material::Tone;
+use super::{DrawContext, DrawList, FocusId, Pressable};
 
-/// Resolved interaction state of a button, shared by the chrome/overlay helpers.
-pub(crate) struct ButtonVisual {
-    pub enabled: bool,
-    pub hovered: bool,
-    pub pressed: bool,
-    /// Which face the chrome wears (default neutral).
-    pub tone: Tone,
-    /// No plinth under the face (see [`Material::hollow`]).
-    pub hollow: bool,
-}
-
-impl ButtonVisual {
-    /// Background fill for the current state (disabled dims the idle color).
-    /// Retained for the test suite's seam assertions.
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub(crate) fn bg_color(&self, s: &StyleResolver) -> [f32; 4] {
-        let _ = self.tone;
-        if !self.enabled {
-            let mut c = s.color(StyleKey::Button);
-            c[3] = 0.5;
-            c
-        } else if self.pressed {
-            s.color(StyleKey::ButtonPressed)
-        } else if self.hovered {
-            s.color(StyleKey::ButtonHover)
-        } else {
-            s.color(StyleKey::Button)
-        }
+/// A button label's color on a face in `tone`: tones with a saturated face
+/// (accent / danger) use `OnAccent` / `OnDanger`, the rest `Text`. A disabled
+/// button needs no color of its own; its [`Pressable`] fades the label.
+fn label_color(s: &StyleResolver, tone: Tone) -> [f32; 4] {
+    match tone {
+        Tone::Accent => s.color(StyleKey::OnAccent),
+        Tone::Danger => s.color(StyleKey::OnDanger),
+        _ => s.color(StyleKey::Text),
     }
 }
 
-/// Draw a button's face-over-plinth material for the given state, its face
-/// dropping `travel` px while pressed.
-///
-/// Shared by [`Button`] and [`ImageButton`](super::ImageButton) so both get the
-/// same material from a single place. Honors [`Theme::border_radius`] (0 =>
-/// square); the border is the material's 1px near-black face edge.
-pub(crate) fn draw_chrome(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    rect: Rect,
-    radius: f32,
-    travel: f32,
-    v: &ButtonVisual,
-) {
-    let m = Material::new(v.tone)
-        .enabled(v.enabled)
-        .hovered(v.hovered)
-        .pressed(v.pressed)
-        .travel(travel)
-        .hollow(v.hollow);
-    material::draw_with_radius(list, s, rect, radius, &m);
-}
-
-/// Low-level flat chrome draw from already-resolved colors. Currently unused by
-/// widgets (they go through the material), kept as the documented escape hatch
-/// for crate-internal callers that want a bare rounded fill+border.
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn draw_chrome_colors(
-    list: &mut DrawList,
-    rect: Rect,
-    radius: f32,
-    bg: [f32; 4],
-    border_color: [f32; 4],
-    border_width: f32,
-) {
-    // One instanced SDF rounded-rect carries fill + border. When the border is
-    // disabled (`border_width == 0`) a transparent border color collapses the
-    // SDF to a plain fill. `chrome_rect` falls back to immediate tessellation
-    // under a rotated/scaled transform, so correctness is universal.
-    let border = if border_width > 0.0 {
-        border_color
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    };
-    list.chrome_rect(rect, radius, border_width, bg, border);
-}
-
-/// Draw the bare-button feedback overlay (no background/border): a dim for
-/// disabled, a darken for pressed, a subtle lighten for hover. Drawn on top of
-/// whatever content the bare button shows.
-pub(crate) fn draw_bare_overlay(list: &mut DrawList, rect: Rect, v: &ButtonVisual) {
-    let overlay = if !v.enabled {
-        [0.0, 0.0, 0.0, 0.4]
-    } else if v.pressed {
-        [0.0, 0.0, 0.0, 0.2]
-    } else if v.hovered {
-        [1.0, 1.0, 1.0, 0.08]
-    } else {
-        return;
-    };
-    list.quad(rect.x, rect.y, rect.width, rect.height, overlay);
-}
-
-/// Horizontally- and vertically-centered button label, clipped to the inner
-/// width. The horizontal inset is the theme padding, but capped relative to the
-/// button width so a small button (e.g. a spin-box `+`/`-` stepper) still leaves
-/// room for the glyph instead of pushing it off the edge.
-///
-/// `face` is the material's face rect (dropped `travel` px while pressed), so
-/// the label rides down with the face. Tones with a saturated face (accent /
-/// danger) resolve their label color from `OnAccent` / `OnDanger`.
-pub(crate) fn draw_label(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    face: Rect,
-    label: &str,
-    enabled: bool,
-    tone: Tone,
-) {
-    let text_color = if !enabled {
-        s.color(StyleKey::TextDim)
-    } else {
-        match tone {
-            Tone::Accent => s.color(StyleKey::OnAccent),
-            Tone::Danger => s.color(StyleKey::OnDanger),
-            _ => s.color(StyleKey::Text),
-        }
-    };
-    draw_label_colored(list, s, face, label, text_color);
-}
-
-/// [`draw_label`] with an explicit (already-resolved) color — the eased
-/// animation path resolves its label color per frame and hands it here.
-pub(crate) fn draw_label_colored(
+/// Draw a button label centred on `face`, clipped to the inner width. The
+/// horizontal inset is the theme padding, but capped relative to the button
+/// width so a small button (e.g. a spin-box `+`/`-` stepper) still leaves room
+/// for the glyph instead of pushing it off the edge. `face` is the key's face
+/// rect (dropped `travel` px while pressed), so the label rides down with it.
+fn draw_label_colored(
     list: &mut DrawList,
     s: &StyleResolver,
     face: Rect,
@@ -263,7 +153,14 @@ impl Button {
             }
             .apply(natural[1]),
         ];
-        let baseline = (preferred[1] * 0.5 - text.metrics.visual_center + text.metrics.baseline)
+        // The label centres on the face: `travel` px shorter than the
+        // allocation for a keyed button, the whole allocation for a bare one.
+        let face = if self.chrome {
+            (preferred[1] - self.travel_px(&styles)).max(0.0)
+        } else {
+            preferred[1]
+        };
+        let baseline = (face * 0.5 - text.metrics.visual_center + text.metrics.baseline)
             .clamp(0.0, preferred[1]);
         Measurement::new(
             [padding * 2.0, natural[1]],
@@ -316,6 +213,12 @@ impl Button {
         self
     }
 
+    /// How far the face drops while pressed: the override, or
+    /// `StyleKey::Travel`.
+    fn travel_px(&self, s: &StyleResolver) -> f32 {
+        self.travel.unwrap_or_else(|| s.scalar(StyleKey::Travel))
+    }
+
     /// Keep the key down: it wears the pressed face (dropped by `travel`)
     /// without being pressed, as a latched toggle does. Clicks still report
     /// normally; a disabled button never looks held.
@@ -357,121 +260,40 @@ impl Button {
     /// [`focusable`](Self::focusable), its stable focus ID also identifies its hit
     /// region; otherwise interaction retains the legacy immediate rect test.
     pub fn draw_response(&self, rect: Rect, ctx: &mut DrawContext) -> crate::Response {
-        let response_id = crate::WidgetId(self.focus_id.unwrap_or(0));
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            return crate::Response::idle(response_id, rect);
-        }
-        // Pushed before `ctx.styles()` / the `&mut *ctx.draw_list` reborrow
-        // below, which hold `ctx` for the rest of the body.
-        ctx.push_debug_scope_rect(crate::widgets::scope_name("Button", &self.label), rect);
-        let retained = self
-            .focus_id
-            .filter(|_| ctx.has_interactions())
-            .map(|id| ctx.interact(crate::WidgetId(id), rect, self.enabled));
-        let retained = retained.filter(|response| response.resolved);
-        let input = ctx.input;
-
-        // Legacy raw DrawContexts retain immediate behavior. Interaction-backed
-        // widgets use the sole topmost winner from the previous presented scene.
-        let hovered = retained.as_ref().map_or_else(
-            || self.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y),
-            |response| response.hovered,
-        );
-        if hovered {
-            ctx.request_cursor(crate::CursorIcon::Pointer);
-        }
-        let pressed = retained
-            .as_ref()
-            .map_or(hovered && input.mouse_down, |r| r.pressed);
-        let looks_pressed = pressed || self.held;
-        let clicked = retained
-            .as_ref()
-            .map_or(hovered && input.mouse_clicked, |r| r.clicked);
-        let key_activate = input.nav.confirm;
         let tone = self.tone.unwrap_or_default();
-        let v = ButtonVisual {
-            enabled: self.enabled,
-            hovered,
-            pressed: looks_pressed,
-            tone,
-            hollow: self.hollow,
-        };
-
-        // `styles()` returns an 'a-lifetimed resolver that borrows nothing of
-        // `ctx`, so it stays valid across the animation calls below and the
-        // later `&mut *ctx.draw_list` borrow.
-        let s = ctx.styles();
-        let radius = self
-            .radius
-            .unwrap_or_else(|| s.scalar(StyleKey::BorderRadius));
-
-        // The 4a press is geometric (the face drops `travel` px), not a color
-        // swap, so the material is resolved discretely; the eased path applies
-        // only to the label color, which still fades between states.
-        let travel = self.travel.unwrap_or_else(|| s.scalar(StyleKey::Travel));
-        let face_y = rect.y
-            + if v.enabled && looks_pressed {
-                travel
-            } else {
-                0.0
-            };
-        let face = Rect::new(rect.x, face_y, rect.width, rect.height - (face_y - rect.y));
-        let target_text = if !self.enabled {
-            s.color(StyleKey::TextDim)
-        } else {
-            match tone {
-                Tone::Accent => s.color(StyleKey::OnAccent),
-                Tone::Danger => s.color(StyleKey::OnDanger),
-                _ => s.color(StyleKey::Text),
-            }
-        };
-        let text_color = match self.anim_id {
-            Some(id) => ctx.animate_color(id, AnimSlot::Text, target_text),
-            None => target_text,
-        };
-        {
-            let list = &mut *ctx.draw_list;
-            if self.chrome {
-                draw_chrome(list, &s, rect, radius, travel, &v);
-            } else {
-                draw_bare_overlay(list, rect, &v);
-            }
-            if !self.label.is_empty() {
-                draw_label_colored(list, &s, face, &self.label, text_color);
-            }
+        let mut key = Pressable::new()
+            .tone(tone)
+            .enabled(self.enabled)
+            .held(self.held)
+            .hollow(self.hollow)
+            .name(crate::widgets::scope_name("Button", &self.label));
+        if !self.chrome {
+            key = key.bare();
         }
-
-        // Keyboard focus + Space/Enter activation (opt-in via `focusable`).
-        let mut activated = clicked;
         if let Some(id) = self.focus_id {
-            ctx.register_focus(id);
-            if clicked {
-                ctx.focus.request(id);
-            }
-            if ctx.focus.is_focused(id) {
-                if self.enabled && key_activate {
-                    activated = true;
-                }
-                ctx.draw_focus_ring(rect);
-            }
+            key = key.focusable(id);
         }
-
-        ctx.pop_debug_scope();
-        let mut response = retained.unwrap_or_else(|| crate::Response {
-            id: self.focus_id.map(crate::WidgetId),
-            rect,
-            resolved: false,
-            hovered,
-            pressed,
-            clicked,
-            released: hovered && input.mouse_released,
-            held: hovered && input.mouse_held,
-            double_clicked: hovered && input.mouse_double_clicked,
-            local_pos: hovered.then_some([input.mouse_x - rect.x, input.mouse_y - rect.y]),
-            scroll_delta: 0.0,
-        });
-        response.clicked = activated;
-        response
+        if let Some(radius) = self.radius {
+            key = key.radius(radius);
+        }
+        if let Some(travel) = self.travel {
+            key = key.travel(travel);
+        }
+        // The press is geometric (the face drops `travel` px), not a color
+        // swap, so the material switches discretely; only the label color
+        // eases between states.
+        key.draw(rect, ctx, |state, ctx| {
+            if self.label.is_empty() {
+                return;
+            }
+            let s = ctx.styles();
+            let target = label_color(&s, tone);
+            let text_color = match self.anim_id {
+                Some(id) => ctx.animate_color(id, AnimSlot::Text, target),
+                None => target,
+            };
+            draw_label_colored(ctx.draw_list, &s, state.face, &self.label, text_color);
+        })
     }
 
     /// Draw a chrome button at a layout-computed rect. Returns true if clicked.
@@ -490,31 +312,20 @@ impl Button {
         ctx: &mut DrawContext,
         texture_key: &str,
     ) -> bool {
-        ctx.push_debug_scope_rect(crate::widgets::scope_name("Button", label), rect);
-        let s = ctx.styles();
-        let input = ctx.input;
-        let list = &mut *ctx.draw_list;
-        let hovered =
-            enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y);
-        let pressed = hovered && input.mouse_down;
-        let clicked = hovered && input.mouse_clicked;
-
-        list.nine_slice(rect.x, rect.y, rect.width, rect.height, texture_key);
-        draw_bare_overlay(
-            list,
-            rect,
-            &ButtonVisual {
-                enabled,
-                hovered,
-                pressed,
-                tone: Tone::default(),
-                hollow: false,
-            },
-        );
-        draw_label(list, &s, rect, label, enabled, Tone::default());
-
-        list.pop_debug_scope();
-        clicked
+        // A bare key whose content is the nine-slice texture plus the label.
+        Pressable::new()
+            .bare()
+            .enabled(enabled)
+            .name(crate::widgets::scope_name("Button", label))
+            .draw(rect, ctx, |state, ctx| {
+                let s = ctx.styles();
+                let face = state.face;
+                ctx.draw_list
+                    .nine_slice(face.x, face.y, face.width, face.height, texture_key);
+                let color = label_color(&s, Tone::default());
+                draw_label_colored(ctx.draw_list, &s, face, label, color);
+            })
+            .clicked
     }
 }
 
@@ -705,11 +516,13 @@ mod tests {
         assert!(label.ellipsize, "button labels must use ellipsis mode");
         let inset = theme.padding.min(button.width * 0.15);
         assert_eq!(label.max_width, button.width - inset * 2.0);
+        // Centred on the face, which sits `travel` px above the plinth.
+        let travel = StyleResolver::new(&theme).scalar(StyleKey::Travel);
         assert_eq!(
             label.y,
             list.vcentered_text_y(
                 button.y,
-                button.height,
+                button.height - travel,
                 theme.font_size,
                 theme.font.as_ref(),
                 "Reconnect",
@@ -948,8 +761,9 @@ mod tests {
         drop(measure);
         let block = styles.text_block("Save", 0.0, 0.0);
         let metrics = measurer.vmetrics(block.font.as_ref(), block.weight, block.style);
-        let painted_top =
-            result.preferred[1] * 0.5 - block.font_size * metrics.visual_center_ratio("Save");
+        // Painted centred on the face, `travel` px shorter than the button.
+        let face = result.preferred[1] - styles.scalar(StyleKey::Travel);
+        let painted_top = face * 0.5 - block.font_size * metrics.visual_center_ratio("Save");
         let painted_baseline = painted_top + block.font_size * metrics.baseline_ratio;
         assert!((result.baseline.unwrap() - painted_baseline).abs() < 0.001);
     }
