@@ -3332,6 +3332,8 @@ impl<'a> Drop for UiContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The module's own import of `Tone` is behind `phosphor-icons`.
+    use crate::Tone;
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
