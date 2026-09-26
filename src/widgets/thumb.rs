@@ -395,44 +395,13 @@ impl<'a> Thumb<'a> {
     fn draw_slot(&self, list: &mut DrawList, s: &StyleResolver, rect: Rect) {
         let radius = self.radius();
         list.rounded_rect(rect, radius, s.color(StyleKey::WellDeep));
-        // Hatch: 1 px lines rising left to right (a 135° CSS stripe), every
-        // few pixels, clipped to the tile.
-        list.push_clip(rect);
-        let mut offset = 0.0;
-        while offset < rect.width + rect.height {
-            list.line(
-                [rect.x + offset - rect.height, rect.bottom()],
-                [rect.x + offset, rect.y],
-                1.0,
-                HATCH,
-            );
-            offset += HATCH_STEP;
-        }
-        list.pop_clip();
+        list.hatch(rect, HATCH_STEP, HATCH);
         let edge = if self.selected {
             SLOT_EDGE_SELECTED
         } else {
             SLOT_EDGE
         };
-        dashed_outline(list, rect, edge);
-    }
-}
-
-/// A 1 px dashed outline just inside `rect`.
-fn dashed_outline(list: &mut DrawList, rect: Rect, color: [f32; 4]) {
-    let mut x = rect.x;
-    while x < rect.right() {
-        let w = DASH.min(rect.right() - x);
-        list.quad(x, rect.y, w, 1.0, color);
-        list.quad(x, rect.bottom() - 1.0, w, 1.0, color);
-        x += DASH * 2.0;
-    }
-    let mut y = rect.y + DASH * 2.0;
-    while y < rect.bottom() - 1.0 {
-        let h = DASH.min(rect.bottom() - 1.0 - y);
-        list.quad(rect.x, y, 1.0, h, color);
-        list.quad(rect.right() - 1.0, y, 1.0, h, color);
-        y += DASH * 2.0;
+        list.dashed_rect_outline(rect, DASH, edge);
     }
 }
 

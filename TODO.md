@@ -2067,3 +2067,47 @@ registration lifetime, resume clamp). 1071 lib tests green.
   disabled)"). Kept on purpose for now (Bart, 2026-09-26). The fix is real
   group opacity: draw a disabled key into an offscreen layer and blend it at
   `DISABLED_ALPHA`, if the renderer's layer/backdrop path can carry it.
+
+## 2026-09-26 — Missing Forge components, batch A (small pieces)
+
+Built from the Forge Design System's `components/*` sources. Coverage
+61 of 77 (was 54).
+
+- [x] **CountBubble** (`data`) — `CountBubble::new(n).draw(list, s, x, y)
+  -> Rect`, `width()`, `COUNT_BUBBLE_HEIGHT`. Raised danger pill.
+- [x] **StatusIcon** (`feedback`) — `StatusIcon::new(Severity).size(..)
+  .glyph(..).draw(list, s, x, y) -> Rect`; `STATUS_ICON_SIZE` (22),
+  `STATUS_ICON_INLINE_SIZE` (14); `tone_glyph` / `tone_ink`.
+- [x] **Placeholder** (`feedback`) — `Placeholder::image()` (hatched,
+  crossed, dashed; `.round(true)`; `.label("")` hides the chip) and
+  `Placeholder::text(lines)` with `.height()`. Draws only what fits.
+- [x] **DropZone** (`data`) — `DropZone::new(label).active(bool)
+  .draw(rect, list, s)`; `DROP_ZONE_SIZE`. The caller decides "over".
+- [x] **FieldLabel** (`forms`) — `FieldLabel::new(text).value(..)
+  .draw(list, s, x, y, width) -> Rect`, `FieldLabel::height()`.
+- [x] **Panel** (`layout`) — reworked to Forge: `Panel::new().title(..)
+  .aside(..).padding(..).gap(..).draw(rect, list, s) -> content Rect`,
+  `content_rect()`; `PANEL_RADIUS` / `PANEL_PADDING` / `PANEL_GAP`. The old
+  `Panel { x, y, width, height }`, `Panel::centered` and `Panel::draw_at`
+  are gone (`Group` and `UiContext::panel` use the new one).
+- [x] **DockSection** (`sidebar`) — already built in `dock_stack.rs`; now
+  has its own gallery section.
+- `DrawList::dashed_rect_outline` and `DrawList::hatch` are shared now
+  (Thumb's slot used private copies). `hatch` cuts its lines to the rect
+  instead of relying on a clip.
+- The Forge hues (`HUE_ACCENT` …) moved from `badge.rs` to `color.rs`.
+
+- [ ] **P3 — Outset lips count as overflow in the debug report.** Wells
+  with Forge's lit lower lip (`0 1px 0 rgba(255,255,255,.07)` outside the
+  box: `SearchField`, `Placeholder::image`) paint 1 px below their
+  declared rect, and `overflows_declared` flags each one. Either the report
+  learns that a 1 px outset lip is intended, or those widgets declare the
+  lip in their scope rect.
+- [ ] **P3 — `cargo doc` has 28 warnings again.** It was clean once (see
+  "Rustdoc on all public types"). Unresolved links (`Frame::run`,
+  `UiState::end_frame`, `TooltipLayer::hover_zone`, `UiFrameResult`, …)
+  and links to private items, such as `Thumb`'s "See the module docs",
+  which points into a private module whose docs users never see.
+- [ ] **P3 — Our `Group` isn't Forge's `Group`.** Forge's is a *sunken*,
+  collapsible card (`rgba(0,0,0,.22)`, mono-caps header with ▸ caret and a
+  right-aligned summary). Ours is a raised panel with a sans title strip.

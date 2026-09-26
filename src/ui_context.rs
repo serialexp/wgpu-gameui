@@ -1394,7 +1394,7 @@ impl<'a> UiContext<'a> {
         let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
         let width = w.unwrap_or_else(|| self.default_field_width());
         let rect = self.place_local(width, h);
-        Panel::draw_at(rect, self.backend.list_mut(), &style);
+        Panel::new().draw(rect, self.backend.list_mut(), &style);
         self.advance(h);
     }
 

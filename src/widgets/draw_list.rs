@@ -1436,6 +1436,65 @@ impl DrawList {
         self.stroke_rect_instance(rect, radius, thickness, color);
     }
 
+    /// Add a 1 px dashed outline flush inside `rect`: `dash` px on, `dash`
+    /// px off, starting at each side's top/left end (a CSS `1px dashed`
+    /// border). Drop zones and empty slots use it: an outline marks a place
+    /// without covering what is under it.
+    pub fn dashed_rect_outline(&mut self, rect: Rect, dash: f32, color: [f32; 4]) {
+        if dash <= 0.0 || rect.width < 1.0 || rect.height < 1.0 {
+            self.dropped_degenerate += 1;
+            return;
+        }
+        let mut x = rect.x;
+        while x < rect.right() {
+            let w = dash.min(rect.right() - x);
+            self.quad(x, rect.y, w, 1.0, color);
+            self.quad(x, rect.bottom() - 1.0, w, 1.0, color);
+            x += dash * 2.0;
+        }
+        // The sides start one period down so their first dash doesn't paint
+        // over the corner pixel the top edge already covered.
+        let mut y = rect.y + dash * 2.0;
+        while y < rect.bottom() - 1.0 {
+            let h = dash.min(rect.bottom() - 1.0 - y);
+            self.quad(rect.x, y, 1.0, h, color);
+            self.quad(rect.right() - 1.0, y, 1.0, h, color);
+            y += dash * 2.0;
+        }
+    }
+
+    /// Fill `rect` with 1 px hatch lines rising left to right (a CSS
+    /// `repeating-linear-gradient(135deg, …)` stripe), `step` px apart
+    /// horizontally. The texture of empty slots and placeholders.
+    ///
+    /// Each 45° line is cut before it's drawn to a box half a pixel inside
+    /// `rect`, so the stroke's width stays inside too and no clip is needed.
+    pub fn hatch(&mut self, rect: Rect, step: f32, color: [f32; 4]) {
+        let area = rect.inset(0.5);
+        if step <= 0.0 || area.width <= 0.0 || area.height <= 0.0 {
+            self.dropped_degenerate += 1;
+            return;
+        }
+        let mut offset = step;
+        while offset < area.width + area.height {
+            // The line runs from (x0, bottom) up and to the right; `t` is the
+            // distance travelled along both axes. Keep the part with x
+            // inside the area.
+            let x0 = area.x + offset - area.height;
+            let t0 = (area.x - x0).max(0.0);
+            let t1 = (area.right() - x0).min(area.height);
+            if t1 > t0 {
+                self.line(
+                    [x0 + t0, area.bottom() - t0],
+                    [x0 + t1, area.bottom() - t1],
+                    1.0,
+                    color,
+                );
+            }
+            offset += step;
+        }
+    }
+
     /// Draw a rounded-rect chrome panel. This compatibility wrapper records one
     /// full-affine composable quad with uniform radii and border widths.
     pub fn chrome_rect(

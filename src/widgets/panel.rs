@@ -1,90 +1,162 @@
-//! Panel widget and label/title helpers.
+//! Panel — a grouped container with a mono caption (Forge `Panel`), plus the
+//! plain label/title helpers.
 
 use crate::layout::Rect;
+use crate::style::{Ink, TextSize, Tracking};
 use crate::{StyleKey, StyleResolver};
 
 use super::DrawList;
 
-/// Panel widget - a container with background.
-pub struct Panel {
-    /// Left edge, in pixels.
-    pub x: f32,
-    /// Top edge, in pixels.
-    pub y: f32,
-    /// Width, in pixels.
-    pub width: f32,
-    /// Height, in pixels.
-    pub height: f32,
+/// Corner radius of a panel (`--radius-panel`).
+pub const PANEL_RADIUS: f32 = 2.0;
+/// Default space between the edge and the content (`--pad-panel`).
+pub const PANEL_PADDING: f32 = 14.0;
+/// Default space between the caption row and the content
+/// (`--gap-section`).
+pub const PANEL_GAP: f32 = 11.0;
+/// The lit line along the top, inside the edge (`--hi-card`).
+const HI_CARD: [f32; 4] = [1.0, 1.0, 1.0, 0.055];
+
+/// A grouped container on the app ground with an optional mono caption
+/// (Forge `Panel`).
+///
+/// The panel draws its card (surface, edge, lit top line) and caption, then
+/// **returns the content rect** for the caller to lay children in:
+///
+/// ```ignore
+/// let body = Panel::new().title("Physics").aside("3").draw(rect, list, &style);
+/// ```
+///
+/// Use [`Group`](super::Group) for a card inside a pane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Panel<'a> {
+    title: Option<&'a str>,
+    aside: Option<&'a str>,
+    padding: f32,
+    gap: f32,
 }
 
-impl Panel {
-    /// Create a panel at the given rect.
-    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+impl Default for Panel<'_> {
+    fn default() -> Self {
         Self {
-            x,
-            y,
-            width,
-            height,
+            title: None,
+            aside: None,
+            padding: PANEL_PADDING,
+            gap: PANEL_GAP,
         }
     }
+}
 
-    /// Center the panel on screen.
-    pub fn centered(width: f32, height: f32, screen_width: f32, screen_height: f32) -> Self {
-        Self {
-            x: (screen_width - width) / 2.0,
-            y: (screen_height - height) / 2.0,
-            width,
-            height,
-        }
+impl<'a> Panel<'a> {
+    /// A panel with no caption.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Draw the panel at its configured rect.
-    pub fn draw(&self, list: &mut DrawList, style: &StyleResolver) {
-        Self::draw_at(
-            Rect::new(self.x, self.y, self.width, self.height),
-            list,
-            style,
+    /// The mono-capitals caption across the top.
+    #[must_use]
+    pub fn title(mut self, title: &'a str) -> Self {
+        self.title = Some(title);
+        self
+    }
+
+    /// A mono note at the right end of the caption row (a count, a unit).
+    /// Shown only with a [`title`](Self::title).
+    #[must_use]
+    pub fn aside(mut self, aside: &'a str) -> Self {
+        self.aside = Some(aside);
+        self
+    }
+
+    /// Space between the edge and the content (default
+    /// [`PANEL_PADDING`]).
+    #[must_use]
+    pub fn padding(mut self, padding: f32) -> Self {
+        self.padding = padding.max(0.0);
+        self
+    }
+
+    /// Space between the caption row and the content (default
+    /// [`PANEL_GAP`]).
+    #[must_use]
+    pub fn gap(mut self, gap: f32) -> Self {
+        self.gap = gap.max(0.0);
+        self
+    }
+
+    /// The caption and aside blocks, positioned for `rect`.
+    fn caption(
+        &self,
+        rect: Rect,
+        list: &mut DrawList,
+        s: &StyleResolver,
+    ) -> Option<(f32, crate::text::TextBlock, Option<crate::text::TextBlock>)> {
+        let title = self.title?;
+        let (x, y) = (rect.x + self.padding, rect.y + self.padding);
+        let mut title = s.caption_block(title, x, y, Tracking::Section, Ink::Caption);
+        let title_h = list.measure_block(&title).1;
+        let aside = self
+            .aside
+            .map(|a| s.mono_block(a, 0.0, y, TextSize::Meta, Ink::Caption));
+        let aside_size = aside.as_ref().map(|a| list.measure_block(a));
+        let row_h = title_h.max(aside_size.map_or(0.0, |(_, h)| h)).ceil();
+        // `align-items: center`: each sits on the row's middle.
+        title.y = y + (row_h - title_h) * 0.5;
+        let aside = aside.zip(aside_size).map(|(mut a, (w, h))| {
+            a.x = rect.right() - self.padding - w;
+            a.y = y + (row_h - h) * 0.5;
+            a
+        });
+        Some((row_h, title, aside))
+    }
+
+    /// The rect children go in, without drawing.
+    pub fn content_rect(&self, rect: Rect, list: &mut DrawList, s: &StyleResolver) -> Rect {
+        let top = self
+            .caption(rect, list, s)
+            .map_or(0.0, |(row_h, ..)| row_h + self.gap);
+        Rect::new(
+            rect.x + self.padding,
+            rect.y + self.padding + top,
+            (rect.width - 2.0 * self.padding).max(0.0),
+            (rect.height - 2.0 * self.padding - top).max(0.0),
+        )
+    }
+
+    /// Draw the panel filling `rect`; returns the content rect.
+    pub fn draw(&self, rect: Rect, list: &mut DrawList, s: &StyleResolver) -> Rect {
+        list.push_debug_scope_rect(
+            super::scope_name("Panel", self.title.unwrap_or_default()),
+            rect,
         );
-    }
-
-    /// Draw a panel at a layout-computed rect.
-    pub fn draw_at(rect: Rect, list: &mut DrawList, style: &StyleResolver) {
-        // `draw` forwards here verbatim, so the scope lives on this side only —
-        // a `Panel > Panel` pair declaring the same rect would be pure noise.
-        list.push_debug_scope_rect("Panel", rect);
-        let radius = style.scalar(StyleKey::BorderRadius);
-        let panel = style.color(StyleKey::Panel);
-        let panel_border = style.color(StyleKey::PanelBorder);
-        // Draw background
-        if radius > 0.0 {
-            list.rounded_rect(rect, radius, panel);
-        } else {
-            list.quad(rect.x, rect.y, rect.width, rect.height, panel);
-        }
-
-        // Draw border (4 non-overlapping inset quads). Top/bottom span the
-        // full width; left/right span only the inner height between them so
-        // the corners are painted exactly once — important for any
-        // semi-transparent panel_border color.
-        let border = style.scalar(StyleKey::BorderWidth);
-        let inner_h = (rect.height - 2.0 * border).max(0.0);
-        list.quad(rect.x, rect.y, rect.width, border, panel_border);
-        list.quad(
-            rect.x,
-            rect.y + rect.height - border,
-            rect.width,
+        let border = s.scalar(StyleKey::BorderWidth).max(1.0);
+        list.chrome_rect(
+            rect,
+            PANEL_RADIUS,
             border,
-            panel_border,
+            s.color(StyleKey::Panel),
+            s.color(StyleKey::PanelBorder),
         );
-        list.quad(rect.x, rect.y + border, border, inner_h, panel_border);
-        list.quad(
-            rect.x + rect.width - border,
-            rect.y + border,
-            border,
-            inner_h,
-            panel_border,
-        );
+        // `inset 0 1px 0`: a 1 px band along the top, inside the edge. A
+        // plain quad rather than a panel-sized inset shadow, so the panel
+        // doesn't leave a box behind that later content appears to sit in.
+        let inner = rect.inset(border);
+        if inner.width > 0.0 && inner.height > 0.0 {
+            list.quad(inner.x, inner.y, inner.width, 1.0, HI_CARD);
+        }
+        if let Some((_, title, aside)) = self.caption(rect, list, s) {
+            // The caption gives way to the aside rather than running under it.
+            let right = aside
+                .as_ref()
+                .map_or(rect.right() - self.padding, |a| a.x - 10.0);
+            let clip = Rect::new(title.x, rect.y, (right - title.x).max(0.0), rect.height);
+            list.text(title.with_clip(clip));
+            if let Some(aside) = aside {
+                list.text(aside);
+            }
+        }
         list.pop_debug_scope();
+        self.content_rect(rect, list, s)
     }
 
     /// Draw a nine-slice textured panel at a layout-computed rect.
@@ -141,4 +213,50 @@ pub fn title_at(list: &mut DrawList, style: &StyleResolver, text: &str, rect: Re
         text,
     );
     list.text(style.title_block(text, rect.x + style.scalar(StyleKey::Padding), y));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Theme;
+
+    #[test]
+    fn untitled_content_is_inset_by_the_padding() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let rect = Rect::new(10.0, 20.0, 200.0, 100.0);
+        let body = Panel::new().draw(rect, &mut list, &s);
+        assert_eq!(body, Rect::new(24.0, 34.0, 172.0, 72.0));
+        assert!(list.texts.is_empty());
+    }
+
+    #[test]
+    fn caption_row_pushes_the_content_down() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        let rect = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let body = Panel::new()
+            .title("Physics")
+            .aside("3")
+            .draw(rect, &mut list, &s);
+        assert_eq!(list.texts[0].content, "PHYSICS");
+        assert_eq!(list.texts[1].content, "3");
+        assert!(body.y > PANEL_PADDING + PANEL_GAP, "{body:?}");
+        let aside = list.texts[1].clone();
+        let (w, _) = list.measure_block(&aside);
+        assert!((aside.x + w - (rect.right() - PANEL_PADDING)).abs() < 0.01);
+    }
+
+    #[test]
+    fn aside_needs_a_title() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        Panel::new()
+            .aside("3")
+            .draw(Rect::new(0.0, 0.0, 100.0, 60.0), &mut list, &s);
+        assert!(list.texts.is_empty());
+    }
 }

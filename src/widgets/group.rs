@@ -76,7 +76,7 @@ impl<'a> Group<'a> {
         let border = style.scalar(StyleKey::BorderWidth).max(1.0);
 
         // Body: reuse the Panel bg + 4-quad border.
-        Panel::draw_at(rect, list, style);
+        Panel::new().draw(rect, list, style);
 
         // Header strip: a theme-agnostic translucent lighten so it reads as a
         // title bar on any theme, kept inside the border. A separator line under

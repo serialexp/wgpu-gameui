@@ -78,6 +78,15 @@ pub fn oklch(l: f32, c: f32, h: f32, alpha: f32) -> [f32; 4] {
     ]
 }
 
+/// Forge's fixed hues (`--hue-*` in `tokens/colors.css`), in degrees. A hue
+/// names a meaning; lightness and chroma name the role, so a token is
+/// `oklch(l, c, HUE_*, a)` written where it's used.
+pub(crate) const HUE_ACCENT: f32 = 200.0;
+pub(crate) const HUE_DANGER: f32 = 25.0;
+pub(crate) const HUE_WARN: f32 = 75.0;
+pub(crate) const HUE_WARN_INK: f32 = 85.0;
+pub(crate) const HUE_OK: f32 = 145.0;
+
 /// Return `color` with its alpha replaced by `alpha`.
 pub const fn with_alpha(color: [f32; 4], alpha: f32) -> [f32; 4] {
     [color[0], color[1], color[2], alpha]

@@ -313,7 +313,7 @@ fn the_report_names_what_it_can_without_any_scopes() {
     let theme = Theme::default();
     let styles = StyleResolver::new(&theme);
     let mut list = DrawList::new();
-    wgpu_gameui::Panel::draw_at(Rect::new(20.0, 20.0, 300.0, 120.0), &mut list, &styles);
+    wgpu_gameui::Panel::new().draw(Rect::new(20.0, 20.0, 300.0, 120.0), &mut list, &styles);
     list.text(
         TextBlock::new("Inventory", 32.0, 32.0)
             .with_size(16.0)

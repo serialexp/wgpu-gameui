@@ -123,7 +123,7 @@ cargo run --example hello_ui
 | Enabled/disabled subtree | `enabled_scope(enabled, \|ui\|)` / `disabled_scope(\|ui\|)` | *(scope verb — gray-tint + input-disable a block)* |
 | List | *(raw widget)* | `List::draw(rect, count, state, list, style, input, closure)` |
 | Table | *(raw widget)* | `Table::draw(rect, rows, scroll, list, style, input)` |
-| Panel | `panel(w, h)` | `Panel::draw_at(rect, list, style)` |
+| Panel | `panel(w, h)` | `Panel::new().title(..).draw(rect, list, style) -> Rect` |
 | Group | `group_begin(title, w, h) -> Rect` | `Group::draw(rect, list, style) -> Rect` |
 | Separator | `separator()` | `Separator::draw(rect, list, style)` |
 | Progress bar | `progress_bar(value, w)` | `ProgressBar::draw(rect, list, style)` |

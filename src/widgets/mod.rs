@@ -13,6 +13,7 @@ mod checkbox;
 mod color_picker;
 mod combo_box;
 mod context_menu;
+mod count_bubble;
 mod curve_editor;
 mod doc_tabs;
 mod dock_panel;
@@ -21,8 +22,10 @@ mod dock_stack;
 mod drag;
 mod drag_handle;
 mod draw_list;
+mod drop_zone;
 mod dropdown;
 mod empty_state;
+mod field_label;
 mod focus;
 mod gradient_ramp;
 mod group;
@@ -43,6 +46,7 @@ mod menubar;
 mod meter;
 mod number_input;
 mod panel;
+mod placeholder;
 mod popover;
 mod pressable;
 mod progress_bar;
@@ -57,6 +61,7 @@ mod span_tabs;
 mod splitter;
 mod status_bar;
 mod status_dot;
+mod status_icon;
 mod status_zones;
 mod table;
 mod tabs;
@@ -98,6 +103,7 @@ pub use combo_box::{
     ComboOutput, draw_list as draw_combo_list, draw_trigger as draw_combo_trigger,
 };
 pub use context_menu::{ContextMenu, ContextMenuState, place_context_menu};
+pub use count_bubble::{COUNT_BUBBLE_HEIGHT, CountBubble};
 pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
 pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
@@ -112,8 +118,10 @@ pub use draw_list::{
     AnalyticInstance, ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw,
     NineSliceDraw, NineSliceId, PrimCounts, Vertex,
 };
+pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use empty_state::{EmptyGlyph, EmptyState};
+pub use field_label::FieldLabel;
 pub use focus::{FocusId, FocusState};
 pub use gradient_ramp::{
     GradientStop, RampOutput, draw as draw_gradient_ramp, readout as gradient_ramp_readout,
@@ -145,7 +153,11 @@ pub use menubar::{
 };
 pub use meter::{BarSegment, INLINE_METER_HEIGHT, MeterFill, inline_meter, stacked_bar};
 pub use number_input::{NumberInput, NumberOutput};
-pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};
+pub use panel::{
+    PANEL_GAP, PANEL_PADDING, PANEL_RADIUS, Panel, label, label_at, label_centered_at, title,
+    title_at,
+};
+pub use placeholder::Placeholder;
 pub use popover::{
     POPOVER_CONTENT_TOP, POPOVER_PAD, POPOVER_TITLE_H, Popover, PopoverFrame, PopoverOutput,
     PopoverSide, draw_frame as draw_popover_frame, measure_sheet_height, place_popover,
@@ -166,6 +178,7 @@ pub use span_tabs::{SPAN_TABS_HEIGHT, SpanTab, SpanTabs};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
 pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};
 pub use status_dot::{STATUS_DOT_SIZE, Status, status_dot};
+pub use status_icon::{STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, StatusIcon};
 pub use status_zones::{StatusBarOutput, StatusPart, StatusToggle, StatusZone, ZonedStatusBar};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};

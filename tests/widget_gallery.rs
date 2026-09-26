@@ -31,12 +31,14 @@ use wgpu_gameui::{
     VectorField, VectorScrub, ease, lerp_color,
 };
 use wgpu_gameui::{
-    BADGE_HEIGHT, Badge, BadgeTone, BarSegment, EmptyState, Ink, MeterFill, SPAN_TABS_HEIGHT,
-    STATUS_BAR_HEIGHT, SpanTab, SpanTabs, Status, StatusPart, StatusToggle, StatusZone, TextSize,
-    WELL_CHIP_HEIGHT, Waffle, WaffleCategory, WaffleFill, WellChip, WellChipPart, ZonedStatusBar,
-    chip, dots, draw_combo_trigger, draw_curve_editor, draw_doc_tabs, draw_gradient_ramp,
-    draw_popover_frame, draw_status_bar, draw_tag_input, inline_meter, keycap, place_popover,
-    skeleton, spinner, stacked_bar, toolbar_band,
+    BADGE_HEIGHT, Badge, BadgeTone, BarSegment, COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE,
+    DropZone, EmptyState, FieldLabel, Ink, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT,
+    STATUS_BAR_HEIGHT, STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status,
+    StatusIcon, StatusPart, StatusToggle, StatusZone, TextSize, WELL_CHIP_HEIGHT, Waffle,
+    WaffleCategory, WaffleFill, WellChip, WellChipPart, ZonedStatusBar, chip, dots,
+    draw_combo_trigger, draw_curve_editor, draw_doc_tabs, draw_gradient_ramp, draw_popover_frame,
+    draw_status_bar, draw_tag_input, inline_meter, keycap, place_popover, skeleton, spinner,
+    stacked_bar, toolbar_band,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -3444,6 +3446,168 @@ fn render_widget_gallery() {
             row(list, inner, &pair, true, true);
         }
 
+        flow.section(
+            list,
+            Category::Data,
+            "CountBubble",
+            "raised: an arriving quantity",
+        );
+        {
+            for count in [3, 12, 128] {
+                let w = CountBubble::new(count).width(list, &s);
+                let r = flow.cell(list, &count.to_string(), w.max(40.0), COUNT_BUBBLE_HEIGHT);
+                CountBubble::new(count).draw(list, &s, r.x, r.y);
+            }
+            // Beside a label, where it usually lives.
+            let r = flow.cell(list, "Beside a row label", 140.0, 22.0);
+            let mut label = s.sans_block("Problems", r.x, r.y, TextSize::Row, Ink::Row);
+            let (label_w, label_h) = list.measure_block(&label);
+            label.y = r.y + (r.height - label_h) * 0.5;
+            list.text(label);
+            let y = r.y + (r.height - COUNT_BUBBLE_HEIGHT) * 0.5;
+            CountBubble::new(7).draw(list, &s, r.x + label_w + 6.0, y);
+        }
+
+        flow.section(
+            list,
+            Category::Feedback,
+            "StatusIcon",
+            "tone by glyph and colour · 22 px and 14 px",
+        );
+        {
+            let tones = [
+                ("Info", Severity::Info),
+                ("Success", Severity::Success),
+                ("Warning", Severity::Warning),
+                ("Error", Severity::Error),
+            ];
+            for (label, tone) in tones {
+                let r = flow.cell(list, label, 50.0, STATUS_ICON_SIZE);
+                StatusIcon::new(tone).draw(list, &s, r.x, r.y);
+                StatusIcon::new(tone).size(STATUS_ICON_INLINE_SIZE).draw(
+                    list,
+                    &s,
+                    r.x + STATUS_ICON_SIZE + 8.0,
+                    r.y + (STATUS_ICON_SIZE - STATUS_ICON_INLINE_SIZE) * 0.5,
+                );
+            }
+            let r = flow.cell(list, "Inline in a 22 px row", 200.0, 22.0);
+            let icon_y = r.y + (22.0 - STATUS_ICON_INLINE_SIZE) * 0.5;
+            StatusIcon::new(Severity::Warning)
+                .size(STATUS_ICON_INLINE_SIZE)
+                .draw(list, &s, r.x, icon_y);
+            let text = s.sans_block("3 missing textures", 0.0, 0.0, TextSize::Row, Ink::Row);
+            let text_h = list.measure_block(&text).1;
+            list.text(TextBlock {
+                x: r.x + STATUS_ICON_INLINE_SIZE + 6.0,
+                y: r.y + (22.0 - text_h) * 0.5,
+                ..text
+            });
+        }
+
+        flow.section(
+            list,
+            Category::Feedback,
+            "Placeholder",
+            "static stand-in: image · round · text",
+        );
+        {
+            let r = flow.cell(list, "Image 16:9", 192.0, 108.0);
+            Placeholder::image()
+                .label("Level preview · 16:9")
+                .draw(r, list, &s);
+            let r = flow.cell(list, "Image, no caption", 64.0, 64.0);
+            Placeholder::image().label("").draw(r, list, &s);
+            let r = flow.cell(list, "Round", 64.0, 64.0);
+            Placeholder::image().round(true).label("").draw(r, list, &s);
+            let text = Placeholder::text(3).label("Description");
+            let h = text.height(list, &s);
+            let r = flow.cell(list, "Text, 3 lines", 180.0, h);
+            text.draw(r, list, &s);
+            let bare = Placeholder::text(5);
+            let h = bare.height(list, &s);
+            let r = flow.cell(list, "Text, 5 lines", 180.0, h);
+            bare.draw(r, list, &s);
+        }
+
+        flow.section(
+            list,
+            Category::Data,
+            "DropZone",
+            "outline, not fill · idle / active",
+        );
+        {
+            let (w, h) = DROP_ZONE_SIZE;
+            let r = flow.cell(list, "Idle", w, h);
+            DropZone::new("Drop to group").draw(r, list, &s);
+            let r = flow.cell(list, "Active (drag over)", w, h);
+            DropZone::new("Drop to group")
+                .active(true)
+                .draw(r, list, &s);
+            let r = flow.cell(list, "Wide, over content", 260.0, h);
+            Placeholder::text(4).draw(r.inset(6.0), list, &s);
+            DropZone::new("Drop textures here to import them")
+                .active(true)
+                .draw(r, list, &s);
+        }
+
+        flow.section(
+            list,
+            Category::Forms,
+            "FieldLabel",
+            "mono caps above the well · optional readout",
+        );
+        {
+            let label_h = FieldLabel::height(list, &s);
+            let r = flow.cell(list, "Label", 160.0, label_h);
+            FieldLabel::new("Albedo").draw(list, &s, r.x, r.y, r.width);
+            let r = flow.cell(list, "With readout", 160.0, label_h);
+            FieldLabel::new("Roughness")
+                .value("0.42")
+                .draw(list, &s, r.x, r.y, r.width);
+            // Above its field, as it's used.
+            let r = flow.cell(list, "Over a slider", 180.0, label_h + 4.0 + 16.0);
+            let line = FieldLabel::new("Metallic")
+                .value("0.80")
+                .draw(list, &s, r.x, r.y, r.width);
+            let slider_r = Rect::new(r.x, line.bottom() + 4.0, r.width, 16.0);
+            let mut capture = DragCapture::default();
+            Slider::new(0.0, 1.0).draw(
+                0.8,
+                0,
+                &mut capture,
+                slider_r,
+                &mut ctx(list, &mut focus, &theme, &input),
+            );
+        }
+
+        flow.section(
+            list,
+            Category::Layout,
+            "Panel",
+            "card on the app ground · mono caption",
+        );
+        {
+            let r = flow.cell(list, "Captioned, with aside", 220.0, 110.0);
+            let body = Panel::new().title("Physics").aside("3").draw(r, list, &s);
+            for (i, (name, value)) in [("Mass", "72 kg"), ("Drag", "0.05"), ("Bounce", "0.3")]
+                .into_iter()
+                .enumerate()
+            {
+                let y = body.y + i as f32 * 20.0;
+                list.text(s.sans_block(name, body.x, y, TextSize::Row, Ink::Row));
+                let v = s.mono_block(value, 0.0, y, TextSize::Dense, Ink::Second);
+                let vw = list.measure_block(&v).0;
+                list.text(TextBlock {
+                    x: body.right() - vw,
+                    ..v
+                });
+            }
+            let r = flow.cell(list, "No caption", 160.0, 110.0);
+            let body = Panel::new().draw(r, list, &s);
+            Placeholder::text(3).draw(body, list, &s);
+        }
+
         flow.section(list, Category::Keys, "Keycap", "");
         {
             let r = flow.cell(list, "⇧ · Ctrl · F", 150.0, 22.0);
@@ -4447,6 +4611,88 @@ fn render_widget_gallery() {
                             },
                         );
                     }
+                }
+            }
+        }
+
+        // ---- DockSection: one section on its own, per header state -------
+        #[cfg(feature = "phosphor-icons")]
+        {
+            flow.section(
+                list,
+                Category::Sidebar,
+                "DockSection",
+                "22 px raised header · count · ghost keys · toolbar strip",
+            );
+            use wgpu_gameui::{DockSection, DockStack, DockStackState, SearchField};
+
+            let plus = [PhosphorIcon::Plus];
+            let rescan = [PhosphorIcon::ArrowsClockwise, PhosphorIcon::Plus];
+            const SECTION_ID: u64 = 0xD5EC;
+            const SECTION_SEARCH_ID: u64 = 0xD5EA;
+            // (label, section, cell height, pointer on the header)
+            let cases = [
+                (
+                    "Count · one action",
+                    DockSection::new("Sessions").count(12).actions(&plus),
+                    96.0,
+                    false,
+                ),
+                (
+                    "Toolbar strip · two actions",
+                    DockSection::new("Projects")
+                        .count(24)
+                        .toolbar(SearchField::HEIGHT)
+                        .actions(&rescan),
+                    130.0,
+                    false,
+                ),
+                (
+                    "Collapsed",
+                    DockSection::new("Layers").count(3).collapsed(true),
+                    22.0,
+                    false,
+                ),
+                (
+                    "Header hovered",
+                    DockSection::new("Outliner").count(128),
+                    96.0,
+                    true,
+                ),
+            ];
+            for (label, section, h, hovered) in cases {
+                let r = flow.cell(list, label, 244.0, h);
+                list.paint_background_opaque(r, theme.chrome.dock.body.background);
+                let sections = [section];
+                let mut state = DockStackState::new(&sections);
+                let mut capture = DragCapture::new();
+                let mut section_focus = FocusState::new();
+                let section_input = InputState {
+                    mouse_x: if hovered { r.x + 80.0 } else { -1.0 },
+                    mouse_y: if hovered { r.y + 11.0 } else { -1.0 },
+                    ..InputState::default()
+                };
+                let mut sctx = DrawContext::new(
+                    list,
+                    &mut section_focus,
+                    &theme,
+                    &section_input,
+                    W as f32,
+                    600.0,
+                );
+                let out = DockStack::new(&sections).draw(
+                    SECTION_ID,
+                    r,
+                    &mut state,
+                    &mut capture,
+                    &mut sctx,
+                );
+                if let Some(bar) = out.sections[0].toolbar {
+                    let mut field = TextInput::default().with_placeholder("Search projects…");
+                    SearchField::new().draw(&mut field, SECTION_SEARCH_ID, bar, &mut sctx);
+                }
+                if let Some(body) = out.sections[0].body {
+                    Placeholder::text(4).draw(body.inset(8.0), sctx.draw_list, &s);
                 }
             }
         }

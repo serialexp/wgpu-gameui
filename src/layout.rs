@@ -1815,7 +1815,7 @@ mod tests {
         //     let mut new_floor = None;
         //
         //     // Draw panel background
-        //     Panel::draw_at(layout.get(0), list, theme);
+        //     Panel::new().draw(layout.get(0), list, theme);
         //
         //     // Up button
         //     if Button::draw_at("▲", layout.get(1), current_floor < 3, list, theme, input) {

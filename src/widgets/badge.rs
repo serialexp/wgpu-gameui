@@ -8,7 +8,7 @@
 //!   black edge with a bottom drop line.
 //! - [`chip`]: a toggleable filter pill — raised at rest, held-in when on.
 
-use crate::color::oklch;
+use crate::color::{HUE_ACCENT, HUE_DANGER, HUE_OK, HUE_WARN, HUE_WARN_INK, oklch};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
@@ -72,13 +72,6 @@ const BADGE_TRACKING: f32 = 0.08;
 const BADGE_COMPACT_TRACKING: f32 = 0.02;
 /// The light line under a badge's plate: the lower lip of its recess.
 const BADGE_LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
-
-/// Forge hues (`--hue-*`), in degrees.
-const HUE_ACCENT: f32 = 200.0;
-const HUE_DANGER: f32 = 25.0;
-const HUE_WARN: f32 = 75.0;
-const HUE_WARN_INK: f32 = 85.0;
-const HUE_OK: f32 = 145.0;
 
 /// The color of a [`Badge`]'s plate and text: one of Forge's status tones, or
 /// any hue.
