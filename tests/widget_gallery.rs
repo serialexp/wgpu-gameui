@@ -74,6 +74,7 @@ enum Category {
     Inspector,
     Keys,
     Layout,
+    Mobile,
     Palette,
     Settings,
     Sidebar,
@@ -83,7 +84,7 @@ enum Category {
 
 impl Category {
     /// Every category, in index-page order.
-    const ALL: [Category; 15] = [
+    const ALL: [Category; 16] = [
         Category::Foundations,
         Category::Chrome,
         Category::Data,
@@ -94,6 +95,7 @@ impl Category {
         Category::Inspector,
         Category::Keys,
         Category::Layout,
+        Category::Mobile,
         Category::Palette,
         Category::Settings,
         Category::Sidebar,
@@ -116,6 +118,7 @@ impl Category {
             Category::Inspector => "inspector",
             Category::Keys => "keys",
             Category::Layout => "layout",
+            Category::Mobile => "mobile",
             Category::Palette => "palette",
             Category::Settings => "settings",
             Category::Sidebar => "sidebar",
@@ -145,7 +148,6 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
         Category::Data,
         &[
             "AssetGrid",
-            "Badge",
             "CountBubble",
             "DragList",
             "DropZone",
@@ -153,6 +155,7 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
             "Table",
             "Thumb",
             "Tree",
+            "Waffle",
         ],
     ),
     (
@@ -166,12 +169,14 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
     (
         Category::Feedback,
         &[
+            "Badge",
             "Banner",
             "BusyDots",
             "EmptyState",
             "Placeholder",
             "Skeleton",
             "Spinner",
+            "StatusDot",
             "StatusIcon",
             "Toast",
             "Tooltip",
@@ -229,6 +234,7 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
             "Splitter",
         ],
     ),
+    (Category::Mobile, &["AppBar", "TabBar"]),
     (Category::Palette, &["CommandPalette"]),
     (Category::Settings, &["SettingRow", "SettingsPanel"]),
     (Category::Sidebar, &["DockSection", "DockStack"]),
@@ -3375,7 +3381,7 @@ fn render_widget_gallery() {
 
         flow.section(
             list,
-            Category::Data,
+            Category::Feedback,
             "Badge",
             "status tones, any hue, compact",
         );
@@ -3624,7 +3630,12 @@ fn render_widget_gallery() {
                 .draw(r.x, r.y, list, &s, &input);
         }
 
-        flow.section(list, Category::Data, "Waffle", "not in Forge");
+        flow.section(
+            list,
+            Category::Data,
+            "Waffle",
+            "share grid, hover fades the rest",
+        );
         {
             let categories = [
                 WaffleCategory {
