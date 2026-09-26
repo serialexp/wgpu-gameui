@@ -396,6 +396,9 @@ pub struct UiRenderer {
     uniform: UniformArena,
     /// The slot the pass being recorded binds. Set by `prepare_pass`.
     pass_uniform_offset: u32,
+    /// Logical canvas point drawn at the target's top-left corner. See
+    /// [`set_view_origin`](Self::set_view_origin).
+    view_origin: [f32; 2],
     /// Once an arena crosses the submission cap, refuse further rendering until
     /// `begin_frame` resets all cursors. This turns a missed frame boundary into
     /// one actionable log rather than a fatal oversized-buffer allocation.
@@ -808,6 +811,7 @@ impl UiRenderer {
             nine_slice_pipeline,
             uniform,
             pass_uniform_offset: 0,
+            view_origin: [0.0, 0.0],
             frame_boundary_required: false,
             atlas,
             texture,
@@ -1047,6 +1051,27 @@ impl UiRenderer {
     ) {
         self.text_renderer
             .resize(device, queue, width, height, scale_factor);
+    }
+
+    /// Draw a window of a larger canvas: the logical point `(x, y)` lands on the
+    /// target's top-left corner, and the target shows the `viewport`-sized
+    /// region from there. Clip rects stay in canvas coordinates, so nothing
+    /// else changes. The default is `(0, 0)`.
+    ///
+    /// Use it to render a canvas taller or wider than the GPU's texture limit
+    /// in tiles, or to capture one part of a UI. It applies to every later
+    /// [`render`](Self::render), [`render_layers`](Self::render_layers) and
+    /// [`blur_backdrop`](Self::blur_backdrop) until set again. Keep `x` and `y`
+    /// to whole logical pixels so pixel-snapped edges stay sharp.
+    pub fn set_view_origin(&mut self, x: f32, y: f32) {
+        self.view_origin = [x, y];
+        self.text_renderer.set_view_origin(x, y);
+    }
+
+    /// The logical canvas point drawn at the target's top-left corner (see
+    /// [`set_view_origin`](Self::set_view_origin)).
+    pub fn view_origin(&self) -> (f32, f32) {
+        (self.view_origin[0], self.view_origin[1])
     }
 
     /// Force-upload pending atlas changes to the GPU. Called automatically by
@@ -1314,7 +1339,9 @@ impl UiRenderer {
     ///
     /// `region` is in **logical** pixels (UI coordinates); `viewport` is the
     /// target's **physical** size and `scale_factor` the logical→physical ratio,
-    /// matching [`render`](Self::render). A degenerate region is a no-op.
+    /// matching [`render`](Self::render). A degenerate region is a no-op. With a
+    /// [view origin](Self::set_view_origin) set, `region` is still in canvas
+    /// coordinates and the backdrop must show the same window as the target.
     ///
     /// Typical frame: render scene → `blur_backdrop(region)` → `render(panels)`,
     /// all into one encoder under one [`begin_frame`](Self::begin_frame).
@@ -1336,9 +1363,11 @@ impl UiRenderer {
         } else {
             1.0
         };
+        // `region` is on the canvas; the target (and the backdrop, which mirrors
+        // it) shows the window starting at the view origin.
         let region_phys = [
-            region.x * scale,
-            region.y * scale,
+            (region.x - self.view_origin[0]) * scale,
+            (region.y - self.view_origin[1]) * scale,
             region.width * scale,
             region.height * scale,
         ];
@@ -1392,7 +1421,7 @@ impl UiRenderer {
         let logical_w = viewport.0 as f32 / scale;
         let logical_h = viewport.1 as f32 / scale;
         let uniforms = Uniforms {
-            view_proj: ortho_matrix(logical_w, logical_h),
+            view_proj: ortho_matrix(self.view_origin, logical_w, logical_h),
         };
         let (slot, grew) = self.uniform.allocate(device);
         if grew {
@@ -2162,9 +2191,11 @@ fn create_atlas_texture(
     (texture, sampler, bgl, bg)
 }
 
-pub(crate) fn ortho_matrix(width: f32, height: f32) -> [[f32; 4]; 4] {
-    // Top-left origin; positive Y down. Matches DrawList coordinate system.
-    let (l, r, t, b) = (0.0, width, 0.0, height);
+/// Project the logical window `origin .. origin + (width, height)` onto the whole
+/// target: `origin` lands on the target's top-left corner. Positive Y is down,
+/// matching the DrawList coordinate system.
+pub(crate) fn ortho_matrix(origin: [f32; 2], width: f32, height: f32) -> [[f32; 4]; 4] {
+    let (l, r, t, b) = (origin[0], origin[0] + width, origin[1], origin[1] + height);
     [
         [2.0 / (r - l), 0.0, 0.0, 0.0],
         [0.0, 2.0 / (t - b), 0.0, 0.0],
@@ -2441,7 +2472,7 @@ mod tests {
 
     #[test]
     fn ortho_maps_logical_corners_to_ndc() {
-        let m = ortho_matrix(800.0, 600.0);
+        let m = ortho_matrix([0.0, 0.0], 800.0, 600.0);
         // Top-left logical origin → NDC top-left (-1, +1); Y is down in pixels.
         let (x0, y0) = project(&m, 0.0, 0.0);
         assert!(
@@ -2460,12 +2491,32 @@ mod tests {
     }
 
     #[test]
+    fn ortho_with_an_origin_maps_that_window_onto_the_target() {
+        let m = ortho_matrix([100.0, 5000.0], 800.0, 600.0);
+        // The origin is the target's top-left corner…
+        let (x0, y0) = project(&m, 100.0, 5000.0);
+        assert!(
+            (x0 + 1.0).abs() < 1e-5 && (y0 - 1.0).abs() < 1e-5,
+            "{x0},{y0}"
+        );
+        // …the far corner of the window its bottom-right…
+        let (x1, y1) = project(&m, 900.0, 5600.0);
+        assert!(
+            (x1 - 1.0).abs() < 1e-5 && (y1 + 1.0).abs() < 1e-5,
+            "{x1},{y1}"
+        );
+        // …and canvas (0, 0) now lies off the target, up and to the left.
+        let (xa, ya) = project(&m, 0.0, 0.0);
+        assert!(xa < -1.0 && ya > 1.0, "{xa},{ya}");
+    }
+
+    #[test]
     fn dpi_scale_is_logical_size_invariant() {
         // prepare_pass builds ortho from (physical / scale). Two (physical,
         // scale) pairs with the SAME logical size must project a logical point
         // identically — the scale factor only changes which framebuffer the
         // identical logical UI rasterizes onto.
-        let logical = |w: f32, s: f32| ortho_matrix(w / s, w / s); // square for brevity
+        let logical = |w: f32, s: f32| ortho_matrix([0.0, 0.0], w / s, w / s); // square for brevity
         let a = logical(800.0, 1.0); // physical 800, scale 1 → logical 800
         let b = logical(1600.0, 2.0); // physical 1600, scale 2 → logical 800
         for &(px, py) in &[(0.0, 0.0), (250.0, 700.0), (800.0, 800.0)] {

@@ -424,6 +424,9 @@ pub struct TextRenderer {
     uniform: UniformArena,
     /// The slot `resize` handed this pass. Bound as the dynamic offset.
     uniform_offset: u64,
+    /// Logical canvas point projected onto the target's top-left corner; see
+    /// [`set_view_origin`](Self::set_view_origin).
+    view_origin: [f32; 2],
 
     pipeline: wgpu::RenderPipeline,
 
@@ -557,6 +560,7 @@ impl TextRenderer {
             icon_gpu,
             uniform,
             uniform_offset: 0,
+            view_origin: [0.0, 0.0],
             pipeline,
             vbo,
             vbo_capacity,
@@ -613,9 +617,21 @@ impl TextRenderer {
         queue.write_buffer(
             self.uniform.buffer(),
             slot,
-            bytemuck::cast_slice(&[ortho_matrix(self.width as f32, self.height as f32)]),
+            bytemuck::cast_slice(&[ortho_matrix(
+                self.view_origin,
+                self.width as f32,
+                self.height as f32,
+            )]),
         );
         self.uniform_offset = slot;
+    }
+
+    /// Project the logical point `(x, y)` onto the target's top-left corner
+    /// from the next [`resize`](Self::resize) on, so the pass draws a window of
+    /// a larger canvas. [`UiRenderer::set_view_origin`](crate::UiRenderer::set_view_origin)
+    /// calls this; set it there rather than here.
+    pub fn set_view_origin(&mut self, x: f32, y: f32) {
+        self.view_origin = [x, y];
     }
 
     /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.
