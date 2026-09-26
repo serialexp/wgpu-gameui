@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.0 (2026-09-26)
+
+### BREAKING CHANGES
+
+- feat!: sidebar widgets, shared shaping cache, cosmic-text 0.19
+- feat!: sidebar GroupList, toolbar tooltips, hollow keys, danger menu rows
+- feat!: merge badge, badge_toned and hue_chip into one Badge widget
+- feat!: add Pressable (Forge Key) and build every key on it
+- feat!: add CountBubble, StatusIcon, Placeholder, DropZone and FieldLabel; rebuild Panel on Forge
+- feat!: add Sheet, Modal, AlertDialog, ConfirmDialog and PromptDialog
+
+### Features
+
+- rotated chrome stays SDF; new meter/waffle/span-tab widgets; Forge-style gallery
+- add UiRenderer::set_view_origin to render a window of a larger canvas
+- add DragList
+- add PropertyRow, PropertyGroup, FileField and Inspector
+
+### Bug Fixes
+
+- stop filling shadow order slots past the end
+- remove the seam across quads rounded on one side only
+- stop flagging layers as overlapping the content under them
+- build all targets without default features
+
+### Performance Improvements
+
+- match ASCII filter text byte by byte
+
+### Tests
+
+- wipe the whole gallery output directory before each run
+- browse the gallery through an index page, drop the full image
+- sync gallery FORGE_COMPONENTS with the current Forge manifest
+- bench DragList frames up to 100,000 items
+
+### Documentation
+
+- add Forge widget gallery reference and screenshot
+- move back to 0.x after yanking 1.0.0
+
 ## 1.0.0 (2026-09-24)
 
 ### BREAKING CHANGES
