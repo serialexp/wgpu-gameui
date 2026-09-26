@@ -1259,11 +1259,13 @@ fn collect_nodes(
     }
 
     let mut chrome_index = 0;
-    let mut shadow_index = 0;
+    // Shadows fill their order slots in analytic order.
+    let mut shadow_slots = shadow_order.iter_mut();
     for (analytic_index, instance) in list.analytic_instances.iter().enumerate() {
         let Some(c) = instance.as_chrome() else {
-            shadow_order[shadow_index] = analytic_order[analytic_index];
-            shadow_index += 1;
+            if let Some(slot) = shadow_slots.next() {
+                *slot = analytic_order[analytic_index];
+            }
             continue;
         };
         let i = chrome_index;
