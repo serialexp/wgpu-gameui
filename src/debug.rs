@@ -2032,6 +2032,13 @@ fn check_overlap(nodes: &[DebugNode], inside_widgets: bool, out: &mut Vec<Proble
     for siblings in by_parent.values() {
         for (i, a) in siblings.iter().enumerate() {
             for b in siblings.iter().skip(i + 1) {
+                // A layer's root sits beside the base's top-level nodes (and
+                // the other layers' roots) in the tree, but it is stacked
+                // above them: covering what is under it is what a popup,
+                // tooltip or modal is for.
+                if a.kind == NodeKind::Layer || b.kind == NodeKind::Layer {
+                    continue;
+                }
                 // At an application boundary, inferred chrome/geometry is
                 // usually a row or panel background. Compare named controls and
                 // readable text, not those implementation primitives. Strict
@@ -2857,6 +2864,44 @@ mod tests {
         assert!(!codes(&report).contains(&"partially_clipped"));
         let strict = report.with_lints(&LintConfig::strict());
         assert!(codes(&strict).contains(&"partially_clipped"));
+    }
+
+    #[test]
+    fn a_layer_covering_the_base_or_another_layer_is_not_an_overlap() {
+        let panel = |list: &mut DrawList, name: &str, r: Rect| {
+            list.push_debug_scope_rect(name, r);
+            list.chrome_rect(r, 0.0, 0.0, [1.0; 4], [0.0; 4]);
+            list.pop_debug_scope();
+        };
+        let mut layers = crate::LayerStack::new();
+        panel(layers.base_mut(), "list", Rect::new(0.0, 0.0, 100.0, 100.0));
+        for r in [
+            Rect::new(50.0, 50.0, 100.0, 40.0),
+            Rect::new(80.0, 70.0, 100.0, 40.0),
+        ] {
+            layers.push_popup(r);
+            panel(layers.current_mut(), "popup", r);
+            layers.pop_layer();
+        }
+        for report in [
+            DebugReport::from_layers(&layers, SCREEN),
+            DebugReport::from_layers(&layers, SCREEN).with_lints(&LintConfig::strict()),
+        ] {
+            assert!(
+                !codes(&report).contains(&"sibling_overlap"),
+                "{}",
+                report.to_text()
+            );
+        }
+
+        // Base content still overlaps base content.
+        panel(
+            layers.base_mut(),
+            "other",
+            Rect::new(60.0, 0.0, 100.0, 30.0),
+        );
+        let report = DebugReport::from_layers(&layers, SCREEN);
+        assert!(codes(&report).contains(&"sibling_overlap"));
     }
 
     #[cfg(feature = "bundled-font")]
