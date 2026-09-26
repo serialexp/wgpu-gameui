@@ -161,12 +161,19 @@ fn inner_distance(p: vec2<f32>, size: vec2<f32>, outer_radii: vec4<f32>, widths:
         inset = vec2<f32>(select(widths.y, widths.w, left), widths.z);
     }
     let radius = max(vec2<f32>(outer_radius) - inset, vec2<f32>(0.0));
-    let q = abs(p - half) - half + radius;
-    let outside = max(q, vec2<f32>(0.0));
-    let safe_radius = max(radius, vec2<f32>(1e-4));
-    let ellipse = (length(outside / safe_radius) - 1.0) * min(safe_radius.x, safe_radius.y);
-    let square = length(outside) + min(max(q.x, q.y), 0.0);
-    return select(ellipse, square, radius.x <= 1e-4 || radius.y <= 1e-4);
+    // Offset from the unrounded box's corner, and from the corner arc's centre.
+    let o = abs(p - half) - half;
+    let q = o + radius;
+    // Beside a straight edge, anywhere inside, or at a square corner, the
+    // plain box distance is exact. It must be used deep inside too: the arc's
+    // estimate bottoms out at -radius there, so a quadrant with a radius would
+    // disagree with a square neighbour, and `fwidth` across the quadrant line
+    // would read the jump as an edge (a dark seam through the fill).
+    if (q.x <= 0.0 || q.y <= 0.0 || radius.x <= 1e-4 || radius.y <= 1e-4) {
+        return length(max(o, vec2<f32>(0.0))) + min(max(o.x, o.y), 0.0);
+    }
+    // In the corner box: distance to the (possibly elliptical) arc.
+    return (length(q / radius) - 1.0) * min(radius.x, radius.y);
 }
 
 fn shade_chrome(in: AnalyticVsOut) -> vec4<f32> {

@@ -434,3 +434,76 @@ fn composable_quad_renders_affine_unequal_rounded_border_gradient_and_clip() {
         .count();
     assert!(colored > 1_000, "too few composable quad pixels: {colored}");
 }
+
+/// A quad rounded on one side only (a sheet footer: square top, rounded
+/// bottom) must fill evenly. Each half of the shape picks its own corner
+/// radii, and the row where the halves meet must not show a seam.
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn one_side_rounded_quad_has_no_seam_where_its_halves_meet() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter (run under DISPLAY=:0)");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("seam device"),
+            ..Default::default()
+        },
+        None,
+    ))
+    .expect("request device");
+    let font_system = wgpu_gameui::shared_font_system();
+    let mut ui = UiRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        font_system.clone(),
+    );
+    let fill = [0.4, 0.6, 0.8, 1.0];
+    // Odd and even heights, and a half-pixel offset: the halves meet on a
+    // pixel centre, a pixel edge, or in between.
+    let quads = [
+        (
+            Rect::new(20.0, 20.0, 200.0, 43.0),
+            CornerRadii::new(0.0, 0.0, 6.0, 6.0),
+        ),
+        (
+            Rect::new(20.0, 80.0, 200.0, 44.0),
+            CornerRadii::new(0.0, 0.0, 6.0, 6.0),
+        ),
+        (
+            Rect::new(20.0, 140.5, 200.0, 43.0),
+            CornerRadii::new(6.0, 6.0, 0.0, 0.0),
+        ),
+        (
+            Rect::new(240.0, 20.0, 43.0, 200.0),
+            CornerRadii::new(0.0, 6.0, 6.0, 0.0),
+        ),
+    ];
+    let mut list = DrawList::with_font_system(font_system);
+    for (rect, radii) in quads {
+        list.paint_quad_background(rect, Background::Solid(fill), radii);
+    }
+    let image = render_list(&device, &queue, &mut ui, &list);
+    let pixel = |x: u32, y: u32| -> [u8; 4] {
+        let start = ((y * W + x) * 4) as usize;
+        image[start..start + 4].try_into().unwrap()
+    };
+    for (rect, _) in quads {
+        let (cx, cy) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let expected = pixel(cx as u32 - 12, cy as u32 - 12);
+        // Every pixel fully inside the quad, along both centre lines.
+        for y in (rect.y.ceil() as u32 + 1)..(rect.bottom().floor() as u32 - 1) {
+            let got = pixel(cx as u32, y);
+            assert_eq!(got, expected, "{rect:?}: seam at row {y}");
+        }
+        for x in (rect.x.ceil() as u32 + 1)..(rect.right().floor() as u32 - 1) {
+            let got = pixel(x, cy as u32);
+            assert_eq!(got, expected, "{rect:?}: seam at column {x}");
+        }
+    }
+}
