@@ -463,18 +463,11 @@ impl ToastStack {
     /// Draw one toast; whether its close key was clicked.
     fn draw_one(&self, a: &Active, rect: Rect, ctx: &mut DrawContext, s: &StyleResolver) -> bool {
         let chrome = s.toast();
-        let shadow_margin = chrome.shadow.blur * 1.5;
         // Scoped per toast rather than per stack: the stack has no
-        // allocation of its own, each toast does.
-        ctx.draw_list.push_debug_scope_rect(
-            "Toast",
-            Rect::new(
-                rect.x - shadow_margin,
-                rect.y - shadow_margin + chrome.shadow.offset[1],
-                rect.width + shadow_margin * 2.0,
-                rect.height + shadow_margin * 2.0,
-            ),
-        );
+        // allocation of its own, each toast does. The declared area takes in
+        // the drop shadow.
+        ctx.draw_list
+            .push_debug_scope_rect("Toast", rect.union(chrome.shadow.ink_rect(rect)));
         // The tint is set before every instance so the shadow, surface,
         // content, border and key fade together.
         let alpha = fade_alpha(a.elapsed, a.toast.ttl, self.fade);

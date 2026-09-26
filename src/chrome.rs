@@ -312,6 +312,23 @@ pub struct FloatingSurfaceChrome {
     pub lines: [StructuralLine; 2],
 }
 
+/// Dialog-sheet chrome: the raised surface of a [`Sheet`](crate::Sheet) and
+/// the dimmed backdrop a [`Modal`](crate::Modal) lays under it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SheetChrome {
+    /// Sheet surface and border (`--surface-dialog`, `--edge-sheet`).
+    pub surface: QuadStyle,
+    /// `--shadow-sheet` in CSS order: two drops, then the lit top and dark
+    /// bottom insets.
+    pub shadows: [BoxShadow; 4],
+    /// The footer strip behind the keys (`--surface-status-opaque`).
+    pub footer: Background,
+    /// The rule along the footer's top (`--rule`).
+    pub footer_rule: EdgeStyle,
+    /// The wash over everything under a modal sheet.
+    pub backdrop: [f32; 4],
+}
+
 /// Movable in-app window chrome: a floating surface with a title strip, a
 /// close key, and an optional bottom-right resize grip. See
 /// [`Window`](crate::Window).
@@ -364,6 +381,8 @@ pub struct ChromeTheme {
     pub toast: FloatingSurfaceChrome,
     /// Curve-editor key chrome.
     pub curve_key: FloatingSurfaceChrome,
+    /// Dialog sheet and modal backdrop chrome.
+    pub sheet: SheetChrome,
     /// Movable window chrome.
     pub window: WindowChrome,
 }
@@ -806,6 +825,30 @@ impl Default for ChromeTheme {
                 0.6,
             ),
             curve_key: floating(panel, 1.0, 3.0, 0.6),
+            sheet: SheetChrome {
+                surface: QuadStyle {
+                    background: Background::LinearGradient {
+                        start: crate::color::rgba8([27, 31, 36], 0.93),
+                        end: crate::color::rgba8([16, 19, 22], 0.95),
+                        axis: GradientAxis::Vertical,
+                    },
+                    border_widths: EdgeWidths::uniform(1.0),
+                    border_color: [0.0, 0.0, 0.0, 0.75],
+                    corner_radii: CornerRadii::uniform(2.0),
+                },
+                shadows: [
+                    shadow(16.0, 40.0, [0.0, 0.0, 0.0, 0.7], false),
+                    shadow(2.0, 6.0, [0.0, 0.0, 0.0, 0.5], false),
+                    shadow(1.0, 0.0, [1.0, 1.0, 1.0, 0.12], true),
+                    shadow(-1.0, 0.0, [0.0, 0.0, 0.0, 0.5], true),
+                ],
+                footer: gradient([0x1e, 0x23, 0x28], [0x13, 0x17, 0x1b]),
+                footer_rule: EdgeStyle {
+                    thickness: 1.0,
+                    color: [0.0, 0.0, 0.0, 0.6],
+                },
+                backdrop: crate::color::rgba8([4, 6, 8], 0.45),
+            },
             // Stand-in until the window design handoff lands: the popover's
             // floating surface and elevation with the dock header's strip,
             // rules, and key hover.

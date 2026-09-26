@@ -74,6 +74,28 @@ impl Default for BoxShadow {
     }
 }
 
+impl BoxShadow {
+    /// The area this shadow paints when cast by `element` (untransformed):
+    /// an outset shadow is `element` moved by its offset, grown by its spread
+    /// and by its blur's visible reach (3σ, which is `1.5 × blur`). An inset
+    /// shadow paints inside `element`, so that is its area.
+    ///
+    /// Union it into a widget's declared debug rect so a raised surface's
+    /// shadow is not reported as painting outside the widget.
+    pub fn ink_rect(&self, element: crate::layout::Rect) -> crate::layout::Rect {
+        if self.inset {
+            return element;
+        }
+        let grow = self.spread + 1.5 * self.blur.max(0.0);
+        crate::layout::Rect::new(
+            element.x + self.offset[0] - grow,
+            element.y + self.offset[1] - grow,
+            (element.width + 2.0 * grow).max(0.0),
+            (element.height + 2.0 * grow).max(0.0),
+        )
+    }
+}
+
 /// Fixed-size GPU record for one full-affine analytic shadow.
 ///
 /// Geometry stays local while blur is isotropic in browser/screen space.

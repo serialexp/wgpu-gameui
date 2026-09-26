@@ -1,5 +1,6 @@
 //! UI widgets - buttons, text inputs, panels, etc.
 
+mod alert_dialog;
 mod app_shell;
 mod asset_grid;
 mod badge;
@@ -12,6 +13,7 @@ mod button;
 mod checkbox;
 mod color_picker;
 mod combo_box;
+mod confirm_dialog;
 mod context_menu;
 mod count_bubble;
 mod curve_editor;
@@ -44,18 +46,21 @@ mod material;
 mod menu_screens;
 mod menubar;
 mod meter;
+mod modal;
 mod number_input;
 mod panel;
 mod placeholder;
 mod popover;
 mod pressable;
 mod progress_bar;
+mod prompt_dialog;
 mod radio;
 mod scroll_view;
 #[cfg(feature = "phosphor-icons")]
 mod search_field;
 mod separator;
 mod settings;
+mod sheet;
 mod slider;
 mod span_tabs;
 mod splitter;
@@ -80,6 +85,7 @@ mod waffle;
 mod well_chip;
 mod window;
 
+pub use alert_dialog::{ALERT_DIALOG_WIDTH, AlertDialog, AlertDialogState};
 pub use app_shell::{
     AppShell, SHELL_DRAG_BOTTOM_SPLITTER, SHELL_DRAG_LEFT_SPLITTER, SHELL_DRAG_RIGHT_SPLITTER,
     ShellChromeOutput, ShellLayout,
@@ -101,6 +107,9 @@ pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
 pub use combo_box::{
     ComboOutput, draw_list as draw_combo_list, draw_trigger as draw_combo_trigger,
+};
+pub use confirm_dialog::{
+    CONFIRM_DIALOG_WIDTH, ConfirmChoice, ConfirmDialog, ConfirmDialogState, ConfirmOutcome,
 };
 pub use context_menu::{ContextMenu, ContextMenuState, place_context_menu};
 pub use count_bubble::{COUNT_BUBBLE_HEIGHT, CountBubble};
@@ -152,6 +161,7 @@ pub use menubar::{
     Modifiers, SubmenuSide, blocker_regions, place_popup,
 };
 pub use meter::{BarSegment, INLINE_METER_HEIGHT, MeterFill, inline_meter, stacked_bar};
+pub use modal::{MODAL_BACKDROP_BLUR, MODAL_WIDTH, Modal, ModalOutput, ModalState};
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{
     PANEL_GAP, PANEL_PADDING, PANEL_RADIUS, Panel, label, label_at, label_centered_at, title,
@@ -164,6 +174,7 @@ pub use popover::{
 };
 pub use pressable::{PressState, Pressable};
 pub use progress_bar::{INDETERMINATE_STEP, ProgressBar, ProgressFill, indeterminate_step};
+pub use prompt_dialog::{PROMPT_DIALOG_WIDTH, PromptDialog, PromptDialogState, PromptOutcome};
 pub use radio::RadioGroup;
 pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};
 #[cfg(feature = "phosphor-icons")]
@@ -173,6 +184,7 @@ pub use settings::{
     SettingField, SettingValue, SettingsForm, SettingsFormOutput, SettingsFormState, SettingsSpec,
     default_values,
 };
+pub use sheet::{SHEET_BLUR, SHEET_WIDTH, Sheet, SheetAction, SheetAlign, SheetOutput, SheetSlot};
 pub use slider::{Slider, SliderOutput};
 pub use span_tabs::{SPAN_TABS_HEIGHT, SpanTab, SpanTabs};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
@@ -293,6 +305,14 @@ impl<'a> DrawContext<'a> {
     /// theme. Builder-style; chain after [`new`](Self::new).
     pub fn with_style(mut self, overlay: &'a StyleOverlay) -> Self {
         self.style = Some(overlay);
+        self
+    }
+
+    /// Draw into overlay layer `layer`: sets [`active_layer`](Self::active_layer)
+    /// so focusables join that layer's Tab ring. Builder-style; chain after
+    /// [`new`](Self::new).
+    pub fn with_layer(mut self, layer: usize) -> Self {
+        self.active_layer = Some(layer);
         self
     }
 

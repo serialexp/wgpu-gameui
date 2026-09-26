@@ -2111,3 +2111,70 @@ Built from the Forge Design System's `components/*` sources. Coverage
 - [ ] **P3 — Our `Group` isn't Forge's `Group`.** Forge's is a *sunken*,
   collapsible card (`rgba(0,0,0,.22)`, mono-caps header with ▸ caret and a
   right-aligned summary). Ours is a raised panel with a sans title strip.
+
+## 2026-09-26 — Missing Forge components, batch B (dialogs)
+
+Built from the Forge Design System's `components/*` sources. Coverage
+66 of 77 (was 61).
+
+- [x] **Sheet** (`layout`) — `Sheet::new().title(..).description(..)
+  .tone(Severity).meta(..).actions(&[SheetAction]).content(h).body(h)
+  .lead(w).width(w).focusable(base)`, then `draw(rect, ctx)` or
+  `draw_with(rect, ctx, |slot, rect, ctx| ..)` → `SheetOutput { rect,
+  content, body, lead, clicked }`. `height()`, `place(bounds, SheetAlign,
+  ..)`, `content_width()`. `SheetAction::new(label).tone(..).enabled(..)
+  .leading(true).space_after(px)`. Slots are filled before the keys, so
+  the Tab ring follows reading order. Chrome: `ChromeTheme::sheet`
+  (`SheetChrome`: surface, 4 shadows, footer, footer rule, backdrop),
+  overridable through `StyleOverlay::set_sheet`. `SHEET_WIDTH`,
+  `SHEET_BLUR`.
+- [x] **Modal** (`layout`) — `ModalState` (`open()`, `begin_frame(&mut
+  input)` claims Escape, `close(&mut focus)` gives focus back) and
+  `Modal::new()` (the Sheet builder plus `autofocus(..)`,
+  `dismiss_on_backdrop(..)`); `draw(bounds, state, ctx) -> ModalOutput {
+  sheet, dismissed }`. Draws the backdrop over `bounds` and nothing outside
+  it. `MODAL_WIDTH`, `MODAL_BACKDROP_BLUR`.
+- [x] **AlertDialog** (`dialogs`) — `AlertDialog::new(title).message(..)
+  .detail(..).tone(..).ok_label(..).width(..).draw(id, bounds, &mut
+  AlertDialogState, ctx) -> bool`. The mono detail block scrolls past
+  96 px. `ALERT_DIALOG_WIDTH`.
+- [x] **ConfirmDialog** (`dialogs`) — `.message .tone .confirm_label
+  .cancel_label .alt_label .dont_ask_label .destructive .width`, `draw(id,
+  bounds, &mut ConfirmDialogState, ctx) -> Option<ConfirmOutcome { choice:
+  ConfirmChoice, dont_ask }>`. Destructive: danger key, focus on Cancel.
+  `CONFIRM_DIALOG_WIDTH`.
+- [x] **PromptDialog** (`dialogs`) — `.description .label .hint
+  .placeholder .validate(&dyn Fn(&str) -> Option<String>) .required
+  .ok_label .cancel_label .width`, `draw(id, bounds, &mut
+  PromptDialogState, ctx) -> Option<PromptOutcome>` (`Submit(String)` /
+  `Cancel`). The error shows after the first edit; Enter submits.
+  `PROMPT_DIALOG_WIDTH`.
+- `TextInput::with_invalid(bool)` (error border), `TextInput::select_all`
+  is public, and a field inside a layer now joins that layer's Tab ring
+  (it registered with the base ring before, so Tab could never reach a
+  field in a modal).
+- `DrawContext::with_layer(layer)`.
+- `BoxShadow::ink_rect(element)`: the area a shadow paints. Sheet and
+  Toast declare it in their debug scope.
+- **Fixed:** a quad rounded on one side only (square top, rounded bottom)
+  showed a dark seam across its middle row: the inner-edge distance in
+  `ui.wgsl` bottomed out at `-radius` inside a rounded quadrant, and
+  `fwidth` read the jump as an edge. Regression test in
+  `tests/chrome_instancing.rs`.
+- `UiRenderer::set_view_origin(x, y)` / `view_origin()`: render a window
+  of a larger canvas (text, clips and `blur_backdrop` follow).
+  `tests/view_origin.rs`.
+- The gallery renders in pages of at most 4096 rows (`PAGE_MAX`), split
+  between sections, instead of one canvas-sized texture, which had hit the
+  16384 px limit. It no longer asks the adapter for raised limits.
+
+- [ ] **P2 — `UiContext::modal_begin` doesn't scope focus to its layer.**
+  `ui_context.rs` registers its widgets with `focus.register` (around
+  lines 2220 and 2748) instead of the layer's ring, the bug `TextInput`
+  had. Tab inside a `UiContext` modal can reach base widgets.
+- [ ] **P3 — `TextInput` has one font.** Its caret layout assumes the
+  default font, so `PromptDialog` can't offer Forge's `mono` field.
+- [ ] **P3 — Dialog backdrop blur is up to the app.** Forge blurs behind the
+  backdrop (3 px) and the sheet (18 px). `DrawList` can't sample the
+  framebuffer, so `Modal` only exposes `MODAL_BACKDROP_BLUR` /
+  `SHEET_BLUR` for the app's `UiRenderer::blur_backdrop` pass.

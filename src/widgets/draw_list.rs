@@ -4058,6 +4058,32 @@ mod tests {
     }
 
     #[test]
+    fn shadow_ink_rect_covers_what_the_shadow_rasters() {
+        let element = Rect::new(10.0, 20.0, 100.0, 40.0);
+        let shadow = BoxShadow {
+            offset: [3.0, 16.0],
+            blur: 40.0,
+            spread: 2.0,
+            color: [0.0, 0.0, 0.0, 0.7],
+            inset: false,
+        };
+        let mut dl = DrawList::new();
+        dl.box_shadow_outset(element, CornerRadii::uniform(4.0), shadow);
+        let [x, y, w, h] = dl.shadow_instance(0).unwrap().raster_rect;
+        let ink = shadow.ink_rect(element);
+        // 2 spread + 3σ (60) out from the offset box; the raster adds half a
+        // pixel of coverage on top, which the debug lint's tolerance absorbs.
+        assert_eq!(ink, Rect::new(-49.0, -26.0, 224.0, 164.0));
+        assert!(ink.inset(-0.5).contains_rect(Rect::new(x, y, w, h), 1e-3));
+        // An inset shadow stays inside its element.
+        let inset = BoxShadow {
+            inset: true,
+            ..shadow
+        };
+        assert_eq!(inset.ink_rect(element), element);
+    }
+
+    #[test]
     fn analytic_inset_raster_is_conservatively_inflated() {
         let mut dl = DrawList::new();
         dl.scale(2.0, 0.5);

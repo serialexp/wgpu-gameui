@@ -542,6 +542,7 @@ pub struct StyleOverlay {
     tooltip: Option<crate::FloatingSurfaceChrome>,
     toast: Option<crate::FloatingSurfaceChrome>,
     curve_key: Option<crate::FloatingSurfaceChrome>,
+    sheet: Option<crate::SheetChrome>,
     window: Option<crate::WindowChrome>,
 }
 
@@ -706,6 +707,15 @@ impl StyleOverlay {
     pub fn curve_key(&self) -> Option<crate::FloatingSurfaceChrome> {
         self.curve_key
     }
+    /// Override dialog-sheet chrome.
+    pub fn set_sheet(&mut self, value: crate::SheetChrome) -> &mut Self {
+        self.sheet = Some(value);
+        self
+    }
+    /// Return the dialog-sheet override.
+    pub fn sheet(&self) -> Option<crate::SheetChrome> {
+        self.sheet
+    }
     /// Override movable-window chrome.
     pub fn set_window(&mut self, value: crate::WindowChrome) -> &mut Self {
         self.window = Some(value);
@@ -733,6 +743,7 @@ impl StyleOverlay {
             && self.tooltip.is_none()
             && self.toast.is_none()
             && self.curve_key.is_none()
+            && self.sheet.is_none()
             && self.window.is_none()
     }
 
@@ -754,6 +765,7 @@ impl StyleOverlay {
         self.tooltip = None;
         self.toast = None;
         self.curve_key = None;
+        self.sheet = None;
         self.window = None;
     }
 }
@@ -919,6 +931,12 @@ impl<'a> StyleResolver<'a> {
         self.overlay
             .and_then(StyleOverlay::curve_key)
             .unwrap_or(self.theme.chrome.curve_key)
+    }
+    /// Resolve dialog-sheet chrome in O(1).
+    pub fn sheet(&self) -> crate::SheetChrome {
+        self.overlay
+            .and_then(StyleOverlay::sheet)
+            .unwrap_or(self.theme.chrome.sheet)
     }
     /// Resolve movable-window chrome in O(1).
     pub fn window(&self) -> crate::WindowChrome {

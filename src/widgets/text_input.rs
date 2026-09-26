@@ -242,6 +242,9 @@ pub struct TextInput {
     /// its own frame around the field, like the
     /// [`SearchField`](super::SearchField)'s round well, turns this off.
     pub well: bool,
+    /// Paint the well's error border and ring: the value was rejected. Set
+    /// via [`with_invalid`](Self::with_invalid).
+    pub invalid: bool,
     /// Left and right text insets in pixels, replacing the theme's
     /// [`StyleKey::Padding`] on those two sides, for fields with something
     /// beside the text (an icon, a key). `None` pads both sides evenly.
@@ -287,6 +290,7 @@ impl Default for TextInput {
             mask: None,
             direction: crate::TextDirection::Auto,
             well: true,
+            invalid: false,
             insets: None,
             clipboard_get: None,
             clipboard_set: None,
@@ -335,6 +339,13 @@ impl TextInput {
     /// the caller. See [`well`](Self::well).
     pub fn with_well(mut self, well: bool) -> Self {
         self.well = well;
+        self
+    }
+
+    /// Paint the well as rejected (error border and ring). See
+    /// [`invalid`](Self::invalid).
+    pub fn with_invalid(mut self, invalid: bool) -> Self {
+        self.invalid = invalid;
         self
     }
 
@@ -582,8 +593,9 @@ impl TextInput {
         }
     }
 
-    /// Select all text.
-    fn select_all(&mut self) {
+    /// Select all text, caret at the end (a dialog field that opens with
+    /// its value ready to be typed over).
+    pub fn select_all(&mut self) {
         if !self.value.is_empty() {
             self.selection_start = Some(0);
             self.cursor_pos = self.value.len();
@@ -878,12 +890,13 @@ impl TextInput {
             "TextInput",
             Rect::new(self.x, self.y, self.width, self.height),
         );
+        // Join the Tab ring for this frame (the layer's ring inside a modal
+        // or popup).
+        ctx.register_focus(id);
         let s = ctx.styles();
         let list = &mut *ctx.draw_list;
         let focus = &mut *ctx.focus;
         let input = ctx.input;
-        // Join the Tab ring for this frame.
-        focus.register(id);
 
         let hovered = input.is_hovered(self.x, self.y, self.width, self.height);
         let clicked = hovered && input.mouse_clicked;
@@ -1106,7 +1119,7 @@ impl TextInput {
         // highlights focus, not hover, on wells.
         if self.well {
             let frame = Rect::new(self.x, self.y, self.width, self.height);
-            crate::widgets::material::draw_well(list, &s, frame, focused, false);
+            crate::widgets::material::draw_well(list, &s, frame, focused, self.invalid);
         }
 
         // Render-time caret layout (multiline+focused), reflecting any edits made
@@ -1778,6 +1791,47 @@ mod tests {
         end.key_end = true;
         ti.process_keyboard(&end);
         assert_eq!(ti.cursor_pos, 11);
+    }
+
+    #[test]
+    fn field_in_a_layer_joins_that_layers_tab_ring() {
+        let mut ti = make_input("hi");
+        let mut focus = FocusState::new();
+        let mut list = DrawList::new();
+        let theme = Theme::default();
+        let tab = InputState {
+            nav: crate::NavInput {
+                next: true,
+                ..Default::default()
+            },
+            ..InputState::default()
+        };
+        focus.begin_frame(&tab);
+        focus.register(1); // a base-layer widget under the modal
+        {
+            let mut ctx =
+                DrawContext::new(&mut list, &mut focus, &theme, &tab, 800.0, 600.0).with_layer(0);
+            ti.draw(9, &mut ctx);
+        }
+        focus.end_frame(Some(0));
+        assert_eq!(focus.focused(), Some(9), "Tab stays in the layer");
+    }
+
+    #[test]
+    fn invalid_field_wears_the_error_border() {
+        let theme = Theme::default();
+        let border_of = |invalid: bool| {
+            let mut ti = make_input("hi").with_invalid(invalid);
+            let mut focus = FocusState::new();
+            let mut list = DrawList::new();
+            draw_input(&mut ti, 1, &mut focus, &mut list, &theme, &fake_input());
+            list.chrome_instances().next().unwrap().border
+        };
+        assert_ne!(border_of(false), border_of(true));
+        assert_eq!(
+            border_of(true),
+            crate::StyleResolver::new(&theme).color(StyleKey::Error)
+        );
     }
 
     #[test]

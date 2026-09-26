@@ -31,6 +31,10 @@ use wgpu_gameui::{
     VectorField, VectorScrub, ease, lerp_color,
 };
 use wgpu_gameui::{
+    AlertDialog, AlertDialogState, ConfirmDialog, ConfirmDialogState, Modal, ModalState,
+    PromptDialog, PromptDialogState, Sheet, SheetAction,
+};
+use wgpu_gameui::{
     BADGE_HEIGHT, Badge, BadgeTone, BarSegment, COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE,
     DropZone, EmptyState, FieldLabel, Ink, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT,
     STATUS_BAR_HEIGHT, STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status,
@@ -51,6 +55,55 @@ fn ctx<'a>(
     input: &'a InputState,
 ) -> DrawContext<'a> {
     DrawContext::new(list, focus, theme, input, W as f32, 600.0)
+}
+
+/// A stage for a modal to cover, like the Forge dialogs card: a viewport-blue
+/// ground, its name in the corner, and a card of content, so the backdrop's
+/// dimming shows.
+fn dialog_stage(list: &mut DrawList, s: &StyleResolver, r: Rect, name: &str) {
+    list.paint_quad_background(
+        r,
+        wgpu_gameui::Background::LinearGradient {
+            start: [0.17, 0.35, 0.4, 1.0],
+            end: [0.05, 0.11, 0.14, 1.0],
+            axis: wgpu_gameui::GradientAxis::Vertical,
+        },
+        wgpu_gameui::CornerRadii::uniform(2.0),
+    );
+    list.text(
+        s.mono_block(
+            name.to_uppercase(),
+            r.x + 9.0,
+            r.y + 7.0,
+            TextSize::Caption,
+            Ink::Glyph,
+        )
+        .with_color_f32([1.0, 1.0, 1.0, 0.45]),
+    );
+    let card = Rect::new(r.x + 12.0, r.y + 26.0, (r.width * 0.45).round(), 70.0);
+    let body = Panel::new().padding(10.0).draw(card, list, s);
+    Placeholder::text(3).draw(body, list, s);
+}
+
+/// Reserve a cell for a free-standing `w`×`h` sheet that takes in its drop
+/// shadow, so the shadow doesn't fall on the neighbouring cells; returns the
+/// sheet's rect inside the cell.
+fn sheet_cell(
+    flow: &mut Flow,
+    list: &mut DrawList,
+    s: &StyleResolver,
+    label: &str,
+    w: f32,
+    h: f32,
+) -> Rect {
+    let sheet = Rect::new(0.0, 0.0, w, h);
+    let ink = s
+        .sheet()
+        .shadows
+        .iter()
+        .fold(sheet, |area, shadow| area.union(shadow.ink_rect(sheet)));
+    let cell = flow.cell(list, label, ink.width, ink.height);
+    Rect::new(cell.x - ink.x, cell.y - ink.y, w, h)
 }
 
 const W: u32 = 800;
@@ -449,20 +502,300 @@ fn file_stem(title: &str) -> String {
     stem
 }
 
-fn crop_with_margin(img: &image::RgbaImage, rect: Rect, margin: u32) -> image::RgbaImage {
-    let left = (rect.x.floor().max(0.0) as u32).saturating_sub(margin);
-    let top = (rect.y.floor().max(0.0) as u32).saturating_sub(margin);
-    let right = (rect.right().ceil().max(0.0) as u32 + margin).min(img.width());
-    let bottom = (rect.bottom().ceil().max(0.0) as u32 + margin).min(img.height());
-    assert!(right > left && bottom > top, "gallery crop is empty");
-    image::imageops::crop_imm(img, left, top, right - left, bottom - top).to_image()
+/// Most canvas rows rendered in one page. Well inside every adapter's texture
+/// limit, and pages split between sections, so the gallery can grow without
+/// bound as long as no single section is taller than this.
+const PAGE_MAX: u32 = 4096;
+/// Margin around a section image, in pixels.
+const SECTION_MARGIN: u32 = 10;
+/// Margin around a cell image, in pixels. Smaller than `SECTION_MARGIN`, so a
+/// cell's image fits in its section's page.
+const CELL_MARGIN: u32 = 6;
+
+/// One rendered horizontal strip of the canvas, starting `top` rows down.
+struct GalleryPage {
+    top: u32,
+    img: image::RgbaImage,
 }
 
-/// Cut the canvas into one image per section
+/// Everything `render_gallery_page` draws: the widget layers, plus the
+/// backdrop-blur demo (a stand-in game scene blurred into `blur_rect`, with a
+/// crisp panel on top).
+struct GalleryScene<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    format: wgpu::TextureFormat,
+    /// The theme background, as a clear value for this renderer's target.
+    clear: wgpu::Color,
+    layers: &'a LayerStack,
+    backdrop: &'a DrawList,
+    blur_rect: Rect,
+    panel: &'a DrawList,
+}
+
+/// The canvas area a section's image shows, before its margin.
+fn section_rect(section: &GallerySection) -> Rect {
+    Rect::new(
+        20.0,
+        section.top,
+        (W - 40) as f32,
+        section.bottom - section.top,
+    )
+}
+
+/// The canvas rows a section's image covers, margin included — the same rows
+/// `crop_with_margin` cuts.
+fn section_rows(section: &GallerySection) -> (u32, u32) {
+    let rect = section_rect(section);
+    let top = (rect.y.floor().max(0.0) as u32).saturating_sub(SECTION_MARGIN);
+    let bottom = rect.bottom().ceil().max(0.0) as u32 + SECTION_MARGIN;
+    (top, bottom)
+}
+
+/// Split the canvas into pages of at most `PAGE_MAX` rows, each holding whole
+/// sections: `(top, bottom)` row ranges, in canvas order.
+fn page_spans(sections: &[GallerySection]) -> Vec<(u32, u32)> {
+    let mut spans = Vec::new();
+    let mut page: Option<(u32, u32)> = None;
+    for section in sections {
+        let (top, bottom) = section_rows(section);
+        assert!(
+            bottom - top <= PAGE_MAX,
+            "gallery section {}/{} is {}px tall, over the {PAGE_MAX}px page; split it",
+            section.category.name(),
+            section.component,
+            bottom - top
+        );
+        page = Some(match page {
+            Some((page_top, page_bottom)) if bottom - page_top <= PAGE_MAX => {
+                (page_top, page_bottom.max(bottom))
+            }
+            Some(full) => {
+                spans.push(full);
+                (top, bottom)
+            }
+            None => (top, bottom),
+        });
+    }
+    spans.extend(page);
+    spans
+}
+
+/// A `W`-wide render target (or backdrop) texture, `height` rows tall.
+fn page_texture(
+    scene: &GalleryScene,
+    label: &str,
+    height: u32,
+    usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    scene.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: W,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: scene.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | usage,
+        view_formats: &[],
+    })
+}
+
+/// Clear `view` to `color` (the renderer loads, rather than clears, its
+/// target).
+fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, color: wgpu::Color) {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("gallery clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(color),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+}
+
+/// Render canvas rows `top..bottom` through the renderer's view origin and
+/// read them back.
+fn render_gallery_page(
+    ui: &mut UiRenderer,
+    scene: &GalleryScene,
+    top: u32,
+    bottom: u32,
+) -> GalleryPage {
+    let (device, queue) = (scene.device, scene.queue);
+    let h = bottom - top;
+    let viewport = (W, h);
+    ui.set_view_origin(0.0, top as f32);
+
+    let target = page_texture(scene, "gallery page", h, wgpu::TextureUsages::COPY_SRC);
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // The blur demo, when its cell is on this page: render the stand-in scene
+    // first. It is its own submission, so its own frame for the renderer's
+    // arenas.
+    let blur = scene.blur_rect;
+    let backdrop = (blur.y < bottom as f32 && blur.bottom() > top as f32).then(|| {
+        let tex = page_texture(scene, "blur scene", h, wgpu::TextureUsages::TEXTURE_BINDING);
+        let backdrop_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("scene encoder"),
+        });
+        ui.begin_frame();
+        clear_view(
+            &mut encoder,
+            &backdrop_view,
+            wgpu::Color {
+                r: 0.05,
+                g: 0.06,
+                b: 0.10,
+                a: 1.0,
+            },
+        );
+        ui.render(
+            device,
+            queue,
+            &mut encoder,
+            &backdrop_view,
+            viewport,
+            1.0,
+            scene.backdrop,
+        );
+        queue.submit(Some(encoder.finish()));
+        backdrop_view
+    });
+
+    // bytes_per_row must be 256-aligned for wgpu copy.
+    let row_stride = W * 4;
+    let bytes_per_row = (row_stride + 255) & !255;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("gallery readback"),
+        size: (bytes_per_row * h) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("gallery encoder"),
+    });
+    // Everything from here to the `queue.submit` below — the widget stack, the
+    // blurred backdrop and the PAUSED panel — is one submission, hence one
+    // frame (see `UiRenderer::begin_frame`).
+    ui.begin_frame();
+    clear_view(&mut encoder, &view, scene.clear);
+    ui.render_layers(
+        device,
+        queue,
+        &mut encoder,
+        &view,
+        viewport,
+        1.0,
+        scene.layers,
+    );
+    if let Some(backdrop_view) = &backdrop {
+        // Blur the scene into the reserved cell (a darkening scrim tint), then
+        // draw the crisp panel on top.
+        ui.blur_backdrop(
+            device,
+            queue,
+            &mut encoder,
+            &view,
+            &Backdrop {
+                view: backdrop_view,
+                size: viewport,
+                encoding: ColorEncoding::Srgb,
+            },
+            blur,
+            viewport,
+            1.0,
+            &BlurParams {
+                radius: 9.0,
+                downsample: 2,
+                tint: [0.62, 0.64, 0.72, 1.0],
+            },
+        );
+        ui.render(
+            device,
+            queue,
+            &mut encoder,
+            &view,
+            viewport,
+            1.0,
+            scene.panel,
+        );
+    }
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: W,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+    ui.set_view_origin(0.0, 0.0);
+
+    let slice = readback.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+    device.poll(wgpu::Maintain::Wait);
+    let data = slice.get_mapped_range();
+
+    // De-pad: the GPU buffer rows are 256-aligned (`bytes_per_row`), but a
+    // tightly-packed RGBA image expects `row_stride` (W*4) per row. Copy each
+    // row's real bytes, dropping the alignment padding — otherwise every row
+    // drifts by the padding amount and the image shears diagonally.
+    let row_stride = row_stride as usize;
+    let bpr = bytes_per_row as usize;
+    let mut pixels = Vec::with_capacity(row_stride * h as usize);
+    for row in 0..h as usize {
+        let start = row * bpr;
+        pixels.extend_from_slice(&data[start..start + row_stride]);
+    }
+    let img = image::RgbaImage::from_raw(W, h, pixels).expect("image from raw");
+    GalleryPage { top, img }
+}
+
+/// Cut canvas `rect`, grown by `margin`, out of the page that holds it.
+fn crop_with_margin(pages: &[GalleryPage], rect: Rect, margin: u32) -> image::RgbaImage {
+    let left = (rect.x.floor().max(0.0) as u32).saturating_sub(margin);
+    let top = (rect.y.floor().max(0.0) as u32).saturating_sub(margin);
+    let right = (rect.right().ceil().max(0.0) as u32 + margin).min(W);
+    let bottom = rect.bottom().ceil().max(0.0) as u32 + margin;
+    assert!(right > left && bottom > top, "gallery crop is empty");
+    let page = pages
+        .iter()
+        .find(|page| page.top <= top && bottom <= page.top + page.img.height())
+        .unwrap_or_else(|| panic!("gallery crop rows {top}..{bottom} span two pages"));
+    image::imageops::crop_imm(&page.img, left, top - page.top, right - left, bottom - top)
+        .to_image()
+}
+
+/// Cut the rendered pages into one image per section
 /// (`<group>/<Component>.png`) and one per labeled cell
 /// (`<group>/<Component>/<label>.png`), and write `index.html` to browse
 /// them by group, with Forge's missing components listed.
-fn save_gallery_images(img: &image::RgbaImage, sections: &[GallerySection], cells: &[GalleryCell]) {
+fn save_gallery_images(pages: &[GalleryPage], sections: &[GallerySection], cells: &[GalleryCell]) {
     let output_dir = "test_output/widget_gallery";
     // Start from an empty directory so a renamed or removed section or cell
     // never leaves a stale PNG behind.
@@ -490,16 +823,7 @@ fn save_gallery_images(img: &image::RgbaImage, sections: &[GallerySection], cell
         );
         std::fs::create_dir_all(format!("{output_dir}/{category}/{component}"))
             .expect("create gallery image directories");
-        let section_img = crop_with_margin(
-            img,
-            Rect::new(
-                20.0,
-                section.top,
-                (img.width() - 40) as f32,
-                section.bottom - section.top,
-            ),
-            10,
-        );
+        let section_img = crop_with_margin(pages, section_rect(section), SECTION_MARGIN);
         let file = format!("{category}/{component}.png");
         section_img
             .save(format!("{output_dir}/{file}"))
@@ -530,7 +854,7 @@ fn save_gallery_images(img: &image::RgbaImage, sections: &[GallerySection], cell
             entry.section.category.name(),
             entry.section.component
         );
-        let cell_img = crop_with_margin(img, cell.rect, 6);
+        let cell_img = crop_with_margin(pages, cell.rect, CELL_MARGIN);
         cell_img
             .save(format!("{output_dir}/{file}"))
             .expect("save gallery cell PNG");
@@ -858,16 +1182,11 @@ fn render_widget_gallery() {
     }))
     .expect("no GPU adapter available");
 
-    // The gallery is one tall image — taller than wgpu's portable default
-    // texture limit (8192) — so ask for whatever this adapter supports.
-    let max_texture_dimension_2d = adapter.limits().max_texture_dimension_2d;
+    // The canvas is rendered in pages of at most `PAGE_MAX` rows, so the
+    // portable default limits are enough however tall the gallery grows.
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("gallery device"),
-            required_limits: wgpu::Limits {
-                max_texture_dimension_2d,
-                ..Default::default()
-            },
             ..Default::default()
         },
         None,
@@ -3608,6 +3927,199 @@ fn render_widget_gallery() {
             Placeholder::text(3).draw(body, list, &s);
         }
 
+        flow.section(
+            list,
+            Category::Layout,
+            "Sheet",
+            "raised surface · header, body, footer keys",
+        );
+        {
+            use wgpu_gameui::Tone;
+            let keys = [
+                SheetAction::new("Cancel"),
+                SheetAction::new("Export").tone(Tone::Accent),
+            ];
+            let sheet = Sheet::new()
+                .title("Export level")
+                .description("Bakes lighting and packs every asset the level uses.")
+                .body(46.0)
+                .meta("~38 MB")
+                .actions(&keys)
+                .width(300.0);
+            let h = sheet.height(300.0, list, &s);
+            let r = sheet_cell(&mut flow, list, &s, "Body and meta", 300.0, h);
+            sheet.draw_with(
+                r,
+                &mut ctx(list, &mut focus, &theme, &input),
+                |_, body, ctx| {
+                    let s = ctx.styles();
+                    let label = FieldLabel::new("Target").value("PC · x64").draw(
+                        ctx.draw_list,
+                        &s,
+                        body.x,
+                        body.y,
+                        body.width,
+                    );
+                    let rest = Rect::new(
+                        body.x,
+                        label.bottom() + 6.0,
+                        body.width,
+                        body.bottom() - label.bottom() - 6.0,
+                    );
+                    Placeholder::text(2).draw(rest, ctx.draw_list, &s);
+                },
+            );
+
+            let keys = [
+                SheetAction::new("Don't save").leading(true),
+                SheetAction::new("Cancel"),
+                SheetAction::new("Save").tone(Tone::Accent),
+            ];
+            let sheet = Sheet::new()
+                .tone(Severity::Warning)
+                .title("Unsaved changes")
+                .description("city_block_07 has edits that haven't been saved.")
+                .actions(&keys)
+                .width(320.0);
+            let h = sheet.height(320.0, list, &s);
+            let r = sheet_cell(&mut flow, list, &s, "Tone, leading key", 320.0, h);
+            sheet.draw(r, &mut ctx(list, &mut focus, &theme, &input));
+        }
+
+        flow.section(
+            list,
+            Category::Layout,
+            "Modal",
+            "sheet over a dimmed backdrop",
+        );
+        {
+            let r = flow.cell(list, "Over a scene", 380.0, 230.0);
+            dialog_stage(list, &s, r, "Level view");
+            let keys = [
+                SheetAction::new("Keep editing"),
+                SheetAction::new("Discard").tone(wgpu_gameui::Tone::Danger),
+            ];
+            let mut state = ModalState::new();
+            state.open();
+            let mut modal_focus = FocusState::new();
+            Modal::new()
+                .tone(Severity::Warning)
+                .title("Discard changes?")
+                .message("Your terrain edits since the last save will be lost.")
+                .actions(&keys)
+                .focusable(900)
+                .autofocus(None)
+                .draw(
+                    r,
+                    &mut state,
+                    &mut ctx(list, &mut modal_focus, &theme, &input),
+                );
+        }
+
+        flow.section(
+            list,
+            Category::Dialogs,
+            "AlertDialog",
+            "one message, one key · mono detail",
+        );
+        {
+            let r = flow.cell(list, "Error with detail", 340.0, 300.0);
+            dialog_stage(list, &s, r, "AlertDialog · error");
+            let mut state = AlertDialogState::new();
+            state.open();
+            let mut dialog_focus = FocusState::new();
+            AlertDialog::new("Couldn't open level")
+                .tone(Severity::Error)
+                .message("Another editor has this level open. Close it there, then try again.")
+                .detail("EBUSY: city_block_07.lvl\nlocked by pid 48213 (forge-editor)")
+                .width(290.0)
+                .draw(
+                    910,
+                    r,
+                    &mut state,
+                    &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+        }
+
+        flow.section(
+            list,
+            Category::Dialogs,
+            "ConfirmDialog",
+            "destructive · focus starts on Cancel",
+        );
+        {
+            let r = flow.cell(list, "Destructive, don't ask", 340.0, 300.0);
+            dialog_stage(list, &s, r, "ConfirmDialog · destructive");
+            let mut state = ConfirmDialogState::new();
+            state.open();
+            let mut dialog_focus = FocusState::new();
+            ConfirmDialog::new("Delete 3 prefabs?")
+                .destructive(true)
+                .message("Instances in open levels become unlinked meshes. This can't be undone.")
+                .confirm_label("Delete")
+                .dont_ask_label("Don't ask again")
+                .width(300.0)
+                .draw(
+                    920,
+                    r,
+                    &mut state,
+                    &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+        }
+
+        flow.section(
+            list,
+            Category::Dialogs,
+            "PromptDialog",
+            "one value · validated after the first edit",
+        );
+        {
+            let taken = |v: &str| {
+                let v = v.trim();
+                if v != "Props" && ["Terrain", "Props", "Lighting"].contains(&v) {
+                    Some("A layer with that name already exists".to_owned())
+                } else if v.contains(['/', '\\']) {
+                    Some("Names can't contain / or \\".to_owned())
+                } else {
+                    None
+                }
+            };
+            let prompt = PromptDialog::new("Rename layer")
+                .label("Name")
+                .ok_label("Rename")
+                .description("Scripts that look this layer up by name will need updating.")
+                .hint("Shown in the outliner and layer menus.")
+                .validate(&taken)
+                .width(290.0);
+            for (label, typed) in [("Opened", None), ("Invalid name", Some("Terrain"))] {
+                let r = flow.cell(list, label, 340.0, 300.0);
+                dialog_stage(list, &s, r, "PromptDialog · validated");
+                let mut state = PromptDialogState::new();
+                state.open("Props");
+                let mut dialog_focus = FocusState::new();
+                if let Some(text) = typed {
+                    // A frame of typing, off-screen, so the error shows.
+                    let mut scratch = DrawList::new();
+                    let typing = InputState {
+                        text_input: text.to_owned(),
+                        ..InputState::default()
+                    };
+                    prompt.draw(
+                        930,
+                        r,
+                        &mut state,
+                        &mut ctx(&mut scratch, &mut dialog_focus, &theme, &typing),
+                    );
+                }
+                prompt.draw(
+                    930,
+                    r,
+                    &mut state,
+                    &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+            }
+        }
+
         flow.section(list, Category::Keys, "Keycap", "");
         {
             let r = flow.cell(list, "⇧ · Ctrl · F", 150.0, 22.0);
@@ -4805,13 +5317,10 @@ fn render_widget_gallery() {
         gallery_cells = flow.cells;
     }
 
-    // Size the target to the laid-out content first, so the tooltip layer
-    // knows the real screen height (it flips the popup up/left near the edges).
+    // The laid-out canvas height, so the tooltip layer knows the real screen
+    // height (it flips the popup up/left near the edges). Nothing is rendered
+    // at this size: the canvas is drawn in pages (see `page_spans`).
     let h = (content_bottom.ceil() as u32).max(64);
-    assert!(
-        h <= max_texture_dimension_2d,
-        "gallery is {h}px tall, over this adapter's {max_texture_dimension_2d}px texture limit"
-    );
 
     // Cursor-anchored context menu (modal layer: outside clicks close without
     // reaching the base UI).
@@ -4922,44 +5431,13 @@ fn render_widget_gallery() {
         }
     }
 
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("gallery target"),
-        size: wgpu::Extent3d {
-            width: W,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
     // --- Backdrop-blur "scene" -------------------------------------------------
-    // Stand in for the app's rendered game: a full-target texture with vivid
+    // Stand in for the app's rendered game: a page-sized texture with vivid
     // colored stripes + text inside the reserved blur cell. `blur_backdrop` then
     // samples this and writes a blurred copy into the cell, with a crisp panel on
     // top — exactly the pause-menu flow (render scene → blur → draw UI).
-    let scene_tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("blur scene"),
-        size: wgpu::Extent3d {
-            width: W,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let scene_view = scene_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut scene_list = DrawList::new();
     {
-        let mut scene_list = DrawList::new();
         // Vivid vertical stripes across the blur cell — soft blobs once blurred.
         let stripe_colors = [
             [0.92, 0.26, 0.30, 1.0],
@@ -4986,104 +5464,12 @@ fn render_widget_gallery() {
                 .with_size(44.0)
                 .with_color(255, 255, 255),
         );
-        let mut scene_enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("scene encoder"),
-        });
-        // This scene list is its own submission (submitted at `queue.submit` just
-        // below), so it is its own frame for the renderer's arenas.
-        ui.begin_frame();
-        {
-            scene_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scene clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &scene_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.06,
-                            b: 0.10,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        }
-        ui.render(
-            &device,
-            &queue,
-            &mut scene_enc,
-            &scene_view,
-            (W, h),
-            1.0,
-            &scene_list,
-        );
-        queue.submit(Some(scene_enc.finish()));
     }
 
-    // bytes_per_row must be 256-aligned for wgpu copy.
-    let row_stride = W * 4;
-    let bytes_per_row = (row_stride + 255) & !255;
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback"),
-        size: (bytes_per_row * h) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("encoder"),
-    });
-    // Everything from here to the `queue.submit` at the bottom — the widget stack,
-    // the blurred backdrop and the PAUSED panel — is one submission, hence one
-    // frame (see `UiRenderer::begin_frame`).
-    ui.begin_frame();
+    // The crisp "PAUSED" panel drawn over the blurred cell — UI rendered after
+    // the blur sits sharp.
+    let mut panel_list = DrawList::new();
     {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(ui.clear_color(theme.background)),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-    }
-
-    ui.render_layers(&device, &queue, &mut encoder, &view, (W, h), 1.0, &layers);
-
-    // Blur the scene into the reserved cell (a darkening scrim tint), then draw a
-    // crisp "PAUSED" panel on top — UI rendered after the blur sits sharp.
-    ui.blur_backdrop(
-        &device,
-        &queue,
-        &mut encoder,
-        &view,
-        &Backdrop {
-            view: &scene_view,
-            size: (W, h),
-            encoding: ColorEncoding::Srgb,
-        },
-        blur_rect,
-        (W, h),
-        1.0,
-        &BlurParams {
-            radius: 9.0,
-            downsample: 2,
-            tint: [0.62, 0.64, 0.72, 1.0],
-        },
-    );
-    {
-        let mut panel_list = DrawList::new();
         let pw = 200.0;
         let ph = 84.0;
         let px = blur_rect.x + (blur_rect.width - pw) / 2.0;
@@ -5110,67 +5496,31 @@ fn render_widget_gallery() {
                 .with_size(13.0)
                 .with_color(255, 255, 255),
         );
-        ui.render(
-            &device,
-            &queue,
-            &mut encoder,
-            &view,
-            (W, h),
-            1.0,
-            &panel_list,
-        );
     }
 
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(h),
-            },
-        },
-        wgpu::Extent3d {
-            width: W,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    queue.submit(Some(encoder.finish()));
-
-    let slice = readback.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
-
-    // De-pad: the GPU buffer rows are 256-aligned (`bytes_per_row`), but a
-    // tightly-packed RGBA image expects `row_stride` (W*4) per row. Copy each
-    // row's real bytes, dropping the alignment padding — otherwise every row
-    // drifts by the padding amount and the image shears diagonally.
-    let row_stride = (W * 4) as usize;
-    let bpr = bytes_per_row as usize;
-    let mut pixels = Vec::with_capacity(row_stride * h as usize);
-    for row in 0..h as usize {
-        let start = row * bpr;
-        pixels.extend_from_slice(&data[start..start + row_stride]);
-    }
-
-    // The whole canvas is only cut up into section and component images;
-    // it is not saved itself.
-    let img = image::RgbaImage::from_raw(W, h, pixels).expect("image from raw");
-    save_gallery_images(&img, &gallery_sections, &gallery_cells);
+    // No full-canvas image: the canvas is drawn in pages of at most
+    // `PAGE_MAX` rows, split between sections, and every section and cell
+    // image is cut from the one page that holds it.
+    let scene = GalleryScene {
+        device: &device,
+        queue: &queue,
+        format,
+        clear: ui.clear_color(theme.background),
+        layers: &layers,
+        backdrop: &scene_list,
+        blur_rect,
+        panel: &panel_list,
+    };
+    let pages: Vec<GalleryPage> = page_spans(&gallery_sections)
+        .into_iter()
+        .map(|(top, bottom)| render_gallery_page(&mut ui, &scene, top, bottom))
+        .collect();
+    save_gallery_images(&pages, &gallery_sections, &gallery_cells);
 
     // Sanity: at least some pixels are not the theme clear color.
     let [cr, cg, cb, _] = wgpu_gameui::color::to_rgba8(theme.background);
     let clear = [cr, cg, cb];
-    let drew = img.pixels().any(|p| {
+    let drew = pages.iter().flat_map(|page| page.img.pixels()).any(|p| {
         let d = (p.0[0] as i32 - clear[0] as i32).abs()
             + (p.0[1] as i32 - clear[1] as i32).abs()
             + (p.0[2] as i32 - clear[2] as i32).abs();
