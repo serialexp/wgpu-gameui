@@ -8,7 +8,7 @@
 //!   [`Thumb`], the group's name and a right-aligned count, on an opaque
 //!   raised bar. Clicking it asks to toggle the group.
 //! - **Item** ([`GroupItem`], 37 px): a [`status_dot`], a title with a mono
-//!   sub line under it, and on the right a [`hue_chip`](crate::hue_chip) over a meta text (an
+//!   sub line under it, and on the right a compact hue [`Badge`](crate::Badge) over a meta text (an
 //!   age). While hovered, the meta gives way to a ghost `⋯` key that asks for
 //!   the item's menu. The selected item wears the accent.
 //! - **More** ([`GroupMore`], 23 px): a quiet mono "… 3 older" row with a
@@ -49,7 +49,7 @@ use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 use crate::text::{TextBlock, vcentered_line_y};
 use crate::{Edge, InputState};
 
-use super::badge::{HUE_CHIP_HEIGHT, hue_chip_right};
+use super::badge::{BADGE_COMPACT_HEIGHT, Badge, BadgeTone};
 use super::material::{self, Material, Tone};
 use super::scroll_view::{ScrollState, ScrollView};
 use super::status_dot::{STATUS_DOT_SIZE, Status, status_dot};
@@ -892,10 +892,13 @@ fn draw_item(list: &mut DrawList, s: &StyleResolver, item: &GroupItem, p: RowPai
     let meta_size = s.text_size(TextSize::Meta);
     let mut column = 0.0f32;
     if let Some((text, hue)) = item.chip {
-        let chip = hue_chip_right(list, s, right, r.y + CHIP_TOP, text, hue, p.selected);
+        let chip = Badge::new(BadgeTone::Hue(hue))
+            .compact()
+            .on_accent(p.selected)
+            .draw_right(list, s, right, r.y + CHIP_TOP, text);
         column = column.max(chip.width);
     }
-    const { assert!(CHIP_TOP + HUE_CHIP_HEIGHT < META_CY) };
+    const { assert!(CHIP_TOP + BADGE_COMPACT_HEIGHT < META_CY) };
     if item.menu && p.hovered {
         let key = key_rect(r);
         let face = material::draw(

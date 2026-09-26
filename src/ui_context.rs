@@ -21,18 +21,17 @@ use crate::text::{FontHandle, TextBlock};
 use crate::theme::Theme;
 use crate::widgets::DrawList;
 use crate::widgets::{
-    AssetGrid, AssetGridOutput, Banner, Breadcrumb, Button, Checkbox, ChipOutput, ColorPicker,
-    ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId, DrawContext,
-    Dropdown, DropdownId, DropdownState, EmptyState, FocusId, FocusState, GradientStop, Group,
-    HitZone, HitZoneOutput, ImageButton, List, ListItem, ListOutput, ListState, NumberInput, Pager,
-    PagerOutput, Panel, ProgressBar, RadioGroup, RampOutput, ScrollBegin, ScrollState, ScrollView,
-    Separator, Severity, Slider, Table, TableCell, TableOutput, Tabs, TagOutput, TextInput,
-    ToastStack, Toggle, TooltipLayer, TreeId, TreeNode, TreeNodeOutput, TreeState, VectorField,
-    VectorFieldOutput, VectorScrub,
+    AssetGrid, AssetGridOutput, Badge, Banner, Breadcrumb, Button, Checkbox, ChipOutput,
+    ColorPicker, ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId,
+    DrawContext, Dropdown, DropdownId, DropdownState, EmptyState, FocusId, FocusState,
+    GradientStop, Group, HitZone, HitZoneOutput, ImageButton, List, ListItem, ListOutput,
+    ListState, NumberInput, Pager, PagerOutput, Panel, ProgressBar, RadioGroup, RampOutput,
+    ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Table, TableCell,
+    TableOutput, Tabs, TagOutput, TextInput, ToastStack, Toggle, TooltipLayer, TreeId, TreeNode,
+    TreeNodeOutput, TreeState, VectorField, VectorFieldOutput, VectorScrub,
 };
 use crate::widgets::{
-    badge, chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton,
-    spinner,
+    chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton, spinner,
 };
 #[cfg(feature = "phosphor-icons")]
 use crate::{IconKey, PhosphorIcon, Tone};
@@ -2801,10 +2800,10 @@ impl<'a> UiContext<'a> {
         out
     }
 
-    /// Draw a badge (a tinted inline label). Does **not** auto-advance — use
-    /// as an inline decoration next to other content. Returns the `Rect`
-    /// actually drawn.
-    pub fn badge_label(&mut self, text: &str, tint: [f32; 4]) -> Rect {
+    /// Draw a [`Badge`] showing `text`. Does **not** auto-advance — use as an
+    /// inline decoration next to other content. Returns the `Rect` actually
+    /// drawn.
+    pub fn badge_label(&mut self, text: &str, badge: Badge) -> Rect {
         let theme = self.theme;
         let overlay = self.style_stack.last().cloned();
         let (theme, overlay) = match (theme, overlay) {
@@ -2812,14 +2811,9 @@ impl<'a> UiContext<'a> {
             _ => return Rect::new(0.0, 0.0, 0.0, 0.0),
         };
         let style = StyleResolver::with_overlay_opt(theme, overlay.as_ref());
-        let font_size = style.scalar(StyleKey::FontSize);
-        let (tw, _) = self.backend.list_mut().measure_text(text, font_size, None);
-        let pad = 4.0;
-        let w = tw + pad * 2.0 + 4.0;
-        let h = font_size + pad;
-        let rect = self.place_local(w, h);
-        badge(self.backend.list_mut(), &style, rect, text, tint);
-        rect
+        let w = badge.width(self.backend.list_mut(), &style, text);
+        let rect = self.place_local(w, badge.height());
+        badge.draw(self.backend.list_mut(), &style, rect.x, rect.y, text)
     }
 
     /// Draw a toggleable chip (pill button). Returns [`ChipOutput`] with a

@@ -83,8 +83,8 @@ pub use app_shell::{
 pub use app_shell::{SHELL_DRAG_TOOLBAR_GRIP, SHELL_TOOLBAR_ID};
 pub use asset_grid::{AssetGrid, AssetGridOutput};
 pub use badge::{
-    BADGE_HEIGHT, BadgeTone, CHIP_HEIGHT, ChipOutput, HUE_CHIP_HEIGHT, badge, badge_toned,
-    badge_toned_width, chip, chip_width, hue_chip, hue_chip_right, hue_chip_width, keycap,
+    BADGE_COMPACT_HEIGHT, BADGE_HEIGHT, Badge, BadgeTone, CHIP_HEIGHT, ChipOutput, chip,
+    chip_width, keycap,
 };
 pub use band::toolbar_band;
 pub use banner::{Banner, Severity};

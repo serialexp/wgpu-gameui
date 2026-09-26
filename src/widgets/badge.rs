@@ -1,12 +1,12 @@
 //! Badges, keycaps, and chips — the design's small "callout" atoms (Gallery III).
 //!
-//! - [`badge`] / [`Badge`]: a tiny uppercase mono label on a tinted pill
-//!   (status readouts: `ok` / `over` / `stale` in the design's table).
+//! - [`Badge`]: a short mono label on a sunken plate, tinted by a
+//!   [`BadgeTone`] — one of Forge's status tones or any hue. `.compact()`
+//!   makes the small, case-keeping version for tight rows (a session row's
+//!   provider).
 //! - [`keycap`]: a keyboard-key cap (`⇧` `Ctrl` `F`) — raised face over a
 //!   black edge with a bottom drop line.
 //! - [`chip`]: a toggleable filter pill — raised at rest, held-in when on.
-//! - [`hue_chip`]: a small recessed mono label tinted by a hue (a session
-//!   row's provider), with a flat variant for rows on the accent.
 
 use crate::color::oklch;
 use crate::layout::Rect;
@@ -16,64 +16,6 @@ use crate::text::TextBlock;
 
 use super::DrawList;
 use super::material;
-use super::material::draw_inset_shadow;
-
-/// Draw a badge: a small rounded pill with `text`, tinted `tint` (bg alpha is
-/// derived) and a legible foreground resolved by contrast. Height follows the
-/// theme font; width follows the text. Returns the rect drawn.
-///
-/// The design badges are uppercase mono (`ok`, `over`, `stale`) — callers pick
-/// the text; the widget only styles.
-pub fn badge(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    rect: Rect,
-    text: &str,
-    tint: [f32; 4],
-) -> Rect {
-    let h = 15.0f32
-        .max(s.scalar(StyleKey::FontSize) * 0.9)
-        .min(rect.height);
-    let (w, _) = list.measure_text(text, s.scalar(StyleKey::FontSize) * 0.75, None);
-    let bw = (w + 12.0).min(rect.width);
-    let r = Rect::new(rect.x, rect.y + (rect.height - h) * 0.5, bw, h);
-
-    // Status badges are recessed tinted labels, not flat translucent pills:
-    // a low-alpha tint lives under a dark edge, with the shared top inset and
-    // lower counter-edge supplying the 4a material read.
-    let bg = [tint[0], tint[1], tint[2], tint[3] * 0.22];
-    let top = material::sheen_over(bg, [1.0, 1.0, 1.0, 0.10]);
-    list.chrome_rect_gradient(
-        r,
-        s.scalar(StyleKey::BorderRadius),
-        1.0,
-        top,
-        bg,
-        [0.0, 0.0, 0.0, 0.6],
-    );
-    draw_inset_shadow(
-        list,
-        s,
-        r,
-        s.scalar(StyleKey::InnerShadowDepth).min(3.0),
-        1.0,
-    );
-    let fg = crate::widgets::sheen_over(s.color(StyleKey::Text), [tint[0], tint[1], tint[2], 0.55]);
-    let text_y = list.vcentered_text_y(
-        r.y,
-        r.height,
-        s.scalar(StyleKey::FontSize) * 0.75,
-        s.theme().font.as_ref(),
-        text,
-    );
-    list.text(
-        TextBlock::new(text, r.x + 6.0, text_y)
-            .with_size(s.scalar(StyleKey::FontSize) * 0.75)
-            .with_color_f32(fg)
-            .with_font_opt(s.theme().font.clone()),
-    );
-    r
-}
 
 /// Draw a keycap: a keyboard-key cap with `label` (design: raised white-sheen
 /// face over a black edge, plus a dark line under the bottom edge selling the
@@ -115,13 +57,21 @@ pub fn keycap(list: &mut DrawList, s: &StyleResolver, rect: Rect, label: &str, m
     r
 }
 
-/// Height of a [`badge_toned`] (Forge Badge: 9px mono caps, `1px 7px 2px`
+/// Height of a regular [`Badge`] (Forge Badge: 9px mono caps, `1px 7px 2px`
 /// padding inside a 1px edge).
 pub const BADGE_HEIGHT: f32 = 15.0;
-/// Space left and right of a toned badge's text.
+/// Height of a [`compact`](Badge::compact) [`Badge`].
+pub const BADGE_COMPACT_HEIGHT: f32 = 13.0;
+/// Space left and right of a regular badge's text.
 const BADGE_PAD: f32 = 7.0;
-/// Letter spacing of a toned badge (`--track-badge`), in em.
+/// Space left and right of a compact badge's text.
+const BADGE_COMPACT_PAD: f32 = 4.0;
+/// Letter spacing of a regular badge (`--track-badge`), in em.
 const BADGE_TRACKING: f32 = 0.08;
+/// Letter spacing of a compact badge, in em.
+const BADGE_COMPACT_TRACKING: f32 = 0.02;
+/// The light line under a badge's plate: the lower lip of its recess.
+const BADGE_LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
 
 /// Forge hues (`--hue-*`), in degrees.
 const HUE_ACCENT: f32 = 200.0;
@@ -130,8 +80,9 @@ const HUE_WARN: f32 = 75.0;
 const HUE_WARN_INK: f32 = 85.0;
 const HUE_OK: f32 = 145.0;
 
-/// The tones of a Forge `Badge`: a sunken mono chip stamped into the surface.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The color of a [`Badge`]'s plate and text: one of Forge's status tones, or
+/// any hue.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum BadgeTone {
     /// Neutral (`draft`): a dark well with the neutral chip ink.
     #[default]
@@ -144,9 +95,13 @@ pub enum BadgeTone {
     Error,
     /// Happening now (`live`, accent).
     Live,
+    /// Any hue, in degrees (OKLCH): a darker, quieter plate than the status
+    /// tones, for labels that tell things apart rather than report a state
+    /// (a session's provider).
+    Hue(f32),
 }
 
-/// A toned badge's plate: gradient top and bottom, ink, edge, and recess.
+/// A badge's plate: gradient top and bottom, ink, edge, and recess.
 struct BadgePaint {
     top: [f32; 4],
     bottom: [f32; 4],
@@ -157,9 +112,11 @@ struct BadgePaint {
 }
 
 impl BadgeTone {
-    fn paint(self, s: &StyleResolver) -> BadgePaint {
+    /// The tone's paint. `on_accent` flattens the plate so it reads on a
+    /// selected (accent) row's brighter fill.
+    fn paint(self, s: &StyleResolver, on_accent: bool) -> BadgePaint {
         let edge_hard = [0.0, 0.0, 0.0, 0.65];
-        match self {
+        let mut paint = match self {
             BadgeTone::Draft => BadgePaint {
                 top: [0.0, 0.0, 0.0, 0.45],
                 bottom: [1.0, 1.0, 1.0, 0.05],
@@ -195,61 +152,174 @@ impl BadgeTone {
                 edge: edge_hard,
                 inset: (3.0, 0.5),
             },
+            // On the accent a hue plate goes flat at its own, slightly more
+            // chromatic color, with a brighter ink to hold contrast.
+            BadgeTone::Hue(hue) if on_accent => {
+                let flat = oklch(0.30, 0.06, hue, 1.0);
+                BadgePaint {
+                    top: flat,
+                    bottom: flat,
+                    ink: oklch(0.88, 0.08, hue, 1.0),
+                    edge: edge_hard,
+                    inset: (3.0, 0.5),
+                }
+            }
+            BadgeTone::Hue(hue) => BadgePaint {
+                top: oklch(0.30, 0.055, hue, 1.0),
+                bottom: oklch(0.36, 0.07, hue, 1.0),
+                ink: oklch(0.86, 0.09, hue, 1.0),
+                edge: edge_hard,
+                inset: (3.0, 0.5),
+            },
+        };
+        if on_accent {
+            paint.bottom = paint.top;
         }
+        paint
     }
 }
 
-/// The text block of a toned badge, uppercased as Forge's `text-transform`
-/// does, at the origin.
-fn badge_text(s: &StyleResolver, text: &str) -> TextBlock {
-    let size = s.text_size(TextSize::Caption);
-    s.mono_block(text.to_uppercase(), 0.0, 0.0, TextSize::Caption, Ink::Chip)
-        .with_letter_spacing(size * BADGE_TRACKING)
-}
-
-/// The width a [`badge_toned`] showing `text` takes.
-pub fn badge_toned_width(list: &mut DrawList, s: &StyleResolver, text: &str) -> f32 {
-    let (w, _) = list.measure_block(&badge_text(s, text));
-    w + BADGE_PAD * 2.0
-}
-
-/// Draw a Forge badge with its top-left corner at `(x, y)`: `text` in 9px
-/// mono capitals on a sunken plate in `tone`. Returns the badge's rect
-/// ([`BADGE_HEIGHT`] tall).
-pub fn badge_toned(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    x: f32,
-    y: f32,
-    text: &str,
+/// A Forge `Badge`: a short mono label on a sunken plate stamped into the
+/// surface, colored by its [`BadgeTone`]. It sizes itself to its text.
+///
+/// A regular badge is Forge's: capitals, [`BADGE_HEIGHT`] tall, inside a dark
+/// edge. A [`compact`](Self::compact) one is [`BADGE_COMPACT_HEIGHT`] tall,
+/// keeps the text's case, and has no edge — for tight rows such as a session
+/// list's provider label.
+///
+/// ```ignore
+/// Badge::new(BadgeTone::Live).draw(list, s, x, y, "running");
+/// Badge::new(BadgeTone::Hue(160.0))
+///     .compact()
+///     .on_accent(row_selected)
+///     .draw_right(list, s, column_right, y, "codex");
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Badge {
     tone: BadgeTone,
-) -> Rect {
-    let mut block = badge_text(s, text);
-    let (w, _) = list.measure_block(&block);
-    let r = Rect::new(x, y, w + BADGE_PAD * 2.0, BADGE_HEIGHT);
-    let paint = tone.paint(s);
-    let radius = s.scalar(StyleKey::BorderRadius);
-    list.chrome_rect_gradient(r, radius, 1.0, paint.top, paint.bottom, paint.edge);
-    list.box_shadow_inset(
-        r.inset(1.0),
-        CornerRadii::uniform(0.0),
-        BoxShadow {
+    compact: bool,
+    on_accent: bool,
+}
+
+impl Badge {
+    /// A regular badge in `tone`.
+    pub fn new(tone: BadgeTone) -> Self {
+        Self {
+            tone,
+            ..Self::default()
+        }
+    }
+
+    /// Make it the compact badge: smaller, case kept, no edge.
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
+
+    /// Whether the badge sits on a selected (accent) row, which flattens its
+    /// plate so it reads on the brighter fill.
+    pub fn on_accent(mut self, on_accent: bool) -> Self {
+        self.on_accent = on_accent;
+        self
+    }
+
+    /// The badge's height: [`BADGE_HEIGHT`], or [`BADGE_COMPACT_HEIGHT`] when
+    /// compact.
+    pub fn height(&self) -> f32 {
+        if self.compact {
+            BADGE_COMPACT_HEIGHT
+        } else {
+            BADGE_HEIGHT
+        }
+    }
+
+    /// Space left and right of the text.
+    fn pad(&self) -> f32 {
+        if self.compact {
+            BADGE_COMPACT_PAD
+        } else {
+            BADGE_PAD
+        }
+    }
+
+    /// The badge's text block at the origin: capitals (Forge's
+    /// `text-transform`) unless compact.
+    fn text_block(&self, s: &StyleResolver, text: &str) -> TextBlock {
+        let size = s.text_size(TextSize::Caption);
+        let (content, tracking) = if self.compact {
+            (text.to_owned(), BADGE_COMPACT_TRACKING)
+        } else {
+            (text.to_uppercase(), BADGE_TRACKING)
+        };
+        s.mono_block(content, 0.0, 0.0, TextSize::Caption, Ink::Chip)
+            .with_letter_spacing(size * tracking)
+    }
+
+    /// The width the badge takes when showing `text`.
+    pub fn width(&self, list: &mut DrawList, s: &StyleResolver, text: &str) -> f32 {
+        let (w, _) = list.measure_block(&self.text_block(s, text));
+        w + self.pad() * 2.0
+    }
+
+    /// Draw the badge showing `text` with its top-left corner at `(x, y)`.
+    /// Returns the badge's rect.
+    pub fn draw(&self, list: &mut DrawList, s: &StyleResolver, x: f32, y: f32, text: &str) -> Rect {
+        let block = self.text_block(s, text);
+        let (w, _) = list.measure_block(&block);
+        let r = Rect::new(x, y, w + self.pad() * 2.0, self.height());
+        self.paint(list, s, r, block);
+        r
+    }
+
+    /// [`draw`](Self::draw), placed by its top-right corner `(right, y)`
+    /// instead: for a badge ending at a column edge, without measuring its
+    /// text twice.
+    pub fn draw_right(
+        &self,
+        list: &mut DrawList,
+        s: &StyleResolver,
+        right: f32,
+        y: f32,
+        text: &str,
+    ) -> Rect {
+        let block = self.text_block(s, text);
+        let (w, _) = list.measure_block(&block);
+        let width = w + self.pad() * 2.0;
+        let r = Rect::new(right - width, y, width, self.height());
+        self.paint(list, s, r, block);
+        r
+    }
+
+    /// Paint the plate in `r`, and the measured text `block` on it.
+    fn paint(&self, list: &mut DrawList, s: &StyleResolver, r: Rect, mut block: TextBlock) {
+        let paint = self.tone.paint(s, self.on_accent);
+        let radius = s.scalar(StyleKey::BorderRadius);
+        let recess = |(blur, alpha): (f32, f32)| BoxShadow {
             offset: [0.0, 1.0],
-            blur: paint.inset.0,
-            color: [0.0, 0.0, 0.0, paint.inset.1],
+            blur,
+            color: [0.0, 0.0, 0.0, alpha],
             inset: true,
             ..BoxShadow::default()
-        },
-    );
-    list.quad(r.x, r.bottom(), r.width, 1.0, CHIP_LIP);
-    block = block
-        .with_color_f32(paint.ink)
-        .with_shadow(0, 0, 0, 153, 0.0, -1.0, 0.0);
-    block.x = r.x + BADGE_PAD;
-    // `padding: 1px 7px 2px`: the line sits half a pixel above centre.
-    block.y = crate::text::vcentered_line_y(r.y, r.height - 1.0, block.font_size);
-    list.text(block);
-    r
+        };
+        if self.compact {
+            // No edge: the recess follows the plate's own rounded outline.
+            list.chrome_rect_gradient(r, radius, 0.0, paint.top, paint.bottom, [0.0; 4]);
+            list.box_shadow_inset(r, CornerRadii::uniform(radius), recess(paint.inset));
+            block = block.with_color_f32(paint.ink);
+            block.y = crate::text::vcentered_line_y(r.y, r.height, block.font_size);
+        } else {
+            list.chrome_rect_gradient(r, radius, 1.0, paint.top, paint.bottom, paint.edge);
+            list.box_shadow_inset(r.inset(1.0), CornerRadii::uniform(0.0), recess(paint.inset));
+            block = block
+                .with_color_f32(paint.ink)
+                .with_shadow(0, 0, 0, 153, 0.0, -1.0, 0.0);
+            // `padding: 1px 7px 2px`: the line sits half a pixel above centre.
+            block.y = crate::text::vcentered_line_y(r.y, r.height - 1.0, block.font_size);
+        }
+        list.quad(r.x, r.bottom(), r.width, 1.0, BADGE_LIP);
+        block.x = r.x + self.pad();
+        list.text(block);
+    }
 }
 
 /// Height of a [`chip`] (`--h-chip`).
@@ -344,109 +414,6 @@ pub fn chip(
     ChipOutput { clicked, rect: r }
 }
 
-/// Height of a [`hue_chip`].
-pub const HUE_CHIP_HEIGHT: f32 = 13.0;
-/// Space either side of a hue chip's text.
-const HUE_CHIP_PAD: f32 = 4.0;
-/// A hue chip's letter spacing, in em.
-const HUE_CHIP_TRACKING: f32 = 0.02;
-/// The chip's recess (`--chip-inset`): the inner shadow, and the light line
-/// under it.
-const CHIP_INSET: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
-const CHIP_LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
-
-/// The text block of a hue chip, at the origin.
-fn hue_chip_text(s: &StyleResolver, text: &str) -> TextBlock {
-    let size = s.text_size(TextSize::Caption);
-    s.mono_block(text, 0.0, 0.0, TextSize::Caption, Ink::Chip)
-        .with_letter_spacing(size * HUE_CHIP_TRACKING)
-}
-
-/// The width a [`hue_chip`] showing `text` takes.
-pub fn hue_chip_width(list: &mut DrawList, s: &StyleResolver, text: &str) -> f32 {
-    let (w, _) = list.measure_block(&hue_chip_text(s, text));
-    w + HUE_CHIP_PAD * 2.0
-}
-
-/// Draw a hue chip with its top-left corner at `(x, y)`: `text` in small
-/// mono on a recessed plate tinted by `hue` (degrees). A chip on a selected
-/// (accent) row passes `on_accent`, which flattens the plate so it reads on
-/// the brighter fill. Returns the chip's rect.
-pub fn hue_chip(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    x: f32,
-    y: f32,
-    text: &str,
-    hue: f32,
-    on_accent: bool,
-) -> Rect {
-    let block = hue_chip_text(s, text);
-    let (w, _) = list.measure_block(&block);
-    let r = Rect::new(x, y, w + HUE_CHIP_PAD * 2.0, HUE_CHIP_HEIGHT);
-    paint_hue_chip(list, s, r, block, hue, on_accent);
-    r
-}
-
-/// [`hue_chip`], placed by its top-right corner `(right, y)` instead: for a
-/// chip ending at a column edge, without measuring its text twice.
-pub fn hue_chip_right(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    right: f32,
-    y: f32,
-    text: &str,
-    hue: f32,
-    on_accent: bool,
-) -> Rect {
-    let block = hue_chip_text(s, text);
-    let (w, _) = list.measure_block(&block);
-    let width = w + HUE_CHIP_PAD * 2.0;
-    let r = Rect::new(right - width, y, width, HUE_CHIP_HEIGHT);
-    paint_hue_chip(list, s, r, block, hue, on_accent);
-    r
-}
-
-/// Paint a hue chip's plate in `r`, and its measured text `block`.
-fn paint_hue_chip(
-    list: &mut DrawList,
-    s: &StyleResolver,
-    r: Rect,
-    mut block: TextBlock,
-    hue: f32,
-    on_accent: bool,
-) {
-    let radius = s.scalar(StyleKey::BorderRadius);
-    let (top, bottom, ink) = if on_accent {
-        let flat = oklch(0.30, 0.06, hue, 1.0);
-        (flat, flat, oklch(0.88, 0.08, hue, 1.0))
-    } else {
-        (
-            oklch(0.30, 0.055, hue, 1.0),
-            oklch(0.36, 0.07, hue, 1.0),
-            oklch(0.86, 0.09, hue, 1.0),
-        )
-    };
-    list.chrome_rect_gradient(r, radius, 0.0, top, bottom, [0.0; 4]);
-    list.quad(r.x, r.bottom(), r.width, 1.0, CHIP_LIP);
-    list.box_shadow_inset(
-        r,
-        CornerRadii::uniform(radius),
-        BoxShadow {
-            offset: [0.0, 1.0],
-            blur: 3.0,
-            color: CHIP_INSET,
-            inset: true,
-            ..BoxShadow::default()
-        },
-    );
-    block = block.with_color_f32(ink);
-    block.x = r.x + HUE_CHIP_PAD;
-    // Centre the line box, as the design's flex row does.
-    block.y = crate::text::vcentered_line_y(r.y, r.height, block.font_size);
-    list.text(block);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,53 +424,15 @@ mod tests {
     }
 
     #[test]
-    fn badge_uses_inset_status_material() {
+    fn a_badge_sizes_to_its_text() {
         let theme = theme();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
-        badge(
-            &mut list,
-            &s,
-            Rect::new(0.0, 0.0, 100.0, 20.0),
-            "ok",
-            s.color(StyleKey::Success),
-        );
-        assert!(
-            list.chrome_instance_count() >= 3,
-            "badge face plus inset bands"
-        );
-        assert_eq!(
-            list.chrome_instance(0).unwrap().border,
-            [0.0, 0.0, 0.0, 0.6]
-        );
-        assert_eq!(
-            list.chrome_instance(1).unwrap().bg,
-            s.color(StyleKey::InnerShadow)
-        );
-    }
-
-    #[test]
-    fn badge_sizes_to_its_text() {
-        let theme = theme();
-        let s = StyleResolver::new(&theme);
-        let mut short = DrawList::new();
-        let a = badge(
-            &mut short,
-            &s,
-            Rect::new(0.0, 0.0, 200.0, 20.0),
-            "ok",
-            s.color(StyleKey::Success),
-        );
-        let mut long = DrawList::new();
-        let b = badge(
-            &mut long,
-            &s,
-            Rect::new(0.0, 0.0, 200.0, 20.0),
-            "outdated",
-            s.color(StyleKey::Warning),
-        );
+        let badge = Badge::new(BadgeTone::Baked);
+        let a = badge.draw(&mut list, &s, 0.0, 0.0, "ok");
+        let b = badge.draw(&mut list, &s, 0.0, 0.0, "outdated");
         assert!(b.width > a.width, "wider text draws a wider badge");
-        assert!(a.width > 0.0 && a.height > 0.0);
+        assert_eq!((a.height, b.height), (BADGE_HEIGHT, BADGE_HEIGHT));
     }
 
     #[test]
@@ -602,28 +531,67 @@ mod tests {
     }
 
     #[test]
-    fn a_hue_chip_is_tinted_and_flattens_on_the_accent() {
+    fn a_compact_hue_badge_keeps_its_case_and_flattens_on_the_accent() {
         let theme = theme();
         let s = StyleResolver::new(&theme);
+        let badge = Badge::new(BadgeTone::Hue(160.0)).compact();
         let mut plain = DrawList::new();
-        let r = hue_chip(&mut plain, &s, 5.0, 7.0, "codex", 160.0, false);
-        assert_eq!((r.x, r.y, r.height), (5.0, 7.0, HUE_CHIP_HEIGHT));
-        assert!((r.width - hue_chip_width(&mut plain, &s, "codex")).abs() < 0.01);
+        let r = badge.draw(&mut plain, &s, 5.0, 7.0, "codex");
+        assert_eq!((r.x, r.y, r.height), (5.0, 7.0, BADGE_COMPACT_HEIGHT));
+        assert!((r.width - badge.width(&mut plain, &s, "codex")).abs() < 0.01);
         let face = plain.chrome_instance(0).unwrap();
         assert_eq!(face.bg, oklch(0.30, 0.055, 160.0, 1.0));
         assert_ne!(face.bg, face.bg2, "a gradient at rest");
+        assert_eq!(face.widths, [0.0; 4], "compact has no edge");
         assert_eq!(plain.shadow_instance_count(), 1, "the recess");
         let text = plain.texts.iter().find(|t| t.content == "codex").unwrap();
         assert_eq!(
             text.color,
             crate::color::text_color(oklch(0.86, 0.09, 160.0, 1.0))
         );
-        assert_eq!(text.x, 5.0 + HUE_CHIP_PAD);
+        assert_eq!(text.x, 5.0 + BADGE_COMPACT_PAD);
 
         let mut accent = DrawList::new();
-        hue_chip(&mut accent, &s, 0.0, 0.0, "codex", 160.0, true);
+        badge
+            .on_accent(true)
+            .draw(&mut accent, &s, 0.0, 0.0, "codex");
         let face = accent.chrome_instance(0).unwrap();
         assert_eq!(face.bg, face.bg2, "flat on the accent");
+        assert_eq!(face.bg, oklch(0.30, 0.06, 160.0, 1.0));
+    }
+
+    #[test]
+    fn compact_changes_the_size_and_case_but_not_the_tone() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let mut regular = DrawList::new();
+        let r = Badge::new(BadgeTone::Error).draw(&mut regular, &s, 0.0, 0.0, "exit 1");
+        let mut compact = DrawList::new();
+        let c = Badge::new(BadgeTone::Error)
+            .compact()
+            .draw(&mut compact, &s, 0.0, 0.0, "exit 1");
+        assert!(c.height < r.height && c.width < r.width);
+        let (rf, cf) = (
+            regular.chrome_instance(0).unwrap(),
+            compact.chrome_instance(0).unwrap(),
+        );
+        assert_eq!((rf.bg, rf.bg2), (cf.bg, cf.bg2), "same plate colors");
+        assert_eq!(rf.widths, [1.0; 4], "regular keeps its edge");
+        assert!(regular.texts.iter().any(|t| t.content == "EXIT 1"));
+        assert!(compact.texts.iter().any(|t| t.content == "exit 1"));
+    }
+
+    #[test]
+    fn on_accent_flattens_a_status_tone_too() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::new();
+        Badge::new(BadgeTone::Live)
+            .on_accent(true)
+            .draw(&mut list, &s, 0.0, 0.0, "running");
+        let face = list.chrome_instance(0).unwrap();
+        assert_eq!(face.bg, face.bg2);
+        assert_eq!(face.bg, oklch(0.4, 0.07, HUE_ACCENT, 1.0));
     }
 
     #[test]
@@ -631,9 +599,10 @@ mod tests {
         let theme = theme();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
-        let r = badge_toned(&mut list, &s, 4.0, 6.0, "running", BadgeTone::Live);
+        let badge = Badge::new(BadgeTone::Live);
+        let r = badge.draw(&mut list, &s, 4.0, 6.0, "running");
         assert_eq!((r.x, r.y, r.height), (4.0, 6.0, BADGE_HEIGHT));
-        assert!((r.width - badge_toned_width(&mut list, &s, "running")).abs() < 0.01);
+        assert!((r.width - badge.width(&mut list, &s, "running")).abs() < 0.01);
         let face = list.chrome_instance(0).unwrap();
         assert_eq!(face.bg, oklch(0.4, 0.07, HUE_ACCENT, 1.0));
         assert_eq!(face.bg2, oklch(0.48, 0.08, HUE_ACCENT, 1.0));
@@ -646,7 +615,7 @@ mod tests {
         assert_eq!(list.shadow_instance_count(), 1, "the recess");
 
         let mut other = DrawList::new();
-        badge_toned(&mut other, &s, 0.0, 0.0, "exit 1", BadgeTone::Error);
+        Badge::new(BadgeTone::Error).draw(&mut other, &s, 0.0, 0.0, "exit 1");
         assert_ne!(
             other.chrome_instance(0).unwrap().bg,
             face.bg,
@@ -694,16 +663,17 @@ mod tests {
     }
 
     #[test]
-    fn a_right_anchored_hue_chip_ends_at_its_edge() {
+    fn a_right_anchored_badge_ends_at_its_edge() {
         let theme = theme();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
-        let w = hue_chip_width(&mut list, &s, "codex");
-        let r = hue_chip_right(&mut list, &s, 100.0, 7.0, "codex", 160.0, false);
+        let badge = Badge::new(BadgeTone::Hue(160.0)).compact();
+        let w = badge.width(&mut list, &s, "codex");
+        let r = badge.draw_right(&mut list, &s, 100.0, 7.0, "codex");
         assert!((r.right() - 100.0).abs() < 0.01);
         assert!((r.width - w).abs() < 0.01);
-        assert_eq!((r.y, r.height), (7.0, HUE_CHIP_HEIGHT));
+        assert_eq!((r.y, r.height), (7.0, BADGE_COMPACT_HEIGHT));
         let text = list.texts.iter().find(|t| t.content == "codex").unwrap();
-        assert_eq!(text.x, r.x + HUE_CHIP_PAD);
+        assert_eq!(text.x, r.x + BADGE_COMPACT_PAD);
     }
 }

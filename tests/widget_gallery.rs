@@ -31,12 +31,12 @@ use wgpu_gameui::{
     lerp_color,
 };
 use wgpu_gameui::{
-    BADGE_HEIGHT, BadgeTone, BarSegment, EmptyState, Ink, MeterFill, SPAN_TABS_HEIGHT,
+    BADGE_HEIGHT, Badge, BadgeTone, BarSegment, EmptyState, Ink, MeterFill, SPAN_TABS_HEIGHT,
     STATUS_BAR_HEIGHT, SpanTab, SpanTabs, Status, StatusPart, StatusToggle, StatusZone, TextSize,
     WELL_CHIP_HEIGHT, Waffle, WaffleCategory, WaffleFill, WellChip, WellChipPart, ZonedStatusBar,
-    badge, badge_toned, badge_toned_width, chip, dots, draw_combo_trigger, draw_curve_editor,
-    draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar, draw_tag_input,
-    inline_meter, keycap, place_popover, skeleton, spinner, stacked_bar, toolbar_band,
+    chip, dots, draw_combo_trigger, draw_curve_editor, draw_doc_tabs, draw_gradient_ramp,
+    draw_popover_frame, draw_status_bar, draw_tag_input, inline_meter, keycap, place_popover,
+    skeleton, spinner, stacked_bar, toolbar_band,
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
@@ -2727,7 +2727,7 @@ fn render_widget_gallery() {
             flow.section(list, Category::Sidebar, "GroupList", "grouped sessions");
             use wgpu_gameui::{
                 GroupHeader, GroupItem, GroupLayout, GroupList, GroupListState, GroupMore,
-                GroupRow, Status, Thumb, hue_chip, status_dot,
+                GroupRow, Status, Thumb, status_dot,
             };
             let s = StyleResolver::new(&theme);
             let rows = [
@@ -2894,30 +2894,6 @@ fn render_widget_gallery() {
             ] {
                 status_dot(list, &s, (x, r.y + 8.0), status);
                 x += 16.0;
-            }
-
-            flow.section(list, Category::Data, "HueChip", "tinted mono label");
-            let r = flow.cell(list, "Plain / on accent", 300.0, 42.0);
-            let mut x = r.x;
-            for (text, hue) in [
-                ("claude opus", 45.0),
-                ("vertex", 230.0),
-                ("codex", 160.0),
-                ("gothab · codex", 255.0),
-            ] {
-                x = hue_chip(list, &s, x, r.y + 2.0, text, hue, false).right() + 6.0;
-            }
-            let accent = Rect::new(r.x, r.y + 22.0, 300.0, 20.0);
-            list.quad(
-                accent.x,
-                accent.y,
-                accent.width,
-                accent.height,
-                theme.accent,
-            );
-            let mut x = accent.x + 4.0;
-            for (text, hue) in [("claude opus", 45.0), ("codex", 160.0)] {
-                x = hue_chip(list, &s, x, accent.y + 3.5, text, hue, true).right() + 6.0;
             }
         }
 
@@ -3369,24 +3345,69 @@ fn render_widget_gallery() {
             Toggle::new().label("shadows").draw(true, on, &mut tctx);
         }
 
-        flow.section(list, Category::Data, "Badge", "status tones");
+        flow.section(
+            list,
+            Category::Data,
+            "Badge",
+            "status tones, any hue, compact",
+        );
         {
-            let r = flow.cell(list, "Success", 70.0, 15.0);
-            badge(list, &s, r, "ok", s.color(StyleKey::Success));
-            let r = flow.cell(list, "Error", 90.0, 15.0);
-            badge(list, &s, r, "over", s.color(StyleKey::Error));
-            // Forge Badge's tones, sized to their text.
-            for (label, text, tone) in [
-                ("Tone: draft", "queued", BadgeTone::Draft),
-                ("Tone: baked", "exit 0", BadgeTone::Baked),
-                ("Tone: stale", "killed", BadgeTone::Stale),
-                ("Tone: error", "exit 101", BadgeTone::Error),
-                ("Tone: live", "running", BadgeTone::Live),
-            ] {
-                let w = badge_toned_width(list, &s, text);
+            let tones = [
+                ("queued", BadgeTone::Draft),
+                ("exit 0", BadgeTone::Baked),
+                ("killed", BadgeTone::Stale),
+                ("exit 101", BadgeTone::Error),
+                ("running", BadgeTone::Live),
+            ];
+            let hues = [
+                ("claude opus", BadgeTone::Hue(45.0)),
+                ("vertex", BadgeTone::Hue(230.0)),
+                ("codex", BadgeTone::Hue(160.0)),
+                ("gothab · codex", BadgeTone::Hue(255.0)),
+            ];
+            // A row of badges from the left of `r`, 6px apart.
+            let row = |list: &mut DrawList,
+                       r: Rect,
+                       badges: &[(&str, BadgeTone)],
+                       compact: bool,
+                       on_accent: bool| {
+                let mut x = r.x;
+                for &(text, tone) in badges {
+                    let mut badge = Badge::new(tone).on_accent(on_accent);
+                    if compact {
+                        badge = badge.compact();
+                    }
+                    x = badge.draw(list, &s, x, r.y, text).right() + 6.0;
+                }
+            };
+            // Forge Badge's status tones, one cell each.
+            let labels = [
+                "Tone: draft",
+                "Tone: baked",
+                "Tone: stale",
+                "Tone: error",
+                "Tone: live",
+            ];
+            for (label, (text, tone)) in labels.into_iter().zip(tones) {
+                let w = Badge::new(tone).width(list, &s, text);
                 let r = flow.cell(list, label, w.max(70.0), BADGE_HEIGHT);
-                badge_toned(list, &s, r.x, r.y, text, tone);
+                Badge::new(tone).draw(list, &s, r.x, r.y, text);
             }
+            let r = flow.cell(list, "Status tones, compact", 280.0, BADGE_HEIGHT);
+            row(list, r, &tones, true, false);
+            let r = flow.cell(list, "Any hue", 400.0, BADGE_HEIGHT);
+            row(list, r, &hues, false, false);
+            let r = flow.cell(list, "Any hue, compact", 300.0, BADGE_HEIGHT);
+            row(list, r, &hues, true, false);
+            // On a selected row the plate goes flat to read on the accent.
+            let r = flow.cell(list, "On accent: regular, then compact", 460.0, 20.0);
+            list.quad(r.x, r.y, r.width, r.height, theme.accent);
+            let inner = Rect::new(r.x + 4.0, r.y + 2.5, r.width - 8.0, BADGE_HEIGHT);
+            let pair = [hues[0], tones[4]];
+            row(list, inner, &pair, false, true);
+            let compact_x = inner.x + 240.0;
+            let inner = Rect::new(compact_x, r.y + 3.5, r.right() - compact_x, BADGE_HEIGHT);
+            row(list, inner, &pair, true, true);
         }
 
         flow.section(list, Category::Keys, "Keycap", "");

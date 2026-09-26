@@ -1368,9 +1368,16 @@ and rendered in new `4a:*` gallery sections.
 
 - [x] **Toggle** (`toggle.rs`) — 28×15 slide switch; accent face when on, sunken
       trough when off; `.focusable()` Space/Enter.
-- [x] **Badge / keycap / chip** (`badge.rs`) — free functions: `badge` (tinted
-      status pill), `keycap` (raised key cap with side line), `chip`
-      (toggleable filter pill: raised at rest, held-in accent when on).
+- [x] **Badge / keycap / chip** (`badge.rs`) — `Badge` (see below), `keycap`
+      (raised key cap with side line), `chip` (toggleable filter pill: raised
+      at rest, held-in accent when on).
+      *Badge is now one widget:* the old `badge` (free RGBA tint),
+      `badge_toned` (Forge tones) and `hue_chip` (any hue, small) merged into
+      `Badge::new(tone)` with `BadgeTone::{Draft, Baked, Stale, Error, Live,
+      Hue(deg)}`, `.compact()` (13px, case kept, no edge — was `hue_chip`),
+      `.on_accent(bool)` (flat plate on a selected row), `.width()`,
+      `.draw(x, y)` and `.draw_right(right, y)`. `UiContext::badge_label`
+      takes a `Badge`. The free-tint RGBA badge is gone.
 - [x] **Breadcrumb** (`breadcrumb.rs`) — clickable path trail; final segment is
       the non-clickable current location.
 - [x] **Pager** (`breadcrumb.rs`) — `◀ n / total ▶` strip with clamping arrows,
