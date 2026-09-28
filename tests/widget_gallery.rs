@@ -3399,6 +3399,14 @@ fn render_widget_gallery() {
                 status_dot(list, &s, (x, r.y + 8.0), status);
                 x += 16.0;
             }
+            // Hue dots: the badge hues (provider chips), at the same
+            // lightness and chroma whatever the hue.
+            let r = flow.cell(list, "Hue 25 · 80 · 145 · 200 · 255 · 300", 200.0, 16.0);
+            let mut x = r.x + 4.0;
+            for hue in [25.0, 80.0, 145.0, 200.0, 255.0, 300.0] {
+                status_dot(list, &s, (x, r.y + 8.0), Status::Hue(hue));
+                x += 16.0;
+            }
         }
 
         // ---- Instanced chrome (SDF rounded-rect) ------------------------

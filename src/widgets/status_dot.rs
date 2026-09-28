@@ -1,13 +1,15 @@
 //! Status dot — the small glowing light in front of a session or agent row
 //! (Forge's 6 px dot with a 5 px glow): green while it runs, amber while it
-//! waits on the user, accent when it has something unread, and nothing when
-//! idle.
+//! waits on the user, accent when it has something unread, any hue the
+//! caller picks for a state of its own, and nothing when idle.
 //!
 //! # Example
 //! ```ignore
 //! status_dot(list, &style, (x + 3.0, row_mid), Status::Running);
+//! status_dot(list, &style, (x + 3.0, row_mid), Status::Hue(300.0));
 //! ```
 
+use crate::color::oklch;
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{StyleKey, StyleResolver};
@@ -19,8 +21,15 @@ pub const STATUS_DOT_SIZE: f32 = 6.0;
 /// How far the glow blurs out.
 const GLOW_BLUR: f32 = 5.0;
 
+/// Lightness and chroma of a [`Status::Hue`] dot: as bright and as coloured
+/// as the status dots, so it reads as one of them.
+const HUE_LIGHTNESS: f32 = 0.78;
+const HUE_CHROMA: f32 = 0.12;
+/// How strongly a [`Status::Hue`] dot glows.
+const HUE_GLOW_ALPHA: f32 = 0.5;
+
 /// What a [`status_dot`] shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Status {
     /// Nothing happening: no dot at all (the space stays, so rows line up).
     #[default]
@@ -31,6 +40,11 @@ pub enum Status {
     Waiting,
     /// Has something the user hasn't seen (`--accent-dirty`, accent glow).
     Unread,
+    /// Any hue, in degrees (OKLCH), glowing in its own colour: for a state
+    /// the three above don't name (an agent working somewhere else). Same
+    /// lightness and chroma whatever the hue, like
+    /// [`BadgeTone::Hue`](super::BadgeTone::Hue).
+    Hue(f32),
 }
 
 impl Status {
@@ -51,6 +65,10 @@ impl Status {
                 s.color(StyleKey::AccentDirty),
                 with(s.color(StyleKey::Accent), 0.65),
             )),
+            Status::Hue(hue) => {
+                let fill = oklch(HUE_LIGHTNESS, HUE_CHROMA, hue, 1.0);
+                Some((fill, with(fill, HUE_GLOW_ALPHA)))
+            }
         }
     }
 }
@@ -110,5 +128,18 @@ mod tests {
         assert_ne!(fills[0], fills[1]);
         assert_ne!(fills[1], fills[2]);
         assert_eq!(fills[0], theme.status_ok);
+    }
+
+    #[test]
+    fn a_hue_dot_glows_in_the_hue_it_is_given() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let list = frame(Status::Hue(300.0));
+        assert_eq!(list.shadow_instance_count(), 1, "it glows");
+        let (fill, glow) = Status::Hue(300.0).colors(&s).unwrap();
+        assert_eq!(fill, oklch(0.78, 0.12, 300.0, 1.0));
+        assert_eq!(glow, [fill[0], fill[1], fill[2], 0.5]);
+        let (other, _) = Status::Hue(145.0).colors(&s).unwrap();
+        assert_ne!(fill, other, "another hue, another colour");
     }
 }

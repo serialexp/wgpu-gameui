@@ -2096,6 +2096,10 @@ Built from the Forge Design System's `components/*` sources. Coverage
   (Thumb's slot used private copies). `hatch` cuts its lines to the rect
   instead of relying on a clip.
 - The Forge hues (`HUE_ACCENT` …) moved from `badge.rs` to `color.rs`.
+- [x] **Status dot in any hue** (`feedback`) — `Status::Hue(deg)`, like
+  `BadgeTone::Hue`: `oklch(0.78, 0.12, deg)` with a glow in the same colour,
+  for a state Running / Waiting / Unread don't name. `Status` is no longer
+  `Eq` or `Hash` (it holds an `f32` now).
 
 - [ ] **P3 — Outset lips count as overflow in the debug report.** Wells
   with Forge's lit lower lip (`0 1px 0 rgba(255,255,255,.07)` outside the
