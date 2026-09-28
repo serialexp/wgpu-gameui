@@ -71,6 +71,10 @@ impl PromptDialogState {
     }
 }
 
+/// A [`PromptDialog::validate`] function: the error for a value, or `None`
+/// when it's fine.
+type Validate<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 /// Ask for one text value (Forge `PromptDialog`).
 ///
 /// A [`Modal`] with an optional description, a [`FieldLabel`], one text
@@ -97,7 +101,7 @@ pub struct PromptDialog<'a> {
     label: Option<&'a str>,
     hint: Option<&'a str>,
     placeholder: Option<&'a str>,
-    validate: Option<&'a dyn Fn(&str) -> Option<String>>,
+    validate: Option<Validate<'a>>,
     required: bool,
     ok_label: &'a str,
     cancel_label: &'a str,

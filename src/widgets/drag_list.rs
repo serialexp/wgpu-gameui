@@ -265,15 +265,17 @@ impl<'a> DragList<'a> {
                 state.held = None;
                 capture.release(id);
             }
-        } else if input.mouse_clicked && !input.mouse_consumed && capture.is_free() {
-            if let Some(from) = self.row_at(rect, input.mouse_x, input.mouse_y, &s) {
-                capture.try_begin(id);
-                state.held = Some(Held {
-                    from,
-                    press: [input.mouse_x, input.mouse_y],
-                    slot: None,
-                });
-            }
+        } else if input.mouse_clicked
+            && !input.mouse_consumed
+            && capture.is_free()
+            && let Some(from) = self.row_at(rect, input.mouse_x, input.mouse_y, &s)
+        {
+            capture.try_begin(id);
+            state.held = Some(Held {
+                from,
+                press: [input.mouse_x, input.mouse_y],
+                slot: None,
+            });
         }
         out.dragging = state.held.is_some();
 

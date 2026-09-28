@@ -450,7 +450,7 @@ impl<'a> Sheet<'a> {
         let border = chrome.surface.border_widths.top;
         let inner = rect.inset(border);
         let radius = chrome.surface.corner_radii.bottom_left;
-        let mut painter = SurfacePainter::new(
+        SurfacePainter::new(
             ctx.draw_list,
             rect,
             inner,
@@ -458,14 +458,11 @@ impl<'a> Sheet<'a> {
             chrome.surface,
             &chrome.shadows,
             &[],
-        );
-        painter.paint_pre_content();
-        drop(painter);
+        )
+        .paint_pre_content();
 
-        if let Some((x, y)) = layout.icon {
-            if let Some(tone) = self.tone {
-                StatusIcon::new(tone).draw(ctx.draw_list, &s, x, y);
-            }
+        if let (Some((x, y)), Some(tone)) = (layout.icon, self.tone) {
+            StatusIcon::new(tone).draw(ctx.draw_list, &s, x, y);
         }
         if let Some(title) = layout.title {
             ctx.draw_list.text(title);

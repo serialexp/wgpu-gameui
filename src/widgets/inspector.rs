@@ -359,7 +359,7 @@ impl<'a> Inspector<'a> {
         let layout = Self::layout(rect, &s);
         let border = chrome.surface.border_widths.top;
         let radius = (chrome.surface.corner_radii.top_left - border).max(0.0);
-        let mut painter = SurfacePainter::new(
+        SurfacePainter::new(
             ctx.draw_list,
             rect,
             layout.inner,
@@ -367,9 +367,8 @@ impl<'a> Inspector<'a> {
             chrome.surface,
             &chrome.shadows,
             &[],
-        );
-        painter.paint_pre_content();
-        drop(painter);
+        )
+        .paint_pre_content();
 
         let mut out = InspectorOutput::default();
         self.draw_header(layout.header, radius, ctx, &mut out);
