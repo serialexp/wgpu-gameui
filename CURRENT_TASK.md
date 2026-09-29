@@ -15,14 +15,14 @@ Batches, smallest first; one commit per batch:
 
 - [x] A — small: CountBubble, DropZone, FieldLabel, StatusIcon, Placeholder,
       Panel (reworked to Forge), DockSection (gallery section only).
-      Notes in TODO.md "Missing Forge components, batch A".
+      Notes in TODO_DONE.md "Missing Forge components, batch A".
 - [x] B — dialogs: Modal, AlertDialog, ConfirmDialog, PromptDialog, Sheet.
-      Notes in TODO.md "Missing Forge components, batch B". Coverage is
+      Notes in TODO_DONE.md "Missing Forge components, batch B". Coverage is
       66 of 77.
-- [x] C — DragList. Notes in TODO.md "Missing Forge components, batch C".
+- [x] C — DragList. Notes in TODO_DONE.md "Missing Forge components, batch C".
       Coverage 67 of 77.
 - [x] D — inspector: PropertyRow, PropertyGroup, FileField, Inspector.
-      Notes in TODO.md "Missing Forge components, batch D". Coverage 71
+      Notes in TODO_DONE.md "Missing Forge components, batch D". Coverage 71
       of 77. Open question for Bart: Forge hides the Inspector body's
       scrollbar (`scrollbarWidth: none`); ours shows the thin overlay
       thumb, since `ScrollView` has no hidden-bar mode.

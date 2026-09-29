@@ -5,8 +5,10 @@ Custom wgpu-based immediate-mode-ish game UI library. Widgets draw into a
 persistent state (scroll offset, drag ownership, focus) is **caller-owned** and
 passed in by `&mut`. The public API surface is re-exported from `src/lib.rs`.
 
-`TODO.md` is the working 1.0 backlog (P0/P1/P2). Cross items off as they land,
-and append a short note describing the API that closed them.
+`TODO.md` is the working 1.0 backlog (P0/P1/P2) — open items only. As an item
+lands, move it to `TODO_DONE.md` with a short note describing the API that
+closed it; `TODO_DONE.md` is the record of everything shipped, and nothing in
+it is still work.
 
 ## When you add or change a widget
 
@@ -45,7 +47,8 @@ A widget isn't done until **all** of these are true — treat it as the checklis
    look at it. Rendering has already caught real bugs
    (e.g. a too-large default padding that shrank an icon to a speck) that the
    unit tests passed straight through — so don't skip the eyeball pass.
-4. **TODO.md.** Check off the item and note the resulting API.
+4. **TODO.md.** Move the item to `TODO_DONE.md`, checked off, with a note of
+   the resulting API.
 
 ## Conventions
 
