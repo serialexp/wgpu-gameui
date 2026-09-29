@@ -162,15 +162,19 @@ pub enum Background {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GradientAxis {
     Horizontal,
     Vertical,
+    /// CSS degrees: `0` runs bottom to top, turning clockwise.
+    Angle(f32),
 }
 ```
 
-Arbitrary angles are already available through lower-level draw-list methods,
-but are not required in every themed quad value.
+The instance carries the gradient's unit direction (`translation.w`,
+`params.w`); the shader measures each pixel along it across the quad's extent
+in that direction, as CSS's `linear-gradient` does, so an angled gradient on a
+rounded, bordered quad is still one instance.
 
 ### Edges and corners
 

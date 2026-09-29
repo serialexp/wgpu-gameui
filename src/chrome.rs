@@ -4,13 +4,49 @@ use crate::DrawList;
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 
-/// Axis of a two-stop linear background gradient.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Direction of a two-stop linear background gradient.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GradientAxis {
     /// Gradient runs from the left edge to the right edge.
     Horizontal,
     /// Gradient runs from the top edge to the bottom edge.
     Vertical,
+    /// Gradient runs along an angle in degrees, as CSS's
+    /// `linear-gradient(<angle>, …)` takes it: `0` runs bottom to top and the
+    /// angle turns clockwise, so `90` is [`Horizontal`](Self::Horizontal) and
+    /// `180` [`Vertical`](Self::Vertical). As in CSS, the gradient spans the
+    /// quad's extent along that direction, so the start and end colours land
+    /// exactly on the corners it runs between.
+    Angle(f32),
+}
+
+impl GradientAxis {
+    /// The unit direction the gradient runs in, in the quad's local space
+    /// (`+y` down). Exact for [`Horizontal`](Self::Horizontal) and
+    /// [`Vertical`](Self::Vertical).
+    pub fn direction(self) -> [f32; 2] {
+        match self {
+            Self::Horizontal => [1.0, 0.0],
+            Self::Vertical => [0.0, 1.0],
+            Self::Angle(degrees) => {
+                let (sin, cos) = degrees.to_radians().sin_cos();
+                [sin, -cos]
+            }
+        }
+    }
+
+    /// Where along the gradient `point` falls in a `size` quad whose origin is
+    /// its top-left corner: `0` at the start colour, `1` at the end, clamped.
+    /// What the chrome shader computes per pixel.
+    pub fn position(self, point: [f32; 2], size: [f32; 2]) -> f32 {
+        let [dx, dy] = self.direction();
+        let span = (size[0] * dx).abs() + (size[1] * dy).abs();
+        if span <= f32::EPSILON {
+            return 0.0;
+        }
+        let along = (point[0] - size[0] * 0.5) * dx + (point[1] - size[1] * 0.5) * dy;
+        (along / span + 0.5).clamp(0.0, 1.0)
+    }
 }
 
 /// A fixed-size quad background.
@@ -926,6 +962,52 @@ impl Default for ChromeTheme {
 mod tests {
     use super::*;
     use crate::widgets::PaintCmd;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn a_gradient_angle_turns_clockwise_from_bottom_to_top_as_in_css() {
+        let at = |degrees: f32| GradientAxis::Angle(degrees).direction();
+        let expect = |got: [f32; 2], want: [f32; 2]| {
+            assert!(
+                close(got[0], want[0]) && close(got[1], want[1]),
+                "{got:?} != {want:?}"
+            );
+        };
+        expect(at(0.0), [0.0, -1.0]);
+        expect(at(90.0), GradientAxis::Horizontal.direction());
+        expect(at(180.0), GradientAxis::Vertical.direction());
+        expect(at(270.0), [-1.0, 0.0]);
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        expect(at(45.0), [diagonal, -diagonal]);
+    }
+
+    #[test]
+    fn an_angled_gradient_runs_corner_to_corner() {
+        let size = [200.0, 50.0];
+        let corners = [[0.0, 0.0], [200.0, 0.0], [200.0, 50.0], [0.0, 50.0]];
+        let along = |axis: GradientAxis| corners.map(|corner| axis.position(corner, size));
+        // 45°: to the top right, from the bottom left.
+        let [tl, tr, br, bl] = along(GradientAxis::Angle(45.0));
+        assert!(close(bl, 0.0) && close(tr, 1.0), "{bl} {tr}");
+        assert!(close(tl + br, 1.0) && tl > 0.0 && tl < 1.0, "{tl} {br}");
+        // The cardinal axes, and their angles, span the quad edge to edge.
+        for axis in [GradientAxis::Horizontal, GradientAxis::Angle(90.0)] {
+            let [tl, tr, br, bl] = along(axis);
+            assert!(close(tl, 0.0) && close(bl, 0.0) && close(tr, 1.0) && close(br, 1.0));
+        }
+        for axis in [GradientAxis::Vertical, GradientAxis::Angle(180.0)] {
+            let [tl, tr, br, bl] = along(axis);
+            assert!(close(tl, 0.0) && close(tr, 0.0) && close(bl, 1.0) && close(br, 1.0));
+        }
+        // Halfway along its direction is halfway through the colours.
+        assert!(close(
+            GradientAxis::Angle(30.0).position([100.0, 25.0], size),
+            0.5
+        ));
+    }
 
     #[test]
     fn defaults_keep_authored_shadow_recipes_distinct() {

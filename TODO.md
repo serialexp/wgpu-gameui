@@ -12,6 +12,19 @@ Use this as the working backlog for the package. Cross items off as PRs land.
 
 ---
 
+## Multi-stop gradients (noted 2026-09-29)
+
+- [ ] **Gradients with more than two colours** (`linear-gradient(red, blue 40%,
+      green)`). `Background::LinearGradient` and `DrawList::linear_gradient`
+      take two stops, which is all the design comps use so far; agent-ui will
+      need more at some point. The chrome instance is fixed-size (ten `vec4`s,
+      no spare room for stops), so this needs either a wider instance for the
+      gradient kind, or stops in a small ramp texture/storage buffer indexed
+      per instance. Keep positions as CSS gives them (optional per stop,
+      spread evenly when missing), and the direction/span maths of
+      `GradientAxis::position` unchanged. `GradientStop`/`gradient_ramp::sample`
+      (the editor widget) already model stops and could be shared.
+
 ## Gallery foundations cards (2026-09-26)
 
 - [ ] **Draw Forge's Foundations cards in the widget gallery, from `Theme`.**

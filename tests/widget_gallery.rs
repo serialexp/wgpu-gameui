@@ -3748,12 +3748,28 @@ fn render_widget_gallery() {
             let r = flow.cell(list, "Vertical", 150.0, h);
             list.vertical_gradient(r, [0.26, 0.72, 0.42, 1.0], [0.09, 0.10, 0.13, 1.0]);
 
-            let r = flow.cell(list, "Linear 45°", 150.0, h);
+            let r = flow.cell(list, "Linear 135°", 150.0, h);
             list.linear_gradient(
                 r,
                 [0.95, 0.70, 0.20, 1.0],
                 [0.55, 0.20, 0.75, 1.0],
-                std::f32::consts::FRAC_PI_4,
+                wgpu_gameui::GradientAxis::Angle(135.0),
+            );
+
+            // The chrome path: rounded and bordered, at a CSS angle.
+            let r = flow.cell(list, "Rounded 45°", 150.0, h);
+            list.paint_quad(
+                r,
+                wgpu_gameui::QuadStyle {
+                    background: wgpu_gameui::Background::LinearGradient {
+                        start: [0.20, 0.45, 0.95, 1.0],
+                        end: [0.26, 0.72, 0.42, 1.0],
+                        axis: wgpu_gameui::GradientAxis::Angle(45.0),
+                    },
+                    border_widths: wgpu_gameui::EdgeWidths::uniform(1.0),
+                    border_color: [1.0, 1.0, 1.0, 0.25],
+                    corner_radii: wgpu_gameui::CornerRadii::uniform(14.0),
+                },
             );
 
             let r = flow.cell(list, "Radial", 150.0, h);

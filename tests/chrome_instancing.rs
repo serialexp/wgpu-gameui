@@ -507,3 +507,67 @@ fn one_side_rounded_quad_has_no_seam_where_its_halves_meet() {
         }
     }
 }
+
+/// A rounded quad with an angled gradient lands each colour where CSS's
+/// `linear-gradient(<angle>, …)` puts it: the shader's ramp matches
+/// `GradientAxis::position` inside the quad, for several angles.
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn an_angled_gradient_lands_where_css_puts_it() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter (run under DISPLAY=:0)");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("angled gradient device"),
+            ..Default::default()
+        },
+        None,
+    ))
+    .expect("request device");
+    let font_system = wgpu_gameui::shared_font_system();
+    let mut ui = UiRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        font_system.clone(),
+    );
+    let rect = Rect::new(40.0, 60.0, 300.0, 120.0);
+    for degrees in [0.0, 45.0, 120.0, 200.0, 315.0] {
+        let axis = GradientAxis::Angle(degrees);
+        let mut list = DrawList::with_font_system(font_system.clone());
+        list.paint_quad(
+            rect,
+            QuadStyle {
+                background: Background::LinearGradient {
+                    start: [1.0, 0.0, 0.0, 1.0],
+                    end: [0.0, 0.0, 1.0, 1.0],
+                    axis,
+                },
+                corner_radii: CornerRadii::uniform(16.0),
+                ..Default::default()
+            },
+        );
+        let image = render_list(&device, &queue, &mut ui, &list);
+        // Points clear of the rounded corners' antialiasing.
+        for (fx, fy) in [(0.1, 0.5), (0.5, 0.2), (0.5, 0.5), (0.9, 0.8), (0.3, 0.9)] {
+            let local = [rect.width * fx, rect.height * fy];
+            let (x, y) = ((rect.x + local[0]) as u32, (rect.y + local[1]) as u32);
+            // Sample the pixel's centre.
+            let t = axis.position(
+                [x as f32 + 0.5 - rect.x, y as f32 + 0.5 - rect.y],
+                [rect.width, rect.height],
+            );
+            let start = ((y * W + x) * 4) as usize;
+            let [r, _, b, _] = [0, 1, 2, 3].map(|k| image[start + k] as f32 / 255.0);
+            assert!(
+                (r - (1.0 - t)).abs() < 0.02 && (b - t).abs() < 0.02,
+                "{degrees}° at ({fx}, {fy}): got r {r:.3} b {b:.3}, want t {t:.3}"
+            );
+        }
+    }
+}

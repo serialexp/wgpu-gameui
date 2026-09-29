@@ -189,7 +189,12 @@ fn shade_chrome(in: AnalyticVsOut) -> vec4<f32> {
     let inner_aa = max(fwidth(inner_d), 1e-4);
     var inner = 1.0 - smoothstep(-inner_aa, inner_aa, inner_d);
     if (inner_size.x <= 0.0 || inner_size.y <= 0.0) { inner = 0.0; }
-    let gradient_coord = select(in.local.y / max(size.y, 1e-4), in.local.x / max(size.x, 1e-4), in.p1.w > 0.5);
+    // The fill runs along the unit direction (p1.w, p9.w) across the quad's
+    // extent in that direction, centred on it: CSS's `linear-gradient` line.
+    // Must match `GradientAxis::position`.
+    let gradient_dir = vec2<f32>(in.p1.w, in.p9.w);
+    let gradient_span = max(abs(size.x * gradient_dir.x) + abs(size.y * gradient_dir.y), 1e-4);
+    let gradient_coord = dot(in.local - size * 0.5, gradient_dir) / gradient_span + 0.5;
     let fill = mix(in.p3, in.p4, vec4<f32>(clamp(gradient_coord, 0.0, 1.0)));
     let color = mix(in.p5, fill, inner);
     let alpha = outer * color.a;

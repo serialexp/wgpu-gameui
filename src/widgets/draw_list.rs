@@ -104,7 +104,8 @@ pub struct IconDraw {
 pub struct ChromeInstance {
     /// Forward affine linear part `[a, b, c, d]`.
     pub linear: [f32; 4],
-    /// `[tx, ty, clip_enabled, horizontal_gradient]`.
+    /// `[tx, ty, clip_enabled, gradient_x]`: the last is the x of the fill
+    /// gradient's unit direction ([`GradientAxis::direction`]).
     pub translation: [f32; 4],
     /// Local-space rect `[x, y, width, height]`.
     pub rect: [f32; 4],
@@ -120,7 +121,8 @@ pub struct ChromeInstance {
     pub widths: [f32; 4],
     /// World-space clip rect `[x, y, width, height]`.
     pub clip: [f32; 4],
-    /// Compatibility metadata `[uniform_radius, uniform_width, clip_enabled, _]`.
+    /// Compatibility metadata `[uniform_radius, uniform_width, clip_enabled,
+    /// gradient_y]`: the last is the y of the fill gradient's unit direction.
     pub params: [f32; 4],
 }
 
@@ -1250,39 +1252,30 @@ impl DrawList {
             .extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
     }
 
-    /// Fill `rect` with a linear gradient from `start` to `end` along `angle`
-    /// (radians; `0` = left→right, `π/2` = top→bottom, increasing clockwise in
-    /// screen space where +y points down).
+    /// Fill `rect` with a linear gradient from `start` to `end` along `axis`
+    /// ([`GradientAxis::Angle`] takes CSS degrees), spanning the rect as a
+    /// [`Background::LinearGradient`] does.
     ///
     /// Exact for any angle: a linear color ramp is an affine function of
     /// position, which the GPU's bilinear corner interpolation reproduces
     /// precisely — so this is just [`quad_gradient`](Self::quad_gradient) with
-    /// the four corner colors projected onto the gradient axis. No-op on
-    /// non-positive size. For the cardinal directions prefer the cheaper
-    /// [`horizontal_gradient`](Self::horizontal_gradient) /
-    /// [`vertical_gradient`](Self::vertical_gradient).
-    pub fn linear_gradient(&mut self, rect: Rect, start: [f32; 4], end: [f32; 4], angle: f32) {
+    /// each corner's colour taken from where it falls along `axis`. No-op on
+    /// non-positive size.
+    pub fn linear_gradient(
+        &mut self,
+        rect: Rect,
+        start: [f32; 4],
+        end: [f32; 4],
+        axis: GradientAxis,
+    ) {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             self.dropped_degenerate += 1;
             return;
         }
-        let (s, c) = angle.sin_cos();
-        let x0 = rect.x;
-        let y0 = rect.y;
-        let x1 = rect.x + rect.width;
-        let y1 = rect.y + rect.height;
-        // Project each corner (TL, TR, BR, BL) onto the gradient direction, then
-        // normalize to [0,1] across the projected extent → per-corner colors.
-        let proj = [
-            x0 * c + y0 * s,
-            x1 * c + y0 * s,
-            x1 * c + y1 * s,
-            x0 * c + y1 * s,
-        ];
-        let min = proj.iter().copied().fold(f32::INFINITY, f32::min);
-        let max = proj.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let span = (max - min).max(f32::EPSILON);
-        let colors = proj.map(|p| lerp_color(start, end, (p - min) / span));
+        let size = [rect.width, rect.height];
+        // TL, TR, BR, BL, in the rect's own space.
+        let corners = [[0.0, 0.0], [rect.width, 0.0], size, [0.0, rect.height]];
+        let colors = corners.map(|corner| lerp_color(start, end, axis.position(corner, size)));
         self.quad_gradient(rect, colors);
     }
 
@@ -1586,10 +1579,9 @@ impl DrawList {
             Background::Solid(color) => {
                 self.quad_gradient(rect, [color, color, color, color]);
             }
-            Background::LinearGradient { start, end, axis } => match axis {
-                GradientAxis::Vertical => self.vertical_gradient(rect, start, end),
-                GradientAxis::Horizontal => self.horizontal_gradient(rect, start, end),
-            },
+            Background::LinearGradient { start, end, axis } => {
+                self.linear_gradient(rect, start, end, axis);
+            }
         }
     }
 
@@ -1679,11 +1671,9 @@ impl DrawList {
         values[8..12].copy_from_slice(&radii.as_array());
         values[12..16].copy_from_slice(&border);
         values[16..22].copy_from_slice(&[m.a, m.b, m.c, m.d, m.tx, m.ty]);
-        let (bg, bg2, horizontal) = match background {
-            Background::Solid(color) => (color, color, 0.0),
-            Background::LinearGradient { start, end, axis } => {
-                (start, end, (axis == GradientAxis::Horizontal) as u8 as f32)
-            }
+        let (bg, bg2, [gradient_x, gradient_y]) = match background {
+            Background::Solid(color) => (color, color, GradientAxis::Vertical.direction()),
+            Background::LinearGradient { start, end, axis } => (start, end, axis.direction()),
         };
         values[22..26].copy_from_slice(&bg);
         values[26..30].copy_from_slice(&bg2);
@@ -1707,9 +1697,9 @@ impl DrawList {
                 [m.a, m.b, m.c, m.d]
             },
             translation: if m.is_translate_only() {
-                [0.0, 0.0, clip_enabled, horizontal]
+                [0.0, 0.0, clip_enabled, gradient_x]
             } else {
-                [m.tx, m.ty, clip_enabled, horizontal]
+                [m.tx, m.ty, clip_enabled, gradient_x]
             },
             rect: if m.is_translate_only() {
                 [rect.x + m.tx, rect.y + m.ty, rect.width, rect.height]
@@ -1730,7 +1720,7 @@ impl DrawList {
                 radii.top_left.max(0.0),
                 widths.top.max(0.0),
                 clip_enabled,
-                0.0,
+                gradient_y,
             ],
         };
         let idx = self.analytic_instances.len() as u32;
@@ -3346,13 +3336,13 @@ mod tests {
     }
 
     #[test]
-    fn linear_gradient_angle_zero_matches_horizontal() {
+    fn linear_gradient_at_90_degrees_matches_horizontal() {
         let start = [1.0, 0.0, 0.0, 1.0];
         let end = [0.0, 1.0, 0.0, 1.0];
         let rect = Rect::new(3.0, 5.0, 10.0, 20.0);
 
         let mut a = DrawList::new();
-        a.linear_gradient(rect, start, end, 0.0);
+        a.linear_gradient(rect, start, end, GradientAxis::Angle(90.0));
         let mut b = DrawList::new();
         b.horizontal_gradient(rect, start, end);
 
@@ -3360,20 +3350,20 @@ mod tests {
             for k in 0..4 {
                 assert!(
                     (va.color[k] - vb.color[k]).abs() < 1e-5,
-                    "angle 0 should equal horizontal gradient"
+                    "90° should equal the horizontal gradient"
                 );
             }
         }
     }
 
     #[test]
-    fn linear_gradient_quarter_turn_matches_vertical() {
+    fn linear_gradient_at_180_degrees_matches_vertical() {
         let start = [1.0, 0.0, 0.0, 1.0];
         let end = [0.0, 1.0, 0.0, 1.0];
         let rect = Rect::new(3.0, 5.0, 10.0, 20.0);
 
         let mut a = DrawList::new();
-        a.linear_gradient(rect, start, end, std::f32::consts::FRAC_PI_2);
+        a.linear_gradient(rect, start, end, GradientAxis::Angle(180.0));
         let mut b = DrawList::new();
         b.vertical_gradient(rect, start, end);
 
@@ -3381,7 +3371,7 @@ mod tests {
             for k in 0..4 {
                 assert!(
                     (va.color[k] - vb.color[k]).abs() < 1e-5,
-                    "angle π/2 should equal vertical gradient"
+                    "180° should equal the vertical gradient"
                 );
             }
         }
@@ -3390,7 +3380,12 @@ mod tests {
     #[test]
     fn linear_gradient_zero_size_is_noop() {
         let mut list = DrawList::new();
-        list.linear_gradient(Rect::new(0.0, 0.0, 0.0, 20.0), [1.0; 4], [0.0; 4], 0.7);
+        list.linear_gradient(
+            Rect::new(0.0, 0.0, 0.0, 20.0),
+            [1.0; 4],
+            [0.0; 4],
+            GradientAxis::Angle(40.0),
+        );
         assert!(list.vertices.is_empty());
         assert!(list.indices.is_empty());
     }
@@ -3549,7 +3544,8 @@ mod tests {
         assert_eq!(inst.rect, [10.0, 20.0, 80.0, 30.0]);
         assert_eq!(inst.bg, [0.1, 0.2, 0.3, 1.0]);
         assert_eq!(inst.border, [0.4, 0.5, 0.6, 1.0]);
-        assert_eq!(inst.params, [6.0, 2.0, 0.0, 0.0]); // radius, thickness, no clip
+        // Radius, thickness, no clip, and the (vertical) fill direction's y.
+        assert_eq!(inst.params, [6.0, 2.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -3693,6 +3689,48 @@ mod tests {
                 PaintCmd::Analytic { instances: 0..1 },
             ]
         );
+    }
+
+    #[test]
+    fn an_angled_quad_gradient_records_its_direction() {
+        let mut list = DrawList::new();
+        let gradient = |axis| QuadStyle {
+            background: Background::LinearGradient {
+                start: [1.0, 0.0, 0.0, 1.0],
+                end: [0.0, 0.0, 1.0, 1.0],
+                axis,
+            },
+            ..Default::default()
+        };
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        list.paint_quad(rect, gradient(GradientAxis::Angle(135.0)));
+        list.paint_quad(rect, gradient(GradientAxis::Vertical));
+        list.paint_quad(rect, QuadStyle::default());
+        let direction = |index| {
+            let inst = list.chrome_instance(index).unwrap();
+            [inst.translation[3], inst.params[3]]
+        };
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        let [x, y] = direction(0);
+        assert!(approx(x, diagonal) && approx(y, diagonal), "{x} {y}");
+        assert_eq!(direction(1), [0.0, 1.0]);
+        assert_eq!(direction(2), [0.0, 1.0], "a solid fill reads as vertical");
+    }
+
+    #[test]
+    fn an_opaque_angled_background_matches_linear_gradient() {
+        let (start, end) = ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]);
+        let rect = Rect::new(3.0, 5.0, 40.0, 20.0);
+        let axis = GradientAxis::Angle(45.0);
+        let mut a = DrawList::new();
+        a.paint_background_opaque(rect, Background::LinearGradient { start, end, axis });
+        let mut b = DrawList::new();
+        b.linear_gradient(rect, start, end, axis);
+        let colors = |list: &DrawList| list.vertices.iter().map(|v| v.color).collect::<Vec<_>>();
+        assert_eq!(colors(&a), colors(&b));
+        // 45°: bottom left (the fourth corner) starts, top right ends.
+        assert_eq!(a.vertices[3].color, start);
+        assert_eq!(a.vertices[1].color, end);
     }
 
     #[test]
