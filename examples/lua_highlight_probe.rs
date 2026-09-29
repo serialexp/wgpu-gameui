@@ -6,7 +6,7 @@
 //! ```
 
 use wgpu_gameui::{
-    HeadlessGpu, InputState, SyntaxHighlighting, SyntaxTheme, Theme, UiContext, UiState,
+    HeadlessGpu, InputState, Srgb, SyntaxHighlighting, SyntaxTheme, Theme, UiContext, UiState,
     capture_draw_list, write_png,
 };
 
@@ -30,12 +30,7 @@ fn main() {
         ui.text_area_syntax(1, &mut buffer, "", Some(320.0), 6, &syntax);
     }
 
-    let clear = wgpu::Color {
-        r: 0.08,
-        g: 0.09,
-        b: 0.11,
-        a: 1.0,
-    };
+    let clear = Srgb::new([0.08, 0.09, 0.11, 1.0]);
     let device = gpu.device().clone();
     let queue = gpu.queue().clone();
     let pixels = capture_draw_list(

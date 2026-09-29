@@ -7,6 +7,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::TextRenderer;
+use crate::color::{Clear, ColorSpace};
 use crate::layer::LayerStack;
 use crate::layout::Rect;
 use crate::render::atlas::{SpriteAtlas, SpriteId};
@@ -1068,6 +1069,52 @@ impl UiRenderer {
         self.text_renderer.set_view_origin(x, y);
     }
 
+    /// How hard glyph origins are pulled onto the device pixel grid before their
+    /// quads are emitted — our equivalent of a rasterizer's grid fitting.
+    ///
+    /// Defaults to [`GlyphSnap::Baseline`], which rounds baselines to whole
+    /// device pixels so horizontal strokes stay crisp, matching what FreeType's
+    /// `hintslight` (the usual Linux browser setting) does. See [`GlyphSnap`] for
+    /// the alternatives and what each costs.
+    ///
+    /// Snapping quantises glyph positions, so text that slides by fractions of a
+    /// pixel — a panel animating open, a smooth-scrolled list — steps instead of
+    /// gliding. Set [`GlyphSnap::Off`] for the duration if that shows.
+    pub fn set_glyph_snap(&mut self, snap: crate::text::GlyphSnap) {
+        self.text_renderer.set_glyph_snap(snap);
+    }
+
+    /// The current glyph snapping mode (see
+    /// [`set_glyph_snap`](Self::set_glyph_snap)).
+    pub fn glyph_snap(&self) -> crate::text::GlyphSnap {
+        self.text_renderer.glyph_snap()
+    }
+
+    /// Generate small text from outlines **hinted** for the size they are drawn
+    /// at, rather than from one shared size-independent distance field. On by
+    /// default.
+    ///
+    /// This is what makes baselines, x-heights and cap-heights land on whole
+    /// pixels instead of near them. It costs one atlas entry per glyph per
+    /// distinct device size up to
+    /// [`MAX_HINTED_PX`](crate::render::MAX_HINTED_PX), so prefer a small set of
+    /// text sizes and warm them with
+    /// [`TextRenderer::prewarm_ascii`](crate::TextRenderer::prewarm_ascii).
+    ///
+    /// Requires [`set_glyph_snap`](Self::set_glyph_snap) to be anything but
+    /// [`GlyphSnap::Off`](crate::GlyphSnap::Off) — a hinted outline is fitted to
+    /// a pixel grid, so the glyph has to be placed on that grid for it to mean
+    /// anything.
+    pub fn set_glyph_hinting(&mut self, hint: bool) {
+        self.text_renderer.set_glyph_hinting(hint);
+    }
+
+    /// Whether small text is generated from hinted outlines (see
+    /// [`set_glyph_hinting`](Self::set_glyph_hinting)).
+    pub fn glyph_hinting(&self) -> bool {
+        self.text_renderer.glyph_hinting()
+    }
+
     /// The logical canvas point drawn at the target's top-left corner (see
     /// [`set_view_origin`](Self::set_view_origin)).
     pub fn view_origin(&self) -> (f32, f32) {
@@ -1299,12 +1346,34 @@ impl UiRenderer {
         }
     }
 
-    /// The `wgpu::Color` to clear this renderer's target with so it shows the
-    /// sRGB-encoded `color` — typically `theme.background`. Linear-light
-    /// targets (`*Srgb`, float) need the decoded value; direct targets take it
-    /// as-is.
-    pub fn clear_color(&self, color: [f32; 4]) -> wgpu::Color {
+    /// The clear value that shows the sRGB-encoded `color` — typically
+    /// `theme.background` — on this renderer's target. Linear-light targets
+    /// (`*Srgb`, float) need the decoded value; direct targets take it as-is.
+    ///
+    /// A surface's format comes from whatever the adapter offers, so which of
+    /// [`Srgb`](crate::color::Srgb) / [`Linear`](crate::color::Linear) a
+    /// renderer needs is a run-time fact: this returns the [`Clear`] that
+    /// holds whichever one. It is already converted for the target this
+    /// renderer was built for, so hand it straight to `wgpu`:
+    ///
+    /// ```ignore
+    /// let ops = wgpu::Operations {
+    ///     load: wgpu::LoadOp::Clear(ui.clear_color(theme.background).color()),
+    ///     store: wgpu::StoreOp::Store,
+    /// };
+    /// ```
+    ///
+    /// Somewhere the space *is* known statically — a capture texture is
+    /// always sRGB — take the concrete type instead, and the wrong one stops
+    /// compiling rather than showing the wrong colour.
+    pub fn clear_color(&self, color: [f32; 4]) -> Clear {
         self.plan.clear_color(color)
+    }
+
+    /// What this renderer's target stores — which arm
+    /// [`clear_color`](Self::clear_color) returns.
+    pub fn color_space(&self) -> ColorSpace {
+        self.plan.space()
     }
 
     /// Whether this renderer draws through its offscreen layer (the target
@@ -1378,7 +1447,7 @@ impl UiRenderer {
             self.blur = Some(Blur::new(
                 device,
                 self.host_format,
-                self.plan.host_is_linear(),
+                self.plan.space() == ColorSpace::Linear,
             ));
         }
         let blur = self.blur.as_mut().expect("blur just ensured");

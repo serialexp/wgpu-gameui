@@ -70,7 +70,7 @@ pub use syntax::SyntaxConfigurationError;
 #[cfg(feature = "syntax-highlighting")]
 pub use syntax::{HighlightConfiguration, SyntaxHighlighting, SyntaxTheme};
 pub use text::{
-    CaretPos, FontHandle, FontSystemHandle, FontVMetrics, SelRect, TextAlign, TextBlock,
+    CaretPos, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign, TextBlock,
     TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
     TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
     byte_at_point, byte_on_adjacent_line, caret_for_byte, load_font_bytes, load_font_file,
@@ -115,7 +115,7 @@ pub use chrome::{
     StructuralLine, SurfacePainter, ToolbarChrome, WindowChrome,
 };
 pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};
-pub use color::Hsva;
+pub use color::{Clear, ColorSpace, Hsva, Linear, Srgb};
 pub use cursor::{CursorIcon, CursorState};
 /// The entry point to layout inspection — see [`mod@debug`] for the full API.
 pub use debug::DebugReport;
@@ -137,8 +137,8 @@ pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{
-    Backdrop, BlurParams, CAPTURE_FORMAT, ColorEncoding, NineSliceMeta, RenderStats, SpriteAtlas,
-    SpriteId, UiRenderer, capture_draw_list, capture_layers, write_png,
+    Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta, RenderStats,
+    SpriteAtlas, SpriteId, UiRenderer, capture_draw_list, capture_layers, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{

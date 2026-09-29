@@ -15,10 +15,13 @@
 //! view of the target; for an `*Srgb` host target it draws offscreen and
 //! composites — see [`UiRenderer`](crate::UiRenderer).)
 //!
-//! Linear light only appears at the host boundary: a `wgpu::Color` clear value
-//! for an `*Srgb` target, or a scene texture sampled through an sRGB view. Use
-//! [`srgb_to_linear`] / [`linear_to_srgb`] there — never for theme or widget
-//! colours.
+//! Linear light only appears at the host boundary: the clear value of an
+//! `*Srgb` target, or a scene texture sampled through an sRGB view. The two
+//! kinds of host colour are separate types there — [`Srgb`] and [`Linear`] —
+//! because their numbers look identical and only one is right for a given
+//! target. Convert with [`Srgb::to_linear`] / [`Linear::to_srgb`] (or
+//! [`srgb_to_linear`] / [`linear_to_srgb`] for bare channels) — never for
+//! theme or widget colours.
 //!
 //! Design tokens authored as `oklch(L C H)` should be written with [`oklch`] at
 //! the definition site rather than copied as hand-converted hex: a wrong
@@ -154,6 +157,208 @@ pub fn linear_to_srgb(rgba: [f32; 4]) -> [f32; 4] {
         linear_channel_to_srgb(rgba[2]),
         rgba[3],
     ]
+}
+
+/// What a render target's stored bytes mean.
+///
+/// This is the one thing a colour's numbers never tell you: `0.04` is a legal
+/// sRGB value and a legal linear one, and nothing about the number says which
+/// was meant. A target written in the wrong space shows the wrong colour and
+/// reports no error, so the two are separate types: [`Srgb`] and [`Linear`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColorSpace {
+    /// The target stores sRGB-encoded values: what is written is what is
+    /// shown. Plain `*Unorm` formats, and the space every colour in this
+    /// crate is already in.
+    Srgb,
+    /// The target stores linear light and applies the sRGB transfer on the
+    /// way out: `*Srgb` formats, and the float formats an HDR swapchain uses.
+    /// A value written here must be decoded first.
+    Linear,
+}
+
+impl ColorSpace {
+    /// The space a target of `format` stores.
+    pub fn of(format: wgpu::TextureFormat) -> Self {
+        if format.is_srgb() || stores_linear_float(format) {
+            Self::Linear
+        } else {
+            Self::Srgb
+        }
+    }
+}
+
+/// Renderable float formats hold linear light (HDR / scRGB swapchains).
+fn stores_linear_float(format: wgpu::TextureFormat) -> bool {
+    matches!(
+        format,
+        wgpu::TextureFormat::Rgba16Float
+            | wgpu::TextureFormat::Rgba32Float
+            | wgpu::TextureFormat::Rg11b10Ufloat
+    )
+}
+
+fn wgpu_color([r, g, b, a]: [f32; 4]) -> wgpu::Color {
+    wgpu::Color {
+        r: r as f64,
+        g: g as f64,
+        b: b as f64,
+        a: a as f64,
+    }
+}
+
+/// A host-boundary colour for a target that stores sRGB-encoded bytes — a
+/// plain `*Unorm` format, where what is written is what is shown.
+///
+/// This is the crate's own convention, so a theme colour becomes one with no
+/// conversion at all: [`Srgb::new(theme.background)`](Self::new). A function
+/// that takes an `Srgb` cannot be handed a [`Linear`] by mistake, which is the
+/// whole point — the two hold the same kind of numbers and only the type says
+/// which they are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Srgb(wgpu::Color);
+
+/// A host-boundary colour for a target that stores linear light and applies
+/// the sRGB transfer on the way out — an `*Srgb` format, or a float one.
+///
+/// The counterpart to [`Srgb`]. Reach one from a theme colour through
+/// [`Srgb::to_linear`]; writing an [`Srgb`]'s numbers to a target that wants
+/// these shows a far lighter colour, and nothing at the GPU reports it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Linear(wgpu::Color);
+
+impl Srgb {
+    /// A theme colour (sRGB-encoded, the crate's convention) as it stands.
+    pub fn new(color: [f32; 4]) -> Self {
+        Self(wgpu_color(color))
+    }
+
+    /// Nothing at all: the clear a capture starts from when it wants the
+    /// drawing alone, with no backdrop behind it.
+    pub const TRANSPARENT: Self = Self(wgpu::Color::TRANSPARENT);
+
+    /// Bytes already sRGB-encoded, from somewhere other than a theme colour.
+    pub fn raw(color: wgpu::Color) -> Self {
+        Self(color)
+    }
+
+    /// The same colour, decoded for a target that stores linear light.
+    pub fn to_linear(self) -> Linear {
+        Linear(wgpu_color(srgb_to_linear([
+            self.0.r as f32,
+            self.0.g as f32,
+            self.0.b as f32,
+            self.0.a as f32,
+        ])))
+    }
+
+    /// The value to hand `wgpu`.
+    pub fn color(self) -> wgpu::Color {
+        self.0
+    }
+}
+
+impl Linear {
+    /// Channels already in linear light.
+    pub fn new(color: [f32; 4]) -> Self {
+        Self(wgpu_color(color))
+    }
+
+    /// Nothing at all. Zero is zero in both spaces, but the type still has to
+    /// match the target.
+    pub const TRANSPARENT: Self = Self(wgpu::Color::TRANSPARENT);
+
+    /// Bytes already linear, from somewhere other than [`Srgb::to_linear`].
+    pub fn raw(color: wgpu::Color) -> Self {
+        Self(color)
+    }
+
+    /// The same colour, encoded for a target that stores sRGB.
+    pub fn to_srgb(self) -> Srgb {
+        Srgb(wgpu_color(linear_to_srgb([
+            self.0.r as f32,
+            self.0.g as f32,
+            self.0.b as f32,
+            self.0.a as f32,
+        ])))
+    }
+
+    /// The value to hand `wgpu`.
+    pub fn color(self) -> wgpu::Color {
+        self.0
+    }
+}
+
+impl From<Srgb> for wgpu::Color {
+    fn from(color: Srgb) -> Self {
+        color.0
+    }
+}
+
+impl From<Linear> for wgpu::Color {
+    fn from(color: Linear) -> Self {
+        color.0
+    }
+}
+
+/// A clear value for a target whose space is only known at run time.
+///
+/// Most targets are known statically — a capture texture is always
+/// [`Srgb`] — and those should say so in their signatures. A window's surface
+/// is not: its format comes from whatever the adapter offers, so
+/// [`UiRenderer::clear_color`](crate::UiRenderer::clear_color) returns this,
+/// already converted for the target that renderer was built for. Call
+/// [`color`](Self::color) to hand it to `wgpu`, or [`srgb`](Self::srgb) /
+/// [`linear`](Self::linear) when you need the concrete one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Clear {
+    /// For a direct target.
+    Srgb(Srgb),
+    /// For a linear-light target.
+    Linear(Linear),
+}
+
+impl Clear {
+    /// A theme colour converted for a target that stores `space`.
+    pub fn new(color: [f32; 4], space: ColorSpace) -> Self {
+        let srgb = Srgb::new(color);
+        match space {
+            ColorSpace::Srgb => Self::Srgb(srgb),
+            ColorSpace::Linear => Self::Linear(srgb.to_linear()),
+        }
+    }
+
+    /// The space this was converted for.
+    pub fn space(self) -> ColorSpace {
+        match self {
+            Self::Srgb(_) => ColorSpace::Srgb,
+            Self::Linear(_) => ColorSpace::Linear,
+        }
+    }
+
+    /// The value to hand `wgpu`, for the target it was built for.
+    pub fn color(self) -> wgpu::Color {
+        match self {
+            Self::Srgb(c) => c.color(),
+            Self::Linear(c) => c.color(),
+        }
+    }
+
+    /// The sRGB one, if that is what this target stores.
+    pub fn srgb(self) -> Option<Srgb> {
+        match self {
+            Self::Srgb(c) => Some(c),
+            Self::Linear(_) => None,
+        }
+    }
+
+    /// The linear one, if that is what this target stores.
+    pub fn linear(self) -> Option<Linear> {
+        match self {
+            Self::Linear(c) => Some(c),
+            Self::Srgb(_) => None,
+        }
+    }
 }
 
 /// A color in HSVA space.
@@ -427,5 +632,68 @@ mod tests {
         assert_eq!(c.s, 1.0);
         assert_eq!(c.v, 0.0);
         assert_eq!(c.a, 1.0);
+    }
+
+    #[test]
+    fn a_target_stores_srgb_unless_it_encodes_on_the_way_out() {
+        use wgpu::TextureFormat as F;
+        for direct in [F::Rgba8Unorm, F::Bgra8Unorm, F::Rgb10a2Unorm] {
+            assert_eq!(ColorSpace::of(direct), ColorSpace::Srgb, "{direct:?}");
+        }
+        for linear in [
+            F::Rgba8UnormSrgb,
+            F::Bgra8UnormSrgb,
+            F::Rgba16Float,
+            F::Rgba32Float,
+            F::Rg11b10Ufloat,
+        ] {
+            assert_eq!(ColorSpace::of(linear), ColorSpace::Linear, "{linear:?}");
+        }
+    }
+
+    #[test]
+    fn a_theme_colour_stands_as_it_is_for_a_direct_target_and_decodes_for_a_linear_one() {
+        let bg = hex(0x0a0d0f);
+        let direct = Srgb::new(bg);
+        assert_eq!(direct.color().r, bg[0] as f64, "taken as-is");
+        let linear = direct.to_linear();
+        assert!(
+            close(linear.color().r as f32, srgb_channel_to_linear(bg[0])),
+            "decoded for a linear target"
+        );
+        // The mistake the two types exist to keep apart: these bytes on a
+        // linear target show a far lighter colour, and nothing else complains.
+        assert!(linear.color().r < direct.color().r);
+        assert_eq!(linear.color().a, 1.0, "alpha is the same in both");
+    }
+
+    #[test]
+    fn converting_between_the_two_round_trips() {
+        let bg = hex(0x3ebfc6);
+        let there_and_back = Srgb::new(bg).to_linear().to_srgb();
+        assert!(close(there_and_back.color().r as f32, bg[0]));
+        assert!(close(there_and_back.color().g as f32, bg[1]));
+        assert!(close(there_and_back.color().b as f32, bg[2]));
+    }
+
+    #[test]
+    fn transparent_is_zero_in_both_but_still_has_to_match_its_target() {
+        assert_eq!(Srgb::TRANSPARENT.color(), wgpu::Color::TRANSPARENT);
+        assert_eq!(Linear::TRANSPARENT.color(), wgpu::Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn a_run_time_clear_carries_whichever_one_its_target_stores() {
+        let bg = hex(0x0a0d0f);
+        let direct = Clear::new(bg, ColorSpace::Srgb);
+        assert_eq!(direct.space(), ColorSpace::Srgb);
+        assert_eq!(direct.srgb(), Some(Srgb::new(bg)));
+        assert_eq!(direct.linear(), None, "a direct target has no linear one");
+
+        let linear = Clear::new(bg, ColorSpace::Linear);
+        assert_eq!(linear.space(), ColorSpace::Linear);
+        assert_eq!(linear.linear(), Some(Srgb::new(bg).to_linear()));
+        assert_eq!(linear.srgb(), None);
+        assert_eq!(linear.color(), Srgb::new(bg).to_linear().color());
     }
 }

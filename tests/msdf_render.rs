@@ -125,7 +125,7 @@ fn render_text_to_png() {
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(ui.clear_color(CLEAR)),
+                    load: wgpu::LoadOp::Clear(ui.clear_color(CLEAR).color()),
                     store: wgpu::StoreOp::Store,
                 },
             })],

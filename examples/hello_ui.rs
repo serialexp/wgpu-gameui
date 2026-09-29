@@ -898,7 +898,7 @@ impl ApplicationHandler for App {
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(
-                                    gpu.ui.clear_color(self.theme.background),
+                                    gpu.ui.clear_color(self.theme.background).color(),
                                 ),
                                 store: wgpu::StoreOp::Store,
                             },

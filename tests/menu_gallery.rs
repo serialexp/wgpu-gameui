@@ -231,12 +231,7 @@ fn render_menu_gallery() {
         &layers,
         (W, H),
         1.0,
-        wgpu::Color {
-            r: 0.05,
-            g: 0.06,
-            b: 0.08,
-            a: 1.0,
-        },
+        wgpu_gameui::Srgb::new([0.05, 0.06, 0.08, 1.0]),
     );
     wgpu_gameui::write_png("test_output/menu_gallery.png", &pixels, (W, H))
         .expect("write menu gallery png");

@@ -25,7 +25,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
 use crate::render::{DEFAULT_PX_RANGE, IconGlyph, PhosphorIcon, icon_font_snapshot};
-use crate::render::{GlyphTile, MsdfGlyphAtlas, UniformArena, ortho_matrix};
+use crate::render::{
+    GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, UniformArena, ortho_matrix,
+};
 use crate::shaping::{LayoutSpec, ShapedGlyph, SharedFontSystem};
 #[cfg(feature = "phosphor-icons")]
 use crate::widgets::IconMsdf;
@@ -451,6 +453,15 @@ pub struct TextRenderer {
 
     width: u32,
     height: u32,
+    /// Logical → physical ratio, kept from the last [`resize`](Self::resize) so
+    /// glyph snapping can round onto the *device* pixel grid rather than the
+    /// logical one.
+    scale_factor: f32,
+    /// How hard glyph origins are pulled onto that grid. See [`GlyphSnap`].
+    snap: GlyphSnap,
+    /// Generate small text from hinted, size-specific fields. See
+    /// [`set_glyph_hinting`](Self::set_glyph_hinting).
+    hint: bool,
 }
 
 impl TextRenderer {
@@ -570,6 +581,9 @@ impl TextRenderer {
             next_font_key: 0,
             width: 1,
             height: 1,
+            scale_factor: 1.0,
+            snap: GlyphSnap::default(),
+            hint: true,
         }
     }
 
@@ -613,6 +627,8 @@ impl TextRenderer {
         // Store the logical dimensions — ortho_matrix needs these, not physical.
         self.width = ((width as f32 / scale) as u32).max(1);
         self.height = ((height as f32 / scale) as u32).max(1);
+        // Glyph snapping rounds onto device pixels, so it needs the ratio too.
+        self.scale_factor = scale;
         let (slot, _grew) = self.uniform.allocate(device);
         queue.write_buffer(
             self.uniform.buffer(),
@@ -632,6 +648,54 @@ impl TextRenderer {
     /// calls this; set it there rather than here.
     pub fn set_view_origin(&mut self, x: f32, y: f32) {
         self.view_origin = [x, y];
+    }
+
+    /// How hard glyph origins are pulled onto the device pixel grid. See
+    /// [`GlyphSnap`]; defaults to [`GlyphSnap::Baseline`].
+    ///
+    /// [`UiRenderer::set_glyph_snap`](crate::UiRenderer::set_glyph_snap) forwards
+    /// here; set it there rather than here.
+    pub fn set_glyph_snap(&mut self, snap: GlyphSnap) {
+        self.snap = snap;
+    }
+
+    /// The current glyph snapping mode.
+    pub fn glyph_snap(&self) -> GlyphSnap {
+        self.snap
+    }
+
+    /// The device-pixel grid glyph origins round onto, from the view origin and
+    /// the scale factor of the last [`resize`](Self::resize).
+    fn pixel_grid(&self) -> PixelGrid {
+        PixelGrid {
+            snap: self.snap,
+            scale: self.scale_factor,
+            view_origin: self.view_origin,
+            hint: self.hint,
+        }
+    }
+
+    /// Generate small text from outlines **hinted** for the size they are drawn
+    /// at, instead of from one shared size-independent field. On by default.
+    ///
+    /// A distance field scales to any size; hinting does not, because it moves
+    /// control points onto one pixel grid. So this trades atlas space — one entry
+    /// per glyph per distinct device size, up to
+    /// [`MAX_HINTED_PX`](crate::render::MAX_HINTED_PX) — for baselines,
+    /// x-heights and cap-heights that land on whole pixels instead of near them.
+    ///
+    /// It needs [`set_glyph_snap`](Self::set_glyph_snap) to be anything but
+    /// [`GlyphSnap::Off`]: hinting fits the outline to a grid, and the glyph has
+    /// to be placed on that grid for the fit to mean anything. With snapping off
+    /// this does nothing.
+    pub fn set_glyph_hinting(&mut self, hint: bool) {
+        self.hint = hint;
+    }
+
+    /// Whether small text is generated from hinted outlines (see
+    /// [`set_glyph_hinting`](Self::set_glyph_hinting)).
+    pub fn glyph_hinting(&self) -> bool {
+        self.hint
     }
 
     /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.
@@ -675,7 +739,15 @@ impl TextRenderer {
 
     /// Pre-generate the printable-ASCII glyph set into the atlas so the first
     /// frame that displays them doesn't hitch. Call once after construction.
-    pub fn prewarm_ascii(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    ///
+    /// `sizes` are the **logical** font sizes the UI draws at — typically the
+    /// handful in your `Theme`. Each is warmed at the current scale factor, so
+    /// call this after [`resize`](Self::resize). With hinting on, a glyph has a
+    /// separate field per device size (see
+    /// [`set_glyph_hinting`](Self::set_glyph_hinting)), which is exactly the
+    /// cost this call exists to move off the first frame; pass `&[]` to warm only
+    /// the shared scalable field.
+    pub fn prewarm_ascii(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, sizes: &[f32]) {
         let ascii: String = (0x20u8..=0x7e).map(|c| c as char).collect();
         // Clone the handle so the guard borrows a local, not `self` (frees `self`
         // for `self.font_key`/`self.atlas`).
@@ -690,11 +762,21 @@ impl TextRenderer {
             None,
         );
         buffer.shape_until_scroll(fs, false);
+        // Glyph ids don't depend on size, so one shaping pass feeds every size.
+        let grid = self.pixel_grid();
+        let sizings: Vec<GlyphSizing> = std::iter::once(GlyphSizing::Scalable)
+            .chain(sizes.iter().map(|&size| grid.sizing(size)))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
                 let font_key = self.font_key(glyph.font_id);
                 if let Some(font) = fs.get_font(glyph.font_id, glyph.font_weight) {
-                    self.atlas.glyph(font_key, glyph.glyph_id, font.data());
+                    for &sizing in &sizings {
+                        self.atlas
+                            .glyph(font_key, glyph.glyph_id, sizing, font.data());
+                    }
                 }
             }
         }
@@ -734,8 +816,12 @@ impl TextRenderer {
             let Some(data) = fonts.get(g.font.index() as usize) else {
                 continue;
             };
-            self.icon_atlas
-                .glyph(g.font.index() as u64, g.glyph_id, data);
+            self.icon_atlas.glyph(
+                g.font.index() as u64,
+                g.glyph_id,
+                GlyphSizing::Scalable,
+                data,
+            );
         }
         self.icon_gpu
             .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
@@ -772,8 +858,12 @@ impl TextRenderer {
             let Some(data) = fonts.get(icon.glyph.font.index() as usize) else {
                 continue;
             };
-            self.icon_atlas
-                .glyph(icon.glyph.font.index() as u64, icon.glyph.glyph_id, data);
+            self.icon_atlas.glyph(
+                icon.glyph.font.index() as u64,
+                icon.glyph.glyph_id,
+                GlyphSizing::Scalable,
+                data,
+            );
         }
         self.icon_gpu
             .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
@@ -825,10 +915,12 @@ impl TextRenderer {
             let Some(data) = fonts.get(icon.glyph.font.index() as usize) else {
                 continue;
             };
-            let Some(tile) =
-                self.icon_atlas
-                    .glyph(icon.glyph.font.index() as u64, icon.glyph.glyph_id, data)
-            else {
+            let Some(tile) = self.icon_atlas.glyph(
+                icon.glyph.font.index() as u64,
+                icon.glyph.glyph_id,
+                GlyphSizing::Scalable,
+                data,
+            ) else {
                 continue;
             };
             push_icon_quad(
@@ -895,7 +987,6 @@ impl TextRenderer {
         let _span = tracing::info_span!("gameui_text_shape").entered();
 
         let px_range = self.atlas.px_range();
-        let ref_px = self.atlas.ref_px();
 
         // First pass: resolve every block to a list of `GlyphPlacement`s. The
         // layouts come from the font system shared with the measurers, which
@@ -913,6 +1004,7 @@ impl TextRenderer {
         // so nothing waits on it; a renderer on another thread sharing this
         // handle would wait for the pass.
         let mut placements: Vec<GlyphPlacement> = Vec::new();
+        let grid = self.pixel_grid();
         let fs_handle = Arc::clone(&self.font_system);
         let mut shared = fs_handle.lock().expect("FontSystem poisoned");
         for block in texts {
@@ -929,6 +1021,7 @@ impl TextRenderer {
                 block,
                 &block.spans,
                 &layout.glyphs,
+                grid,
                 &mut placements,
             );
         }
@@ -943,7 +1036,7 @@ impl TextRenderer {
         for p in &placements {
             if let Some((color, offset, softness)) = p.shadow {
                 // A shadow is a fill with widened AA; cap the blur to the field reach.
-                let safe = field_reach(p.font_size, px_range, ref_px);
+                let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
                 push_glyph_quad(
                     &mut verts,
                     p,
@@ -965,7 +1058,7 @@ impl TextRenderer {
                 // The glow is a grown, soft, fill-less halo. Cap its band (width +
                 // softness) to the field's valid reach so it follows the glyph instead
                 // of filling the tile rectangle (graceful degradation at small sizes).
-                let safe = field_reach(p.font_size, px_range, ref_px);
+                let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
                 let radius = radius.min(safe / 1.5);
                 let softness = (radius * 0.5).max(0.5).min((safe - radius).max(0.0));
                 push_glyph_quad(
@@ -987,7 +1080,7 @@ impl TextRenderer {
         for p in &placements {
             let (outline, outline_width) = p.outline.unwrap_or(([0.0; 4], 0.0));
             // Cap the outline thickness to the field reach to avoid tile-fill artifacts.
-            let safe = field_reach(p.font_size, px_range, ref_px);
+            let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
             push_glyph_quad(
                 &mut verts,
                 p,
@@ -1162,6 +1255,116 @@ pub fn resolve_range_color(byte_start: u32, ranges: &[TextStyleRange]) -> Option
     })
 }
 
+/// How far glyph origins are pulled onto whole device pixels before their quads
+/// are emitted — our equivalent of a rasterizer's grid fitting.
+///
+/// A distance field is positioned in continuous space, so a stem that lands
+/// between two pixel columns is antialiased across both: correct coverage, but
+/// visibly softer than the same stem landing on a boundary. Since two glyphs in
+/// one word rarely share a fractional offset, some come out crisp and some grey,
+/// and that *inconsistency* is what reads as fuzzy text.
+///
+/// Snapping can only translate a glyph, never reshape its outline the way a
+/// TrueType hinting program does, so this recovers the cheap half of hinting and
+/// none of the expensive half.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GlyphSnap {
+    /// Place glyphs exactly where layout puts them. Spacing is ideal, stem
+    /// sharpness is luck of the draw.
+    Off,
+    /// Round each glyph's baseline to a whole device pixel, leaving horizontal
+    /// position untouched. Baselines, x-height tops and crossbars land on pixel
+    /// rows, so horizontal strokes come out crisp.
+    ///
+    /// This is what FreeType's `hintslight` (the common Linux default, and what
+    /// browsers there render with) does: grid-fit vertically, keep horizontal
+    /// positions fractional.
+    #[default]
+    Baseline,
+    /// [`Baseline`](Self::Baseline), plus shift each glyph horizontally so its
+    /// **ink** starts on a whole device pixel.
+    ///
+    /// Most letters begin with a vertical stem (`l i n h m b k r P B D E F H K
+    /// L M N R` …), so aligning the outline's left edge — not the pen, which
+    /// sits an arbitrary sidebearing away — puts that stem on the pixel grid
+    /// instead of straddling two columns. It is the same trick FreeType's
+    /// autohinter plays on the left sidebearing, and it is the only lever short
+    /// of subpixel antialiasing that sharpens vertical stems: no curve applied
+    /// to coverage can merge a stem that spans two pixels back into one.
+    ///
+    /// The cost is spacing. Each glyph moves up to half a pixel independently,
+    /// so advances quantise and letter spacing visibly bunches — most at small
+    /// sizes, where the half pixel is the largest fraction of an advance.
+    BaselineAndStem,
+}
+
+/// The device-pixel grid glyph origins are rounded onto, in the canvas
+/// coordinates the layout works in.
+///
+/// Rounding has to happen in *device* pixels, so it composes with the view
+/// origin and the DPI scale: a canvas point is `(p - view_origin) * scale`
+/// device pixels from the target's top-left corner. Snapping in canvas space
+/// instead would land off-grid on any HiDPI output or scrolled view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PixelGrid {
+    snap: GlyphSnap,
+    scale: f32,
+    view_origin: [f32; 2],
+    /// Generate each glyph's field from an outline hinted for the size it will
+    /// be drawn at, rather than from one shared scalable field.
+    hint: bool,
+}
+
+impl PixelGrid {
+    /// Round `v` — a canvas coordinate along `axis` (0 = x, 1 = y) — to the
+    /// nearest whole device pixel.
+    fn round(&self, v: f32, axis: usize) -> f32 {
+        let origin = self.view_origin[axis];
+        ((v - origin) * self.scale).round() / self.scale + origin
+    }
+
+    /// The pen x a glyph should be placed at, given where its ink starts
+    /// relative to the pen (`ink_left`, in the same units as `x`).
+    ///
+    /// Rounds the *ink* edge onto the grid and returns the pen that puts it
+    /// there, so the glyph's leading stem lands on a pixel boundary.
+    fn pen_x(&self, x: f32, ink_left: f32) -> f32 {
+        match self.snap {
+            GlyphSnap::BaselineAndStem => self.round(x + ink_left, 0) - ink_left,
+            _ => x,
+        }
+    }
+
+    /// The baseline y a glyph should be placed at.
+    fn baseline_y(&self, y: f32) -> f32 {
+        match self.snap {
+            GlyphSnap::Off => y,
+            _ => self.round(y, 1),
+        }
+    }
+
+    /// Which field to draw a glyph of `font_size` from.
+    ///
+    /// Hinting grid-fits the outline to one pixel grid, so it only pays off when
+    /// the glyph is actually placed on that grid — with [`GlyphSnap::Off`] the
+    /// baseline lands wherever layout put it and a hinted field would be fitted
+    /// to a grid the glyph misses. In that case, and above
+    /// [`MAX_HINTED_PX`] device pixels, the shared scalable field is used
+    /// instead, which also keeps the atlas from filling with entries that buy
+    /// nothing.
+    fn sizing(&self, font_size: f32) -> GlyphSizing {
+        if !self.hint || self.snap == GlyphSnap::Off {
+            return GlyphSizing::Scalable;
+        }
+        // Hinting targets *device* pixels, so the DPI scale is part of the size.
+        let device_px = (font_size * self.scale).round();
+        if !(device_px >= 1.0 && device_px <= MAX_HINTED_PX as f32) {
+            return GlyphSizing::Scalable;
+        }
+        GlyphSizing::Hinted(device_px as u16)
+    }
+}
+
 /// Turn a block's relative glyph layout into `GlyphPlacement`s, applying the
 /// block's position, color, clip and effects. Takes the atlas / font-key fields
 /// by `&mut` (not `&mut self`) so the caller can hold a borrow into the shared
@@ -1182,6 +1385,7 @@ fn append_placements(
     block: &TextBlock,
     spans: &[TextSpan],
     shaped: &[ShapedGlyph],
+    grid: PixelGrid,
     out: &mut Vec<GlyphPlacement>,
 ) {
     let block_fill = color_to_rgba(block.color);
@@ -1201,11 +1405,12 @@ fn append_placements(
 
     for g in shaped {
         let font_key = resolve_font_key(font_keys, next_font_key, g.font_id);
-        let tile = match atlas.cached(font_key, g.glyph_id) {
+        let sizing = grid.sizing(g.font_size);
+        let tile = match atlas.cached(font_key, g.glyph_id, sizing) {
             Some(tile) => tile,
             None => font_system
                 .get_font(g.font_id, g.font_weight)
-                .and_then(|font| atlas.glyph(font_key, g.glyph_id, font.data())),
+                .and_then(|font| atlas.glyph(font_key, g.glyph_id, sizing, font.data())),
         };
         let Some(tile) = tile else {
             continue; // whitespace / outline-less
@@ -1226,10 +1431,11 @@ fn append_placements(
         } else {
             block_fill
         };
+        let ink_left = tile.metrics.ink_left_em * g.font_size;
         out.push(GlyphPlacement {
+            pen_x: grid.pen_x(block.x + g.rel_x, ink_left),
+            baseline_y: grid.baseline_y(block.y + g.rel_y),
             tile,
-            pen_x: block.x + g.rel_x,
-            baseline_y: block.y + g.rel_y,
             font_size: g.font_size,
             clip,
             fill,
@@ -3378,16 +3584,159 @@ impl TextBlock {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaretPos, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, MsdfVertex, SelRect, TextAlign,
-        TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan, TextStyleRange, Underline,
-        VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
-        cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
-        load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
-        shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
-        vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
+        CaretPos, FontHandle, FontVMetrics, GlyphSnap, LINE_HEIGHT_RATIO, MsdfVertex, PixelGrid,
+        SelRect, TextAlign, TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan,
+        TextStyleRange, Underline, VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line,
+        caret_for_byte, color_to_rgba, cosmic_align, direction_prefix, ellipsize_to_width,
+        field_reach, has_cjk, has_lowercase, load_font_bytes, resolve_range_color,
+        resolve_span_color, selection_rects, shared_font_system, text_caret_layout,
+        text_cursor_positions, text_visual_layout, vcentered_line_y, vertical_stack_string,
+        visual_caret_neighbor,
     };
+    use crate::render::{GlyphSizing, MAX_HINTED_PX};
     use crate::shaping::{LayoutSpec, LayoutStats, shape_layout};
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
+
+    /// A grid at `scale` device pixels per logical pixel, viewing the canvas
+    /// from `origin`.
+    fn grid(snap: GlyphSnap, scale: f32, origin: f32) -> PixelGrid {
+        PixelGrid {
+            snap,
+            scale,
+            view_origin: [origin, origin],
+            hint: true,
+        }
+    }
+
+    #[test]
+    fn snapping_off_places_glyphs_exactly_where_layout_put_them() {
+        let g = grid(GlyphSnap::Off, 1.0, 0.0);
+        assert_eq!(g.pen_x(10.4, 0.7), 10.4);
+        assert_eq!(g.baseline_y(33.62), 33.62);
+    }
+
+    #[test]
+    fn baseline_snapping_rounds_the_baseline_and_leaves_x_alone() {
+        let g = grid(GlyphSnap::Baseline, 1.0, 0.0);
+        assert_eq!(g.baseline_y(33.62), 34.0);
+        assert_eq!(g.baseline_y(33.2), 33.0);
+        // Horizontal position is deliberately untouched — this mirrors
+        // FreeType's `hintslight`, which grid-fits vertically only.
+        assert_eq!(g.pen_x(10.4, 0.7), 10.4);
+    }
+
+    #[test]
+    fn stem_snapping_lands_the_glyphs_ink_on_a_whole_pixel() {
+        let g = grid(GlyphSnap::BaselineAndStem, 1.0, 0.0);
+        // Pen at 10.4 with the outline starting 0.7px further right puts the
+        // ink at 11.1; it should be pulled back to 11.0, so the pen moves to
+        // 10.3 — the offset between pen and ink is preserved exactly.
+        let pen = g.pen_x(10.4, 0.7);
+        assert!((pen + 0.7 - 11.0).abs() < 1e-5, "ink edge at {}", pen + 0.7);
+        assert!((pen - 10.3).abs() < 1e-5, "pen at {pen}");
+    }
+
+    #[test]
+    fn a_glyph_never_moves_more_than_half_a_device_pixel() {
+        // The whole trade-off — sharper stems for quantised advances — rests on
+        // the shift being bounded by half a pixel, so spacing error stays sub-pixel.
+        let g = grid(GlyphSnap::BaselineAndStem, 1.0, 0.0);
+        for i in 0..100 {
+            let x = i as f32 * 0.137;
+            let ink = 0.31;
+            assert!(
+                (g.pen_x(x, ink) - x).abs() <= 0.5 + 1e-5,
+                "pen moved {} at x={x}",
+                g.pen_x(x, ink) - x
+            );
+            assert!((g.baseline_y(x) - x).abs() <= 0.5 + 1e-5);
+        }
+    }
+
+    #[test]
+    fn snapping_targets_device_pixels_not_logical_ones() {
+        // At 2x DPI a logical half-pixel *is* a whole device pixel, so it is
+        // already on the grid and must not be rounded away — snapping in logical
+        // space would blur every glyph on a HiDPI display.
+        let g = grid(GlyphSnap::BaselineAndStem, 2.0, 0.0);
+        assert_eq!(g.baseline_y(33.5), 33.5);
+        assert_eq!(g.baseline_y(33.6), 33.5);
+        assert_eq!(g.baseline_y(33.8), 34.0);
+    }
+
+    #[test]
+    fn snapping_is_measured_from_the_view_origin() {
+        // A scrolled view puts canvas point `origin` on the target's top-left
+        // corner. The grid that matters is the target's, so a fractional origin
+        // shifts where the whole-pixel positions fall.
+        let g = grid(GlyphSnap::BaselineAndStem, 1.0, 0.25);
+        assert_eq!(g.baseline_y(33.25), 33.25);
+        assert_eq!(g.baseline_y(33.3), 33.25);
+        assert_eq!(g.baseline_y(33.8), 34.25);
+    }
+
+    #[test]
+    fn ui_sizes_are_hinted_and_large_text_is_not() {
+        let g = grid(GlyphSnap::Baseline, 1.0, 0.0);
+        assert_eq!(g.sizing(11.0), GlyphSizing::Hinted(11));
+        assert_eq!(
+            g.sizing(MAX_HINTED_PX as f32),
+            GlyphSizing::Hinted(MAX_HINTED_PX)
+        );
+        // Past the cap a stem is several pixels wide, so a half-pixel of
+        // misalignment no longer shows and the per-size tiles stop paying off.
+        assert_eq!(g.sizing(MAX_HINTED_PX as f32 + 1.0), GlyphSizing::Scalable);
+        assert_eq!(g.sizing(64.0), GlyphSizing::Scalable);
+    }
+
+    #[test]
+    fn hinting_targets_device_pixels_so_dpi_picks_a_different_field() {
+        // 11 logical px on a 2x display is a 22px glyph, which is past the cap —
+        // and if it weren't, it would still need the 22px fit, not the 11px one.
+        let one_x = grid(GlyphSnap::Baseline, 1.0, 0.0);
+        let two_x = grid(GlyphSnap::Baseline, 2.0, 0.0);
+        assert_eq!(one_x.sizing(9.0), GlyphSizing::Hinted(9));
+        assert_eq!(two_x.sizing(9.0), GlyphSizing::Hinted(18));
+    }
+
+    #[test]
+    fn snapping_off_also_turns_hinting_off() {
+        // A hinted outline is fitted to a pixel grid; with the baseline left
+        // wherever layout put it the glyph misses that grid, so the entry would
+        // cost atlas space and generation time to buy nothing.
+        let g = grid(GlyphSnap::Off, 1.0, 0.0);
+        assert_eq!(g.sizing(11.0), GlyphSizing::Scalable);
+    }
+
+    #[test]
+    fn hinting_can_be_turned_off_on_its_own() {
+        let mut g = grid(GlyphSnap::Baseline, 1.0, 0.0);
+        g.hint = false;
+        assert_eq!(g.sizing(11.0), GlyphSizing::Scalable);
+        // Snapping still applies — the two are independent.
+        assert_eq!(g.baseline_y(33.62), 34.0);
+    }
+
+    #[test]
+    fn degenerate_font_sizes_never_ask_for_a_hinted_field() {
+        let g = grid(GlyphSnap::Baseline, 1.0, 0.0);
+        for size in [0.0, -3.0, f32::NAN, f32::INFINITY, 0.4] {
+            assert_eq!(
+                g.sizing(size),
+                GlyphSizing::Scalable,
+                "size {size} must not reach the hinter"
+            );
+        }
+    }
+
+    #[test]
+    fn snapping_defaults_to_baseline_only() {
+        // The conservative default: it sharpens horizontal strokes and cannot
+        // disturb letter spacing. `BaselineAndStem` sharpens vertical stems too
+        // but quantises advances, which is a look worth opting into rather than
+        // getting by surprise.
+        assert_eq!(GlyphSnap::default(), GlyphSnap::Baseline);
+    }
 
     /// The shared layout cache behind a measurer.
     fn layout_stats(measurer: &TextMeasurer) -> LayoutStats {
@@ -5571,7 +5920,7 @@ mod icon_tests {
         let key = g.font.index() as u64;
 
         let t1 = atlas
-            .glyph(key, g.glyph_id, data)
+            .glyph(key, g.glyph_id, GlyphSizing::Scalable, data)
             .expect("Plus generates a tile");
         assert!(t1.region.w > 0 && t1.region.h > 0);
         // A real icon has horizontal and vertical extent.
@@ -5579,7 +5928,9 @@ mod icon_tests {
         assert!(t1.metrics.top_em > t1.metrics.bottom_em);
 
         // Cached: same tile, no new packing.
-        let t2 = atlas.glyph(key, g.glyph_id, data).expect("cached");
+        let t2 = atlas
+            .glyph(key, g.glyph_id, GlyphSizing::Scalable, data)
+            .expect("cached");
         assert_eq!(t1, t2);
     }
 
@@ -5611,6 +5962,7 @@ mod icon_tests {
             .glyph(
                 phosphor.font.index() as u64,
                 phosphor.glyph_id,
+                GlyphSizing::Scalable,
                 fonts[phosphor.font.index() as usize],
             )
             .expect("phosphor tile");
@@ -5618,6 +5970,7 @@ mod icon_tests {
             .glyph(
                 twin.font.index() as u64,
                 twin.glyph_id,
+                GlyphSizing::Scalable,
                 fonts[twin.font.index() as usize],
             )
             .expect("other-font tile");
@@ -5634,7 +5987,12 @@ mod icon_tests {
         let g = PhosphorIcon::Check.glyph().unwrap();
         let data = icon_font_snapshot()[g.font.index() as usize];
         let tile = atlas
-            .glyph(g.font.index() as u64, g.glyph_id, data)
+            .glyph(
+                g.font.index() as u64,
+                g.glyph_id,
+                GlyphSizing::Scalable,
+                data,
+            )
             .unwrap();
 
         let icon = IconMsdf {

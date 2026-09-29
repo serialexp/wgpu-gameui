@@ -834,6 +834,87 @@ harden those foundations rather than create parallel replacements.
       (~1.2k mod calls). `UiRenderer::render`/`render_layers` take a
       `scale_factor`; the ortho is built from the logical size while the
       framebuffer stays physical (MSDF text self-sharpens via `fwidth`).
+- [x] **P1 — Glyph grid fitting, so small text isn't fuzzy.** A distance field
+      is positioned continuously, so a stem landing between two pixel columns
+      was antialiased across both: correct coverage, but two grey columns where
+      a browser shows one solid one. Measured on the gallery, an `l` stem was
+      `69 | 82` against a 150 ink peak; since neighbouring glyphs rarely share a
+      fractional offset, some came out crisp and some grey, and that
+      inconsistency is what read as fuzz.
+      `UiRenderer::set_glyph_snap(GlyphSnap)` now rounds glyph origins onto the
+      **device** pixel grid (composed with the view origin and DPI scale, so
+      HiDPI and scrolled views stay aligned): `Off`, `Baseline` (baseline only —
+      what FreeType's `hintslight` does, and the default), and `BaselineAndStem`,
+      which also aligns each glyph's *ink* left edge, not its pen. Most letters open
+      with a vertical stem, so that lands the stem on the grid — the same trick
+      FreeType's autohinter plays on the left sidebearing. The same `l` stem is
+      now `12 | 140`. Needed a new `GlyphMetrics::ink_left_em` (tile bounds
+      include SDF padding, so `left_em` is not the ink edge).
+      Snapping only translates a glyph; it can't rescale the outline the way a
+      hinting program does, so cap-height and x-height still land where they
+      land. Costs: advances quantise (spacing bunches slightly at small sizes),
+      text sliding by sub-pixel amounts steps rather than glides, and carets /
+      selection rects come from the *unsnapped* measurer so they can sit up to
+      half a pixel off their glyph.
+      Tried and rejected: **raising the field resolution**. Published SDF/MSDF
+      comparisons benchmark at 64 texels/EM and we generate at 40, so this looked
+      like free headroom. Measured properly — `DEFAULT_REF_PX` 40 → 64 with
+      `DEFAULT_PX_RANGE` 12 → 20 so the ratio, and therefore effect reach, held
+      constant — it left mid-tone text pixels unchanged (partial/full 7.75 →
+      7.74) and narrowed horizontal edges ~6%, for ~1.6x tile area and ~20% more
+      glyph generation time. Indistinguishable at 6x zoom, so both constants stay
+      where they were. Softness at UI sizes is a positioning problem, not a
+      sampling-rate one.
+      (A first pass at this appeared to show an 11% win; that was an artifact of
+      a parallel colour-pipeline change landing between the two renders. The A/B
+      above was re-run back-to-back under one pipeline.)
+      Not attempted: subpixel (ClearType-style) antialiasing, the only thing
+      that genuinely triples horizontal resolution. It needs per-channel alpha,
+      and the offscreen layer `composite.rs` uses for `*Srgb` targets is a single
+      RGBA texture whose alpha the composite pass divides by, so it can only
+      carry one. That would mean rendering at 3x horizontal resolution and
+      resolving per channel, plus a text mask to keep colour fringes off chrome.
+- [x] **P1 — Real font hinting, by generating the field from a hinted outline.**
+      `GlyphSnap::Baseline` could only *translate* a glyph, so rounding its
+      baseline pushed cap-height and x-height off the grid — the gallery's `P`
+      sharpened at the stem bottom while its top fell from 144 to 112. Proper
+      grid fitting has to move control points, which is size-specific, which a
+      size-independent distance field cannot be.
+      So hinted fields are now generated per size and keyed by it:
+      `GlyphSizing::{Scalable, Hinted(device_px)}` in `MsdfGlyphAtlas`, fed by
+      `glyph_msdf::generate_hinted_glyph_msdf`. `skrifa` (already in the tree via
+      cosmic-text, and carrying FreeType's TrueType interpreter *and* its
+      autohinter with blue zones) hints the outline; an `OutlinePen` collects it
+      into an `fdsm::Shape`; from there it shares the whole existing pipeline —
+      same cleanup, edge colouring, shader, quads, effects.
+      Hinting runs in `SmoothMode::Light` with `preserve_linear_metrics: true`:
+      vertical grid fitting only, advances untouched. That is what browsers do on
+      Linux (`hintslight`), and it means this costs *nothing* in letter spacing —
+      measured, the horizontal ink profile correlates 0.9997 with the unhinted
+      render, versus the visible bunching `GlyphSnap::BaselineAndStem` causes.
+      Measured: a hinted `x`'s x-height and baseline land 0.000px off the pixel
+      grid, against 0.423px unhinted; the gallery's horizontal-edge spread went
+      15.29 (nothing) → 12.17 (snapping) → 8.40 (hinting), a 45% total
+      improvement, and the `P`'s bowl edges became clean single rows.
+      Switches: `UiRenderer::set_glyph_hinting(bool)` (on by default; needs
+      `GlyphSnap` ≠ `Off`, since a hinted outline is fitted to a grid the glyph
+      then has to land on). `HINTED_OVERSAMPLE = 3` field texels per screen pixel
+      — 2 is too coarse to resolve the fit and scores *worse* than no hinting,
+      past 3 buys nothing and eats the distance ramp that outlines reach into.
+      `MAX_HINTED_PX = 20`, above which a stem is wide enough that misalignment
+      does not show.
+      Cost, and the thing to watch: one atlas entry per glyph per distinct device
+      size. Printable ASCII at four sizes grows the atlas one step to 2048²
+      (16 MiB) — there is a test pinning that budget — and glyph generation runs
+      per size, so `TextRenderer::prewarm_ascii` now takes the sizes to warm.
+      Keep the set of text sizes small.
+- [ ] **P2 — Stem darkening / coverage gamma.** Vello lists its absence beside
+      hinting and subpixel AA as the reason its text looks weak on low-DPI
+      displays, and DirectWrite exposes the same thing as "text contrast".
+      Light-on-dark text optically thins; a gamma applied to coverage in
+      `ui_msdf.wgsl` compensates. Cheap to try. Note it makes text *denser*, not
+      sharper — it cannot merge a stem that spans two pixels, so it is a
+      complement to grid fitting rather than a substitute.
 - [x] **P1 — Multiple fonts / sizes / weights** (see font system above) —
       per-`TextBlock` family/size/weight/style, `Theme.font`, and the
       `UiContext` font stack all land this.

@@ -33,7 +33,9 @@ mod ui_renderer;
 mod uniform_arena;
 
 pub use glyph_msdf::{GlyphMetrics, GlyphMsdf, generate_glyph_msdf};
-pub use msdf_atlas::{DEFAULT_PX_RANGE, DEFAULT_REF_PX, GlyphTile, MsdfGlyphAtlas};
+pub use msdf_atlas::{
+    DEFAULT_PX_RANGE, DEFAULT_REF_PX, GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas,
+};
 
 #[cfg(feature = "phosphor-icons")]
 pub(crate) use icon_font::icon_font_snapshot;
@@ -48,7 +50,7 @@ pub use atlas::{AtlasRegion, SpriteAtlas, SpriteId};
 pub use blur::{Backdrop, BlurParams, ColorEncoding};
 #[cfg(feature = "headless")]
 pub use capture::HeadlessGpu;
-pub use capture::{CAPTURE_FORMAT, capture_draw_list, capture_layers, write_png};
+pub use capture::{CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, write_png};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub(crate) use ui_renderer::ortho_matrix;
 pub use ui_renderer::{NineSliceMeta, RenderStats, UiRenderer};

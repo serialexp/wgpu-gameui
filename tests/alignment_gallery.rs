@@ -332,16 +332,7 @@ fn render_alignment_gallery() {
     }
 
     let size = (W as u32, h.ceil() as u32);
-    let pixels = gpu.capture_on(
-        &list,
-        size,
-        wgpu::Color {
-            r: 0.05,
-            g: 0.06,
-            b: 0.08,
-            a: 1.0,
-        },
-    );
+    let pixels = gpu.capture_on(&list, size, wgpu_gameui::Srgb::new([0.05, 0.06, 0.08, 1.0]));
     write_png("test_output/alignment_gallery.png", &pixels, size).expect("write png");
     eprintln!(
         "wrote test_output/alignment_gallery.png ({}x{})",

@@ -24,7 +24,7 @@ use wgpu_gameui::{
     LayerStack, List, ListItem, ListState, MeasureBuffer, MeasureConstraints, MeasuredChild, Menu,
     MenuBar, MenuBarState, MenuDrawEnv, MenuItem, NavInput, NumberInput, Pager, Popover,
     PopoverSide, PressState, Pressable, ProgressBar, ProgressFill, RadioGroup, ScrollState,
-    ScrollView, SelectionMode, Separator, Severity, Slider, Splitter, StatusCell, StyleKey,
+    ScrollView, SelectionMode, Separator, Severity, Slider, Splitter, Srgb, StatusCell, StyleKey,
     StyleOverlay, StyleResolver, Table, TableCell, TableColumn, Tabs, TextAlign, TextBlock,
     TextDirection, TextInput, TextSpan, Theme, Toast, ToastStack, Toggle, TooltipContent,
     TooltipLayer, TreeAction, TreeNode, TreeState, UiContext, UiRenderer, UiState, Underline,
@@ -612,7 +612,7 @@ struct GalleryScene<'a> {
     queue: &'a wgpu::Queue,
     format: wgpu::TextureFormat,
     /// The theme background, as a clear value for this renderer's target.
-    clear: wgpu::Color,
+    clear: Srgb,
     layers: &'a LayerStack,
     backdrop: &'a DrawList,
     blur_rect: Rect,
@@ -690,9 +690,11 @@ fn page_texture(
     })
 }
 
-/// Clear `view` to `color` (the renderer loads, rather than clears, its
-/// target).
-fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, color: wgpu::Color) {
+/// Clear `view` to `clear` (the renderer loads, rather than clears, its
+/// target). The gallery's targets are all `Rgba8Unorm`, so they take an
+/// [`Srgb`] and a value built for a linear-light target won't compile here.
+fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clear: Srgb) {
+    let color = clear.color();
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("gallery clear"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -739,12 +741,7 @@ fn render_gallery_page(
         clear_view(
             &mut encoder,
             &backdrop_view,
-            wgpu::Color {
-                r: 0.05,
-                g: 0.06,
-                b: 0.10,
-                a: 1.0,
-            },
+            Srgb::new([0.05, 0.06, 0.10, 1.0]),
         );
         ui.render(
             device,
@@ -5885,7 +5882,7 @@ fn render_widget_gallery() {
         device: &device,
         queue: &queue,
         format,
-        clear: ui.clear_color(theme.background),
+        clear: Srgb::new(theme.background),
         layers: &layers,
         backdrop: &scene_list,
         blur_rect,

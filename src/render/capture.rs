@@ -27,6 +27,7 @@
 
 use std::path::Path;
 
+use crate::color::{ColorSpace, Srgb};
 use crate::layer::LayerStack;
 use crate::render::UiRenderer;
 use crate::widgets::DrawList;
@@ -34,8 +35,16 @@ use crate::widgets::DrawList;
 /// Texture format used for offscreen capture. Plain `Rgba8Unorm`, so the
 /// renderer draws straight into it (its direct path) and the read-back bytes
 /// are the sRGB-encoded colours, blended exactly as a browser would — ready to
-/// write as a PNG. A `wgpu::Color` clear value for it is sRGB-encoded too.
+/// write as a PNG.
+///
+/// Its clear value is sRGB-encoded too, and because that never varies every
+/// capture below takes an [`Srgb`] rather than a bare `wgpu::Color`: a
+/// [`Linear`](crate::color::Linear) built for a window's surface does not
+/// compile here.
 pub const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// What [`CAPTURE_FORMAT`] stores.
+pub const CAPTURE_SPACE: ColorSpace = ColorSpace::Srgb;
 
 /// Round a row length up to wgpu's 256-byte `bytes_per_row` alignment.
 fn padded_bytes_per_row(width: u32) -> u32 {
@@ -49,11 +58,12 @@ fn capture_with(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     size: (u32, u32),
-    clear: wgpu::Color,
+    clear: Srgb,
     draw: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView),
 ) -> Vec<u8> {
     let (width, height) = size;
     assert!(width > 0 && height > 0, "capture size must be non-zero");
+    let clear = clear.color();
 
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("gameui capture target"),
@@ -158,7 +168,7 @@ pub fn capture_draw_list(
     list: &DrawList,
     size: (u32, u32),
     scale_factor: f32,
-    clear: wgpu::Color,
+    clear: Srgb,
 ) -> Vec<u8> {
     ui.begin_frame();
     capture_with(device, queue, size, clear, |encoder, view| {
@@ -175,7 +185,7 @@ pub fn capture_layers(
     layers: &LayerStack,
     size: (u32, u32),
     scale_factor: f32,
-    clear: wgpu::Color,
+    clear: Srgb,
 ) -> Vec<u8> {
     ui.begin_frame();
     capture_with(device, queue, size, clear, |encoder, view| {
@@ -285,7 +295,7 @@ impl HeadlessGpu {
 
     /// Render `list` and read the pixels back, on a transparent background.
     pub fn capture(&mut self, list: &DrawList, size: (u32, u32)) -> Vec<u8> {
-        self.capture_on(list, size, wgpu::Color::TRANSPARENT)
+        self.capture_on(list, size, Srgb::TRANSPARENT)
     }
 
     /// [`capture`](Self::capture) with a logical-to-physical scale factor.
@@ -295,12 +305,18 @@ impl HeadlessGpu {
         size: (u32, u32),
         scale_factor: f32,
     ) -> Vec<u8> {
-        self.capture_scaled_on(list, size, scale_factor, wgpu::Color::TRANSPARENT)
+        self.capture_scaled_on(list, size, scale_factor, Srgb::TRANSPARENT)
     }
 
-    /// [`capture`](Self::capture) with an explicit clear colour (sRGB-encoded,
-    /// like the theme — `ui.clear_color(theme.background)` works).
-    pub fn capture_on(&mut self, list: &DrawList, size: (u32, u32), clear: wgpu::Color) -> Vec<u8> {
+    /// A theme colour as the clear value for this context's capture target.
+    /// The target is always [`CAPTURE_FORMAT`], so the type is known here and
+    /// no conversion is needed: `Srgb::new(theme.background)` says the same.
+    pub fn clear_color(&self, color: [f32; 4]) -> Srgb {
+        Srgb::new(color)
+    }
+
+    /// [`capture`](Self::capture) with an explicit clear colour.
+    pub fn capture_on(&mut self, list: &DrawList, size: (u32, u32), clear: Srgb) -> Vec<u8> {
         self.capture_scaled_on(list, size, 1.0, clear)
     }
 
@@ -310,7 +326,7 @@ impl HeadlessGpu {
         list: &DrawList,
         size: (u32, u32),
         scale_factor: f32,
-        clear: wgpu::Color,
+        clear: Srgb,
     ) -> Vec<u8> {
         capture_draw_list(
             &self.device,
@@ -328,7 +344,7 @@ impl HeadlessGpu {
         &mut self,
         layers: &LayerStack,
         size: (u32, u32),
-        clear: wgpu::Color,
+        clear: Srgb,
     ) -> Vec<u8> {
         capture_layers(
             &self.device,
@@ -347,7 +363,7 @@ impl HeadlessGpu {
         path: impl AsRef<Path>,
         list: &DrawList,
         size: (u32, u32),
-        clear: wgpu::Color,
+        clear: Srgb,
     ) -> std::io::Result<()> {
         let pixels = self.capture_on(list, size, clear);
         write_png(path, &pixels, size)

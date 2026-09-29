@@ -23,6 +23,13 @@ tracing = { version = "0.1", optional = true }
 fdsm = "0.8"
 fdsm-ttf-parser = "0.2"
 ttf-parser = "0.25"
+# Font hinting for small text. A distance field is size-independent, but hinting
+# is size-specific by definition — it moves control points onto one pixel grid —
+# so crisp UI text means generating the field from an outline hinted for the size
+# it will be drawn at. `skrifa` carries FreeType's two hinting engines (the
+# TrueType/PostScript interpreter and the autohinter, blue zones and all) and is
+# already in the tree transitively via cosmic-text. See `render::glyph_msdf`.
+skrifa = "0.44"
 nalgebra = "0.34"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # The IBM Plex font files live under assets/fonts/ibm-plex/ and are embedded

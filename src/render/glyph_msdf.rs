@@ -75,6 +75,14 @@ pub struct GlyphMetrics {
     pub top_em: f32,
     /// Bottom edge of the tile, EM fraction (negative for descenders).
     pub bottom_em: f32,
+    /// Left edge of the **outline** (the glyph's left sidebearing point), EM
+    /// fraction — unlike [`left_em`](Self::left_em) this excludes the SDF padding
+    /// margin, so it is where the glyph's ink actually starts.
+    ///
+    /// Grid-fitting uses this: most letters begin with a vertical stem, so
+    /// rounding `pen_x + ink_left_em * font_size` to a whole device pixel lands
+    /// that stem on the pixel grid instead of straddling two columns.
+    pub ink_left_em: f32,
 }
 
 /// A generated glyph: its MSDF tile (RGB8) plus placement metrics.
@@ -84,6 +92,25 @@ pub struct GlyphMsdf {
     /// EM-fraction placement metrics for positioning the tile's quad.
     pub metrics: GlyphMetrics,
 }
+
+/// An outline handed to the tile pipeline, in whatever units its source speaks.
+///
+/// The two front-ends differ only here. `ttf-parser` yields the raw outline in
+/// font units, where `units_per_em` is the font's UPM. `skrifa` yields an
+/// outline already hinted and scaled for a target pixel size, where one EM is
+/// `size_px` of those units. Everything downstream — padding, the affine into
+/// tile pixels, cleanup, edge colouring, metrics — is identical, because it only
+/// ever works in ratios of `units_per_em`.
+struct SourceOutline {
+    shape: Shape<Contour>,
+    /// How many of the shape's units make one EM.
+    units_per_em: f64,
+    /// Outline bounds in the same units.
+    bounds: Bounds,
+}
+
+/// An outline's extent in its own units: `(x_min, y_min, x_max, y_max)`.
+type Bounds = (f64, f64, f64, f64);
 
 /// Lift `glyph`'s outline into its tile (see [`generate_glyph_msdf`] for the
 /// parameters) and colour its edges. `None` for outline-less glyphs.
@@ -95,6 +122,33 @@ fn tile_shape(face: &Face, glyph: GlyphId, ref_px: f32, px_range: f32) -> Option
     if upm <= 0.0 {
         return None;
     }
+    tile_shape_from_outline(
+        SourceOutline {
+            shape,
+            units_per_em: upm,
+            bounds: (
+                bbox.x_min as f64,
+                bbox.y_min as f64,
+                bbox.x_max as f64,
+                bbox.y_max as f64,
+            ),
+        },
+        ref_px,
+        px_range,
+    )
+}
+
+/// Turn a source outline into a coloured tile shape plus its placement metrics.
+/// Shared by the unhinted and hinted front-ends; see [`SourceOutline`].
+fn tile_shape_from_outline(source: SourceOutline, ref_px: f32, px_range: f32) -> Option<TileShape> {
+    let SourceOutline {
+        shape,
+        units_per_em: upm,
+        bounds,
+    } = source;
+    if upm <= 0.0 {
+        return None;
+    }
 
     let ref_px = ref_px as f64;
     let px_range = px_range.max(1.0) as f64;
@@ -103,12 +157,9 @@ fn tile_shape(face: &Face, glyph: GlyphId, ref_px: f32, px_range: f32) -> Option
     // use the full px_range plus a pixel for safety.
     let padding = px_range.ceil() + 1.0;
 
-    let scale = ref_px / upm; // font units -> pixels
+    let scale = ref_px / upm; // source units -> tile pixels
 
-    let x_min = bbox.x_min as f64;
-    let y_min = bbox.y_min as f64;
-    let x_max = bbox.x_max as f64;
-    let y_max = bbox.y_max as f64;
+    let (x_min, y_min, x_max, y_max) = bounds;
 
     // Degenerate bbox (e.g. a zero-area control glyph) — nothing to render.
     if x_max <= x_min || y_max <= y_min {
@@ -166,6 +217,10 @@ fn tile_shape(face: &Face, glyph: GlyphId, ref_px: f32, px_range: f32) -> Option
         right_em: (right_fu / upm) as f32,
         top_em: (top_fu / upm) as f32,
         bottom_em: (bottom_fu / upm) as f32,
+        // The outline's own left edge, i.e. the tile left plus the padding
+        // margin — `x_min` by construction, since the affine maps it to tile
+        // pixel `padding`.
+        ink_left_em: (x_min / upm) as f32,
     };
 
     Some(TileShape {
@@ -397,7 +452,11 @@ pub fn generate_glyph_msdf(
     ref_px: f32,
     px_range: f32,
 ) -> Option<GlyphMsdf> {
-    let tile = tile_shape(face, glyph, ref_px, px_range)?;
+    rasterize_tile(tile_shape(face, glyph, ref_px, px_range)?)
+}
+
+/// Fill a prepared tile shape's distance field and quantize it to RGB8.
+fn rasterize_tile(tile: TileShape) -> Option<GlyphMsdf> {
     let (width_px, height_px) = (tile.metrics.width_px, tile.metrics.height_px);
     let prepared = tile.colored.prepare();
 
@@ -430,6 +489,195 @@ pub fn generate_glyph_msdf(
         image,
         metrics: tile.metrics,
     })
+}
+
+/// How many field texels the hinted path generates per target screen pixel.
+///
+/// The hinting decides *where* the outline's edges land; this decides how finely
+/// the field between them is sampled — and how much atlas each size costs, since
+/// tile area goes as its square.
+///
+/// Measured on the gallery, by the spread of its horizontal edges (lower is
+/// crisper), against a tile's effect reach at an 11px font:
+///
+/// | oversample | v-edge spread | effect reach | atlas page |
+/// |-----------:|--------------:|-------------:|-----------:|
+/// | 2          | 13.08         | 2.5px        | 1024²      |
+/// | **3**      | **8.40**      | **1.5px**    | 2048²      |
+/// | 4          | 9.26          | 1.0px        | 2048²      |
+///
+/// 2 is too coarse to resolve the grid fitting it was given — it scores worse
+/// than not hinting at all. Past 3 the extra samples buy nothing and start
+/// eating the distance ramp, which is what outlines and glows reach into.
+pub const HINTED_OVERSAMPLE: f32 = 3.0;
+
+/// Collects `skrifa`'s hinted outline into an `fdsm` shape.
+///
+/// Both speak Y-up with the origin on the baseline at the pen position, so no
+/// flip is needed here — [`tile_shape_from_outline`] applies the one that takes
+/// the shape into tile pixels. Coordinates arrive as pixels at the hinted size.
+#[derive(Default)]
+struct ShapePen {
+    contours: Vec<Contour>,
+    current: Vec<Segment>,
+    start: Option<Point>,
+    pen: Point,
+}
+
+impl ShapePen {
+    /// Close the contour being built and push it, if it has any segments.
+    fn flush(&mut self) {
+        if let (Some(start), false) = (self.start, self.current.is_empty()) {
+            // fdsm wants a closed loop. Fonts usually leave the closing edge
+            // implicit; a zero-length one here is harmless because
+            // `drop_degenerate_segments` takes it back out.
+            if self.pen != start {
+                self.current.push(Segment::line(self.pen, start));
+            }
+            self.contours.push(Contour {
+                segments: core::mem::take(&mut self.current),
+            });
+        }
+        self.current.clear();
+        self.start = None;
+    }
+
+    /// The finished contours, and the bounds of every control point in them.
+    fn finish(mut self) -> Option<(Vec<Contour>, Bounds)> {
+        self.flush();
+        if self.contours.is_empty() {
+            return None;
+        }
+        let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
+        let (mut x1, mut y1) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for contour in &self.contours {
+            for segment in &contour.segments {
+                for i in 0..=last_point(segment) {
+                    let p = segment.control_point(i);
+                    x0 = x0.min(p.x);
+                    y0 = y0.min(p.y);
+                    x1 = x1.max(p.x);
+                    y1 = y1.max(p.y);
+                }
+            }
+        }
+        (x1 > x0 && y1 > y0).then_some((self.contours, (x0, y0, x1, y1)))
+    }
+}
+
+impl skrifa::outline::OutlinePen for ShapePen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.flush();
+        self.pen = Point::new(x as f64, y as f64);
+        self.start = Some(self.pen);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let to = Point::new(x as f64, y as f64);
+        self.current.push(Segment::line(self.pen, to));
+        self.pen = to;
+    }
+
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        let ctrl = Point::new(cx as f64, cy as f64);
+        let to = Point::new(x as f64, y as f64);
+        self.current.push(Segment::quad(self.pen, ctrl, to));
+        self.pen = to;
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let c0 = Point::new(cx0 as f64, cy0 as f64);
+        let c1 = Point::new(cx1 as f64, cy1 as f64);
+        let to = Point::new(x as f64, y as f64);
+        self.current.push(Segment::cubic(self.pen, c0, c1, to));
+        self.pen = to;
+    }
+
+    fn close(&mut self) {
+        self.flush();
+    }
+}
+
+/// Generate an MSDF tile for one glyph from an outline **hinted for `size_px`**.
+///
+/// A distance field is size-independent; hinting is not, because it moves control
+/// points onto one specific pixel grid. So a hinted tile is only correct at the
+/// size it was generated for, and the atlas keys it by that size (see
+/// [`MsdfGlyphAtlas::glyph`](super::MsdfGlyphAtlas::glyph)).
+///
+/// * `font_data` — the raw face bytes (`cosmic_text::Font::data()`).
+/// * `glyph_id` — the shaped glyph index.
+/// * `size_px` — the **device** pixel EM size the outline is hinted for. The
+///   caller must place the glyph's baseline on a whole device pixel (see
+///   [`GlyphSnap`](crate::GlyphSnap)) or the grid the hinter fitted to is not the
+///   grid the glyph lands on, and the work is wasted.
+/// * `px_range` — distance ramp width in tile pixels, as for
+///   [`generate_glyph_msdf`].
+///
+/// Hinting runs in FreeType's *light* mode with `preserve_linear_metrics`, which
+/// grid-fits vertically only and leaves the outline's horizontal extent alone.
+/// That is deliberate and matches what browsers do on Linux (`hintslight`):
+/// horizontal fitting would quantise stem positions per glyph and make letter
+/// spacing visibly uneven, for a sharpening that only pays off if the pen is also
+/// snapped to whole pixels.
+///
+/// Returns `None` for outline-less glyphs (whitespace), and for any font
+/// `skrifa` declines to parse or hint — the caller falls back to the unhinted
+/// path.
+pub fn generate_hinted_glyph_msdf(
+    font_data: &[u8],
+    glyph_id: u16,
+    size_px: f32,
+    px_range: f32,
+) -> Option<GlyphMsdf> {
+    use skrifa::MetadataProvider;
+    use skrifa::outline::{DrawSettings, HintingInstance, HintingOptions, SmoothMode, Target};
+    use skrifa::prelude::{LocationRef, Size};
+
+    if !(size_px.is_finite() && size_px > 0.0) {
+        return None;
+    }
+
+    let font = skrifa::FontRef::from_index(font_data, 0).ok()?;
+    let outlines = font.outline_glyphs();
+    let glyph = outlines.get(skrifa::GlyphId::new(glyph_id as u32))?;
+
+    let hinting = HintingInstance::new(
+        &outlines,
+        Size::new(size_px),
+        LocationRef::default(),
+        HintingOptions {
+            engine: skrifa::outline::Engine::AutoFallback,
+            target: Target::Smooth {
+                mode: SmoothMode::Light,
+                symmetric_rendering: true,
+                // Keep advances exactly as the shaper measured them.
+                preserve_linear_metrics: true,
+            },
+        },
+    )
+    .ok()?;
+
+    let mut pen = ShapePen::default();
+    // Non-pedantic: a font whose hinting program faults still yields a usable
+    // outline, which is better than dropping the glyph.
+    glyph
+        .draw(DrawSettings::hinted(&hinting, false), &mut pen)
+        .ok()?;
+    let (contours, bounds) = pen.finish()?;
+
+    rasterize_tile(tile_shape_from_outline(
+        SourceOutline {
+            shape: Shape { contours },
+            // skrifa emits pixels at `size_px` ppem, so one EM *is* `size_px` of
+            // them — which makes the tile affine a plain `HINTED_OVERSAMPLE`
+            // scale and keeps the metrics in EM fractions like the other path.
+            units_per_em: size_px as f64,
+            bounds,
+        },
+        size_px * HINTED_OVERSAMPLE,
+        px_range,
+    )?)
 }
 
 #[cfg(test)]

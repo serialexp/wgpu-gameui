@@ -74,7 +74,7 @@ fn render(
                 view: &view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(ui.clear_color(clear)),
+                    load: wgpu::LoadOp::Clear(ui.clear_color(clear).color()),
                     store: wgpu::StoreOp::Store,
                 },
             })],

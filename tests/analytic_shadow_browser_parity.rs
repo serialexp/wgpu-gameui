@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use image::{ImageBuffer, Rgba, RgbaImage};
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{Affine2, BoxShadow, CornerRadii, HeadlessGpu};
+use wgpu_gameui::{Affine2, BoxShadow, CornerRadii, HeadlessGpu, Srgb};
 
 const FIXTURE_ROOT: &str = "fixtures/browser/gpu-chrome-shadows";
 const CSS_SIZE: (u32, u32) = (288, 280);
@@ -933,8 +933,8 @@ fn shadow_colour_composites_in_srgb_like_chromium() {
     let mut gpu = HeadlessGpu::new().expect("no GPU adapter");
     let mut list = gpu.draw_list();
     let (mut alpha, mut on_black, mut on_white) = (Vec::new(), Vec::new(), Vec::new());
-    let white = wgpu::Color::WHITE;
-    let black = wgpu::Color::BLACK;
+    let white = Srgb::new([1.0, 1.0, 1.0, 1.0]);
+    let black = Srgb::new([0.0, 0.0, 0.0, 1.0]);
     let mut checked = 0usize;
 
     for case in CASES.iter().filter(|c| single_colour.contains(&c.id)) {

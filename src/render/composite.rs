@@ -13,7 +13,7 @@
 //! out exactly as authored; translucent UI over the host's own scene mixes in
 //! linear light only at that last step.
 
-use crate::color::srgb_to_linear;
+use crate::color::{Clear, ColorSpace};
 
 const SHADER: &str = include_str!("composite.wgsl");
 
@@ -29,55 +29,41 @@ pub(crate) struct TargetPlan {
 
 impl TargetPlan {
     pub(crate) fn for_host(host: wgpu::TextureFormat) -> Self {
-        if host.is_srgb() {
-            Self {
+        // What the host *stores* is [`ColorSpace`]'s to say, so one place
+        // decides it; the work format the pipelines are built for is this
+        // one's business.
+        match (ColorSpace::of(host), host.is_srgb()) {
+            (ColorSpace::Linear, true) => Self {
                 work_format: host.remove_srgb_suffix(),
                 offscreen: true,
-            }
-        } else if stores_linear_float(host) {
-            Self {
+            },
+            (ColorSpace::Linear, false) => Self {
                 work_format: wgpu::TextureFormat::Rgba8Unorm,
                 offscreen: true,
-            }
-        } else {
-            Self {
+            },
+            (ColorSpace::Srgb, _) => Self {
                 work_format: host,
                 offscreen: false,
-            }
+            },
         }
     }
 
-    /// Whether the host target holds linear light (so values written to it, and
-    /// its clear colour, must be linear).
-    pub(crate) fn host_is_linear(self) -> bool {
-        self.offscreen
-    }
-
-    /// The `wgpu::Color` that clears the host target to the sRGB-encoded
-    /// `color` (e.g. `theme.background`).
-    pub(crate) fn clear_color(self, color: [f32; 4]) -> wgpu::Color {
-        let [r, g, b, a] = if self.host_is_linear() {
-            srgb_to_linear(color)
+    /// What the host target stores. The UI draws offscreen for exactly the
+    /// targets that hold linear light.
+    pub(crate) fn space(self) -> ColorSpace {
+        if self.offscreen {
+            ColorSpace::Linear
         } else {
-            color
-        };
-        wgpu::Color {
-            r: r as f64,
-            g: g as f64,
-            b: b as f64,
-            a: a as f64,
+            ColorSpace::Srgb
         }
     }
-}
 
-/// Renderable float formats hold linear light (HDR / scRGB swapchains).
-fn stores_linear_float(format: wgpu::TextureFormat) -> bool {
-    matches!(
-        format,
-        wgpu::TextureFormat::Rgba16Float
-            | wgpu::TextureFormat::Rgba32Float
-            | wgpu::TextureFormat::Rg11b10Ufloat
-    )
+    /// The clear value that shows the sRGB-encoded `color` (e.g.
+    /// `theme.background`) on the host target, in whichever of the two the
+    /// host stores.
+    pub(crate) fn clear_color(self, color: [f32; 4]) -> Clear {
+        Clear::new(color, self.space())
+    }
 }
 
 /// A viewport-sized layer, reused across frames and re-created on resize.
@@ -282,9 +268,18 @@ mod tests {
     fn clear_color_is_linear_only_for_linear_hosts() {
         let bg = crate::color::hex(0x0a0d0f);
         let direct = TargetPlan::for_host(F::Bgra8Unorm).clear_color(bg);
+        assert_eq!(direct.space(), ColorSpace::Srgb);
+        assert!(direct.srgb().is_some(), "a direct host gets the sRGB one");
+        let direct = direct.color();
         assert_eq!(direct.r, bg[0] as f64);
         let linear = TargetPlan::for_host(F::Bgra8UnormSrgb).clear_color(bg);
-        assert!((linear.r - srgb_to_linear(bg)[0] as f64).abs() < 1e-9);
+        assert_eq!(linear.space(), ColorSpace::Linear);
+        assert!(
+            linear.linear().is_some(),
+            "an sRGB host gets the linear one"
+        );
+        let linear = linear.color();
+        assert!((linear.r - crate::color::srgb_to_linear(bg)[0] as f64).abs() < 1e-9);
         assert!(linear.r < direct.r);
         assert_eq!(linear.a, 1.0);
     }
