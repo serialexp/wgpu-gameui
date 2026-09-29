@@ -63,6 +63,8 @@ mod shaping;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax;
 mod text;
+mod text_select;
+mod text_units;
 
 pub use shaping::{LayoutStats, SharedFontSystem};
 #[cfg(feature = "syntax-lua")]
@@ -73,11 +75,13 @@ pub use text::{
     CaretPos, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign, TextBlock,
     TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
     TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
-    byte_at_point, byte_on_adjacent_line, caret_for_byte, load_font_bytes, load_font_file,
-    register_bundled_fonts, resolve_range_color, resolve_span_color, selection_rects,
-    shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
-    vcentered_line_y, visual_caret_neighbor, visual_caret_pos,
+    byte_at_point, byte_on_adjacent_line, byte_under_point, caret_for_byte, load_font_bytes,
+    load_font_file, register_bundled_fonts, resolve_range_color, resolve_span_color,
+    selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
+    text_visual_layout, vcentered_line_y, visual_caret_neighbor, visual_caret_pos,
 };
+pub use text_select::{TextHighlight, TextKey, TextPoint, TextSelection};
+pub use text_units::TextUnit;
 
 /// Font weight and style selectors (re-exported from `glyphon`/`cosmic-text`)
 /// for `TextBlock::with_weight`/`with_style` and the `UiContext` font stack.
@@ -114,7 +118,9 @@ pub use chrome::{
     MenuSheetChrome, QuadStyle, ScrollbarChrome, SheetChrome, SplitterChrome, StatusBarChrome,
     StructuralLine, SurfacePainter, ToolbarChrome, WindowChrome,
 };
-pub use click_tracker::{ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD};
+pub use click_tracker::{
+    CLICK_SLOP, ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD,
+};
 pub use color::{Clear, ColorSpace, Hsva, Linear, Srgb};
 pub use cursor::{CursorIcon, CursorState};
 /// The entry point to layout inspection — see [`mod@debug`] for the full API.
@@ -163,6 +169,13 @@ pub struct InputState {
     pub mouse_clicked: bool,
     /// Primary button went up this frame (release edge).
     pub mouse_released: bool,
+    /// On the frame of a primary-button press, how many presses its run of
+    /// clicks has had: `1` for a lone click, `2` for a double, `3` for a
+    /// triple. `0` on frames without a press. Computed by
+    /// [`ClickTracker::update`]; a per-frame edge event like
+    /// [`mouse_double_clicked`](Self::mouse_double_clicked). Text reads it to
+    /// select a word on `2` and a paragraph on `3`.
+    pub mouse_click_count: u32,
     /// True on the frame of a double-click (two presses of the primary button
     /// within the double-click threshold). Computed by [`ClickTracker::update`];
     /// a per-frame edge event (cleared by `end_frame`, zeroed by `consumed()`).
@@ -334,6 +347,7 @@ impl Default for InputState {
             mouse_down: false,
             mouse_clicked: false,
             mouse_released: false,
+            mouse_click_count: 0,
             mouse_double_clicked: false,
             mouse_held: false,
             mouse_right_down: false,
@@ -388,6 +402,7 @@ impl InputState {
         self.mouse_clicked = false;
         self.mouse_released = false;
         // Click-tracker outputs; the tracker re-asserts them each update call.
+        self.mouse_click_count = 0;
         self.mouse_double_clicked = false;
         self.mouse_held = false;
         self.mouse_right_clicked = false;
@@ -458,6 +473,7 @@ impl InputState {
             scroll_consumed: true,
             mouse_clicked: false,
             mouse_released: false,
+            mouse_click_count: 0,
             mouse_double_clicked: false,
             mouse_held: false,
             mouse_right_clicked: false,

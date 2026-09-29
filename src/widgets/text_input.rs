@@ -6,17 +6,19 @@ use std::rc::Rc;
 
 use crate::InputState;
 use crate::StyleKey;
+use crate::TextUnit;
 use crate::layout::Rect;
 use crate::text::{
     CaretPos, TextBlock, TextSpan, Underline, VisualGlyph, WrapMode, byte_at_point,
-    byte_on_adjacent_line, caret_for_byte, selection_rects, visual_caret_neighbor,
+    byte_on_adjacent_line, byte_under_point, caret_for_byte, selection_rects,
+    visual_caret_neighbor,
 };
 #[cfg(feature = "syntax-highlighting")]
 use crate::{SyntaxHighlighting, TextStyleRange};
 #[cfg(feature = "syntax-highlighting")]
 use tree_sitter_highlight::Highlighter;
 
-use super::{DrawContext, FocusId};
+use super::{DrawContext, DrawList, FocusId};
 
 /// Shared clipboard reader used by retained text editors.
 pub type ClipboardGet = Rc<RefCell<dyn FnMut() -> String>>;
@@ -127,6 +129,16 @@ fn closest_cursor_pos(positions: &[(usize, f32)], click_x: f32) -> usize {
     }
 }
 
+/// The byte of the character under `x`: the last position at or left of it,
+/// or the first when `x` is left of them all. Unlike [`closest_cursor_pos`],
+/// the right half of a character still counts as that character.
+fn cursor_pos_under(positions: &[(usize, f32)], x: f32) -> usize {
+    let right = positions.partition_point(|&(_, px)| px <= x);
+    positions
+        .get(right.saturating_sub(1))
+        .map_or(0, |&(byte, _)| byte)
+}
+
 /// The `(first_byte, last_byte)` of the visual line containing `byte`, from a
 /// [`CaretPos`] layout. Used for line-relative Home/End in multiline mode.
 /// Falls back to `(byte, byte)` for an empty layout.
@@ -221,6 +233,9 @@ pub struct TextInput {
     /// separately from `selection_start` so dragging back to the anchor and then
     /// past it continues to extend the same selection.
     drag_selection_anchor: Option<usize>,
+    /// What a double or triple click selected, and so what a drag after it
+    /// grows by. `None` for a single click: the drag selects characters.
+    drag_unit: Option<(TextUnit, std::ops::Range<usize>)>,
     /// Sticky horizontal column (pixels) for Up/Down navigation. Seeded from the
     /// caret's x on the first vertical move and cleared by any horizontal
     /// move/edit, so a run of Up/Down keeps the original column.
@@ -286,6 +301,7 @@ impl Default for TextInput {
             scroll_offset: 0.0,
             horizontal_scroll_offset: 0.0,
             drag_selection_anchor: None,
+            drag_unit: None,
             desired_caret_x: None,
             mask: None,
             direction: crate::TextDirection::Auto,
@@ -466,6 +482,27 @@ impl TextInput {
                     .map(|(i, _)| i)
                     .unwrap_or(self.value.len())
             }
+        }
+    }
+
+    /// The value byte of the character under `local`, the pointer relative to
+    /// the text's origin: what a double or triple click picks its word or
+    /// paragraph around.
+    fn byte_under(
+        &self,
+        list: &mut DrawList,
+        font_size: f32,
+        nav_layout: &[CaretPos],
+        multiline: bool,
+        local: [f32; 2],
+    ) -> usize {
+        if multiline {
+            byte_under_point(nav_layout, local[0], local[1] + self.scroll_offset)
+        } else {
+            let display = self.display_value();
+            let positions = list.text_cursor_positions(&display, font_size, None);
+            let x = local[0] + self.horizontal_scroll_offset;
+            self.display_to_value_byte(cursor_pos_under(&positions, x))
         }
     }
 
@@ -1075,6 +1112,27 @@ impl TextInput {
             } else {
                 self.cursor_pos
             });
+            // A double or triple click selects the word or paragraph under the
+            // pointer (a password, whole: its words aren't shown).
+            let unit = TextUnit::for_clicks(input.mouse_click_count);
+            self.drag_unit = (unit != TextUnit::Char).then(|| {
+                let range = if self.mask.is_some() {
+                    0..self.value.len()
+                } else {
+                    let under = self.byte_under(
+                        list,
+                        s.scalar(StyleKey::FontSize),
+                        &nav_layout,
+                        multiline,
+                        [input.mouse_x - text_x, input.mouse_y - text_top],
+                    );
+                    unit.range_at(&self.value, under)
+                };
+                self.selection_start = Some(range.start);
+                self.cursor_pos = range.end;
+                self.desired_caret_x = None;
+                (unit, range)
+            });
         }
 
         // Continue a primary-button selection after the press, including while
@@ -1093,12 +1151,27 @@ impl TextInput {
                     list.text_cursor_positions(&display, s.scalar(StyleKey::FontSize), None);
                 self.display_to_value_byte(closest_cursor_pos(&positions, local_x))
             };
-            self.selection_start = self.drag_selection_anchor;
-            self.cursor_pos = byte_pos;
+            let (anchor, cursor) = match self.drag_unit.clone() {
+                Some((_, origin)) if self.mask.is_some() => (origin.start, origin.end),
+                Some((unit, origin)) => {
+                    let under = self.byte_under(
+                        list,
+                        s.scalar(StyleKey::FontSize),
+                        &nav_layout,
+                        multiline,
+                        [input.mouse_x - text_x, input.mouse_y - text_top],
+                    );
+                    unit.extend(&self.value, origin, under, byte_pos)
+                }
+                None => (self.drag_selection_anchor.unwrap_or(byte_pos), byte_pos),
+            };
+            self.selection_start = Some(anchor);
+            self.cursor_pos = cursor;
             self.desired_caret_x = None;
         }
         if !input.mouse_down {
             self.drag_selection_anchor = None;
+            self.drag_unit = None;
         }
 
         // Process keyboard events only while focused.
@@ -1488,6 +1561,79 @@ mod tests {
         assert_eq!(ti.selection_start, Some(anchor));
         assert_eq!(ti.cursor_pos, ti.value.len());
         assert!(ti.selection_range().is_some_and(|(a, b)| a < b));
+    }
+
+    /// Press at `(x, y)` as the `clicks`-th click of a run, then hold still.
+    fn click_n(ti: &mut TextInput, focus: &mut FocusState, x: f32, y: f32, clicks: u32) {
+        let mut list = DrawList::new();
+        let press = InputState {
+            mouse_x: x,
+            mouse_y: y,
+            mouse_down: true,
+            mouse_clicked: true,
+            mouse_click_count: clicks,
+            ..Default::default()
+        };
+        focus.begin_frame(&press);
+        draw_input(ti, 7, focus, &mut list, &Theme::default(), &press);
+    }
+
+    fn drag_to(ti: &mut TextInput, focus: &mut FocusState, x: f32, y: f32) {
+        let mut list = DrawList::new();
+        let drag = InputState {
+            mouse_x: x,
+            mouse_y: y,
+            mouse_down: true,
+            is_dragging: true,
+            ..Default::default()
+        };
+        focus.begin_frame(&drag);
+        draw_input(ti, 7, focus, &mut list, &Theme::default(), &drag);
+    }
+
+    fn selected(ti: &TextInput) -> &str {
+        ti.selection_range().map_or("", |(a, b)| &ti.value[a..b])
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_and_a_drag_grows_it_by_words() {
+        let mut ti =
+            TextInput::new(0.0, 0.0, 300.0, 24.0).with_value("hello big world".to_string());
+        let mut focus = FocusState::new();
+        // Right of the text: the last character is under the pointer.
+        click_n(&mut ti, &mut focus, 250.0, 12.0, 2);
+        assert_eq!(selected(&ti), "world");
+        // Back over the first word: everything from it to the end of
+        // "world", with the caret at the start.
+        drag_to(&mut ti, &mut focus, 1.0, 12.0);
+        assert_eq!(selected(&ti), "hello big world");
+        assert_eq!(ti.cursor_pos, 0);
+        assert_eq!(ti.selection_start, Some(ti.value.len()));
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_paragraph() {
+        let mut ti = TextInput::new(0.0, 0.0, 300.0, 120.0)
+            .with_multiline(true)
+            .with_value("one two\nthree four\nfive".to_string());
+        let mut focus = FocusState::new();
+        // Past the end of the first line.
+        click_n(&mut ti, &mut focus, 250.0, 12.0, 3);
+        assert_eq!(selected(&ti), "one two\n");
+        click_n(&mut ti, &mut focus, 250.0, 12.0, 1);
+        assert_eq!(selected(&ti), "", "a single click drops it again");
+    }
+
+    #[test]
+    fn a_double_click_in_a_password_selects_all_of_it() {
+        let mut ti = TextInput::new(0.0, 0.0, 300.0, 24.0)
+            .with_value("two words".to_string())
+            .password();
+        let mut focus = FocusState::new();
+        click_n(&mut ti, &mut focus, 250.0, 12.0, 2);
+        assert_eq!(selected(&ti), "two words");
+        drag_to(&mut ti, &mut focus, 1.0, 12.0);
+        assert_eq!(selected(&ti), "two words");
     }
 
     #[test]

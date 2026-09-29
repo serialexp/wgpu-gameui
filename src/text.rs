@@ -2687,6 +2687,21 @@ pub fn byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
     best_byte
 }
 
+/// Hit-test a point like [`byte_at_point`], but to the character **under**
+/// it rather than the caret nearest it: the byte of the last caret stop at or
+/// left of `x` on the line, so the right half of a character is still that
+/// character. What a double-click picks its word around.
+pub fn byte_under_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
+    let caret = byte_at_point(layout, x, y);
+    let line = caret_for_byte(layout, caret).line;
+    layout
+        .iter()
+        .filter(|p| p.line == line && p.x <= x)
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .or_else(|| layout.iter().find(|p| p.line == line))
+        .map_or(0, |p| p.byte)
+}
+
 /// Move the caret to the visual line `dir` steps away (`-1` up, `+1` down),
 /// landing at the caret nearest `desired_x` on that line (sticky-column vertical
 /// navigation). Returns `byte` unchanged when already at the top/bottom line.
@@ -3334,6 +3349,9 @@ pub struct TextBlock {
     /// horizontally within [`max_width`](Self::with_max_width) (`Start`/`Left`,
     /// `Center`, `End`/`Right`). See [`with_vertical`](Self::with_vertical).
     pub vertical: bool,
+    /// Where the block sits in selectable text, if it can be selected with the
+    /// pointer (default `None`: it can't). See [`selectable`](Self::selectable).
+    pub selectable: Option<crate::TextKey>,
 }
 
 impl TextBlock {
@@ -3364,6 +3382,7 @@ impl TextBlock {
             style_range_tint: [1.0; 4],
             wrap: WrapMode::default(),
             vertical: false,
+            selectable: None,
         }
     }
 
@@ -3499,6 +3518,15 @@ impl TextBlock {
     /// (e.g. `Center` to center a stacked label in a fixed-width slot).
     pub fn with_vertical(mut self) -> Self {
         self.vertical = true;
+        self
+    }
+
+    /// Let the pointer select this block's text, as the block `key` of its
+    /// scope: a selection can span it and the blocks keyed around it in the
+    /// same scope. Vertical text can't be selected. See
+    /// [`TextSelection`](crate::TextSelection).
+    pub fn selectable(mut self, key: crate::TextKey) -> Self {
+        self.selectable = Some(key);
         self
     }
 

@@ -219,6 +219,11 @@ pub struct UiState {
     /// layer at the end of the frame. Caller-owned; no `UiContext` verb wraps
     /// it.
     pub toasts: ToastStack,
+    /// The selection over [`selectable`](crate::TextBlock::selectable) text.
+    /// [`begin_frame`](Self::begin_frame) feeds it the pointer and copies it on
+    /// the copy key; the host highlights and collects it (see
+    /// [`TextSelection`](crate::TextSelection)).
+    pub text_selection: crate::TextSelection,
     /// Tooltip layer — register hover regions with
     /// [`TooltipLayer::hover_zone`], call [`tick`](TooltipLayer::tick) once per
     /// frame with `dt`, and [`draw`](TooltipLayer::draw) at the end of the
@@ -304,6 +309,18 @@ impl UiState {
         self.toasts.tick(dt);
         self.tooltips.tick(dt, input);
         self.frame_timings.reset(dt);
+        self.text_selection.handle_input(input);
+        // A focused field copies its own selection.
+        let field_focused = self
+            .focus
+            .focused()
+            .is_some_and(|id| self.text_inputs.contains_key(&id));
+        if input.key_copy
+            && !field_focused
+            && let (Some(text), Some(set)) = (self.text_selection.text(), &self.clipboard_set)
+        {
+            (set.borrow_mut())(text);
+        }
     }
 
     /// Per-frame teardown: resolve tree arrow-navigation (gated on the tree

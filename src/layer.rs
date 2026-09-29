@@ -93,6 +93,9 @@ pub struct LayerStack {
     /// commands route to. Empty = base list is current.
     active: Vec<usize>,
     font_system: Option<FontSystemHandle>,
+    /// The text selection every list paints (see
+    /// [`set_text_highlight`](Self::set_text_highlight)).
+    text_highlight: Option<crate::TextHighlight>,
 }
 
 impl Default for LayerStack {
@@ -109,6 +112,7 @@ impl LayerStack {
             layers: Vec::new(),
             active: Vec::new(),
             font_system: None,
+            text_highlight: None,
         }
     }
 
@@ -120,6 +124,7 @@ impl LayerStack {
             layers: Vec::new(),
             active: Vec::new(),
             font_system: Some(font_system),
+            text_highlight: None,
         }
     }
 
@@ -168,9 +173,22 @@ impl LayerStack {
     }
 
     fn make_list(&self) -> DrawList {
-        match &self.font_system {
+        let mut list = match &self.font_system {
             Some(fs) => DrawList::with_font_system(fs.clone()),
             None => DrawList::new(),
+        };
+        list.set_text_highlight(self.text_highlight);
+        list
+    }
+
+    /// Paint `highlight` behind selected text in the base list and every layer,
+    /// including ones pushed later: set it each frame, before drawing, from
+    /// [`TextSelection::highlight`](crate::TextSelection::highlight).
+    pub fn set_text_highlight(&mut self, highlight: Option<crate::TextHighlight>) {
+        self.text_highlight = highlight;
+        self.base.set_text_highlight(highlight);
+        for layer in &mut self.layers {
+            layer.list.set_text_highlight(highlight);
         }
     }
 

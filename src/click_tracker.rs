@@ -7,12 +7,17 @@
 //! the mouse fields of your [`InputState`] and **before** drawing widgets. It
 //! writes two fields:
 //!
-//! - [`InputState::mouse_double_clicked`] — `true` on the frame a second press
-//!   of the primary button arrives within [`ClickTracker::double_click_threshold`]
-//!   seconds of the first. `mouse_clicked` is also `true` on that frame, so
-//!   widgets that don't distinguish clicks from double-clicks need not change.
-//!   After a double-click fires, the window resets so a third click (however
-//!   quick) does not register as a second double.
+//! - [`InputState::mouse_click_count`] — on a press, how many presses of the
+//!   primary button it ends: `1` for a lone click, `2` for a double, `3` for a
+//!   triple and so on. A press continues the run when it arrives within
+//!   [`ClickTracker::double_click_threshold`] seconds of the previous one and
+//!   within [`CLICK_SLOP`] pixels of it; otherwise it starts a new run at `1`.
+//!   `0` on frames without a press.
+//!
+//! - [`InputState::mouse_double_clicked`] — `true` on the frame the count
+//!   reaches exactly `2`. `mouse_clicked` is also `true` on that frame, so
+//!   widgets that don't distinguish clicks from double-clicks need not change,
+//!   and a quick third click is a triple (count `3`), not a second double.
 //!
 //! - [`InputState::mouse_held`] — latches `true` once the primary button has
 //!   been held for at least [`ClickTracker::hold_threshold`] seconds from the
@@ -57,6 +62,10 @@ pub const DEFAULT_DOUBLE_CLICK_THRESHOLD: f64 = 0.45;
 /// Default hold time before [`InputState::mouse_held`] fires (seconds).
 pub const DEFAULT_HOLD_THRESHOLD: f64 = 0.5;
 
+/// How far (logical px, on either axis) a press may land from the previous one
+/// and still continue its run of clicks.
+pub const CLICK_SLOP: f32 = 4.0;
+
 /// Detects double-clicks and click-and-hold gestures, writing the result into
 /// [`InputState`] each frame.
 ///
@@ -65,8 +74,12 @@ pub const DEFAULT_HOLD_THRESHOLD: f64 = 0.5;
 #[derive(Debug, Clone)]
 pub struct ClickTracker {
     /// Time of the most recent primary-button press, `f64::NEG_INFINITY` when
-    /// none has been seen or after a double-click fires (to reset the window).
+    /// none has been seen (or after [`cancel`](Self::cancel)).
     last_click_time: f64,
+    /// Where that press landed.
+    last_click_pos: [f32; 2],
+    /// How many presses the current run has had.
+    count: u32,
     /// When the current press started; `None` when no press is active.
     down_since: Option<f64>,
     /// Whether the hold threshold has been crossed on the current gesture.
@@ -89,6 +102,8 @@ impl ClickTracker {
     pub fn new() -> Self {
         Self {
             last_click_time: f64::NEG_INFINITY,
+            last_click_pos: [0.0, 0.0],
+            count: 0,
             down_since: None,
             hold_latched: false,
             double_click_threshold: DEFAULT_DOUBLE_CLICK_THRESHOLD,
@@ -105,7 +120,8 @@ impl ClickTracker {
         }
     }
 
-    /// The double-click time window in seconds.
+    /// The time window (seconds) within which a press continues the run of
+    /// clicks before it.
     pub fn double_click_threshold(&self) -> f64 {
         self.double_click_threshold
     }
@@ -121,9 +137,10 @@ impl ClickTracker {
     }
 
     /// Abort any in-progress gesture (e.g. on window blur or focus loss).
-    /// The double-click window also resets.
+    /// The run of clicks also ends.
     pub fn cancel(&mut self) {
         self.last_click_time = f64::NEG_INFINITY;
+        self.count = 0;
         self.down_since = None;
         self.hold_latched = false;
     }
@@ -132,21 +149,25 @@ impl ClickTracker {
     ///
     /// `time_secs` is the current wall-clock time in seconds (monotonically
     /// increasing; e.g. `elapsed.as_secs_f64()` or winit's frame timestamp).
-    /// Reads `mouse_clicked`/`mouse_down`/`mouse_released`; writes
+    /// Reads `mouse_clicked`/`mouse_down`/`mouse_released` and the pointer;
+    /// writes [`InputState::mouse_click_count`],
     /// [`InputState::mouse_double_clicked`] and [`InputState::mouse_held`].
     pub fn update(&mut self, input: &mut InputState, time_secs: f64) {
         // ---- Press edge ----
         if input.mouse_clicked {
-            let gap = time_secs - self.last_click_time;
-            if gap <= self.double_click_threshold {
-                // Second click within the window → double-click.
-                input.mouse_double_clicked = true;
-                // Reset the window so a rapid third click is NOT another double.
-                self.last_click_time = f64::NEG_INFINITY;
+            let pos = [input.mouse_x, input.mouse_y];
+            let near = (pos[0] - self.last_click_pos[0]).abs() <= CLICK_SLOP
+                && (pos[1] - self.last_click_pos[1]).abs() <= CLICK_SLOP;
+            let quick = time_secs - self.last_click_time <= self.double_click_threshold;
+            self.count = if near && quick {
+                self.count.saturating_add(1)
             } else {
-                // First click in a new window; record the time.
-                self.last_click_time = time_secs;
-            }
+                1
+            };
+            self.last_click_time = time_secs;
+            self.last_click_pos = pos;
+            input.mouse_click_count = self.count;
+            input.mouse_double_clicked = self.count == 2;
             self.down_since = Some(time_secs);
             self.hold_latched = false;
         }
@@ -246,24 +267,63 @@ mod tests {
     }
 
     #[test]
-    fn third_click_after_double_is_not_another_double() {
-        // After a double fires the window resets, so a third rapid click
-        // starts a new single-click window rather than tripling.
+    fn a_quick_third_click_is_a_triple_not_another_double() {
         let mut ct = ClickTracker::new();
         let (mut i1, _) = click_at(0.0);
         advance(&mut ct, &mut i1, 0.0);
+        assert_eq!(i1.mouse_click_count, 1);
 
         let (mut i2, _) = click_at(0.2);
         advance(&mut ct, &mut i2, 0.2);
         assert!(i2.mouse_double_clicked, "second click triggers double");
+        assert_eq!(i2.mouse_click_count, 2);
 
-        // Third click — very quick, but window was reset.
-        let (mut i3, _) = click_at(0.21);
-        advance(&mut ct, &mut i3, 0.21);
+        let (mut i3, _) = click_at(0.4);
+        advance(&mut ct, &mut i3, 0.4);
+        assert_eq!(i3.mouse_click_count, 3);
         assert!(
             !i3.mouse_double_clicked,
             "third click after double must NOT be another double"
         );
+    }
+
+    #[test]
+    fn each_click_of_a_run_is_timed_from_the_one_before() {
+        // 0.3s apart each: the run spans 0.9s, longer than one window.
+        let mut ct = ClickTracker::new();
+        for (n, t) in [0.0, 0.3, 0.6, 0.9].into_iter().enumerate() {
+            let (mut i, _) = click_at(t);
+            advance(&mut ct, &mut i, t);
+            assert_eq!(i.mouse_click_count, n as u32 + 1);
+        }
+    }
+
+    #[test]
+    fn a_click_away_from_the_last_starts_a_new_run() {
+        let mut ct = ClickTracker::new();
+        let (mut i1, _) = click_at(0.0);
+        advance(&mut ct, &mut i1, 0.0);
+        let (mut i2, _) = click_at(0.1);
+        i2.mouse_x = CLICK_SLOP + 1.0;
+        advance(&mut ct, &mut i2, 0.1);
+        assert_eq!(i2.mouse_click_count, 1);
+        assert!(!i2.mouse_double_clicked);
+        // Within the slop of that one, it continues from there.
+        let (mut i3, _) = click_at(0.2);
+        i3.mouse_x = CLICK_SLOP + 2.0;
+        advance(&mut ct, &mut i3, 0.2);
+        assert_eq!(i3.mouse_click_count, 2);
+    }
+
+    #[test]
+    fn frames_without_a_press_count_no_clicks() {
+        let mut ct = ClickTracker::new();
+        let (mut press, _) = click_at(0.0);
+        advance(&mut ct, &mut press, 0.0);
+        press.end_frame();
+        let (mut h, _) = held(0.1);
+        advance(&mut ct, &mut h, 0.1);
+        assert_eq!(h.mouse_click_count, 0);
     }
 
     #[test]
@@ -277,22 +337,15 @@ mod tests {
         advance(&mut ct, &mut i2, 0.05);
         assert!(i2.mouse_double_clicked);
 
-        // After the double, the window resets to NEG_INFINITY. A click RIGHT
-        // after (0.06s) is 0.06 - NEG_INFINITY = ∞ > threshold → fresh single.
-        let (mut i3, _) = click_at(0.06);
-        advance(&mut ct, &mut i3, 0.06);
-        assert!(
-            !i3.mouse_double_clicked,
-            "click just after double-reset must be a fresh single"
-        );
-
-        // Two new clicks within the threshold of each other DO produce a double.
-        let (mut i4, _) = click_at(0.06 + 0.07); // 0.07s < 0.1s
-        advance(&mut ct, &mut i4, 0.06 + 0.07);
-        assert!(
-            i4.mouse_double_clicked,
-            "two quick clicks after reset produce another double"
-        );
+        // 0.15s after that is outside the window: a fresh single, and a
+        // quick click after it is a double again.
+        let (mut i3, _) = click_at(0.2);
+        advance(&mut ct, &mut i3, 0.2);
+        assert!(!i3.mouse_double_clicked);
+        assert_eq!(i3.mouse_click_count, 1);
+        let (mut i4, _) = click_at(0.27); // 0.07s < 0.1s
+        advance(&mut ct, &mut i4, 0.27);
+        assert!(i4.mouse_double_clicked);
     }
 
     // ---- Hold detection ----
@@ -403,11 +456,13 @@ mod tests {
     #[test]
     fn end_frame_clears_double_clicked_and_held() {
         let mut i = InputState {
+            mouse_click_count: 2,
             mouse_double_clicked: true,
             mouse_held: true,
             ..InputState::default()
         };
         i.end_frame();
+        assert_eq!(i.mouse_click_count, 0);
         assert!(!i.mouse_double_clicked);
         assert!(!i.mouse_held);
     }
@@ -415,11 +470,13 @@ mod tests {
     #[test]
     fn consumed_zeros_double_clicked_and_held() {
         let i = InputState {
+            mouse_click_count: 2,
             mouse_double_clicked: true,
             mouse_held: true,
             ..InputState::default()
         };
         let c = i.consumed();
+        assert_eq!(c.mouse_click_count, 0);
         assert!(!c.mouse_double_clicked, "consumed must zero double_clicked");
         assert!(!c.mouse_held, "consumed must zero held");
     }

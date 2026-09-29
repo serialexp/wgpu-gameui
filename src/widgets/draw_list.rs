@@ -502,6 +502,12 @@ pub struct DrawList {
     /// Logged-once flag for "tried to draw rotated text" — glyphon does not
     /// support rotation, so we silently render axis-aligned.
     text_rotation_warned: bool,
+    /// The [`selectable`](TextBlock::selectable) blocks drawn so far, as their
+    /// key and index into `texts`.
+    selectable: Vec<(crate::TextKey, u32)>,
+    /// The text selection to paint behind selectable blocks as they are drawn.
+    /// Kept by [`clear`](Self::clear): the host sets it each frame.
+    text_highlight: Option<crate::TextHighlight>,
     /// Unique identity (see [`next_draw_list_id`]). Stable for this list's whole
     /// lifetime and never reused; lets the renderer tell a reused list from a
     /// per-frame-fresh one. `clear()` keeps it (the list is the same object).
@@ -533,6 +539,8 @@ impl Default for DrawList {
             debug_scope_stack: Vec::new(),
             dropped_degenerate: 0,
             text_rotation_warned: false,
+            selectable: Vec::new(),
+            text_highlight: None,
             id: next_draw_list_id(),
         }
     }
@@ -583,6 +591,8 @@ impl DrawList {
             debug_scope_stack: Vec::new(),
             dropped_degenerate: 0,
             text_rotation_warned: false,
+            selectable: Vec::new(),
+            text_highlight: None,
             id: next_draw_list_id(),
         }
     }
@@ -606,6 +616,7 @@ impl DrawList {
         self.vertices.clear();
         self.indices.clear();
         self.texts.clear();
+        self.selectable.clear();
         self.icons.clear();
         self.nine_slices.clear();
         #[cfg(feature = "phosphor-icons")]
@@ -2215,6 +2226,63 @@ impl DrawList {
         );
     }
 
+    /// Paint `highlight` behind the selected part of each
+    /// [`selectable`](TextBlock::selectable) block drawn from now on; `None`
+    /// paints none. Usually set for every layer at once through
+    /// [`LayerStack::set_text_highlight`](crate::LayerStack::set_text_highlight).
+    pub fn set_text_highlight(&mut self, highlight: Option<crate::TextHighlight>) {
+        self.text_highlight = highlight;
+    }
+
+    /// The [`selectable`](TextBlock::selectable) blocks drawn so far, with
+    /// their keys, as drawn: in screen space.
+    pub fn selectable_texts(&self) -> impl Iterator<Item = (crate::TextKey, &TextBlock)> {
+        self.selectable
+            .iter()
+            .map(|&(key, index)| (key, &self.texts[index as usize]))
+    }
+
+    /// The selected part of `block`, painted behind it, in the block's own
+    /// (pre-transform) space.
+    fn paint_text_highlight(&mut self, block: &TextBlock) {
+        let (Some(highlight), Some(key)) = (self.text_highlight, block.selectable) else {
+            return;
+        };
+        if block.vertical {
+            return;
+        }
+        let Some(range) = highlight.range_of(key, block.content.len()) else {
+            return;
+        };
+        let rects = {
+            let handle = self.text_measurer.font_system_handle();
+            let mut shared = handle.lock().expect("FontSystem poisoned");
+            let layout =
+                shared.layout(&crate::shaping::LayoutSpec::of_block(block), &block.content);
+            crate::text_select::highlight_rects(layout, range)
+        };
+        // The block's own clip is in screen space; bring it back through the
+        // transform the quads go through.
+        let own_clip = block
+            .clip
+            .map(|clip| self.current_transform().inverse().transform_rect_aabb(clip));
+        if let Some(clip) = own_clip {
+            self.push_clip(clip);
+        }
+        for rect in rects {
+            self.quad(
+                block.x + rect.x,
+                block.y + rect.y,
+                rect.width,
+                rect.height,
+                highlight.color,
+            );
+        }
+        if own_clip.is_some() {
+            self.pop_clip();
+        }
+    }
+
     /// Add text. The block's origin is transformed through the current
     /// affine; uniform scale (the geometric mean of the X and Y axis basis
     /// lengths, i.e. `sqrt(|det|)`) is applied to font_size, line_height and
@@ -2358,6 +2426,8 @@ impl DrawList {
             }
         }
 
+        self.paint_text_highlight(&block);
+
         // Transform origin.
         let origin = m.transform_point([block.x, block.y]);
         block.x = origin[0];
@@ -2389,6 +2459,9 @@ impl DrawList {
         }
         self.flush_soup();
         let start = self.texts.len() as u32;
+        if let Some(key) = block.selectable.filter(|_| !block.vertical) {
+            self.selectable.push((key, start));
+        }
         self.texts.push(block);
         self.push_paint_cmd(PaintCmd::Text {
             draws: start..start + 1,

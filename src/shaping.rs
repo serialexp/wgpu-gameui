@@ -299,12 +299,34 @@ pub(crate) struct ShapedGlyph {
     /// Byte offset of the glyph's source character in the block's content, for
     /// span and style-range colours.
     pub byte_start: u32,
+    /// Where the glyph's cluster ends in the content: with `byte_start`, the
+    /// bytes selecting the glyph selects.
+    pub byte_end: u32,
+    /// The glyph's advance: its cell spans `rel_x..rel_x + advance`.
+    pub advance: f32,
+    /// Whether the glyph runs right to left, so its cell's left edge is its
+    /// end rather than its start.
+    pub rtl: bool,
+}
+
+/// One laid-out line of a [`ShapedLayout`], relative to the block origin.
+#[derive(Clone, Debug)]
+pub(crate) struct ShapedLine {
+    /// The line box's top.
+    pub top: f32,
+    pub height: f32,
+    /// Its glyphs, as indices into [`ShapedLayout::glyphs`].
+    pub glyphs: std::ops::Range<u32>,
+    /// Where the line starts in the content; all an empty line has.
+    pub byte_start: u32,
 }
 
 /// A laid-out string: its glyphs, including outline-less ones such as spaces,
 /// and the size layout reserves for it.
 pub(crate) struct ShapedLayout {
     pub glyphs: Vec<ShapedGlyph>,
+    /// The lines, top to bottom, including empty ones.
+    pub lines: Vec<ShapedLine>,
     /// The widest line's advance and the lines' total height: what
     /// [`TextMeasurer`](crate::TextMeasurer) reports.
     pub size: (f32, f32),
@@ -390,6 +412,7 @@ impl LayoutCache {
             let layout = shape_layout(font_system, spec, content);
             let bytes = content.len()
                 + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
+                + layout.lines.len() * std::mem::size_of::<ShapedLine>()
                 + LAYOUT_OVERHEAD;
             if self.bytes + bytes > self.budget {
                 self.evict();
@@ -574,6 +597,7 @@ pub(crate) fn shape_layout(
         .collect();
 
     let mut glyphs = Vec::new();
+    let mut lines = Vec::new();
     let mut width = 0.0f32;
     let mut height = 0.0f32;
     for run in buffer.layout_runs() {
@@ -585,16 +609,19 @@ pub(crate) fn shape_layout(
             0.0
         };
         let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
+        // The direction prefix sits once at the head of the shaped string
+        // (never inside later lines), so it comes off the absolute byte once,
+        // not off the line base.
+        let content_byte = |shaped: usize| {
+            if spec.vertical {
+                (line_base + shaped).saturating_sub(run.line_i)
+            } else {
+                (line_base + shaped).saturating_sub(prefix_len)
+            }
+        };
+        let first = glyphs.len() as u32;
         for glyph in run.glyphs {
             let font_size = glyph.font_size;
-            // The direction prefix sits once at the head of the shaped string
-            // (never inside later lines), so it comes off the absolute byte
-            // once, not off the line base.
-            let byte_start = if spec.vertical {
-                (line_base + glyph.start).saturating_sub(run.line_i)
-            } else {
-                (line_base + glyph.start).saturating_sub(prefix_len)
-            };
             glyphs.push(ShapedGlyph {
                 font_id: glyph.font_id,
                 font_weight: glyph.font_weight,
@@ -602,9 +629,18 @@ pub(crate) fn shape_layout(
                 rel_x: glyph.x + font_size * glyph.x_offset + line_off_x,
                 rel_y: run.line_y + glyph.y - font_size * glyph.y_offset,
                 font_size,
-                byte_start: byte_start as u32,
+                byte_start: content_byte(glyph.start) as u32,
+                byte_end: content_byte(glyph.end) as u32,
+                advance: glyph.w,
+                rtl: glyph.level.is_rtl(),
             });
         }
+        lines.push(ShapedLine {
+            top: run.line_top,
+            height: run.line_height,
+            glyphs: first..glyphs.len() as u32,
+            byte_start: content_byte(0) as u32,
+        });
     }
 
     let size = if content.is_empty() {
@@ -614,6 +650,7 @@ pub(crate) fn shape_layout(
     };
     ShapedLayout {
         glyphs,
+        lines,
         size,
         ink: OnceCell::new(),
     }
