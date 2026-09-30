@@ -33,6 +33,10 @@ pub enum WellChipPart<'a> {
     /// Mono text. `None` takes the chip's ink (`--ink-2`, `--ink-max` while
     /// hovered); `Some` keeps its own (e.g. a caption-coloured unit).
     Text(&'a str, Option<Ink>),
+    /// Mono text in a colour of its own, off the ink ladder: a state the
+    /// chip reports, e.g. `--warn-soft-ink` for uncommitted changes. It
+    /// keeps that colour while the chip is hovered.
+    Tinted(&'a str, [f32; 4]),
     /// An inline meter `width` wide.
     Meter(f32, MeterFill),
 }
@@ -69,7 +73,9 @@ impl<'a> WellChip<'a> {
 
     fn part_width(list: &mut DrawList, s: &StyleResolver, part: &WellChipPart) -> f32 {
         match *part {
-            WellChipPart::Text(text, _) => s.mono_width(list, text, TextSize::Meta),
+            WellChipPart::Text(text, _) | WellChipPart::Tinted(text, _) => {
+                s.mono_width(list, text, TextSize::Meta)
+            }
             WellChipPart::Meter(width, _) => width,
         }
     }
@@ -126,6 +132,13 @@ impl<'a> WellChip<'a> {
                 WellChipPart::Text(text, own) => {
                     let ty = crate::text::vcentered_line_y(rect.y, rect.height, size);
                     list.text(s.mono_block(text, px, ty, TextSize::Meta, own.unwrap_or(ink)));
+                }
+                WellChipPart::Tinted(text, color) => {
+                    let ty = crate::text::vcentered_line_y(rect.y, rect.height, size);
+                    list.text(
+                        s.mono_block(text, px, ty, TextSize::Meta, ink)
+                            .with_color_f32(color),
+                    );
                 }
                 WellChipPart::Meter(width, fill) => {
                     let my = (cy - INLINE_METER_HEIGHT * 0.5).round();
@@ -186,6 +199,37 @@ mod tests {
         );
         let unit = list.texts.iter().find(|t| t.content == "5h").unwrap();
         assert_eq!(unit.color, crate::color::text_color(s.ink(Ink::Caption)));
+    }
+
+    #[test]
+    fn a_tinted_part_keeps_its_colour_when_hovered() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let amber = [0.9, 0.7, 0.3, 1.0];
+        let parts = [
+            WellChipPart::Text("main", None),
+            WellChipPart::Tinted("±3", amber),
+        ];
+        let chip = WellChip::new(&parts);
+        let mut list = DrawList::new();
+        let w = chip.width(&mut list, &s);
+        let measure = |list: &mut DrawList, text| {
+            list.measure_block(&s.mono_block(text, 0.0, 0.0, TextSize::Meta, Ink::Max))
+                .0
+        };
+        let main = measure(&mut list, "main");
+        let changes = measure(&mut list, "±3");
+        assert!((w - (main + changes + GAP + 2.0 * PAD)).abs() < 0.01);
+        let hover = InputState {
+            mouse_x: 5.0,
+            mouse_y: 5.0,
+            ..Default::default()
+        };
+        chip.draw(0.0, 0.0, &mut list, &s, &hover);
+        let tinted = list.texts.iter().find(|t| t.content == "±3").unwrap();
+        assert_eq!(tinted.color, crate::color::text_color(amber));
+        let plain = list.texts.iter().find(|t| t.content == "main").unwrap();
+        assert_eq!(plain.color, crate::color::text_color(s.ink(Ink::Max)));
     }
 
     #[test]
