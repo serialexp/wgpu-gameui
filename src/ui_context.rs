@@ -248,6 +248,17 @@ impl UiState {
         self.clipboard_set = Some(std::rc::Rc::new(std::cell::RefCell::new(set)));
     }
 
+    /// Put `text` on the clipboard through the callback
+    /// [`set_clipboard`](Self::set_clipboard) installed, for a host's own
+    /// Copy button. Returns `false` when no clipboard is installed.
+    pub fn copy_text(&self, text: String) -> bool {
+        let Some(set) = &self.clipboard_set else {
+            return false;
+        };
+        (set.borrow_mut())(text);
+        true
+    }
+
     /// Per-frame setup: fill this frame's navigation intents via `nav`, let each
     /// consumer **claim** the intents it will act on, arm focus navigation for
     /// whatever is left, seed the auto-advance gap from the theme, and advance the
@@ -3354,6 +3365,17 @@ mod tests {
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn copy_text_goes_through_the_installed_clipboard() {
+        let mut state = UiState::new();
+        assert!(!state.copy_text("nowhere".into()), "no clipboard installed");
+        let copied = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let sink = copied.clone();
+        state.set_clipboard(String::new, move |text| *sink.borrow_mut() = text);
+        assert!(state.copy_text("{\"a\":1}".into()));
+        assert_eq!(*copied.borrow(), "{\"a\":1}");
     }
 
     #[test]
