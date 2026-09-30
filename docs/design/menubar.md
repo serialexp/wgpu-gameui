@@ -673,7 +673,7 @@ the identical bug today: clicking a dropdown row blurs the focused field.
 ### 4. Generic key edges (Phase 4)
 
 Accelerators and mnemonics need a key vocabulary that the named-boolean fields
-and `text_input` do not provide; `key_select_all`/`key_cut`/`key_copy`/`key_paste`
+and `text_input` do not provide; `key_select_all`/`key_cut`/`key_copy`/`key_paste`/`key_clear`
 are the established precedent for host-supplied shortcut edges
 (`src/lib.rs:236`). A fixed-size bitset, indexed by a total `Key → usize`
 mapping (`Char` by ASCII code, 2 words; named keys, 1 word), keeps it

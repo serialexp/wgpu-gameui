@@ -287,6 +287,10 @@ pub struct InputState {
     pub key_copy: bool,
     /// Platform paste shortcut (Ctrl+V, or Cmd+V on macOS) was pressed.
     pub key_paste: bool,
+    /// The host's clear-field shortcut was pressed: a focused text input
+    /// empties entirely. No platform has a standard key for this; a host might
+    /// bind Ctrl+U, which erases the line in a terminal.
+    pub key_clear: bool,
     /// Tab key was pressed this frame. Drives focus navigation
     /// (Shift+Tab reverses via [`shift_pressed`](Self::shift_pressed)).
     pub key_tab: bool,
@@ -376,6 +380,7 @@ impl Default for InputState {
             key_cut: false,
             key_copy: false,
             key_paste: false,
+            key_clear: false,
             key_tab: false,
             key_escape: false,
             key_space: false,
@@ -435,6 +440,7 @@ impl InputState {
         self.key_cut = false;
         self.key_copy = false;
         self.key_paste = false;
+        self.key_clear = false;
         self.key_tab = false;
         self.key_escape = false;
         self.key_space = false;

@@ -639,6 +639,16 @@ impl TextInput {
         }
     }
 
+    /// Empty the field, back to its first line and column.
+    pub fn clear(&mut self) {
+        self.value.clear();
+        self.cursor_pos = 0;
+        self.selection_start = None;
+        self.desired_caret_x = None;
+        self.scroll_offset = 0.0;
+        self.horizontal_scroll_offset = 0.0;
+    }
+
     /// Cut: copy selection to clipboard then delete it.
     fn cut(&mut self) {
         let text = self.selected_text().map(|s| s.to_string());
@@ -748,6 +758,10 @@ impl TextInput {
         }
         if input.key_paste || ctrl_letter == Some('v') {
             self.paste();
+            return;
+        }
+        if input.key_clear {
+            self.clear();
             return;
         }
 
@@ -2031,6 +2045,25 @@ mod tests {
         };
         ti.process_keyboard(&input);
         assert_eq!(ti.selection_range(), Some((0, 11)));
+    }
+
+    #[test]
+    fn the_clear_shortcut_empties_the_whole_field() {
+        let mut ti = make_input("first line\nsecond line");
+        ti.multiline = true;
+        ti.cursor_pos = 14;
+        ti.selection_start = Some(3);
+        ti.scroll_offset = 40.0;
+        ti.horizontal_scroll_offset = 12.0;
+        let input = InputState {
+            key_clear: true,
+            ..Default::default()
+        };
+        ti.process_keyboard(&input);
+        assert_eq!(ti.value, "");
+        assert_eq!(ti.cursor_pos, 0);
+        assert_eq!(ti.selection_range(), None);
+        assert_eq!((ti.scroll_offset, ti.horizontal_scroll_offset), (0.0, 0.0));
     }
 
     #[test]
