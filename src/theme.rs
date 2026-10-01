@@ -230,6 +230,8 @@ pub struct Theme {
     pub status_ok: [f32; 4],
     /// A state waiting on the user (status dots, warning meta text).
     pub warn_meta: [f32; 4],
+    /// Text that says what waits on the user (a sidebar row's question).
+    pub warn_soft_ink: [f32; 4],
     /// Something new and unseen (unread dots, dirty tabs).
     pub accent_dirty: [f32; 4],
     /// A handle being dragged: a scrubbed property label, a splitter grip.
@@ -430,6 +432,7 @@ impl Default for Theme {
             edge_hard: [0.0, 0.0, 0.0, 0.65],
             status_ok: oklch(0.7, 0.14, 145.0, 1.0),
             warn_meta: oklch(0.82, 0.13, 75.0, 1.0),
+            warn_soft_ink: oklch(0.85, 0.12, 75.0, 1.0),
             accent_dirty: oklch(0.78, 0.12, 200.0, 1.0),
             accent_grip: oklch(0.82, 0.1, 200.0, 1.0),
             accent_glyph: oklch(0.72, 0.09, 200.0, 1.0),
@@ -729,6 +732,7 @@ impl Theme {
             EdgeHard => StyleValue::Color(self.edge_hard),
             StatusOk => StyleValue::Color(self.status_ok),
             WarnMeta => StyleValue::Color(self.warn_meta),
+            WarnSoftInk => StyleValue::Color(self.warn_soft_ink),
             AccentDirty => StyleValue::Color(self.accent_dirty),
             AccentGrip => StyleValue::Color(self.accent_grip),
             AccentGlyph => StyleValue::Color(self.accent_glyph),
@@ -840,6 +844,7 @@ impl Theme {
             (EdgeHard, StyleValue::Color(c)) => self.edge_hard = c,
             (StatusOk, StyleValue::Color(c)) => self.status_ok = c,
             (WarnMeta, StyleValue::Color(c)) => self.warn_meta = c,
+            (WarnSoftInk, StyleValue::Color(c)) => self.warn_soft_ink = c,
             (AccentDirty, StyleValue::Color(c)) => self.accent_dirty = c,
             (AccentGrip, StyleValue::Color(c)) => self.accent_grip = c,
             (AccentGlyph, StyleValue::Color(c)) => self.accent_glyph = c,

@@ -11,6 +11,7 @@ mod breadcrumb;
 mod busy;
 mod button;
 mod checkbox;
+mod choice_card;
 mod color_picker;
 mod combo_box;
 mod confirm_dialog;
@@ -109,6 +110,7 @@ pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
 pub use busy::{dots, skeleton, spinner};
 pub use button::Button;
 pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
+pub use choice_card::{ChoiceCard, ChoiceMark, ChoiceResponse};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
 pub use combo_box::{
     ComboOutput, draw_list as draw_combo_list, draw_trigger as draw_combo_trigger,

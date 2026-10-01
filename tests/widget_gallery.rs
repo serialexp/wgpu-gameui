@@ -327,6 +327,7 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
         Category::Forms,
         &[
             "Checkbox",
+            "ChoiceCard",
             "ComboBox",
             "Dropdown",
             "FieldLabel",
@@ -2440,6 +2441,47 @@ fn render_widget_gallery() {
         let r = flow.cell(list, "Radio (horizontal)", rw, rh);
         horizontal.draw(0, r, &mut ctx(list, &mut focus, &theme, &input));
 
+        flow.section(list, Category::Forms, "ChoiceCard", "answers to pick");
+        {
+            use wgpu_gameui::{ChoiceCard, ChoiceMark};
+            let s = StyleResolver::new(&theme);
+            let cards = [
+                ChoiceCard::new("Postgres")
+                    .description("Runs as its own service, and keeps every write.")
+                    .selected(true),
+                ChoiceCard::new("SQLite").description("One file next to the app."),
+                ChoiceCard::new("Other")
+                    .description("Provide a custom answer")
+                    .dashed(true),
+            ];
+            let w = 260.0;
+            let heights: Vec<f32> = cards.iter().map(|c| c.height(w, list, &s)).collect();
+            let total = heights.iter().sum::<f32>() + 4.0 * (cards.len() - 1) as f32;
+            let r = flow.cell(list, "Pick one · picked · other", w, total);
+            let mut y = r.y;
+            for (card, h) in cards.iter().zip(&heights) {
+                card.draw(Rect::new(r.x, y, w, *h), list, &s, &input);
+                y += h + 4.0;
+            }
+            let checks = [
+                ChoiceCard::new("Linux")
+                    .mark(ChoiceMark::Check)
+                    .selected(true),
+                ChoiceCard::new("macOS")
+                    .mark(ChoiceMark::Check)
+                    .selected(true),
+                ChoiceCard::new("Windows").mark(ChoiceMark::Check),
+            ];
+            let heights: Vec<f32> = checks.iter().map(|c| c.height(w, list, &s)).collect();
+            let total = heights.iter().sum::<f32>() + 4.0 * (checks.len() - 1) as f32;
+            let r = flow.cell(list, "Pick any", w, total);
+            let mut y = r.y;
+            for (card, h) in checks.iter().zip(&heights) {
+                card.draw(Rect::new(r.x, y, w, *h), list, &s, &input);
+                y += h + 4.0;
+            }
+        }
+
         flow.section(list, Category::Forms, "ProgressBar", "");
         let r = flow.cell(list, "Progress bar", 150.0, 20.0);
         ProgressBar::new(0.65).draw(r, list, &StyleResolver::new(&theme));
@@ -3277,7 +3319,8 @@ fn render_widget_gallery() {
                 GroupRow::More(GroupMore::new("2 older", "3d – 8d")),
                 GroupRow::Header(
                     GroupHeader::new("AJME-54")
-                        .count("1 / 1")
+                        .count("2 / 2")
+                        .asking("1")
                         .thumb(Thumb::new().name("AJME-54")),
                 ),
                 GroupRow::Item(
@@ -3286,6 +3329,14 @@ fn render_widget_gallery() {
                         .chip("claude opus", 45.0)
                         .meta("6m")
                         .status(Status::Waiting),
+                ),
+                GroupRow::Item(
+                    GroupItem::new("Pick a storage engine")
+                        .subtitle("@keen-heron · 88 msgs")
+                        .notice("2 questions · Which database should it use?")
+                        .chip("codex", 160.0)
+                        .meta("2m")
+                        .status(Status::Asking),
                 ),
                 GroupRow::Header(
                     GroupHeader::new("quiet projects")
@@ -3321,7 +3372,7 @@ fn render_widget_gallery() {
             // (label, selected, hovered row)
             let cases = [
                 (
-                    "Sidebar · selected · running · waiting · unread",
+                    "Sidebar · selected · running · waiting · asking · unread",
                     Some(2),
                     None,
                 ),
@@ -3402,11 +3453,17 @@ fn render_widget_gallery() {
                 "session state on a row",
             );
             // Idle deliberately draws no dot; it holds the fourth slot empty.
-            let r = flow.cell(list, "Running · waiting · unread · (idle)", 200.0, 16.0);
+            let r = flow.cell(
+                list,
+                "Running · waiting · asking · unread · (idle)",
+                200.0,
+                16.0,
+            );
             let mut x = r.x + 4.0;
             for status in [
                 Status::Running,
                 Status::Waiting,
+                Status::Asking,
                 Status::Unread,
                 Status::Idle,
             ] {

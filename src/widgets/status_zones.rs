@@ -17,7 +17,7 @@ use crate::style::{Ink, StyleResolver, TextSize};
 
 use super::DrawList;
 use super::meter::{INLINE_METER_HEIGHT, MeterFill, inline_meter};
-use super::status_dot::{STATUS_DOT_SIZE, Status, status_dot};
+use super::status_dot::{Status, status_dot};
 
 /// Space inside the band's ends.
 const BAND_PAD: f32 = 6.0;
@@ -122,7 +122,7 @@ fn part_width(list: &mut DrawList, s: &StyleResolver, part: &StatusPart) -> f32 
     match *part {
         StatusPart::Text(text) | StatusPart::Tinted(text, _) => mono_width(list, s, text),
         StatusPart::Value(text, _, min) => mono_width(list, s, text).max(min),
-        StatusPart::Dot(_) => STATUS_DOT_SIZE,
+        StatusPart::Dot(status) => status.size(),
         StatusPart::Meter(width, _) => width,
     }
 }
@@ -365,7 +365,7 @@ fn draw_zone(
                 );
             }
             StatusPart::Dot(status) => {
-                status_dot(list, s, (x + STATUS_DOT_SIZE * 0.5, cy), status);
+                status_dot(list, s, (x + status.size() * 0.5, cy), status);
             }
             StatusPart::Meter(width, fill) => {
                 let my = (cy - INLINE_METER_HEIGHT * 0.5).round();

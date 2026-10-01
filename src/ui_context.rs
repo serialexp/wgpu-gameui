@@ -469,6 +469,10 @@ pub struct UiContext<'a> {
     /// `pop`, so a scope opened inside a `push`/`pop` frame (notably by
     /// [`window_begin`](UiContext::window_begin)) closes with it.
     debug_scope_depth_stack: Vec<usize>,
+    /// Debug scopes already open when this context was made (it may be made
+    /// inside a [`ScrollView`](crate::widgets::ScrollView), say): its own
+    /// must all be closed by the time it drops, theirs belong to the caller.
+    entry_debug_scopes: usize,
     /// Stack of layer kinds still open — used by Drop debug_assert, by
     /// modal_end / popup_end to verify the caller closed the right kind, and
     /// to detect unbalanced begin/end pairs. Length == number of open layers.
@@ -541,6 +545,7 @@ impl<'a> UiContext<'a> {
     /// debug_assert when called on this variant — switch to
     /// [`UiContext::with_layers`] for full layer support.
     pub fn new(list: &'a mut DrawList) -> Self {
+        let entry_debug_scopes = list.debug_scope_depth();
         Self {
             backend: Backend::List(list),
             align_stack: vec![AlignSpec::DEFAULT],
@@ -548,6 +553,7 @@ impl<'a> UiContext<'a> {
             window_stack: Vec::new(),
             window_depth_stack: Vec::new(),
             debug_scope_depth_stack: Vec::new(),
+            entry_debug_scopes,
             open_layer_kinds: Vec::new(),
             open_rect_scopes: 0,
             warned_align_tokens: std::collections::HashSet::new(),
@@ -568,6 +574,7 @@ impl<'a> UiContext<'a> {
 
     /// Wrap a `LayerStack`. Enables `modal_begin`/`popup_begin`.
     pub fn with_layers(layers: &'a mut LayerStack) -> Self {
+        let entry_debug_scopes = layers.current_mut().debug_scope_depth();
         Self {
             backend: Backend::Layers(layers),
             align_stack: vec![AlignSpec::DEFAULT],
@@ -575,6 +582,7 @@ impl<'a> UiContext<'a> {
             window_stack: Vec::new(),
             window_depth_stack: Vec::new(),
             debug_scope_depth_stack: Vec::new(),
+            entry_debug_scopes,
             open_layer_kinds: Vec::new(),
             open_rect_scopes: 0,
             warned_align_tokens: std::collections::HashSet::new(),
@@ -3349,7 +3357,11 @@ impl<'a> Drop for UiContext<'a> {
         // An unbalanced debug scope does not corrupt rendering, but it silently
         // swallows every later draw into the leaked scope and makes the layout
         // report wrong — which is exactly when someone is relying on it.
-        let open_scopes = self.backend.list_mut().debug_scope_depth();
+        let open_scopes = self
+            .backend
+            .list_mut()
+            .debug_scope_depth()
+            .saturating_sub(self.entry_debug_scopes);
         debug_assert_eq!(
             open_scopes, 0,
             "UiContext dropped with {open_scopes} unbalanced push_debug_scope/pop_debug_scope pair(s)"
@@ -4286,6 +4298,30 @@ mod tests {
     #[should_panic(expected = "unbalanced push_debug_scope/pop_debug_scope")]
     fn unbalanced_debug_scope_drop_panics_in_debug() {
         let mut list = DrawList::new();
+        let mut ui = UiContext::new(&mut list);
+        ui.push_debug_scope("never_popped");
+        drop(ui);
+    }
+
+    #[test]
+    fn a_context_made_inside_an_open_scope_leaves_that_scope_alone() {
+        // A scroll view's content is drawn inside the view's scope, and may
+        // make a context of its own (for a text field, say).
+        let mut list = DrawList::new();
+        list.push_debug_scope("ScrollView");
+        {
+            let mut ui = UiContext::new(&mut list);
+            ui.debug_scope("field", |ui| ui.quad(10.0, 10.0, [1.0; 4]));
+        }
+        assert_eq!(list.debug_scope_depth(), 1, "the caller's scope stays open");
+        list.pop_debug_scope();
+    }
+
+    #[test]
+    #[should_panic(expected = "unbalanced push_debug_scope/pop_debug_scope")]
+    fn a_scope_leaked_inside_an_open_one_still_panics() {
+        let mut list = DrawList::new();
+        list.push_debug_scope("ScrollView");
         let mut ui = UiContext::new(&mut list);
         ui.push_debug_scope("never_popped");
         drop(ui);

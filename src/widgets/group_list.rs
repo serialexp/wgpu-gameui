@@ -6,11 +6,14 @@
 //!
 //! - **Header** ([`GroupHeader`], 23 px): a disclosure triangle, an optional
 //!   [`Thumb`], the group's name and a right-aligned count, on an opaque
-//!   raised bar. Clicking it asks to toggle the group.
+//!   raised bar; before the count, a ringed amber dot and how many of its
+//!   items ask the user something, when any do. Clicking it asks to toggle
+//!   the group.
 //! - **Item** ([`GroupItem`], 37 px): a [`status_dot`], a title with a mono
 //!   sub line under it, and on the right a compact hue [`Badge`](crate::Badge) over a meta text (an
-//!   age). While hovered, the meta gives way to a ghost `⋯` key that asks for
-//!   the item's menu. The selected item wears the accent.
+//!   age). An item that asks the user something says what in amber sans in
+//!   the sub line's place. While hovered, the meta gives way to a ghost `⋯`
+//!   key that asks for the item's menu. The selected item wears the accent.
 //! - **More** ([`GroupMore`], 23 px): a quiet mono "… 3 older" row with a
 //!   meta on the right. Clicking it asks to show what it hides.
 //!
@@ -52,7 +55,7 @@ use crate::{Edge, InputState};
 use super::badge::{BADGE_COMPACT_HEIGHT, Badge, BadgeTone};
 use super::material::{self, Material, Tone};
 use super::scroll_view::{ScrollState, ScrollView};
-use super::status_dot::{STATUS_DOT_SIZE, Status, status_dot};
+use super::status_dot::{STATUS_DOT_SIZE, Status, asking_dot, status_dot};
 use super::tree::{CARET_HALF, draw_disclosure};
 use super::{DrawList, Icon, Thumb};
 
@@ -97,6 +100,11 @@ const SELECT_TOP: [f32; 4] = [1.0, 1.0, 1.0, 0.28];
 const SELECT_BOTTOM: [f32; 4] = [0.0, 0.0, 0.0, 0.25];
 /// The carve under header names (`--carve`).
 const CARVE_ALPHA: u8 = 128;
+/// A header's asking count: its dot, the dot's glow, and the gap to the
+/// number.
+const ASKING_DOT: f32 = 6.0;
+const ASKING_BLUR: f32 = 6.0;
+const ASKING_GAP: f32 = 5.0;
 
 /// Which kind a row is. Fixes the row's height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -209,6 +217,9 @@ pub struct GroupHeader<'a> {
     pub name: &'a str,
     /// The right-aligned count ("2 / 5").
     pub count: &'a str,
+    /// How many of the group's items ask the user something ("2"), shown
+    /// before the count with a ringed amber dot; empty for none.
+    pub asking: &'a str,
     /// Whether the group is open (the triangle points down).
     pub open: bool,
     /// The tile before the name.
@@ -228,6 +239,7 @@ impl<'a> GroupHeader<'a> {
         Self {
             name,
             count: "",
+            asking: "",
             open: true,
             thumb: None,
             mono: true,
@@ -240,6 +252,13 @@ impl<'a> GroupHeader<'a> {
     #[must_use]
     pub fn count(mut self, count: &'a str) -> Self {
         self.count = count;
+        self
+    }
+
+    /// Set how many of the group's items ask the user something.
+    #[must_use]
+    pub fn asking(mut self, asking: &'a str) -> Self {
+        self.asking = asking;
         self
     }
 
@@ -286,6 +305,9 @@ pub struct GroupItem<'a> {
     pub title: &'a str,
     /// The mono line under the title.
     pub subtitle: &'a str,
+    /// What the item asks the user, in the subtitle's place: amber sans,
+    /// selected or not. Empty for nothing.
+    pub notice: &'a str,
     /// A hue-tinted chip on the right: its text and hue in degrees.
     pub chip: Option<(&'a str, f32)>,
     /// The meta under the chip (an age), replaced by the `⋯` key on hover.
@@ -307,6 +329,7 @@ impl<'a> GroupItem<'a> {
         Self {
             title,
             subtitle: "",
+            notice: "",
             chip: None,
             meta: "",
             status: Status::Idle,
@@ -320,6 +343,13 @@ impl<'a> GroupItem<'a> {
     #[must_use]
     pub fn subtitle(mut self, subtitle: &'a str) -> Self {
         self.subtitle = subtitle;
+        self
+    }
+
+    /// Say what the item asks the user, in the subtitle's place.
+    #[must_use]
+    pub fn notice(mut self, notice: &'a str) -> Self {
+        self.notice = notice;
         self
     }
 
@@ -845,6 +875,22 @@ fn draw_header(list: &mut DrawList, s: &StyleResolver, h: &GroupHeader, p: RowPa
         let block = s.mono_block(h.count, 0.0, line_y(cy, size), TextSize::Meta, Ink::Caption);
         right = text_right(list, block, right) - HEADER_GAP;
     }
+    if !h.asking.is_empty() {
+        let size = s.text_size(TextSize::Meta);
+        let block = s
+            .mono_block(
+                h.asking,
+                0.0,
+                line_y(cy, size),
+                TextSize::Meta,
+                Ink::Caption,
+            )
+            .with_color_f32(s.color(StyleKey::WarnSoftInk));
+        let number = text_right(list, block, right);
+        let dot_x = number - ASKING_GAP - ASKING_DOT * 0.5;
+        asking_dot(list, s, (dot_x, cy), ASKING_DOT, ASKING_BLUR);
+        right = dot_x - ASKING_DOT * 0.5 - HEADER_GAP;
+    }
     let size = s.text_size(TextSize::Dense);
     let ink = if h.dim { Ink::Caption } else { Ink::Title };
     let block = if h.mono {
@@ -954,18 +1000,20 @@ fn draw_item(list: &mut DrawList, s: &StyleResolver, item: &GroupItem, p: RowPai
         .with_max_width(max_w)
         .with_ellipsis(),
     );
-    if !item.subtitle.is_empty() {
+    let sub_y = line_y(r.y + SUB_CY, meta_size);
+    if !item.notice.is_empty() {
         list.text(
-            s.mono_block(
-                item.subtitle,
-                text_x,
-                line_y(r.y + SUB_CY, meta_size),
-                TextSize::Meta,
-                Ink::Caption,
-            )
-            .with_color_f32(sub_ink)
-            .with_max_width(max_w)
-            .with_ellipsis(),
+            s.sans_block(item.notice, text_x, sub_y, TextSize::Meta, Ink::Caption)
+                .with_color_f32(s.color(StyleKey::WarnSoftInk))
+                .with_max_width(max_w)
+                .with_ellipsis(),
+        );
+    } else if !item.subtitle.is_empty() {
+        list.text(
+            s.mono_block(item.subtitle, text_x, sub_y, TextSize::Meta, Ink::Caption)
+                .with_color_f32(sub_ink)
+                .with_max_width(max_w)
+                .with_ellipsis(),
         );
     }
 }
@@ -1161,6 +1209,37 @@ mod tests {
         );
         // The running dot glows; the idle one doesn't.
         assert!(list.shadow_instance_count() >= 1);
+    }
+
+    #[test]
+    fn what_asks_the_user_shows_in_amber_on_the_item_and_its_header() {
+        let rows = vec![
+            GroupRow::Header(GroupHeader::new("agent-ui").count("2 / 5").asking("1")),
+            GroupRow::Item(
+                GroupItem::new("Session context menu")
+                    .subtitle("@merry-tiger · 447 msgs")
+                    .notice("Question · Which database?")
+                    .meta("now")
+                    .status(Status::Asking),
+            ),
+        ];
+        let (list, _) = frame(
+            &rows,
+            GroupList::new(),
+            Some(1),
+            &mut GroupListState::new(),
+            &mut at(-1.0, -1.0),
+        );
+        let theme = Theme::default();
+        let amber = text_color(theme.warn_soft_ink);
+        let notice = text(&list, "Question · Which database?");
+        assert_eq!(notice.color, amber, "amber even on the selected row");
+        assert_eq!(notice.font, theme.font);
+        assert!(!has_text(&list, "@merry-tiger · 447 msgs"), "in its place");
+        let asking = text(&list, "1");
+        let count = text(&list, "2 / 5");
+        assert_eq!(asking.color, amber);
+        assert!(asking.x < count.x, "before the count");
     }
 
     #[test]

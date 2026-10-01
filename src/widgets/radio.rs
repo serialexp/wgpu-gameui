@@ -10,6 +10,7 @@
 //! assets — a radio dot is never blank.
 
 use crate::layout::Rect;
+use crate::shadow::{BoxShadow, CornerRadii};
 use crate::text::TextBlock;
 use crate::{StyleKey, StyleResolver};
 
@@ -180,8 +181,6 @@ impl<'a> RadioGroup<'a> {
         let s = ctx.styles();
         let diameter = Self::diameter(&s);
         let radius = diameter * 0.4;
-        let inner_radius = radius * 0.5;
-        let border = s.scalar(StyleKey::BorderWidth).max(1.0).min(radius);
 
         // Honor layer capture so a group under a modal/popup ignores clicks
         // meant for the overlay.
@@ -207,16 +206,7 @@ impl<'a> RadioGroup<'a> {
             }
 
             let list = &mut *ctx.draw_list;
-            // 4a: unselected = sunken dark trough with a black edge; selected =
-            // the accent face with a dark on-accent dot.
-            if i == selected {
-                list.circle((cx, cy), radius, s.color(StyleKey::Accent));
-                list.circle_outline((cx, cy), radius, border, [0.0, 0.0, 0.0, 0.5]);
-                list.circle((cx, cy), inner_radius, s.color(StyleKey::OnAccent));
-            } else {
-                list.circle((cx, cy), radius, s.color(StyleKey::InputBackground));
-                list.circle_outline((cx, cy), radius, border, [0.0, 0.0, 0.0, 0.6]);
-            }
+            radio_mark(list, &s, (cx, cy), radius, i == selected);
             // Hover highlight over the whole cell.
             if hovered && i != selected {
                 list.quad(
@@ -287,6 +277,58 @@ impl<'a> RadioGroup<'a> {
 
         ctx.pop_debug_scope();
         result
+    }
+}
+
+/// One radio dot of `radius` centred on `center`. 4a: unselected is a sunken
+/// dark trough with a black edge; selected is the accent face with a dark
+/// on-accent dot.
+pub(crate) fn radio_mark(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    center: (f32, f32),
+    radius: f32,
+    selected: bool,
+) {
+    let border = s.scalar(StyleKey::BorderWidth).max(1.0).min(radius);
+    if selected {
+        list.circle(center, radius, s.color(StyleKey::Accent));
+        list.circle_outline(center, radius, border, [0.0, 0.0, 0.0, 0.5]);
+        list.circle(center, radius * 0.5, s.color(StyleKey::OnAccent));
+    } else {
+        socket_rim(
+            list,
+            Rect::new(
+                center.0 - radius,
+                center.1 - radius,
+                radius * 2.0,
+                radius * 2.0,
+            ),
+            radius,
+        );
+        list.circle(center, radius, s.color(StyleKey::InputBackground));
+        list.circle_outline(center, radius, border, [0.0, 0.0, 0.0, 0.6]);
+    }
+}
+
+/// The lit rim round an off radio or checkbox (Forge `--socket-rim`: faint
+/// all round, brighter on the lower lip). A black well alone vanishes on
+/// panel and dialog surfaces; the rim is what shows where it is.
+pub(crate) fn socket_rim(list: &mut DrawList, rect: Rect, radius: f32) {
+    let radii = CornerRadii::uniform(radius);
+    // `0 0 0 1px rgba(255,255,255,0.075), 0 1px 0 1px rgba(255,255,255,0.14)`:
+    // the first is on top, so the lip goes down first.
+    for (dy, alpha) in [(1.0, 0.14), (0.0, 0.075)] {
+        list.box_shadow_outset(
+            rect,
+            radii,
+            BoxShadow {
+                offset: [0.0, dy],
+                spread: 1.0,
+                color: [1.0, 1.0, 1.0, alpha],
+                ..BoxShadow::default()
+            },
+        );
     }
 }
 

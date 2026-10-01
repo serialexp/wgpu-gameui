@@ -259,6 +259,8 @@ pub enum StyleKey {
     StatusOk,
     /// A state waiting on the user, as a dot or meta text (`--warn-meta`).
     WarnMeta,
+    /// Text that says what waits on the user (`--warn-soft-ink`).
+    WarnSoftInk,
     /// Something new and unseen: an unread dot, a dirty tab (`--accent-dirty`).
     AccentDirty,
     /// A handle being dragged: a scrubbed property label, a splitter grip
@@ -360,6 +362,7 @@ impl StyleKey {
                 | EdgeHard
                 | StatusOk
                 | WarnMeta
+                | WarnSoftInk
                 | AccentDirty
                 | AccentGrip
                 | AccentGlyph
@@ -1140,6 +1143,7 @@ pub(crate) const COLOR_KEYS: &[StyleKey] = &[
     StyleKey::EdgeHard,
     StyleKey::StatusOk,
     StyleKey::WarnMeta,
+    StyleKey::WarnSoftInk,
     StyleKey::AccentDirty,
     StyleKey::AccentGrip,
     StyleKey::AccentGlyph,

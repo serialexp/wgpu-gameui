@@ -7,6 +7,7 @@ use crate::text::TextBlock;
 use crate::{AnimSlot, SpriteId, StyleKey, StyleResolver};
 
 use super::material::draw_inset_shadow;
+use super::radio::socket_rim;
 use super::{DrawContext, DrawList, FocusId};
 
 /// Icon keys for checkbox textures. Only used by the string-keyed
@@ -286,7 +287,7 @@ impl Checkbox {
 
 /// Draw the theme-driven vector checkbox: a rounded box, filled with the accent
 /// color and stamped with a contrast checkmark when `checked`.
-fn draw_vector_box(
+pub(crate) fn draw_vector_box(
     list: &mut DrawList,
     s: &StyleResolver,
     box_rect: Rect,
@@ -329,7 +330,9 @@ fn draw_vector_box(
             hl,
         );
     } else {
-        // Empty box: the sunken tone — dark fill + black edge + inset shadow.
+        // Empty box: the sunken tone — dark fill + black edge + inset shadow,
+        // in a lit rim so it shows on a dark surface.
+        socket_rim(list, box_rect, radius);
         list.chrome_rect(box_rect, radius, border, fill, [0.0, 0.0, 0.0, 0.6]);
         draw_inset_shadow(
             list,
