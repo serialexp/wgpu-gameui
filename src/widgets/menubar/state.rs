@@ -279,6 +279,8 @@ pub struct MenuBarState {
     hint_scratch: String,
     /// The bar strip's rect from the frame it was last drawn in.
     pub(super) bar_rect: Rect,
+    /// Where the first label starts, past the bar's leading inset and padding.
+    pub(super) label_start: f32,
     /// The viewport from the frame the geometry was collected in.
     pub(super) viewport: Rect,
 
@@ -346,6 +348,7 @@ impl MenuBarState {
             label_pool: Vec::new(),
             hint_scratch: String::new(),
             bar_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+            label_start: 0.0,
             viewport: Rect::new(0.0, 0.0, 0.0, 0.0),
             up: false,
             down: false,
@@ -396,6 +399,32 @@ impl MenuBarState {
     /// The bar label the armed mode has highlighted, if any.
     pub fn highlighted_menu(&self) -> Option<usize> {
         self.highlighted_menu
+    }
+
+    /// Whether a press at (`x`, `y`) would land on the bar's empty strip, as
+    /// it was last drawn: inside it, but on no label. A bar that is also the
+    /// window's title bar moves the window from there. Never while a chain is
+    /// open, where a press on the strip is what closes it.
+    ///
+    /// Asked between frames (a host decides when the press arrives, while the
+    /// platform can still treat it as the start of a window drag), which is
+    /// why it reads the last draw's geometry rather than this frame's input.
+    pub fn drags_window_at(&self, x: f32, y: f32) -> bool {
+        let strip = self.bar_rect;
+        self.open.is_none()
+            && strip.contains(x, y)
+            && (0..self.label_pool.len())
+                .filter_map(|index| self.label_rect(strip, index))
+                .all(|label| !label.contains(x, y))
+    }
+
+    /// The rect of label `index` in `strip`, under the last draw's widths.
+    pub(super) fn label_rect(&self, strip: Rect, index: usize) -> Option<Rect> {
+        let width = *self.label_pool.get(index)?;
+        let x = self.label_start
+            + self.label_pool.iter().take(index).sum::<f32>()
+            + index as f32 * super::MENU_TITLE_GAP;
+        Some(Rect::new(x, strip.y, width, strip.height))
     }
 
     /// The highlighted row of the open column, if any.

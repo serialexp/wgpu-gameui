@@ -271,18 +271,24 @@ impl LayerStack {
 
     /// Resolve the input state the base layer should see.
     pub fn input_for_base(&self, base: &InputState) -> InputState {
-        for higher in &self.layers {
-            match higher.kind {
-                LayerKind::Modal => return base.consumed(),
-                LayerKind::Popup => {
-                    if higher.rect.contains(base.mouse_x, base.mouse_y) {
-                        return base.consumed();
-                    }
-                }
-                LayerKind::Tooltip => {}
-            }
+        if self.blocks_base_at(base.mouse_x, base.mouse_y) {
+            base.consumed()
+        } else {
+            base.clone()
         }
-        base.clone()
+    }
+
+    /// Whether a layer above the base keeps the pointer at (`x`, `y`) from
+    /// it: any modal, or a popup whose rect holds the point. What
+    /// [`input_for_base`](Self::input_for_base) decides, for a host asking
+    /// between frames about a press the base layer would act on there and
+    /// then (the window's title bar starting a drag).
+    pub fn blocks_base_at(&self, x: f32, y: f32) -> bool {
+        self.layers.iter().any(|layer| match layer.kind {
+            LayerKind::Modal => true,
+            LayerKind::Popup => layer.rect.contains(x, y),
+            LayerKind::Tooltip => false,
+        })
     }
 }
 
@@ -309,6 +315,22 @@ mod tests {
             scroll_delta: 1.0,
             ..InputState::default()
         }
+    }
+
+    #[test]
+    fn the_base_is_blocked_under_a_popup_and_everywhere_under_a_modal() {
+        let mut s = LayerStack::new();
+        assert!(!s.blocks_base_at(5.0, 5.0));
+        s.push_tooltip(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.pop_layer();
+        assert!(!s.blocks_base_at(5.0, 5.0), "a tooltip blocks nothing");
+        s.push_popup(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.pop_layer();
+        assert!(s.blocks_base_at(5.0, 5.0));
+        assert!(!s.blocks_base_at(50.0, 50.0));
+        s.push_modal(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.pop_layer();
+        assert!(s.blocks_base_at(50.0, 50.0));
     }
 
     #[test]

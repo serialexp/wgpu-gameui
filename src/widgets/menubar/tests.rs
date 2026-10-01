@@ -249,6 +249,8 @@ struct Rig {
     input: InputState,
     focus: FocusState,
     layers: LayerStack,
+    /// The bar's [`MenuBar::leading_inset`].
+    inset: f32,
 }
 
 impl Rig {
@@ -260,6 +262,7 @@ impl Rig {
             input: InputState::default(),
             focus: FocusState::new(),
             layers: LayerStack::new(),
+            inset: 0.0,
         }
     }
 
@@ -290,7 +293,9 @@ impl Rig {
                 H,
             )
             .with_interactions(&mut self.scene);
-            bar().draw(strip(), &mut self.state, &mut ctx)
+            bar()
+                .leading_inset(self.inset)
+                .draw(strip(), &mut self.state, &mut ctx)
         };
         let activated = {
             let mut env = MenuDrawEnv {
@@ -1818,4 +1823,81 @@ fn highlighted_row_is_an_accent_plate_with_row_hover_inset_edges() {
     }
     assert_eq!(insets[0].color, [1.0, 1.0, 1.0, 0.3]);
     assert_eq!(insets[1].color, [0.0, 0.0, 0.0, 0.25]);
+}
+
+// ------------------------------------------------------------ as the title bar
+
+#[test]
+fn a_leading_inset_moves_the_labels_past_it() {
+    let mut rig = Rig::new();
+    rig.inset = 70.0;
+    rig.step();
+    let file = strip().x + 70.0 + 4.0;
+    rig.click(file + 2.0, strip().y + 5.0);
+    rig.settle();
+    assert_eq!(
+        rig.state.open_menu(),
+        Some(0),
+        "File starts after the inset"
+    );
+
+    let mut rig = Rig::new();
+    rig.inset = 70.0;
+    rig.step();
+    rig.click(strip().x + 30.0, strip().y + 5.0);
+    rig.settle();
+    assert_eq!(rig.state.open_menu(), None, "the inset holds no label");
+}
+
+#[test]
+fn the_window_drags_from_the_strip_but_not_its_labels() {
+    let mut rig = Rig::new();
+    rig.inset = 70.0;
+    rig.step();
+    let y = strip().y + 5.0;
+    let file = strip().x + 70.0 + 4.0;
+    let labels: f32 = rig.state.debug_label_widths().iter().sum::<f32>() + 2.0;
+    assert!(rig.state.drags_window_at(strip().x + 30.0, y), "the inset");
+    assert!(!rig.state.drags_window_at(file + 2.0, y), "a label");
+    assert!(
+        rig.state.drags_window_at(file + labels + 10.0, y),
+        "past the last label"
+    );
+    assert!(
+        !rig.state
+            .drags_window_at(file + 2.0, strip().bottom() + 1.0),
+        "below the strip"
+    );
+}
+
+#[test]
+fn the_window_does_not_drag_while_a_menu_is_open() {
+    let mut rig = Rig::new();
+    rig.step();
+    rig.click(strip().x + 6.0, strip().y + 5.0);
+    rig.settle();
+    assert_eq!(rig.state.open_menu(), Some(0));
+    assert!(
+        !rig.state
+            .drags_window_at(strip().right() - 10.0, strip().y + 5.0),
+        "a press on the strip closes the menu instead"
+    );
+}
+
+#[test]
+fn a_leading_inset_widens_the_measured_bar() {
+    let theme = Theme::default();
+    let mut measurer = crate::TextMeasurer::new();
+    let mut measure = |inset: f32| {
+        let mut cx = crate::MeasureContext::new(
+            &mut measurer,
+            crate::StyleResolver::new(&theme),
+            crate::FontSpec::default(),
+            crate::MeasureConstraints::UNBOUNDED,
+            1.0,
+            crate::WrapMode::None,
+        );
+        bar().leading_inset(inset).measure(&mut cx).preferred[0]
+    };
+    assert_eq!(measure(70.0) - measure(0.0), 70.0);
 }

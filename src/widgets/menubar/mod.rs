@@ -106,6 +106,7 @@ pub struct MenuBar<'a> {
     menus: &'a [Menu<'a>],
     platform: AccelPlatform,
     side: SubmenuSide,
+    leading_inset: f32,
 }
 
 /// What a bar draw resolved. Deliberately **not** an activation: rows live in
@@ -134,7 +135,17 @@ impl<'a> MenuBar<'a> {
             menus,
             platform: AccelPlatform::Pc,
             side: SubmenuSide::Auto,
+            leading_inset: 0.0,
         }
+    }
+
+    /// Keep the first `inset` logical pixels of the strip clear of labels: the
+    /// strip is still painted there, but the labels start after it. For a bar
+    /// that is also the window's title bar, whose leading end holds the
+    /// platform's window buttons (macOS's traffic lights).
+    pub const fn leading_inset(mut self, inset: f32) -> Self {
+        self.leading_inset = inset;
+        self
     }
 
     /// Set the word/glyph set used to render accelerator hints (`Pc` by default).
@@ -159,7 +170,7 @@ impl<'a> MenuBar<'a> {
     pub fn measure(&self, cx: &mut MeasureContext<'_>) -> Measurement {
         let styles = cx.styles();
         let row_h = styles.scalar(StyleKey::MenuBarHeight).max(1.0);
-        let mut width = MENU_BAR_SIDE_PADDING * 2.0;
+        let mut width = self.leading_inset + MENU_BAR_SIDE_PADDING * 2.0;
         let mut baseline = row_h * 0.5;
         for menu in self.menus {
             let block = styles
@@ -220,11 +231,13 @@ impl<'a> MenuBar<'a> {
             ctx.screen_height.max(0.0),
         );
         state.bar_rect = strip;
+        state.label_start = strip.x + self.leading_inset + MENU_BAR_SIDE_PADDING;
         state.viewport = viewport;
         state.bar = self.id;
 
         if self.menus.is_empty() {
             state.next_geom = None;
+            state.label_pool.clear();
             self.paint_strip_background(strip, ctx);
             return self.output(state, None);
         }
@@ -249,7 +262,7 @@ impl<'a> MenuBar<'a> {
         // visited is equivalent to collecting them first — and it keeps the pass
         // allocation-free. The press is resolved before the hover, or opening a
         // menu on press would be undone by hover-to-switch in the same frame.
-        let mut label_x = strip.x + MENU_BAR_SIDE_PADDING;
+        let mut label_x = state.label_start;
         let mut hovered_menu = None;
         for (index, menu) in self.menus.iter().enumerate() {
             let label_rect = Rect::new(label_x, strip.y, state.label_pool[index], strip.height);
@@ -354,7 +367,7 @@ impl<'a> MenuBar<'a> {
             state.highlighted_menu,
             state.hovered_menu,
         );
-        let mut label_x = strip.x + MENU_BAR_SIDE_PADDING;
+        let mut label_x = state.label_start;
         {
             let list = &mut *ctx.draw_list;
             list.push_debug_scope_rect(
@@ -427,7 +440,7 @@ impl<'a> MenuBar<'a> {
 
         // Stage the chain's geometry for the next frame's popup layers. The anchor
         // is the open menu's label rect; with nothing open this clears it.
-        let anchor = open_menu.and_then(|open| self.label_rect(strip, state, open));
+        let anchor = open_menu.and_then(|open| state.label_rect(strip, open));
         let anchor = anchor.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
         {
             let list = &mut *ctx.draw_list;
@@ -468,20 +481,6 @@ impl<'a> MenuBar<'a> {
         painter.paint_pre_content_opaque();
         painter.paint_post_content();
         list.pop_debug_scope();
-    }
-
-    /// The rect of label `index` under the current label widths.
-    fn label_rect(&self, strip: Rect, state: &MenuBarState, index: usize) -> Option<Rect> {
-        let width = *state.label_pool.get(index)?;
-        let x = strip.x
-            + MENU_BAR_SIDE_PADDING
-            + state
-                .label_pool
-                .iter()
-                .take(index)
-                .fold(0.0, |acc, w| acc + w)
-            + index as f32 * MENU_TITLE_GAP;
-        Some(Rect::new(x, strip.y, width, strip.height))
     }
 
     fn output(&self, state: &MenuBarState, hovered_menu: Option<usize>) -> MenuBarOutput {

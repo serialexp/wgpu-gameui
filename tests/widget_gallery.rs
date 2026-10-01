@@ -1459,6 +1459,23 @@ fn render_widget_gallery() {
             &mut DrawContext::new(list, &mut focus, &theme, &armed_input, W as f32, 600.0),
         );
 
+        // As the window's title bar: the leading end left clear for the
+        // platform's window buttons (macOS's traffic lights).
+        let title_bar_rect = flow.cell(list, "Title bar, leading inset", 300.0, 26.0);
+        let mut title_bar_state = MenuBarState::new();
+        MenuBar::new(MENU_BAR_ID, MENUS).leading_inset(72.0).draw(
+            title_bar_rect,
+            &mut title_bar_state,
+            &mut DrawContext::new(
+                list,
+                &mut focus,
+                &theme,
+                &InputState::default(),
+                W as f32,
+                600.0,
+            ),
+        );
+
         flow.section(
             list,
             Category::Chrome,
