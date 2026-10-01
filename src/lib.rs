@@ -60,6 +60,8 @@
 )]
 
 mod shaping;
+#[cfg(feature = "slug-experiment")]
+pub mod slug;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax;
 mod text;
