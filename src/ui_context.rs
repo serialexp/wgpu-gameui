@@ -4482,6 +4482,35 @@ mod tests {
         assert_eq!(scope.declared.expect("declared rect").width, expected);
     }
 
+    #[test]
+    fn a_translated_dropdown_opens_its_list_under_its_button() {
+        let theme = Theme::default();
+        let input = click_at(210.0, 110.0);
+        let mut state = UiState::new();
+        let mut list = DrawList::new();
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        ui.push();
+        ui.translate(200.0, 100.0);
+        ui.dropdown(1, &["Red", "Green"], 0, Some(120.0));
+        ui.pop();
+        drop(ui);
+        assert!(state.dropdowns.is_open(1), "the click opened it");
+
+        // Next frame the list floats on an untransformed popup layer.
+        state.dropdowns.begin_frame(&mut InputState::default());
+        let mut layers = LayerStack::new();
+        let popup = state
+            .dropdowns
+            .push_open_layer(&mut layers)
+            .expect("an open list has a layer");
+        let rect = layers.layers()[popup].rect;
+        assert_eq!((rect.x, rect.width), (200.0, 120.0));
+        assert!(
+            rect.y > 100.0,
+            "the list sits below the button, not at the origin: {rect:?}"
+        );
+    }
+
     #[cfg(feature = "phosphor-icons")]
     #[test]
     fn icon_button_draws_vector_icon_and_uses_square_default() {

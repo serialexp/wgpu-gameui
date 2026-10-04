@@ -2036,3 +2036,26 @@ Coverage 71 of 77.
   rounding can leave a hair under `w`, and the renderer cuts any text wider
   than its box. The summary now right-aligns in all the room right of the
   chevron.
+
+## 2026-10-03 — Charts for agent-ui's usage history (Forge `components/data`)
+
+Built from Forge's `BarChart.{jsx,prompt.md}` and `MiniMeter`. Coverage 74
+of 80.
+
+- [x] **BarChart** (`data`) — `BarChart::new(&[Bar], &[BarSeries], &format)`
+  with `.height(..)` (`BAR_CHART_HEIGHT`, 190), `.max_bar_width(..)`,
+  `.hovered(Option<usize>)` (lit from outside, e.g. a table row),
+  `.hovered_series(..)`, `.legend(bool)`, `.reference_label(..)`,
+  `.empty_labels(empty, zero)`; `measure_height(width, list, s)`;
+  `draw(x, y, width, list, s, input) -> BarChartOutput { hovered,
+  hovered_series, height, tooltip }`; `draw_tooltip(&BarTooltip, viewport,
+  list, s) -> Option<Rect>`, drawn by the caller on a layer above. A `Bar`
+  stacks `segments` (one per series) bottom up on whole pixels, with an
+  optional dashed `reference` and a hatched `current` mark. The axis tops
+  out at `nice_max` in thirds; a lone bar over 3× the next is broken and
+  labelled "▲ value". `BarSeries::estimated` paints 40% inside a full
+  outline and adds "EST." to the legend. Hover dims the other bars to 45%,
+  a hovered legend entry fades the other series to 25%.
+- [x] **MiniMeter** (`data`) — `mini_meter(list, s, x, center_y, value,
+  warn_at) -> right edge`: a 30×5 well and its percentage, amber from
+  `warn_at` (`MINI_METER_WARN`, 0.8). `MINI_METER_WIDTH`.

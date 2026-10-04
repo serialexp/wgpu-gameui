@@ -59,6 +59,8 @@
     )
 )]
 
+#[cfg(feature = "markdown")]
+mod markdown;
 mod shaping;
 #[cfg(feature = "slug-experiment")]
 pub mod slug;
@@ -68,13 +70,16 @@ mod text;
 mod text_select;
 mod text_units;
 
+#[cfg(feature = "markdown")]
+pub use markdown::{Markdown, MarkdownLayout, MarkdownMetrics, MarkdownStyle, ScrollTable};
 pub use shaping::{LayoutStats, SharedFontSystem};
 #[cfg(feature = "syntax-lua")]
 pub use syntax::SyntaxConfigurationError;
 #[cfg(feature = "syntax-highlighting")]
 pub use syntax::{HighlightConfiguration, SyntaxHighlighting, SyntaxTheme};
 pub use text::{
-    CaretPos, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign, TextBlock,
+    CaretPos, FaceRange, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign,
+    TextBlock,
     TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
     TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
     byte_at_point, byte_on_adjacent_line, byte_under_point, caret_for_byte, load_font_bytes,
@@ -218,6 +223,10 @@ pub struct InputState {
     pub drag_delta: [f32; 2],
     /// Scroll wheel delta (positive = scroll up, negative = scroll down)
     pub scroll_delta: f32,
+    /// Sideways scroll wheel delta, from a tilting wheel or a touchpad, in
+    /// the same units as [`scroll_delta`](Self::scroll_delta) (positive =
+    /// scroll left, negative = scroll right).
+    pub scroll_delta_x: f32,
     /// Seconds since the previous drawn frame — the host's frame delta, read by
     /// time-based widgets (currently [`ScrollView`]'s
     /// easing). Set it once per frame alongside the pointer position, the way
@@ -365,6 +374,7 @@ impl Default for InputState {
             is_dragging: false,
             drag_delta: [0.0, 0.0],
             scroll_delta: 0.0,
+            scroll_delta_x: 0.0,
             frame_dt: crate::NOMINAL_FRAME_DT,
             text_input: String::new(),
             backspace_pressed: false,
@@ -422,6 +432,7 @@ impl InputState {
         self.is_dragging = false;
         self.drag_delta = [0.0, 0.0];
         self.scroll_delta = 0.0;
+        self.scroll_delta_x = 0.0;
         self.text_input.clear();
         self.backspace_pressed = false;
         self.enter_pressed = false;
@@ -492,6 +503,7 @@ impl InputState {
             is_dragging: false,
             drag_delta: [0.0, 0.0],
             scroll_delta: 0.0,
+            scroll_delta_x: 0.0,
             text_input: String::new(),
             backspace_pressed: false,
             enter_pressed: false,
@@ -709,5 +721,16 @@ mod input_state_tests {
         // A layer beneath a modal still animates, so the clock must survive the
         // `consumed()` clone as well.
         assert_eq!(i.consumed().frame_dt, 0.004);
+    }
+
+    #[test]
+    fn a_sideways_wheel_is_a_frame_event_a_layer_beneath_does_not_see() {
+        let mut i = InputState {
+            scroll_delta_x: -2.0,
+            ..InputState::default()
+        };
+        assert_eq!(i.consumed().scroll_delta_x, 0.0);
+        i.end_frame();
+        assert_eq!(i.scroll_delta_x, 0.0);
     }
 }

@@ -3059,12 +3059,61 @@ pub fn visual_caret_pos(glyphs: &[VisualGlyph], byte: usize) -> Option<VisualCar
         })
 }
 
+/// The runs `text` is shaped in when parts of it are in other faces: each of
+/// `faces` in its own face, the bytes between them in `base`. The ranges
+/// address content that starts `offset` bytes into `text` (after a direction
+/// prefix) and is `shown` bytes long (what an ellipsis left of it); a range is
+/// cut at `shown`, and one that is out of order, empty, or off a character
+/// boundary is skipped.
+pub(crate) fn face_runs<'s, 'a>(
+    text: &'s str,
+    offset: usize,
+    shown: usize,
+    faces: &'a [FaceRange],
+    base: &Attrs<'a>,
+) -> Vec<(&'s str, Attrs<'a>)> {
+    // Positions in `text`; the gaps between faces, the prefix and an ellipsis
+    // included, are in the block's face.
+    let mut runs = Vec::with_capacity(faces.len() * 2 + 1);
+    let mut at = 0;
+    for face in faces {
+        let start = offset + face.range.start;
+        let end = offset + face.range.end.min(shown);
+        let fits = at <= start
+            && start < end
+            && text.is_char_boundary(start)
+            && text.is_char_boundary(end);
+        if !fits {
+            continue;
+        }
+        if at < start {
+            runs.push((&text[at..start], base.clone()));
+        }
+        let family = face
+            .font
+            .as_ref()
+            .map_or(Family::SansSerif, |font| Family::Name(font.family()));
+        let attrs = base
+            .clone()
+            .family(family)
+            .weight(face.weight)
+            .style(face.style);
+        runs.push((&text[start..end], attrs));
+        at = end;
+    }
+    if at < text.len() {
+        runs.push((&text[at..], base.clone()));
+    }
+    runs
+}
+
 /// Truncate `content` to a single line that fits within `max_width`, appending a
 /// trailing `'…'`. Returns `content` unchanged when it already fits.
 ///
 /// Shapes with no wrapping and reads the laid-out glyph positions to find the
 /// byte cutoff, so it costs at most two extra shaping passes (the content and the
 /// ellipsis) and only for blocks that actually overflow.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ellipsize_to_width(
     fs: &mut FontSystem,
@@ -3086,6 +3135,7 @@ pub(crate) fn ellipsize_to_width(
         family,
         weight,
         style,
+        &[],
         letter_spacing,
     ) {
         None => content.to_string(),
@@ -3110,6 +3160,7 @@ pub(crate) fn ellipsis_cut(
     family: Family,
     weight: Weight,
     style: Style,
+    faces: &[FaceRange],
     letter_spacing: f32,
 ) -> Option<usize> {
     if content.is_empty() || !max_width.is_finite() || max_width <= 0.0 {
@@ -3124,11 +3175,17 @@ pub(crate) fn ellipsis_cut(
             .letter_spacing(letter_spacing_em(letter_spacing, font_size))
     };
 
-    // Shape the full content on a single line.
+    // Shape the full content on a single line, in its faces.
     let mut buffer = Buffer::new(fs, metrics);
     buffer.set_wrap(Wrap::None);
     buffer.set_size(None, None);
-    buffer.set_text(content, &attrs(), Shaping::Advanced, None);
+    if faces.is_empty() {
+        buffer.set_text(content, &attrs(), Shaping::Advanced, None);
+    } else {
+        let base = attrs();
+        let runs = face_runs(content, 0, content.len(), faces, &base);
+        buffer.set_rich_text(runs, &base, Shaping::Advanced, None);
+    }
     buffer.shape_until_scroll(fs, false);
 
     let full_w = buffer
@@ -3203,6 +3260,27 @@ pub struct TextStyleRange {
     pub color: Option<[f32; 4]>,
     /// Underline style for this range.
     pub underline: Underline,
+}
+
+/// A face over a half-open byte range of a [`TextBlock`]'s
+/// [`content`](TextBlock::content): the bold word, the italic aside, the
+/// inline code in a paragraph. Unlike [`TextStyleRange`], it changes how the
+/// text is shaped, so a block's face ranges are part of its layout.
+///
+/// Ranges should be sorted, non-overlapping and on UTF-8 boundaries; one that
+/// isn't is ignored, and one running past the end is cut at it. Bytes no range
+/// covers keep the block's own face. Size and
+/// line height stay the block's. Vertical text ignores face ranges.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceRange {
+    /// Half-open byte range in [`TextBlock::content`].
+    pub range: std::ops::Range<usize>,
+    /// The family, or `None` for the default sans-serif.
+    pub font: Option<FontHandle>,
+    /// The weight, as [`TextBlock::weight`].
+    pub weight: Weight,
+    /// The style, as [`TextBlock::style`].
+    pub style: Style,
 }
 
 /// A run of text within a [`TextBlock`] with optional per-span colour and
@@ -3335,6 +3413,10 @@ pub struct TextBlock {
     /// Draw-list tint applied lazily to range colours during glyph placement.
     /// Keeping it separate preserves shared range storage under tinted scopes.
     pub style_range_tint: [f32; 4],
+    /// Sorted byte ranges set in a face other than the block's own (see
+    /// [`FaceRange`]). Shared, so a retained caller hands the same ranges
+    /// over every frame without copying them.
+    pub face_ranges: std::sync::Arc<Vec<FaceRange>>,
     /// Line-wrapping policy when the content exceeds `max_width` (default
     /// [`WrapMode::WordOrGlyph`], matching the historical implicit behaviour).
     /// Ignored in `ellipsize` mode, which always lays out on a single line.
@@ -3380,6 +3462,7 @@ impl TextBlock {
             spans: Vec::new(),
             style_ranges: std::sync::Arc::new(Vec::new()),
             style_range_tint: [1.0; 4],
+            face_ranges: std::sync::Arc::new(Vec::new()),
             wrap: WrapMode::default(),
             vertical: false,
             selectable: None,
@@ -3597,6 +3680,20 @@ impl TextBlock {
     pub fn with_shared_style_ranges(mut self, ranges: std::sync::Arc<Vec<TextStyleRange>>) -> Self {
         self.style_ranges = ranges;
         self.spans.clear();
+        self
+    }
+
+    /// Set byte ranges of `content` in faces other than the block's own:
+    /// bold, italic or another family within one block (see [`FaceRange`]).
+    pub fn with_face_ranges(mut self, ranges: Vec<FaceRange>) -> Self {
+        self.face_ranges = std::sync::Arc::new(ranges);
+        self
+    }
+
+    /// [`with_face_ranges`](Self::with_face_ranges) with shared ranges, for a
+    /// retained caller that draws the same text every frame.
+    pub fn with_shared_face_ranges(mut self, ranges: std::sync::Arc<Vec<FaceRange>>) -> Self {
+        self.face_ranges = ranges;
         self
     }
 

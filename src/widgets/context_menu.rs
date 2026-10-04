@@ -303,6 +303,11 @@ impl ContextMenuState {
         };
         self.rect.expect("open context menu has measured geometry");
         let layer_input = layers.input_for_layer(index, input);
+        // Measuring placed only the root column; the open children have to be
+        // placed too before a click can be judged to be outside them all.
+        let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
+        self.row_h = row_h;
+        layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
 
         if (self.cancel && self.open_path.is_empty())
             || ((layer_input.mouse_clicked || layer_input.mouse_right_clicked)
@@ -352,8 +357,6 @@ impl ContextMenuState {
             }
         }
 
-        let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
-        self.row_h = row_h;
         layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
         let keyboard_handled =
             self.up || self.down || self.left || self.right || self.confirm || self.cancel;
@@ -1023,6 +1026,53 @@ mod tests {
         );
         assert_eq!(state.open_path, [0]);
         assert_eq!(state.rects.len(), 2, "click frame lays out the child");
+    }
+
+    #[test]
+    fn clicking_a_child_row_activates_it() {
+        const CHILD: &[MenuItem<'static>] = &[MenuItem::new("Leaf").id(7)];
+        const ROOT: &[MenuItem<'static>] = &[MenuItem::new("Parent").with_children(CHILD)];
+        let menu = ContextMenu::new(ROOT);
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let viewport = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let mut state = ContextMenuState::new();
+        state.open_at(20.0, 20.0);
+        context_frame(
+            &mut state,
+            &menu,
+            &theme,
+            InputState {
+                mouse_x: 40.0,
+                mouse_y: 30.0,
+                ..Default::default()
+            },
+            0.0,
+        );
+        let child = state.rects[1];
+        let input = InputState {
+            mouse_x: child.x + child.width / 2.0,
+            mouse_y: child.y + SHEET_PADDING + theme.menu_row_height / 2.0,
+            mouse_clicked: true,
+            mouse_down: true,
+            ..Default::default()
+        };
+        let mut captured = input.clone();
+        state.begin_frame(&mut captured);
+        let mut layers = LayerStack::new();
+        let layer = state.push_open_layer(&mut layers, &menu, &styles, viewport);
+        let mut focus = FocusState::new();
+        let chosen = state.draw_open_layer(
+            &mut layers,
+            layer,
+            &menu,
+            &styles,
+            &input,
+            &mut focus,
+            viewport,
+        );
+        assert_eq!(chosen.map(|item| item.id), Some(7));
+        assert!(!state.is_open());
     }
 
     #[test]

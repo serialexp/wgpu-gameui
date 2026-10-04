@@ -41,6 +41,9 @@ pollster = { version = "0.3", optional = true }
 # separate features so normal text widgets do not compile parser dependencies.
 tree-sitter-highlight = { version = "0.25.10", optional = true }
 tree-sitter-lua = { version = "0.5.0", optional = true }
+# Markdown parsing for the opt-in `markdown` module (CommonMark plus the GFM
+# tables, strikethrough and task lists). No HTML output is needed.
+pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 
 [features]
 default = ["bundled-font", "phosphor-icons", "headless"]
@@ -50,6 +53,9 @@ slug-experiment = []
 syntax-highlighting = ["dep:tree-sitter-highlight"]
 # Lua grammar and its configured highlighter constructor.
 syntax-lua = ["syntax-highlighting", "dep:tree-sitter-lua"]
+# Markdown documents: parsed once, laid out to a width, drawn with rich text
+# (see `markdown`).
+markdown = ["dep:pulldown-cmark"]
 # Emit tracing spans around the render path for Tracy profiling.
 tracy = ["dep:tracing"]
 # Embed IBM Plex Sans (the default UI face) and IBM Plex Mono (the technical
@@ -116,6 +122,11 @@ required-features = ["headless"]
 [[bench]]
 name = "ui_stress"
 harness = false
+
+[[bench]]
+name = "markdown"
+harness = false
+required-features = ["markdown"]
 
 # Glyph and icon MSDFs are generated on the CPU by fdsm; unoptimised, the
 # atlas warm-up and the MSDF quality tests run about thirty times slower.

@@ -759,41 +759,69 @@ impl DrawList {
         crate::text::text_cursor_positions(fs, text, font_size, lh, mw, None)
     }
 
-    /// Caret x offsets of `block`'s content laid out in its own font, and how
-    /// many of its bytes are shown: an [`ellipsize`](TextBlock::ellipsize)
-    /// block is one line cut at `max_width`, anything else wraps at it.
-    fn underline_layout(&mut self, block: &TextBlock) -> (Vec<(usize, f32)>, usize) {
+    /// Where the underlines of `runs` (byte ranges of `block`'s content, each
+    /// with its colour) go: under the glyphs the block is drawn with, faces
+    /// and wrapping included, one segment per line a run crosses. Text an
+    /// ellipsis cut off has none.
+    ///
+    /// Each glyph is looked up among the runs by binary search, so a block
+    /// with many underlined runs (a paragraph of links) costs about one pass
+    /// over its glyphs. Runs are taken as non-overlapping; where two overlap,
+    /// a glyph is underlined once.
+    fn underline_segments(
+        &mut self,
+        block: &TextBlock,
+        runs: &mut [(std::ops::Range<usize>, [f32; 4])],
+    ) -> Vec<UnderlineSegment> {
+        runs.sort_unstable_by_key(|(range, _)| range.start);
         let handle = self.text_measurer.font_system_handle();
         let mut shared = handle.lock().expect("FontSystem poisoned");
-        let fs = shared.font_system();
-        let family = block.font.as_ref().map(|f| f.family());
-        let mut visible = block.content.len();
-        let max_width = if block.ellipsize {
-            let cut = crate::text::ellipsis_cut(
-                fs,
-                &block.content,
-                block.font_size,
-                block.line_height,
-                block.max_width,
-                family.map_or(cosmic_text::Family::SansSerif, cosmic_text::Family::Name),
-                block.weight,
-                block.style,
-                block.letter_spacing,
-            );
-            visible = cut.unwrap_or(visible);
-            f32::MAX / 4.0
-        } else {
-            block.max_width
-        };
-        let positions = crate::text::text_cursor_positions(
-            fs,
-            &block.content,
-            block.font_size,
-            block.line_height,
-            max_width,
-            family,
-        );
-        (positions, visible)
+        let layout = shared.layout(&crate::shaping::LayoutSpec::of_block(block), &block.content);
+        // Just below the baseline, so it clears the letter bottoms and sits in
+        // the descender zone, at a gap that scales with the size.
+        let gap = block.font_size * 0.12;
+        let mut segments = Vec::new();
+        for line in &layout.lines {
+            // This line's segments so far: the run each underlines, and its
+            // extent. Few per line, so a linear search finds one again when
+            // bidi reordering interleaves them.
+            let first = segments.len();
+            let mut runs_here: Vec<usize> = Vec::new();
+            let glyphs = &layout.glyphs[line.glyphs.start as usize..line.glyphs.end as usize];
+            for glyph in glyphs {
+                if glyph.byte_start >= layout.shown {
+                    continue;
+                }
+                let byte = glyph.byte_start as usize;
+                let Some(run) = runs
+                    .partition_point(|(range, _)| range.start <= byte)
+                    .checked_sub(1)
+                    .filter(|&run| runs[run].0.contains(&byte))
+                else {
+                    continue;
+                };
+                let (left, right) = (glyph.rel_x, glyph.rel_x + glyph.advance);
+                match runs_here.iter().position(|&seen| seen == run) {
+                    Some(at) => {
+                        let segment: &mut UnderlineSegment = &mut segments[first + at];
+                        let end = (segment.x + segment.width).max(right);
+                        segment.x = segment.x.min(left);
+                        segment.width = end - segment.x;
+                    }
+                    None => {
+                        runs_here.push(run);
+                        segments.push(UnderlineSegment {
+                            x: left,
+                            y: line.baseline + gap,
+                            width: right - left,
+                            color: runs[run].1,
+                        });
+                    }
+                }
+            }
+        }
+        segments.retain(|segment| segment.width > 0.0);
+        segments
     }
 
     /// Line-aware caret layout for the given text — the multi-line counterpart of
@@ -2390,29 +2418,15 @@ impl DrawList {
                 }
             }
 
-            let (positions, visible) = self.underline_layout(&block);
-            // Sit the underline just below the baseline so it clears the letter
-            // bottoms. `baseline_ratio` (~1.0 of the em) locates the baseline
-            // below the block top; the old flat `0.9` sat *above* it, cutting
-            // through the glyph bottoms. The small extra gap drops it into the
-            // descender zone, font-metric-relative so it scales with any face.
-            let vm = self.font_vmetrics(block.font.as_ref());
-            let underline_y = block.y + block.font_size * (vm.baseline_ratio + 0.12);
             let thickness = (block.font_size * 0.07).max(1.0);
-            for (range, color) in runs {
-                // Text an ellipsis cut off has no underline.
-                let end = range.end.min(visible);
-                let x_start = span_cursor_x(&positions, range.start);
-                let x_end = span_cursor_x(&positions, end);
-                if x_end > x_start {
-                    self.quad(
-                        block.x + x_start,
-                        underline_y,
-                        x_end - x_start,
-                        thickness,
-                        color,
-                    );
-                }
+            for segment in self.underline_segments(&block, &mut runs) {
+                self.quad(
+                    block.x + segment.x,
+                    block.y + segment.y,
+                    segment.width,
+                    thickness,
+                    segment.color,
+                );
             }
         }
 
@@ -2658,16 +2672,13 @@ impl DrawList {
     }
 }
 
-/// Return the x-pixel offset of the cursor at `byte_pos` in the positions
-/// table returned by [`DrawList::text_cursor_positions`]. Falls back to `0.0`
-/// if the byte position is not present (shouldn't happen for well-formed span
-/// data, but the function is cheap enough to not warrant a panic).
-fn span_cursor_x(positions: &[(usize, f32)], byte_pos: usize) -> f32 {
-    positions
-        .iter()
-        .find(|(b, _)| *b == byte_pos)
-        .map(|(_, x)| *x)
-        .unwrap_or(0.0)
+/// One underline of a text block, relative to the block's origin.
+struct UnderlineSegment {
+    x: f32,
+    /// The underline's top.
+    y: f32,
+    width: f32,
+    color: [f32; 4],
 }
 
 /// Component-wise linear interpolation between two RGBA colors at `t ∈ [0,1]`.
@@ -3202,6 +3213,43 @@ mod tests {
         // Mono gives every letter the same advance; the sans `i`s and `l`s are
         // narrow, so the same word is much wider in mono.
         assert!(under(mono) > under(None) * 1.3);
+    }
+
+    #[test]
+    fn an_underline_follows_its_text_onto_the_next_line() {
+        use crate::text::{TextBlock, Underline};
+        let text = "the start of a link that wraps onto a second line";
+        let block = TextBlock::new(text, 0.0, 0.0)
+            .with_size(16.0)
+            .with_max_width(160.0)
+            .with_style_ranges(vec![range(13..text.len(), Underline::Inherit)]);
+        let mut list = DrawList::with_font_system(crate::shared_font_system());
+        list.text(block);
+        let tops: Vec<f32> = list.chrome_instances().map(|c| c.rect[1]).collect();
+        assert!(tops.len() >= 2, "one per line: {tops:?}");
+        assert!(
+            tops.windows(2).all(|pair| pair[1] > pair[0] + 10.0),
+            "each under its own line: {tops:?}"
+        );
+    }
+
+    #[test]
+    fn an_underline_spans_its_text_in_the_face_it_is_set_in() {
+        use crate::text::{TextBlock, Underline};
+        let block = || {
+            TextBlock::new("bold link", 0.0, 0.0)
+                .with_size(20.0)
+                .with_style_ranges(vec![range(0..9, Underline::Inherit)])
+        };
+        let plain = underlines(block())[0].1;
+        let bold = underlines(block().with_face_ranges(vec![crate::FaceRange {
+            range: 0..9,
+            font: None,
+            weight: crate::Weight::BOLD,
+            style: crate::Style::Normal,
+        }]))[0]
+            .1;
+        assert!(bold > plain, "{bold} > {plain}");
     }
 
     #[test]

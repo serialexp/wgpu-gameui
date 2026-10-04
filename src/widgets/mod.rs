@@ -6,6 +6,7 @@ mod asset_grid;
 mod badge;
 mod band;
 mod banner;
+mod bar_chart;
 mod binding;
 mod breadcrumb;
 mod busy;
@@ -105,6 +106,9 @@ pub use badge::{
 };
 pub use band::toolbar_band;
 pub use banner::{Banner, Severity};
+pub use bar_chart::{
+    BAR_CHART_HEIGHT, Bar, BarChart, BarChartOutput, BarSeries, BarTooltip, nice_max,
+};
 pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
 pub use busy::{dots, skeleton, spinner};
@@ -174,7 +178,10 @@ pub use menubar::{
     MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger,
     Modifiers, SubmenuSide, blocker_regions, place_popup,
 };
-pub use meter::{BarSegment, INLINE_METER_HEIGHT, MeterFill, inline_meter, stacked_bar};
+pub use meter::{
+    BarSegment, INLINE_METER_HEIGHT, MINI_METER_WARN, MINI_METER_WIDTH, MeterFill, inline_meter,
+    mini_meter, stacked_bar,
+};
 pub use modal::{MODAL_BACKDROP_BLUR, MODAL_WIDTH, Modal, ModalOutput, ModalState};
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{

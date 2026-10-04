@@ -144,6 +144,88 @@ pub fn stacked_bar(
     }
 }
 
+/// The well of a [`mini_meter`], inside its 1px border.
+pub const MINI_METER_WIDTH: f32 = 30.0;
+/// Where a [`mini_meter`] turns amber when the caller doesn't say.
+pub const MINI_METER_WARN: f32 = 0.8;
+const MINI_METER_HEIGHT: f32 = 5.0;
+/// The gap between the well and its percentage.
+const MINI_METER_GAP: f32 = 6.0;
+/// The fill's lit top line (`inset 0 1px 0 rgba(255,255,255,.25)`).
+const MINI_FILL_HI: [f32; 4] = [1.0, 1.0, 1.0, 0.25];
+
+/// Draw a row-scale meter (Forge's `MiniMeter`) with its left edge at `x`,
+/// centred on `center_y`: a 30×5 sunken well and the percentage after it,
+/// in accent, or amber from `warn_at` up. Returns the right edge of what it
+/// drew. For anything with a label above it, use a progress bar.
+pub fn mini_meter(
+    list: &mut DrawList,
+    s: &StyleResolver,
+    x: f32,
+    center_y: f32,
+    value: f32,
+    warn_at: f32,
+) -> f32 {
+    let value = if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    };
+    let warn = value >= warn_at;
+    let well = Rect::new(
+        x,
+        (center_y - MINI_METER_HEIGHT * 0.5).round() - 1.0,
+        MINI_METER_WIDTH + 2.0,
+        MINI_METER_HEIGHT + 2.0,
+    );
+    list.chrome_rect(
+        well,
+        1.0,
+        1.0,
+        s.color(crate::StyleKey::WellDeep),
+        s.color(crate::StyleKey::InputBorder),
+    );
+    let inner = well.inset(1.0);
+    list.box_shadow_inset(
+        inner,
+        CornerRadii::uniform(0.0),
+        BoxShadow {
+            offset: [0.0, 1.0],
+            blur: 3.0,
+            color: s.color(crate::StyleKey::InnerShadow),
+            inset: true,
+            ..BoxShadow::default()
+        },
+    );
+    let fill = if warn {
+        s.color(crate::StyleKey::WarnMeta)
+    } else {
+        s.color(crate::StyleKey::Accent)
+    };
+    let w = (inner.width * value).round();
+    if w > 0.0 {
+        list.quad(inner.x, inner.y, w, inner.height, fill);
+        list.quad(inner.x, inner.y, w, 1.0, MINI_FILL_HI);
+    }
+    // The percentage, right-aligned in four characters' room.
+    let text = format!("{}%", (value * 100.0).round());
+    let mut block = s.mono_block(&text, 0.0, 0.0, crate::style::TextSize::Meta, Ink::Glyph);
+    if warn {
+        block = block.with_color_f32(fill);
+    }
+    let room = s.mono_width(list, "100%", crate::style::TextSize::Meta);
+    let (w, _) = list.measure_block(&block);
+    let right = well.right() + MINI_METER_GAP + room;
+    block.x = right - w;
+    block.y = crate::text::vcentered_line_y(
+        center_y - 6.0,
+        12.0,
+        s.text_size(crate::style::TextSize::Meta),
+    );
+    list.text(block);
+    right
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +338,34 @@ mod tests {
             3,
             "a line right of each"
         );
+    }
+
+    #[test]
+    fn a_mini_meter_fills_its_well_and_turns_amber_from_the_warning_up() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let accent = s.color(crate::StyleKey::Accent);
+        let amber = s.color(crate::StyleKey::WarnMeta);
+
+        let mut list = DrawList::new();
+        let right = mini_meter(&mut list, &s, 10.0, 20.0, 0.5, MINI_METER_WARN);
+        // Half of the 30px well, inside its 1px border.
+        assert_eq!(rects_of(&list, accent), vec![[11.0, 18.0, 15.0, 5.0]]);
+        assert!(list.texts.iter().any(|t| t.content == "50%"));
+        assert!(right > 10.0 + MINI_METER_WIDTH + 2.0);
+
+        let mut list = DrawList::new();
+        mini_meter(&mut list, &s, 10.0, 20.0, 0.86, MINI_METER_WARN);
+        assert!(rects_of(&list, accent).is_empty());
+        assert_eq!(rects_of(&list, amber).len(), 1);
+        assert!(list.texts.iter().any(|t| t.content == "86%"));
+
+        // Past full and below empty are clamped.
+        let mut list = DrawList::new();
+        mini_meter(&mut list, &s, 0.0, 20.0, 1.7, MINI_METER_WARN);
+        assert_eq!(rects_of(&list, amber)[0][2], MINI_METER_WIDTH);
+        let mut list = DrawList::new();
+        mini_meter(&mut list, &s, 0.0, 20.0, -1.0, MINI_METER_WARN);
+        assert!(list.texts.iter().any(|t| t.content == "0%"));
     }
 }

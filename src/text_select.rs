@@ -28,11 +28,12 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::layer::{LayerKind, LayerStack};
 use crate::layout::Rect;
 use crate::shaping::{LayoutSpec, ShapedLayout};
-use crate::text::{FontHandle, FontSystemHandle, TextBlock, TextDirection, WrapMode};
+use crate::text::{FaceRange, FontHandle, FontSystemHandle, TextBlock, TextDirection, WrapMode};
 use crate::text_units::floor_boundary;
 use crate::{InputState, TextAlign, TextUnit};
 
@@ -126,6 +127,7 @@ struct DrawnBlock {
     font: Option<FontHandle>,
     weight: cosmic_text::Weight,
     style: cosmic_text::Style,
+    faces: Arc<Vec<FaceRange>>,
     wrap: WrapMode,
     align: TextAlign,
     direction: TextDirection,
@@ -147,6 +149,7 @@ impl DrawnBlock {
             font: block.font.clone(),
             weight: block.weight,
             style: block.style,
+            faces: block.face_ranges.clone(),
             wrap: block.wrap,
             align: block.align,
             direction: block.direction,
@@ -168,6 +171,7 @@ impl DrawnBlock {
         self.letter_spacing = block.letter_spacing;
         self.weight = block.weight;
         self.style = block.style;
+        self.faces.clone_from(&block.face_ranges);
         self.wrap = block.wrap;
         self.align = block.align;
         self.direction = block.direction;
@@ -185,6 +189,7 @@ impl DrawnBlock {
             font: self.font.as_ref(),
             weight: self.weight,
             style: self.style,
+            faces: &self.faces,
             wrap: self.wrap,
             align: self.align,
             direction: self.direction,
@@ -994,5 +999,30 @@ mod tests {
         assert_eq!(hit_layout(layout, 500.0, 500.0).0, 5);
         let rects = highlight_rects(layout, 1..4);
         assert_eq!(rects.len(), 2, "one per line: {rects:?}");
+    }
+
+    #[test]
+    fn a_drawn_block_is_hit_tested_in_its_faces() {
+        let fonts = fonts();
+        let mut shared = fonts.lock().unwrap();
+        let plain = TextBlock::new("bold plain", 0.0, 0.0).with_size(16.0);
+        let faced = plain.clone().with_face_ranges(vec![FaceRange {
+            range: 0..4,
+            font: None,
+            weight: cosmic_text::Weight::BOLD,
+            style: cosmic_text::Style::Normal,
+        }]);
+        let drawn = DrawnBlock::of(&faced);
+        let again = shared.layout(&drawn.spec(), &drawn.content).size.0;
+        let as_drawn = shared
+            .layout(&LayoutSpec::of_block(&faced), &faced.content)
+            .size
+            .0;
+        let unfaced = shared
+            .layout(&LayoutSpec::of_block(&plain), &plain.content)
+            .size
+            .0;
+        assert_eq!(again, as_drawn);
+        assert!(again > unfaced, "the bold word is in the layout");
     }
 }

@@ -544,6 +544,10 @@ impl<'a> Dropdown<'a> {
         let s = ctx.styles();
         let list = &mut *ctx.draw_list;
         let input = ctx.input;
+        // `rect` is in the draw list's local space, but the list floats on its
+        // own popup layer, which has no transform: it needs the button where
+        // it lands on screen.
+        let screen_rect = list.current_transform().transform_rect_aabb(rect);
 
         let hovered = input.is_hovered(rect.x, rect.y, rect.width, rect.height);
         let clicked = hovered && input.mouse_clicked;
@@ -573,10 +577,10 @@ impl<'a> Dropdown<'a> {
                 state.scroll_offset = (self.selected as f32 * ITEM_HEIGHT).max(0.0);
                 let geom = OpenGeom {
                     id,
-                    button_rect: rect,
+                    button_rect: screen_rect,
                     items: self.items.iter().map(|s| s.to_string()).collect(),
                     selected: self.selected,
-                    width: rect.width,
+                    width: screen_rect.width,
                     item_h: ITEM_HEIGHT,
                     max_visible: self.max_visible,
                 };
@@ -627,10 +631,10 @@ impl<'a> Dropdown<'a> {
         if open {
             state.next_geom = Some(OpenGeom {
                 id,
-                button_rect: rect,
+                button_rect: screen_rect,
                 items: self.items.iter().map(|s| s.to_string()).collect(),
                 selected: self.selected,
-                width: rect.width,
+                width: screen_rect.width,
                 item_h: ITEM_HEIGHT,
                 max_visible: self.max_visible,
             });

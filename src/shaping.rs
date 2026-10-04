@@ -17,9 +17,9 @@ use cosmic_text::{
 };
 
 use crate::text::{
-    FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, TextAlign, TextBlock, TextDirection, WrapMode,
-    cosmic_align, direction_prefix, ellipsize_to_width, family_hash, letter_spacing_em,
-    resolve_vmetrics, style_disc, vertical_stack_string,
+    FaceRange, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, TextAlign, TextBlock, TextDirection,
+    WrapMode, cosmic_align, direction_prefix, ellipsis_cut, face_runs, family_hash,
+    letter_spacing_em, resolve_vmetrics, style_disc, vertical_stack_string,
 };
 
 /// Roughly how many bytes of layouts [`SharedFontSystem`] keeps before it
@@ -190,6 +190,8 @@ pub(crate) struct LayoutSpec<'a> {
     pub font: Option<&'a FontHandle>,
     pub weight: Weight,
     pub style: Style,
+    /// Byte ranges in other faces ([`TextBlock::face_ranges`]).
+    pub faces: &'a [FaceRange],
     pub wrap: WrapMode,
     pub align: TextAlign,
     pub direction: TextDirection,
@@ -209,6 +211,7 @@ impl<'a> LayoutSpec<'a> {
             font: block.font.as_ref(),
             weight: block.weight,
             style: block.style,
+            faces: &block.face_ranges,
             wrap: block.wrap,
             align: block.align,
             direction: block.direction,
@@ -228,12 +231,19 @@ impl<'a> LayoutSpec<'a> {
             font: None,
             weight: Weight::NORMAL,
             style: Style::Normal,
+            faces: &[],
             wrap: WrapMode::default(),
             align: TextAlign::default(),
             direction: TextDirection::default(),
             vertical: false,
             ellipsize: false,
         }
+    }
+
+    /// The face ranges shaping uses: none for vertical text, which stacks
+    /// its clusters in a string of its own.
+    fn shaped_faces(&self) -> &'a [FaceRange] {
+        if self.vertical { &[] } else { self.faces }
     }
 
     fn key(&self) -> LayoutKey {
@@ -245,6 +255,7 @@ impl<'a> LayoutSpec<'a> {
             family: family_hash(self.font),
             weight: self.weight.0,
             style: style_disc(self.style),
+            faces: faces_hash(self.shaped_faces()),
             wrap: self.wrap,
             align: self.align,
             direction: self.direction,
@@ -272,11 +283,30 @@ struct LayoutKey {
     family: u64,
     weight: u16,
     style: u8,
+    /// A hash of the face ranges; `0` for none.
+    faces: u64,
     wrap: WrapMode,
     align: TextAlign,
     direction: TextDirection,
     vertical: bool,
     ellipsize: bool,
+}
+
+/// A hash of `faces` for [`LayoutKey`]: `0` when there are none, so plain
+/// text costs nothing.
+fn faces_hash(faces: &[FaceRange]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    if faces.is_empty() {
+        return 0;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for face in faces {
+        face.range.hash(&mut hasher);
+        family_hash(face.font.as_ref()).hash(&mut hasher);
+        face.weight.0.hash(&mut hasher);
+        style_disc(face.style).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// One shaped glyph, **relative to the block origin**. A block's position,
@@ -315,6 +345,8 @@ pub(crate) struct ShapedLine {
     /// The line box's top.
     pub top: f32,
     pub height: f32,
+    /// The baseline, below the block's top.
+    pub baseline: f32,
     /// Its glyphs, as indices into [`ShapedLayout::glyphs`].
     pub glyphs: std::ops::Range<u32>,
     /// Where the line starts in the content; all an empty line has.
@@ -327,6 +359,9 @@ pub(crate) struct ShapedLayout {
     pub glyphs: Vec<ShapedGlyph>,
     /// The lines, top to bottom, including empty ones.
     pub lines: Vec<ShapedLine>,
+    /// How many bytes of the content it shows: all of them, unless an
+    /// ellipsis cut the rest off. Glyphs from here on are the ellipsis.
+    pub shown: u32,
     /// The widest line's advance and the lines' total height: what
     /// [`TextMeasurer`](crate::TextMeasurer) reports.
     pub size: (f32, f32),
@@ -484,26 +519,32 @@ pub(crate) fn shape_layout(
     content: &str,
 ) -> ShapedLayout {
     let family = spec.family();
+    let faces = spec.shaped_faces();
 
     // An ellipsized block is one line, cut to `max_width` with a trailing '…'.
     // Vertical text ignores ellipsis: it stacks the whole content.
+    let cut = match spec.max_width {
+        Some(max_width) if spec.ellipsize && !spec.vertical => ellipsis_cut(
+            font_system,
+            content,
+            spec.font_size,
+            spec.line_height,
+            max_width,
+            family,
+            spec.weight,
+            spec.style,
+            faces,
+            spec.letter_spacing,
+        ),
+        _ => None,
+    };
     let truncated;
-    let content: &str = match spec.max_width {
-        Some(max_width) if spec.ellipsize && !spec.vertical => {
-            truncated = ellipsize_to_width(
-                font_system,
-                content,
-                spec.font_size,
-                spec.line_height,
-                max_width,
-                family,
-                spec.weight,
-                spec.style,
-                spec.letter_spacing,
-            );
-            &truncated
+    let (content, shown): (&str, usize) = match cut {
+        Some(cut) => {
+            truncated = format!("{}…", &content[..cut]);
+            (&truncated, cut)
         }
-        _ => content,
+        None => (content, content.len()),
     };
 
     // Force the base paragraph direction (if requested) by prepending a
@@ -541,19 +582,23 @@ pub(crate) fn shape_layout(
         buffer.set_wrap(spec.wrap.into());
         buffer.set_size(Some(spec.max_width.unwrap_or(f32::MAX / 4.0)), None);
     }
-    buffer.set_text(
-        &shaped_text,
-        &Attrs::new()
-            .family(family)
-            .weight(spec.weight)
-            .style(spec.style)
-            .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size)),
-        Shaping::Advanced,
-        // `Start` is cosmic-text's default, so only the rest override it.
-        // Vertical text never sets a cosmic align: it centres each row within
-        // the column itself (below), whatever the shrink-to-content width.
-        cosmic_align(spec.align).filter(|_| !spec.vertical),
-    );
+    let attrs = Attrs::new()
+        .family(family)
+        .weight(spec.weight)
+        .style(spec.style)
+        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size));
+    // `Start` is cosmic-text's default, so only the rest override it.
+    // Vertical text never sets a cosmic align: it centres each row within
+    // the column itself (below), whatever the shrink-to-content width.
+    let align = cosmic_align(spec.align).filter(|_| !spec.vertical);
+    if faces.is_empty() {
+        buffer.set_text(&shaped_text, &attrs, Shaping::Advanced, align);
+    } else {
+        // The ranges address the content: past the direction prefix, and
+        // not into an ellipsis.
+        let runs = face_runs(&shaped_text, prefix_len, shown, faces, &attrs);
+        buffer.set_rich_text(runs, &attrs, Shaping::Advanced, align);
+    }
     buffer.shape_until_scroll(font_system, false);
 
     // Vertical: the column is as wide as the widest cluster row; each row is
@@ -638,6 +683,7 @@ pub(crate) fn shape_layout(
         lines.push(ShapedLine {
             top: run.line_top,
             height: run.line_height,
+            baseline: run.line_y,
             glyphs: first..glyphs.len() as u32,
             byte_start: content_byte(0) as u32,
         });
@@ -651,6 +697,7 @@ pub(crate) fn shape_layout(
     ShapedLayout {
         glyphs,
         lines,
+        shown: shown as u32,
         size,
         ink: OnceCell::new(),
     }
@@ -792,6 +839,170 @@ mod tests {
         );
         let counted: usize = cache.map.values().map(HashMap::len).sum();
         assert_eq!(cache.len, counted);
+    }
+
+    fn face(range: std::ops::Range<usize>, weight: Weight, font: Option<FontHandle>) -> FaceRange {
+        FaceRange {
+            range,
+            font,
+            weight,
+            style: Style::Normal,
+        }
+    }
+
+    /// The advance of the glyphs whose bytes are in `range`.
+    fn advance_of(layout: &ShapedLayout, range: std::ops::Range<usize>) -> f32 {
+        layout
+            .glyphs
+            .iter()
+            .filter(|glyph| range.contains(&(glyph.byte_start as usize)))
+            .map(|glyph| glyph.advance)
+            .sum()
+    }
+
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn a_face_range_sets_its_bytes_in_its_own_face() {
+        let handle = shared_font_system();
+        let mono = crate::bundled_mono_font(&handle);
+        let mut shared = handle.lock().unwrap();
+        let text = "plain bold illicit plain";
+        let plain = shape_layout(shared.font_system(), &LayoutSpec::plain(16.0, None), text);
+        let faces = [
+            face(6..10, Weight::BOLD, None),
+            face(11..18, Weight::NORMAL, mono),
+        ];
+        let spec = LayoutSpec {
+            faces: &faces,
+            ..LayoutSpec::plain(16.0, None)
+        };
+        let faced = shape_layout(shared.font_system(), &spec, text);
+
+        assert!(
+            advance_of(&faced, 6..10) > advance_of(&plain, 6..10),
+            "bold is wider"
+        );
+        assert!(
+            advance_of(&faced, 11..18) > advance_of(&plain, 11..18) * 1.3,
+            "mono gives the narrow letters a full cell"
+        );
+        // The words around them keep the block's face.
+        assert_eq!(advance_of(&faced, 0..5), advance_of(&plain, 0..5));
+        let font_of = |layout: &ShapedLayout, byte: u32| {
+            layout
+                .glyphs
+                .iter()
+                .find(|g| g.byte_start == byte)
+                .unwrap()
+                .font_id
+        };
+        assert_ne!(font_of(&faced, 6), font_of(&plain, 6));
+        assert_eq!(font_of(&faced, 19), font_of(&plain, 19));
+    }
+
+    #[test]
+    fn face_ranges_are_part_of_the_layout_key() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let plain = LayoutSpec::plain(16.0, None);
+        let faces = [face(0..4, Weight::BOLD, None)];
+        let bold = LayoutSpec {
+            faces: &faces,
+            ..plain
+        };
+        let plain_w = shared.layout(&plain, "bold words").size.0;
+        let bold_w = shared.layout(&bold, "bold words").size.0;
+        assert!(bold_w > plain_w);
+        assert_eq!(
+            shared.layout_stats().shaped,
+            2,
+            "not served from the plain layout"
+        );
+    }
+
+    #[test]
+    fn a_face_range_that_does_not_fit_is_skipped() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let text = "café au lait";
+        let plain = shape_layout(shared.font_system(), &LayoutSpec::plain(16.0, None), text);
+        // From inside the `é` (bytes 3..5), empty, and one starting before
+        // the one ahead of it ends.
+        let faces = [
+            face(4..9, Weight::BOLD, None),
+            face(9..9, Weight::BOLD, None),
+            face(6..8, Weight::BOLD, None),
+            face(7..10, Weight::BOLD, None),
+        ];
+        let spec = LayoutSpec {
+            faces: &faces,
+            ..LayoutSpec::plain(16.0, None)
+        };
+        let faced = shape_layout(shared.font_system(), &spec, text);
+        assert_eq!(advance_of(&faced, 0..6), advance_of(&plain, 0..6));
+        assert!(
+            advance_of(&faced, 6..8) > advance_of(&plain, 6..8),
+            "`au` fits"
+        );
+        assert_eq!(
+            advance_of(&faced, 8..13),
+            advance_of(&plain, 8..13),
+            "the overlap doesn't"
+        );
+        // One running past the end is cut at it.
+        let past = [face(9..99, Weight::BOLD, None)];
+        let spec = LayoutSpec {
+            faces: &past,
+            ..LayoutSpec::plain(16.0, None)
+        };
+        let faced = shape_layout(shared.font_system(), &spec, text);
+        assert!(advance_of(&faced, 9..13) > advance_of(&plain, 9..13));
+    }
+
+    #[test]
+    fn a_face_range_counts_from_the_content_past_a_direction_prefix() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let text = "bold then plain";
+        let faces = [face(0..4, Weight::BOLD, None)];
+        let ltr = LayoutSpec {
+            faces: &faces,
+            direction: TextDirection::Ltr,
+            ..LayoutSpec::plain(16.0, None)
+        };
+        let auto = LayoutSpec {
+            faces: &faces,
+            ..LayoutSpec::plain(16.0, None)
+        };
+        let with_prefix = shape_layout(shared.font_system(), &ltr, text);
+        let without = shape_layout(shared.font_system(), &auto, text);
+        assert_eq!(advance_of(&with_prefix, 0..4), advance_of(&without, 0..4));
+        assert_eq!(advance_of(&with_prefix, 5..15), advance_of(&without, 5..15));
+    }
+
+    #[test]
+    fn an_ellipsis_cuts_faced_text_by_its_faced_width() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let text = "a rather long project name that will not fit";
+        let faces = [face(0..text.len(), Weight::BOLD, None)];
+        let cut = |faces: &[FaceRange], shared: &mut SharedFontSystem| {
+            let spec = LayoutSpec {
+                faces,
+                ellipsize: true,
+                ..LayoutSpec::plain(16.0, Some(150.0))
+            };
+            let layout = shape_layout(shared.font_system(), &spec, text);
+            (layout.shown, layout.size.0)
+        };
+        let (plain_shown, plain_w) = cut(&[], &mut shared);
+        let (bold_shown, bold_w) = cut(&faces, &mut shared);
+        assert!(plain_shown < text.len() as u32);
+        assert!(
+            bold_shown < plain_shown,
+            "bold letters are wider, so fewer fit"
+        );
+        assert!(plain_w <= 150.0 && bold_w <= 150.0, "{plain_w} {bold_w}");
     }
 
     #[test]

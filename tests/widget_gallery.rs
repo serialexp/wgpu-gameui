@@ -35,14 +35,14 @@ use wgpu_gameui::{
     PromptDialog, PromptDialogState, Sheet, SheetAction,
 };
 use wgpu_gameui::{
-    BADGE_HEIGHT, Badge, BadgeTone, BarSegment, COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE,
-    DropZone, EmptyState, FieldLabel, Ink, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT,
-    STATUS_BAR_HEIGHT, STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status,
-    StatusIcon, StatusPart, StatusToggle, StatusZone, TextSize, WELL_CHIP_HEIGHT, Waffle,
-    WaffleCategory, WaffleFill, WellChip, WellChipPart, ZonedStatusBar, chip, dots,
-    draw_combo_trigger, draw_curve_editor, draw_doc_tabs, draw_gradient_ramp, draw_popover_frame,
-    draw_status_bar, draw_tag_input, inline_meter, keycap, place_popover, skeleton, spinner,
-    stacked_bar, toolbar_band,
+    BADGE_HEIGHT, Badge, BadgeTone, Bar, BarChart, BarSegment, BarSeries, BarTooltip,
+    COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE, DropZone, EmptyState, FieldLabel, Ink,
+    MINI_METER_WARN, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT, STATUS_BAR_HEIGHT,
+    STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status, StatusIcon, StatusPart,
+    StatusToggle, StatusZone, TextSize, WELL_CHIP_HEIGHT, Waffle, WaffleCategory, WaffleFill,
+    WellChip, WellChipPart, ZonedStatusBar, chip, dots, draw_combo_trigger, draw_curve_editor,
+    draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar, draw_tag_input,
+    inline_meter, keycap, mini_meter, place_popover, skeleton, spinner, stacked_bar, toolbar_band,
 };
 use wgpu_gameui::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListState};
 use wgpu_gameui::{
@@ -289,10 +289,12 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
         Category::Data,
         &[
             "AssetGrid",
+            "BarChart",
             "CountBubble",
             "DragList",
             "DropZone",
             "ListView",
+            "MiniMeter",
             "Table",
             "Thumb",
             "Tree",
@@ -4802,6 +4804,108 @@ fn render_widget_gallery() {
             waffle
                 .hovered(Some(1))
                 .draw(r.x, r.y, r.width, list, &s, &input);
+        }
+
+        flow.section(
+            list,
+            Category::Data,
+            "BarChart",
+            "stacked, estimated series, cap, current, outlier",
+        );
+        {
+            let hue = |h: f32| wgpu_gameui::color::oklch(0.68, 0.1, h, 1.0);
+            let series = [
+                BarSeries {
+                    name: "Cache read",
+                    color: hue(240.0),
+                    estimated: false,
+                },
+                BarSeries {
+                    name: "Input",
+                    color: hue(95.0),
+                    estimated: false,
+                },
+                BarSeries {
+                    name: "Thinking",
+                    color: hue(290.0),
+                    estimated: true,
+                },
+                BarSeries {
+                    name: "Output",
+                    color: hue(175.0),
+                    estimated: false,
+                },
+            ];
+            let days: [[f64; 4]; 10] = [
+                [800.0, 90.0, 40.0, 30.0],
+                [1_100.0, 120.0, 60.0, 50.0],
+                [0.0; 4],
+                [600.0, 70.0, 20.0, 25.0],
+                [1_400.0, 150.0, 90.0, 70.0],
+                [900.0, 100.0, 50.0, 40.0],
+                [2.0, 0.0, 0.0, 0.0],
+                [1_250.0, 140.0, 80.0, 55.0],
+                [700.0, 80.0, 30.0, 35.0],
+                [1_000.0, 110.0, 70.0, 45.0],
+            ];
+            let labels = [
+                "09-12", "09-13", "09-14", "09-15", "09-16", "09-17", "09-18", "09-19", "09-20",
+                "09-21",
+            ];
+            let bars: Vec<Bar<'_>> = days
+                .iter()
+                .zip(labels)
+                .enumerate()
+                .map(|(i, (segments, label))| Bar {
+                    label,
+                    long_label: label,
+                    segments,
+                    reference: (i >= 7).then_some(1_800.0),
+                    current: i == 9,
+                })
+                .collect();
+            let format = |v: f64| format!("{:.0}k", v);
+            let chart = BarChart::new(&bars, &series, &format);
+            let r = flow.cell(list, "Days, cap on the last three", 520.0, 250.0);
+            // Bar 4 lit as if hovered, with the tooltip the pointer would
+            // bring up beside it.
+            chart
+                .hovered(Some(4))
+                .draw(r.x, r.y, r.width, list, &s, &input);
+            let tip = BarTooltip {
+                index: 4,
+                bar_left: r.x + r.width * 0.45,
+                bar_right: r.x + r.width * 0.5,
+                right_of_bar: true,
+                top: r.y,
+            };
+            chart.draw_tooltip(&tip, Rect::new(0.0, 0.0, W as f32, 4_000.0), list, &s);
+
+            let mut outlier = days;
+            outlier[5] = [9_000.0, 600.0, 300.0, 200.0];
+            let bars: Vec<Bar<'_>> = outlier
+                .iter()
+                .zip(labels)
+                .map(|(segments, label)| Bar {
+                    label,
+                    long_label: label,
+                    segments,
+                    reference: None,
+                    current: false,
+                })
+                .collect();
+            let r = flow.cell(list, "A lone outlier is broken", 360.0, 250.0);
+            BarChart::new(&bars, &series, &format).draw(r.x, r.y, r.width, list, &s, &input);
+            let r = flow.cell(list, "Nothing in range", 300.0, 250.0);
+            BarChart::new(&[], &series, &format).draw(r.x, r.y, r.width, list, &s, &input);
+        }
+
+        flow.section(list, Category::Data, "MiniMeter", "row-scale, amber at 80%");
+        {
+            for (label, value) in [("12%", 0.12), ("64%", 0.64), ("86%", 0.86), ("100%", 1.0)] {
+                let r = flow.cell(list, label, 80.0, 16.0);
+                mini_meter(list, &s, r.x, r.y + r.height * 0.5, value, MINI_METER_WARN);
+            }
         }
 
         flow.section(list, Category::Chrome, "Band", "not in Forge");
