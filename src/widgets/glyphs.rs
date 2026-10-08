@@ -14,3 +14,18 @@ pub(crate) fn half_square(list: &mut DrawList, cell: Rect, side: f32, color: [f3
     list.chrome_rect(Rect::new(x, y, side, side), 0.0, 1.0, [0.0; 4], color);
     list.quad(x, y, (side * 0.5).ceil(), side, color);
 }
+
+/// `▴`: a small triangle pointing up, filling `cell`'s width and height on
+/// whole pixels. Forge puts it after a status zone that opens a drop-up.
+pub(crate) fn up_triangle(list: &mut DrawList, cell: Rect, color: [f32; 4]) {
+    let left = cell.x.round();
+    let right = (cell.x + cell.width).round();
+    let top = cell.y.round();
+    let bottom = (cell.y + cell.height).round();
+    list.triangle(
+        ((left + right) * 0.5, top),
+        (right, bottom),
+        (left, bottom),
+        color,
+    );
+}

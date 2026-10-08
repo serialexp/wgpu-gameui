@@ -3,7 +3,8 @@
 //! See [`UiRenderer`] for the entry point. Internally this module owns:
 //! * a colored-quad pipeline (consumes [`crate::Vertex`] directly)
 //! * a textured-quad pipeline (icons and nine-slice tessellation)
-//! * a dynamic [`SpriteAtlas`]
+//! * sprite textures: one per sprite by default, or shared [`SpriteAtlas`]es the
+//!   application opts into (`textures`)
 //! * a nine-slice metadata table
 //! * a [`crate::TextRenderer`] for MSDF text (cosmic-text shaping + fdsm glyph atlas)
 //!
@@ -29,6 +30,7 @@ mod image_cache;
 mod msdf_atlas;
 #[cfg(feature = "phosphor-icons")]
 mod phosphor;
+pub(crate) mod textures;
 mod ui_renderer;
 mod uniform_arena;
 
@@ -46,14 +48,15 @@ pub use icon_font::{
 #[cfg(feature = "phosphor-icons")]
 pub use phosphor::PhosphorIcon;
 
-pub use atlas::{AtlasRegion, SpriteAtlas, SpriteId};
+pub use atlas::{AtlasRegion, AtlasSlot, SpriteAtlas};
 pub use blur::{Backdrop, BlurParams, ColorEncoding};
 #[cfg(feature = "headless")]
 pub use capture::HeadlessGpu;
 pub use capture::{CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, write_png};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
+pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId};
 pub(crate) use ui_renderer::ortho_matrix;
-pub use ui_renderer::{NineSliceMeta, RenderStats, UiRenderer};
+pub use ui_renderer::{NineSliceMeta, RenderStats, SMALL_TEXTURE_BATCHES_WARN, UiRenderer};
 pub(crate) use uniform_arena::UniformArena;
 
 pub use crate::widgets::NineSliceId;

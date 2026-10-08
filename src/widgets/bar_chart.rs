@@ -15,6 +15,12 @@
 //! Segment edges snap to whole pixels, and a bar with anything in it is
 //! never under 2px.
 //!
+//! Past a bar every 2px, neighbouring bars share a slot, which shows the
+//! tallest of them (or the outlier, or the running one, or the one lit from
+//! a table): what is drawn stops growing with the bar count. Bars under 4px
+//! wide sit on whole pixels, drop their lit top edge, and their reference is
+//! a plain tick rather than an edged dash.
+//!
 //! Like [`Waffle`](super::Waffle), the widget only paints and reports what
 //! the pointer is over: the caller feeds the hovered bar back (and may share
 //! it with a table of the same rows), and paints the tooltip last, above
@@ -44,6 +50,10 @@ const BAR_GAP_CROWDED: f32 = 1.0;
 const CROWDED: usize = 40;
 /// The shortest bar with anything in it.
 const MIN_BAR: f32 = 2.0;
+/// The narrowest slot: past a bar this often, neighbours share one.
+const MIN_SLOT: f32 = 2.0;
+/// Bars narrower than this skip their top edge and cap with a plain tick.
+const NARROW: f32 = 4.0;
 /// An outlier is over this many times the next tallest bar.
 const OUTLIER_RATIO: f64 = 3.0;
 /// With an outlier, the axis reaches this far over the next tallest.
@@ -199,12 +209,65 @@ struct Layout {
     top: f32,
     /// The y labels' column, left of the plot.
     gutter: f32,
-    /// Each bar's share of the plot's width, and the bar's own width.
+    /// Each slot's share of the plot's width, and the bar's own width.
     slot: f32,
     bar_width: f32,
+    /// Bars narrower than [`NARROW`], set on whole pixels.
+    snap: bool,
+    /// How many bars there are, and how many slots they are drawn in.
+    bars: usize,
+    slots: usize,
+    /// The bar cut short by the axis, if any.
+    outlier: Option<usize>,
+    /// The bar each slot shows, once bars share slots ([`BarChart::group`]);
+    /// a slot a bar otherwise.
+    shown: Option<Vec<usize>>,
     /// The y labels, bottom up.
     ticks: [String; 4],
 }
+
+impl Layout {
+    /// The bar slot `k` shows.
+    fn shown(&self, k: usize) -> usize {
+        self.shown.as_ref().map_or(k, |shown| shown[k])
+    }
+
+    /// The bar slot `k` draws: the lit bar when it falls in that slot (a
+    /// table row may light a bar its slot doesn't show), else the one the
+    /// slot shows.
+    fn drawn(&self, k: usize, lit: Option<usize>) -> usize {
+        match lit {
+            Some(lit) if self.slot_of(lit) == k => lit,
+            _ => self.shown(k),
+        }
+    }
+
+    /// The slot bar `i` is drawn in.
+    fn slot_of(&self, i: usize) -> usize {
+        if self.slots < self.bars {
+            i * self.slots / self.bars
+        } else {
+            i
+        }
+    }
+
+    /// Where slot `k`'s centre is, from the plot's left edge.
+    fn center(&self, k: usize) -> f32 {
+        (k as f32 + 0.5) * self.slot
+    }
+
+    /// The left edge of slot `k`'s bar, with the plot's left edge at
+    /// `origin`: on a whole pixel once bars are narrow, where a fraction
+    /// would smear a bar across two columns.
+    fn bar_left(&self, origin: f32, k: usize) -> f32 {
+        let left = origin + self.center(k) - self.bar_width * 0.5;
+        if self.snap { left.round() } else { left }
+    }
+}
+
+/// How a bar ranks for its slot ([`BarChart::group`]): outlier, running,
+/// stack, reference, compared in that order.
+type SlotRank = (bool, bool, f64, f64);
 
 /// A stacked bar chart.
 #[derive(Clone, Copy)]
@@ -292,12 +355,13 @@ impl<'a> BarChart<'a> {
 
     fn layout(&self, width: f32, list: &mut DrawList, s: &StyleResolver) -> Layout {
         // The two tallest bars, for the outlier: no sort of every bar.
-        let (mut first, mut second) = (0.0_f64, 0.0_f64);
-        for bar in self.bars {
+        let (mut first, mut second, mut tallest) = (0.0_f64, 0.0_f64, 0);
+        for (i, bar) in self.bars.iter().enumerate() {
             let peak = bar.peak();
             if peak > first {
                 second = first;
                 first = peak;
+                tallest = i;
             } else if peak > second {
                 second = peak;
             }
@@ -329,21 +393,69 @@ impl<'a> BarChart<'a> {
             (widest + GUTTER_GAP + 2.0).ceil().max(MIN_GUTTER)
         };
         let plot = (width - gutter).max(0.0);
-        let slot = if n == 0 { 0.0 } else { plot / n as f32 };
-        let gap = if n > CROWDED {
+        let slots = n.min(((plot / MIN_SLOT).floor() as usize).max(1));
+        let slot = if n == 0 { 0.0 } else { plot / slots as f32 };
+        let gap = if slots > CROWDED {
             BAR_GAP_CROWDED
         } else {
             BAR_GAP
         };
+        let bar_width = (slot - gap).min(self.max_bar_width).max(1.0);
+        // Snapped bars are floored, so a whole-pixel gap is left between them.
+        let snap = bar_width < NARROW;
         Layout {
             max,
             all_zero,
             top: PAD + if outlier { OUTLIER_ROOM } else { 0.0 },
             gutter,
             slot,
-            bar_width: (slot - gap).min(self.max_bar_width).max(1.0),
+            bar_width: if snap { bar_width.floor() } else { bar_width },
+            snap,
+            bars: n,
+            slots,
+            outlier: outlier.then_some(tallest),
+            shown: None,
             ticks,
         }
+    }
+
+    /// The bar each slot shows, the bars split evenly between the slots in
+    /// order, or `None` with a slot a bar. A slot shows its outlier (the axis
+    /// keeps room for its value), else its running bar, else its tallest
+    /// stack, a higher reference breaking a tie; the first of equals.
+    fn group(&self, layout: &Layout) -> Option<Vec<usize>> {
+        let (n, slots) = (layout.bars, layout.slots);
+        if slots >= n {
+            return None;
+        }
+        let rank = |i: usize, bar: &Bar<'_>| -> SlotRank {
+            (
+                layout.outlier == Some(i),
+                bar.current,
+                bar.total(),
+                bar.reference.unwrap_or(0.0),
+            )
+        };
+        let mut best: Vec<Option<(usize, SlotRank)>> = vec![None; slots];
+        for (i, bar) in self.bars.iter().enumerate() {
+            let held = &mut best[i * slots / n];
+            let candidate = rank(i, bar);
+            let replace = held.is_none_or(|(_, kept)| {
+                (candidate.0, candidate.1)
+                    .cmp(&(kept.0, kept.1))
+                    .then(candidate.2.total_cmp(&kept.2))
+                    .then(candidate.3.total_cmp(&kept.3))
+                    .is_gt()
+            });
+            if replace {
+                *held = Some((i, candidate));
+            }
+        }
+        Some(
+            best.into_iter()
+                .map(|held| held.map_or(0, |(i, _)| i))
+                .collect(),
+        )
     }
 
     /// The bar under `(mx, my)`, with the chart's plot area at `area`.
@@ -360,8 +472,8 @@ impl<'a> BarChart<'a> {
         if !plot.contains(input.mouse_x, input.mouse_y) {
             return None;
         }
-        let index = ((input.mouse_x - plot.x) / layout.slot) as usize;
-        (index < self.bars.len()).then_some(index)
+        let k = ((input.mouse_x - plot.x) / layout.slot) as usize;
+        (k < layout.slots).then(|| layout.shown(k))
     }
 
     /// The height it takes `width` wide, legend included.
@@ -385,10 +497,12 @@ impl<'a> BarChart<'a> {
         s: &StyleResolver,
         input: &InputState,
     ) -> BarChartOutput {
-        let layout = self.layout(width, list, s);
+        let mut layout = self.layout(width, list, s);
+        layout.shown = self.group(&layout);
         let area = Rect::new(x, y, width, layout.top + self.height + X_LABELS);
         let hit = self.hit(area, &layout, input);
         let lit = hit.or(self.hovered).filter(|&i| i < self.bars.len());
+        let lit_slot = lit.map(|i| layout.slot_of(i));
         let base = area.bottom() - X_LABELS;
         let n = self.bars.len();
 
@@ -414,10 +528,10 @@ impl<'a> BarChart<'a> {
         }
 
         let scale = self.height as f64 / layout.max;
-        for (i, bar) in self.bars.iter().enumerate() {
-            let center = x + layout.gutter + (i as f32 + 0.5) * layout.slot;
-            let left = center - layout.bar_width * 0.5;
-            let dim = lit.is_some_and(|lit| lit != i);
+        for k in 0..layout.slots {
+            let bar = &self.bars[layout.drawn(k, lit)];
+            let left = layout.bar_left(x + layout.gutter, k);
+            let dim = lit_slot.is_some_and(|lit| lit != k);
             list.push_tint();
             if dim {
                 list.multiply_tint([1.0, 1.0, 1.0, DIMMED]);
@@ -445,12 +559,13 @@ impl<'a> BarChart<'a> {
         }
 
         let tooltip = hit.map(|index| {
-            let center = x + layout.gutter + (index as f32 + 0.5) * layout.slot;
+            let bar_left = layout.bar_left(x + layout.gutter, layout.slot_of(index));
+            let bar_right = bar_left + layout.bar_width;
             BarTooltip {
                 index,
-                bar_left: center - layout.bar_width * 0.5,
-                bar_right: center + layout.bar_width * 0.5,
-                right_of_bar: center < x + width * 0.5,
+                bar_left,
+                bar_right,
+                right_of_bar: (bar_left + bar_right) * 0.5 < x + width * 0.5,
                 top: y,
             }
         });
@@ -547,9 +662,13 @@ impl<'a> BarChart<'a> {
             let line_y = base - at;
             let mut ink = s.ink(Ink::Value);
             ink[3] *= REFERENCE;
-            list.quad(left - 2.0, line_y - 1.0, width + 4.0, 1.0, REFERENCE_EDGE);
-            list.quad(left - 2.0, line_y + 1.0, width + 4.0, 1.0, REFERENCE_EDGE);
-            dashes(list, left - 2.0, line_y, width + 4.0, ink);
+            if width < NARROW {
+                list.quad(left, line_y, width, 1.0, ink);
+            } else {
+                list.quad(left - 2.0, line_y - 1.0, width + 4.0, 1.0, REFERENCE_EDGE);
+                list.quad(left - 2.0, line_y + 1.0, width + 4.0, 1.0, REFERENCE_EDGE);
+                list.dashed_hline(left - 2.0, line_y, width + 4.0, DASH, DASH_GAP, ink);
+            }
         }
         if bar.current {
             let accent = s.color(StyleKey::Accent);
@@ -595,7 +714,9 @@ impl<'a> BarChart<'a> {
         if bar.current {
             list.hatch(rect, HATCH_STEP, HATCH);
         }
-        list.quad(rect.x, rect.y, rect.width, 1.0, BAR_HI);
+        if rect.width >= NARROW {
+            list.quad(rect.x, rect.y, rect.width, 1.0, BAR_HI);
+        }
     }
 
     fn paint_segment(&self, index: usize, rect: Rect, list: &mut DrawList) {
@@ -620,7 +741,7 @@ impl<'a> BarChart<'a> {
         list: &mut DrawList,
         s: &StyleResolver,
     ) {
-        let n = self.bars.len();
+        let n = layout.slots;
         if n == 0 {
             return;
         }
@@ -629,14 +750,16 @@ impl<'a> BarChart<'a> {
         let step = n.div_ceil(fits).max(1);
         let size = s.text_size(TextSize::Caption);
         let y = crate::text::vcentered_line_y(base + 4.0, 12.0, size);
-        for (i, bar) in self.bars.iter().enumerate() {
-            if !(n - 1 - i).is_multiple_of(step) {
+        for k in 0..n {
+            if !(n - 1 - k).is_multiple_of(step) {
                 continue;
             }
-            let center = area.x + layout.gutter + (i as f32 + 0.5) * layout.slot;
+            let index = layout.drawn(k, lit);
+            let bar = &self.bars[index];
+            let center = area.x + layout.gutter + layout.center(k);
             let (text, ink) = if bar.current {
                 ("now", None)
-            } else if lit == Some(i) {
+            } else if lit == Some(index) {
                 (bar.label, Some(Ink::Value))
             } else {
                 (bar.label, Some(Ink::Dim))
@@ -754,7 +877,7 @@ impl<'a> BarChart<'a> {
             }
             LegendEntry::Reference => {
                 let mid = (r.y + r.height * 0.5).round();
-                dashes(list, r.x, mid, LEGEND_DASH, s.ink(Ink::Value));
+                list.dashed_hline(r.x, mid, LEGEND_DASH, DASH, DASH_GAP, s.ink(Ink::Value));
                 list.text(s.sans_block(
                     self.reference_label,
                     r.x + LEGEND_DASH + SWATCH_GAP,
@@ -925,7 +1048,7 @@ impl<'a> BarChart<'a> {
             if let (Some(reference), Some(text)) = (bar.reference, &reference_text) {
                 y += TIP_ROW + TIP_ROW_GAP;
                 let mid = (y + TIP_ROW * 0.5).round();
-                dashes(list, left, mid, 10.0, s.ink(Ink::Value));
+                list.dashed_hline(left, mid, 10.0, DASH, DASH_GAP, s.ink(Ink::Value));
                 list.text(s.sans_block(
                     self.reference_label,
                     left + label_x,
@@ -974,15 +1097,6 @@ fn paint_fill(list: &mut DrawList, rect: Rect, series: &BarSeries<'_>) {
         list.rect_outline(rect, 1.0, series.color);
     } else {
         list.quad(rect.x, rect.y, rect.width, rect.height, series.color);
-    }
-}
-
-/// A 1px dashed line from `x`, `width` long, at `y`.
-fn dashes(list: &mut DrawList, x: f32, y: f32, width: f32, color: [f32; 4]) {
-    let mut at = x;
-    while at < x + width {
-        list.quad(at, y, DASH.min(x + width - at), 1.0, color);
-        at += DASH + DASH_GAP;
     }
 }
 

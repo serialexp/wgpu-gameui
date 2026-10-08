@@ -514,8 +514,9 @@ pub struct UiContext<'a> {
     /// this resets to `true` each frame unless re-disabled.
     auto_advance: bool,
     /// When `true`, every interactive verb feeds its widgets an inert
-    /// [`InputState::consumed()`] clone so a whole subtree renders but cannot
-    /// react (no hover/click/scroll/keyboard/nav). Armed by
+    /// [`InputState::consumed()`] clone and a disabled [`DrawContext`], so a
+    /// whole subtree renders but cannot react (no hover/click/scroll/
+    /// keyboard/nav) and stays out of the Tab ring. Armed by
     /// [`disabled_scope`](Self::disabled_scope)/[`enabled_scope`](Self::enabled_scope)
     /// and saved/restored across nesting. `false` by default.
     input_disabled: bool,
@@ -898,7 +899,9 @@ impl<'a> UiContext<'a> {
     /// When `enabled` is `false`, every interactive verb inside `f` feeds its
     /// widget an inert [`InputState::consumed()`] clone (no hover/click/scroll/
     /// keyboard/nav) and a gray dim is multiplied onto the tint stack, so the
-    /// block renders visibly disabled. When `enabled` is `true` the block runs
+    /// block renders visibly disabled. Its widgets' hit regions are
+    /// registered disabled ([`DrawContext::enabled`]), so a click on one
+    /// reaches neither it nor what lies under it, and Tab skips them. When `enabled` is `true` the block runs
     /// normally — and explicitly *re-enables* inside an enclosing disabled scope
     /// (the flag is absolute for the body, restored to its prior value on exit).
     ///
@@ -1651,6 +1654,7 @@ impl<'a> UiContext<'a> {
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -1727,6 +1731,7 @@ impl<'a> UiContext<'a> {
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -1810,6 +1815,7 @@ impl<'a> UiContext<'a> {
                 }
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             // Reuse the DragId value as the FocusId so the slider is also
             // keyboard-adjustable (arrow keys) through the façade.
@@ -1852,6 +1858,7 @@ impl<'a> UiContext<'a> {
                 .expect("checkbox requires interactive state");
             let UiState { focus, anim, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim);
             checkbox
@@ -1898,6 +1905,7 @@ impl<'a> UiContext<'a> {
                 .as_mut()
                 .expect("radio_group requires interactive state");
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             RadioGroup::new(options)
                 .focusable(fid)
@@ -2067,6 +2075,7 @@ impl<'a> UiContext<'a> {
             }
             let before = ti.value.clone();
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -2199,6 +2208,7 @@ impl<'a> UiContext<'a> {
                 .entry(id)
                 .or_insert_with(|| TextInput::new(local.x, local.y, local.width, local.height));
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             let out = NumberInput::new()
                 .with_range(min, max)
@@ -2248,10 +2258,11 @@ impl<'a> UiContext<'a> {
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
         // The whole tree is one Tab stop: wire its focus id and register it in
-        // the ring exactly once per frame (the first row drawn).
+        // the ring exactly once per frame (the first enabled row drawn).
+        let enabled = !self.input_disabled;
         if let Some(s) = self.state.as_mut() {
             s.tree.set_focus_id(TREE_FOCUS_ID);
-            if !s.tree_focus_registered {
+            if enabled && !s.tree_focus_registered {
                 s.tree_focus_registered = true;
                 s.focus.register(TREE_FOCUS_ID);
             }
@@ -2267,6 +2278,7 @@ impl<'a> UiContext<'a> {
             };
             let UiState { tree, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             let out = node.with_depth(depth).draw(id, local, tree, &mut ctx);
             // Focus ring on the selected row while the tree holds keyboard focus.
@@ -2392,6 +2404,7 @@ impl<'a> UiContext<'a> {
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -2444,6 +2457,7 @@ impl<'a> UiContext<'a> {
             };
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             ColorPicker::new().draw(*hsva, id, drag, local, &mut ctx)
         };
@@ -2477,6 +2491,7 @@ impl<'a> UiContext<'a> {
             };
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             DragHandle::new().draw(id, drag, local, &mut ctx)
         };
@@ -2633,6 +2648,7 @@ impl<'a> UiContext<'a> {
                 dropdowns, focus, ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             dropdown.draw(id, local, dropdowns, &mut ctx)
         };
@@ -2670,6 +2686,7 @@ impl<'a> UiContext<'a> {
                 .as_mut()
                 .expect("toggle requires interactive state");
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             toggle.focusable(fid).draw(on, local, &mut ctx)
         };
@@ -2706,6 +2723,7 @@ impl<'a> UiContext<'a> {
                 }
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_tag_input(local, tags, draft, focused, &mut ctx)
         };
@@ -2781,7 +2799,9 @@ impl<'a> UiContext<'a> {
                 return crate::ListViewOutput::default();
             };
             let focus = &mut ui_state.focus;
-            focus.register(id);
+            if !self.input_disabled {
+                focus.register(id);
+            }
             // A click in the list focuses it in this frame, so the row it
             // selects already wears the accent.
             if local_input.mouse_clicked
@@ -3005,6 +3025,7 @@ impl<'a> UiContext<'a> {
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -3038,6 +3059,7 @@ impl<'a> UiContext<'a> {
                 }
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             bc.draw(local, &mut ctx)
         };
@@ -3076,6 +3098,7 @@ impl<'a> UiContext<'a> {
                 }
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             Pager::new().draw(page, total, local, &mut ctx)
         };
@@ -3110,6 +3133,7 @@ impl<'a> UiContext<'a> {
                 }
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             AssetGrid::new(items, glyph).draw(local, selected, &mut ctx)
         };
@@ -3154,6 +3178,7 @@ impl<'a> UiContext<'a> {
             };
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             vf.draw(local, scrub, drag, id, &mut ctx)
         };
@@ -3203,6 +3228,7 @@ impl<'a> UiContext<'a> {
             };
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_gradient_ramp(local, stops, selected, drag_stop, drag, id, &mut ctx)
         };
@@ -3240,6 +3266,7 @@ impl<'a> UiContext<'a> {
                 }
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_combo_trigger(local, label, open, focused, &mut ctx)
         };
@@ -3632,6 +3659,93 @@ mod tests {
             clicked = ui.text_button("OK", Some(100.0), Some(30.0));
         });
         assert!(clicked, "enabled_scope(true) is a no-op pass-through");
+    }
+
+    /// How the top button of [`stacked_button_clicks`] is disabled.
+    #[derive(Clone, Copy)]
+    enum Top {
+        Enabled,
+        InDisabledScope,
+        DisabledItself,
+    }
+
+    /// Runs two frames of a click at (10, 10) over two stacked 100×30
+    /// buttons at the origin and returns the second frame's (bottom, top)
+    /// clicks: from the second frame on, the retained interaction scene
+    /// decides them.
+    fn stacked_button_clicks(top: Top) -> (bool, bool) {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut clicks = (false, false);
+        for _ in 0..2 {
+            let mut input = click_at(10.0, 10.0);
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.set_auto_advance(false);
+            let bottom = ui.text_button("Under", Some(100.0), Some(30.0));
+            let mut over = false;
+            ui.enabled_scope(!matches!(top, Top::InDisabledScope), |ui| {
+                let button = Button::new("Over").enabled(!matches!(top, Top::DisabledItself));
+                over = ui.button(button, Some(100.0), Some(30.0));
+            });
+            drop(ui);
+            state.end_frame();
+            clicks = (bottom, over);
+        }
+        clicks
+    }
+
+    #[test]
+    fn tab_skips_disabled_buttons() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut focused = Vec::new();
+        for _ in 0..2 {
+            let mut input = InputState {
+                key_tab: true,
+                ..InputState::default()
+            };
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+            ui.text_button("First", Some(100.0), Some(30.0));
+            ui.disabled_scope(|ui| {
+                ui.text_button("In a disabled scope", Some(100.0), Some(30.0));
+            });
+            ui.button(
+                Button::new("Disabled").enabled(false),
+                Some(100.0),
+                Some(30.0),
+            );
+            ui.text_button("Last", Some(100.0), Some(30.0));
+            drop(ui);
+            state.end_frame();
+            focused.push(state.focus.focused());
+        }
+        assert_eq!(focused, [Some(AUTO_ID_BASE), Some(AUTO_ID_BASE + 3)]);
+    }
+
+    #[test]
+    fn a_button_in_a_disabled_scope_is_not_clicked_once_its_geometry_is_retained() {
+        let (_, top) = stacked_button_clicks(Top::InDisabledScope);
+        assert!(!top, "a disabled button reports no click");
+    }
+
+    #[test]
+    fn a_disabled_button_keeps_the_click_from_the_button_under_it() {
+        assert_eq!(
+            stacked_button_clicks(Top::Enabled),
+            (false, true),
+            "control"
+        );
+        for top in [Top::InDisabledScope, Top::DisabledItself] {
+            assert_eq!(
+                stacked_button_clicks(top),
+                (false, false),
+                "the click neither lands on nor falls through a disabled button"
+            );
+        }
     }
 
     #[test]

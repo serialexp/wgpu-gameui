@@ -12,7 +12,7 @@ use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleResolver, TextSize};
 
-use super::DrawList;
+use super::{DrawList, Stripes};
 
 /// Side of one cell.
 pub const WAFFLE_CELL: f32 = 12.0;
@@ -40,6 +40,7 @@ const CELL_DROP: [f32; 4] = [0.0, 0.0, 0.0, 0.4];
 const HATCH_GROUND: [f32; 4] = [0.0, 0.0, 0.0, 0.4];
 const HATCH_LINE: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
 const HATCH_RECESS: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+const HATCH_STEP: f32 = 4.0;
 
 /// How a category's cells are painted.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -241,15 +242,9 @@ fn paint_cell(list: &mut DrawList, r: Rect, fill: WaffleFill, alpha: f32) {
         }
         WaffleFill::Hatched => {
             list.quad(r.x, r.y, r.width, r.height, fade(HATCH_GROUND, alpha));
-            // 135° lines every 4px, clipped to the cell.
-            list.push_clip(r);
-            let line = fade(HATCH_LINE, alpha);
-            let mut k = 0.0;
-            while k < r.width + r.height {
-                list.line([r.x + k, r.y], [r.x + k - r.height, r.bottom()], 1.0, line);
-                k += 4.0;
-            }
-            list.pop_clip();
+            // 135° lines every 4px across the cell, from its corner: one
+            // stripe record, drawn with the cell's quads and recess.
+            list.stripes(r, Stripes::hatch(HATCH_STEP, fade(HATCH_LINE, alpha)));
             list.box_shadow_inset(
                 r,
                 CornerRadii::uniform(0.0),
@@ -379,5 +374,48 @@ mod tests {
         assert_eq!(out.hovered, None);
         assert_eq!(solid_cells(&list, fade(RED, FADED)), 1);
         assert_eq!(solid_cells(&list, BLUE), 3);
+    }
+
+    /// The shapes of a waffle of `cells` in rows of `columns`.
+    fn shapes_of(cells: &[u8], columns: usize) -> crate::PrimCounts {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let cats = categories();
+        let away = InputState {
+            mouse_x: -100.0,
+            mouse_y: -100.0,
+            ..Default::default()
+        };
+        let mut list = DrawList::new();
+        Waffle::new(&cats, cells, columns).draw(0.0, 0.0, 2_000.0, &mut list, &s, &away);
+        list.prim_counts()
+    }
+
+    #[test]
+    fn a_solid_cell_is_three_quads_and_the_legend_does_not_grow_with_cells() {
+        let small = shapes_of(&[0; 100], 10);
+        let large = shapes_of(&[0; 2_500], 50);
+        assert_eq!(large.chrome_instances - small.chrome_instances, 3 * 2_400);
+        assert_eq!(large.texts, small.texts);
+        assert_eq!((small.indices, large.indices), (0, 0));
+    }
+
+    #[test]
+    fn hatched_cells_are_drawn_together_in_one_run() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let cats = categories();
+        // Every cell free space (hatched).
+        let cells = [2; 400];
+        let mut list = DrawList::new();
+        Waffle::new(&cats, &cells, 20).draw(0.0, 0.0, 600.0, &mut list, &s, &InputState::default());
+        // A cell's ground, hatching and recess, and the legend swatch's.
+        assert_eq!(list.stripe_instance_count(), 401);
+        assert!(list.indices.is_empty(), "no soup");
+        let crate::widgets::PaintCmd::Analytic { instances } = &list.paint_commands()[0] else {
+            panic!("the cells come first: {:?}", list.paint_commands()[0]);
+        };
+        // The legend's swatch joins them: the legend text is no break.
+        assert_eq!(instances.len(), 401 * 3, "every cell in the first draw");
     }
 }

@@ -11,6 +11,7 @@ use crate::text::{FontHandle, FontSystemHandle, FontVMetrics, TextBlock, TextMea
 
 const ANALYTIC_KIND_CHROME: u32 = 0;
 const ANALYTIC_KIND_SHADOW: u32 = 1;
+const ANALYTIC_KIND_STRIPES: u32 = 2;
 
 /// Monotonic source of per-`DrawList` identity. Each `DrawList` gets a unique,
 /// never-reused id at construction so the renderer can detect the "freshly
@@ -126,6 +127,68 @@ pub struct ChromeInstance {
     pub params: [f32; 4],
 }
 
+/// A repeating stripe fill for [`DrawList::stripes`]: bands `width` px wide,
+/// one every `period` px along `normal`, measured from the rect's top-left
+/// corner (moved `offset` px along `normal`). Between the bands nothing is
+/// painted. Hatching and dashed lines are stripes; one record draws a whole
+/// run of them, in the same GPU draw as the chrome around it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stripes {
+    /// Across the bands; normalized when drawn.
+    pub normal: [f32; 2],
+    /// From one band to the next, in px along `normal`.
+    pub period: f32,
+    /// Each band's width, in px along `normal`.
+    pub width: f32,
+    /// How far along `normal` the first band starts.
+    pub offset: f32,
+    /// The bands' color.
+    pub color: [f32; 4],
+    /// Hard-edged: a pixel is painted fully when its centre is in a band and
+    /// not at all otherwise, like a 1 px line drawn without smoothing. For
+    /// pixel-aligned hatching; smooth bands stay even when rotated or scaled.
+    pub crisp: bool,
+}
+
+impl Stripes {
+    /// Hard 1 px hatch lines rising left to right (a CSS
+    /// `repeating-linear-gradient(135deg, …)` stripe), `step` px apart
+    /// horizontally, one through the rect's top-left corner.
+    pub fn hatch(step: f32, color: [f32; 4]) -> Self {
+        // Across the lines is down and to the right, where `step` apart
+        // horizontally is `step / √2` apart. Each band is centred on its line.
+        let across = std::f32::consts::FRAC_1_SQRT_2;
+        Self {
+            normal: [across, across],
+            period: step * across,
+            width: 1.0,
+            offset: -0.5,
+            color,
+            crisp: true,
+        }
+    }
+}
+
+/// One [`Stripes`] fill as the GPU gets it (see `shade_stripes` in
+/// `ui.wgsl`).
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct StripeInstance {
+    /// Forward affine linear part `[a, b, c, d]`.
+    pub linear: [f32; 4],
+    /// `[tx, ty, clip_enabled, 0]`.
+    pub translation: [f32; 4],
+    /// Local-space rect `[x, y, width, height]`.
+    pub rect: [f32; 4],
+    /// The bands' color, tint applied.
+    pub color: [f32; 4],
+    /// `[normal_x, normal_y, period, width]`, the normal of unit length.
+    pub pattern: [f32; 4],
+    /// `[offset, crisp (0 or 1), 0, 0]`.
+    pub phase: [f32; 4],
+    /// World-space clip rect `[x, y, width, height]`.
+    pub clip: [f32; 4],
+}
+
 /// One ordered analytic GPU instance. The ten `vec4` payload slots are followed
 /// by an explicit integer tag and padding, keeping one upload-ready record for
 /// both chrome and shadows without per-frame conversion.
@@ -182,6 +245,25 @@ impl AnalyticInstance {
         }
     }
 
+    fn stripes(value: StripeInstance) -> Self {
+        Self {
+            payload: [
+                value.linear,
+                value.translation,
+                value.rect,
+                value.color,
+                value.pattern,
+                value.phase,
+                [0.0; 4],
+                [0.0; 4],
+                value.clip,
+                [0.0; 4],
+            ],
+            kind: ANALYTIC_KIND_STRIPES,
+            padding: [0; 3],
+        }
+    }
+
     /// Decode this record as chrome, or return `None` for another kind.
     pub fn as_chrome(&self) -> Option<ChromeInstance> {
         (self.kind == ANALYTIC_KIND_CHROME).then(|| ChromeInstance {
@@ -211,6 +293,19 @@ impl AnalyticInstance {
             element_radii: self.payload[7],
             clip: self.payload[8],
             params: self.payload[9],
+        })
+    }
+
+    /// Decode this record as stripes, or return `None` for another kind.
+    pub fn as_stripes(&self) -> Option<StripeInstance> {
+        (self.kind == ANALYTIC_KIND_STRIPES).then(|| StripeInstance {
+            linear: self.payload[0],
+            translation: self.payload[1],
+            rect: self.payload[2],
+            color: self.payload[3],
+            pattern: self.payload[4],
+            phase: self.payload[5],
+            clip: self.payload[8],
         })
     }
 }
@@ -341,6 +436,8 @@ pub struct PrimCounts {
     pub circle_instances: usize,
     /// Analytic shadows ([`DrawList::shadow_instances`]).
     pub shadow_instances: usize,
+    /// Stripe fills ([`DrawList::stripe_instances`]).
+    pub stripe_instances: usize,
     /// Primitives silently dropped by a non-positive size/radius/thickness
     /// guard. These leave **no trace in any buffer**, so this counter is the
     /// only evidence that an element collapsed — see
@@ -365,6 +462,7 @@ impl PrimCounts {
             + self.chrome_instances
             + self.circle_instances
             + self.shadow_instances
+            + self.stripe_instances
     }
 
     /// Element-wise `self - earlier`, saturating at zero. Use this to turn a
@@ -387,6 +485,9 @@ impl PrimCounts {
             shadow_instances: self
                 .shadow_instances
                 .saturating_sub(earlier.shadow_instances),
+            stripe_instances: self
+                .stripe_instances
+                .saturating_sub(earlier.stripe_instances),
             dropped_degenerate: self
                 .dropped_degenerate
                 .saturating_sub(earlier.dropped_degenerate),
@@ -474,6 +575,7 @@ pub struct DrawList {
     pub analytic_instances: Vec<AnalyticInstance>,
     analytic_chrome_count: usize,
     analytic_shadow_count: usize,
+    analytic_stripe_count: usize,
     /// Instanced circles (filled discs + ring outlines). Drawn by the circle
     /// SDF pipeline; interleaved with soup/chrome via `DrawList::paint_cmds`.
     pub circle_instances: Vec<CircleInstance>,
@@ -529,6 +631,7 @@ impl Default for DrawList {
             analytic_instances: Vec::new(),
             analytic_chrome_count: 0,
             analytic_shadow_count: 0,
+            analytic_stripe_count: 0,
             circle_instances: Vec::new(),
             paint_cmds: Vec::new(),
             soup_committed_indices: 0,
@@ -581,6 +684,7 @@ impl DrawList {
             analytic_instances: Vec::new(),
             analytic_chrome_count: 0,
             analytic_shadow_count: 0,
+            analytic_stripe_count: 0,
             circle_instances: Vec::new(),
             paint_cmds: Vec::new(),
             soup_committed_indices: 0,
@@ -626,6 +730,7 @@ impl DrawList {
         self.analytic_instances.clear();
         self.analytic_chrome_count = 0;
         self.analytic_shadow_count = 0;
+        self.analytic_stripe_count = 0;
         self.circle_instances.clear();
         self.paint_cmds.clear();
         self.soup_committed_indices = 0;
@@ -884,6 +989,7 @@ impl DrawList {
             chrome_instances: self.analytic_chrome_count,
             circle_instances: self.circle_instances.len(),
             shadow_instances: self.analytic_shadow_count,
+            stripe_instances: self.analytic_stripe_count,
             dropped_degenerate: self.dropped_degenerate as usize,
         }
     }
@@ -1477,54 +1583,141 @@ impl DrawList {
             self.dropped_degenerate += 1;
             return;
         }
-        let mut x = rect.x;
-        while x < rect.right() {
-            let w = dash.min(rect.right() - x);
-            self.quad(x, rect.y, w, 1.0, color);
-            self.quad(x, rect.bottom() - 1.0, w, 1.0, color);
-            x += dash * 2.0;
-        }
+        self.dashed_hline(rect.x, rect.y, rect.width, dash, dash, color);
+        self.dashed_hline(rect.x, rect.bottom() - 1.0, rect.width, dash, dash, color);
         // The sides start one period down so their first dash doesn't paint
         // over the corner pixel the top edge already covered.
-        let mut y = rect.y + dash * 2.0;
-        while y < rect.bottom() - 1.0 {
-            let h = dash.min(rect.bottom() - 1.0 - y);
-            self.quad(rect.x, y, 1.0, h, color);
-            self.quad(rect.right() - 1.0, y, 1.0, h, color);
-            y += dash * 2.0;
+        let top = rect.y + dash * 2.0;
+        let side = Rect::new(rect.x, top, 1.0, rect.bottom() - 1.0 - top);
+        if side.height > 0.0 {
+            let stripes = Stripes {
+                normal: [0.0, 1.0],
+                period: dash * 2.0,
+                width: dash,
+                offset: 0.0,
+                color,
+                crisp: false,
+            };
+            self.stripes(side, stripes);
+            self.stripes(
+                Rect {
+                    x: rect.right() - 1.0,
+                    ..side
+                },
+                stripes,
+            );
         }
+    }
+
+    /// Add a 1 px dashed line `width` long from `(x, y)`: `dash` px on, `gap`
+    /// px off, starting with a dash at `x`. One record, however long.
+    pub fn dashed_hline(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        dash: f32,
+        gap: f32,
+        color: [f32; 4],
+    ) {
+        self.stripes(
+            Rect::new(x, y, width, 1.0),
+            Stripes {
+                normal: [1.0, 0.0],
+                period: dash + gap,
+                width: dash,
+                offset: 0.0,
+                color,
+                crisp: false,
+            },
+        );
     }
 
     /// Fill `rect` with 1 px hatch lines rising left to right (a CSS
     /// `repeating-linear-gradient(135deg, …)` stripe), `step` px apart
     /// horizontally. The texture of empty slots and placeholders.
     ///
-    /// Each 45° line is cut before it's drawn to a box half a pixel inside
-    /// `rect`, so the stroke's width stays inside too and no clip is needed.
+    /// The lines sit a whole number of steps from the corner of the box half
+    /// a pixel inside `rect`, though they paint to `rect`'s edges. One
+    /// [`Stripes`] record, however large the area.
     pub fn hatch(&mut self, rect: Rect, step: f32, color: [f32; 4]) {
-        let area = rect.inset(0.5);
-        if step <= 0.0 || area.width <= 0.0 || area.height <= 0.0 {
+        // That box's corner is half a pixel along both axes from `rect`'s:
+        // 1/√2 px across the lines.
+        let stripes = Stripes::hatch(step, color);
+        let offset = stripes.offset + std::f32::consts::FRAC_1_SQRT_2;
+        self.stripes(rect, Stripes { offset, ..stripes });
+    }
+
+    /// Fill `rect` with `stripes` (see [`Stripes`]): one analytic record,
+    /// drawn with the chrome around it, so stripes cost no draw call of
+    /// their own however many bands they paint.
+    pub fn stripes(&mut self, rect: Rect, stripes: Stripes) {
+        let m = self.current_transform();
+        let [nx, ny] = stripes.normal;
+        let length = (nx * nx + ny * ny).sqrt();
+        let values = [
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            stripes.period,
+            stripes.width,
+            stripes.offset,
+            length,
+            m.a,
+            m.b,
+            m.c,
+            m.d,
+            m.tx,
+            m.ty,
+        ];
+        if rect.is_empty()
+            || stripes.period <= 0.0
+            || stripes.width <= 0.0
+            || length <= f32::EPSILON
+            || values
+                .iter()
+                .chain(&stripes.color)
+                .any(|value| !value.is_finite())
+            || m.try_inverse().is_none()
+        {
             self.dropped_degenerate += 1;
             return;
         }
-        let mut offset = step;
-        while offset < area.width + area.height {
-            // The line runs from (x0, bottom) up and to the right; `t` is the
-            // distance travelled along both axes. Keep the part with x
-            // inside the area.
-            let x0 = area.x + offset - area.height;
-            let t0 = (area.x - x0).max(0.0);
-            let t1 = (area.right() - x0).min(area.height);
-            if t1 > t0 {
-                self.line(
-                    [x0 + t0, area.bottom() - t0],
-                    [x0 + t1, area.bottom() - t1],
-                    1.0,
-                    color,
-                );
-            }
-            offset += step;
-        }
+        let current_clip = self.current_clip();
+        self.flush_soup();
+        let (clip, clip_enabled) = current_clip
+            .map(|c| ([c.x, c.y, c.width, c.height], 1.0))
+            .unwrap_or(([0.0; 4], 0.0));
+        let translate_only = m.is_translate_only();
+        let instance = StripeInstance {
+            linear: if translate_only {
+                [1.0, 0.0, 0.0, 1.0]
+            } else {
+                [m.a, m.b, m.c, m.d]
+            },
+            translation: if translate_only {
+                [0.0, 0.0, clip_enabled, 0.0]
+            } else {
+                [m.tx, m.ty, clip_enabled, 0.0]
+            },
+            rect: if translate_only {
+                [rect.x + m.tx, rect.y + m.ty, rect.width, rect.height]
+            } else {
+                [rect.x, rect.y, rect.width, rect.height]
+            },
+            color: self.apply_tint(stripes.color),
+            pattern: [nx / length, ny / length, stripes.period, stripes.width],
+            phase: [stripes.offset, f32::from(u8::from(stripes.crisp)), 0.0, 0.0],
+            clip,
+        };
+        let idx = self.analytic_instances.len() as u32;
+        self.analytic_instances
+            .push(AnalyticInstance::stripes(instance));
+        self.analytic_stripe_count += 1;
+        self.push_paint_cmd(PaintCmd::Analytic {
+            instances: idx..idx + 1,
+        });
     }
 
     /// Draw a rounded-rect chrome panel. This compatibility wrapper records one
@@ -2085,6 +2278,18 @@ impl DrawList {
         self.shadow_instances().nth(index)
     }
 
+    /// Number of stripe records in the heterogeneous analytic stream.
+    pub fn stripe_instance_count(&self) -> usize {
+        self.analytic_stripe_count
+    }
+
+    /// Iterate stripe payloads in paint order.
+    pub fn stripe_instances(&self) -> impl Iterator<Item = StripeInstance> + '_ {
+        self.analytic_instances
+            .iter()
+            .filter_map(AnalyticInstance::as_stripes)
+    }
+
     /// Index range for soup not yet represented by an explicit command.
     ///
     /// The renderer submits this once after the command stream. Keeping the
@@ -2418,11 +2623,22 @@ impl DrawList {
                 }
             }
 
-            let thickness = (block.font_size * 0.07).max(1.0);
+            let mut thickness = (block.font_size * 0.07).max(1.0);
+            let m = self.current_transform();
+            let snap = m.is_translate_only();
+            if snap {
+                thickness = thickness.round();
+            }
             for segment in self.underline_segments(&block, &mut runs) {
+                let mut y = block.y + segment.y;
+                if snap {
+                    // On whole pixels, like a browser's underline: a
+                    // fractional one splits across two rows, neither solid.
+                    y = (y + m.ty).round() - m.ty;
+                }
                 self.quad(
                     block.x + segment.x,
-                    block.y + segment.y,
+                    y,
                     segment.width,
                     thickness,
                     segment.color,
@@ -3157,6 +3373,39 @@ mod tests {
             has_colour(override_yellow),
             "explicit Colour underline should use the override"
         );
+    }
+
+    #[test]
+    fn underlines_sit_on_whole_pixels_unless_transformed() {
+        use crate::text::{TextBlock, Underline};
+        let block = || {
+            TextBlock::new("underlined", 3.3, 10.37)
+                .with_size(17.0)
+                .with_style_ranges(vec![range(0..10, Underline::Color([1.0; 4]))])
+        };
+        let mut list = DrawList::with_font_system(crate::shared_font_system());
+        list.push_transform();
+        list.translate(0.0, 0.25);
+        list.text(block());
+        list.pop_transform();
+        let snapped = list.chrome_instances().next().unwrap().rect;
+        assert_eq!(
+            (snapped[1].fract(), snapped[3].fract()),
+            (0.0, 0.0),
+            "{snapped:?}"
+        );
+        assert!(snapped[3] >= 1.0);
+
+        // Turned, there are no whole pixels to keep to.
+        list.clear();
+        list.push_transform();
+        list.rotate(0.3);
+        list.text(block());
+        list.pop_transform();
+        // A turned quad is soup: its first and last corners span the height.
+        let [a, d] = [list.vertices[0].position, list.vertices[3].position];
+        let thickness = (a[0] - d[0]).hypot(a[1] - d[1]);
+        assert!((thickness - 17.0 * 0.07).abs() < 1e-4, "{thickness}");
     }
 
     /// The underline quads `block` emits, as `(x, width, colour)`.
@@ -4431,5 +4680,187 @@ mod tests {
         assert!(
             matches!(&d.paint_cmds[3], PaintCmd::Analytic { instances } if instances == &(0..1))
         );
+    }
+
+    #[test]
+    fn stripes_are_one_record_drawn_with_the_chrome_around_them() {
+        let mut d = DrawList::new();
+        d.push_clip(Rect::new(0.0, 0.0, 50.0, 50.0));
+        d.push_tint();
+        d.multiply_tint([1.0, 1.0, 1.0, 0.5]);
+        d.quad(0.0, 0.0, 40.0, 40.0, [1.0; 4]);
+        d.stripes(
+            Rect::new(2.0, 3.0, 30.0, 20.0),
+            super::Stripes {
+                normal: [3.0, 4.0],
+                period: 5.0,
+                width: 2.0,
+                offset: 1.0,
+                color: [1.0, 0.0, 0.0, 1.0],
+                crisp: false,
+            },
+        );
+        d.quad(0.0, 0.0, 4.0, 4.0, [1.0; 4]);
+        d.pop_tint();
+        d.pop_clip();
+
+        assert_eq!(d.stripe_instance_count(), 1);
+        assert_eq!(d.prim_counts().stripe_instances, 1);
+        assert!(d.indices.is_empty(), "no soup");
+        assert_eq!(
+            d.paint_cmds,
+            vec![PaintCmd::Analytic { instances: 0..3 }],
+            "one draw for the quads and the stripes between them"
+        );
+        let stripes = d.stripe_instances().next().unwrap();
+        assert_eq!(stripes.rect, [2.0, 3.0, 30.0, 20.0]);
+        assert_eq!(
+            stripes.pattern,
+            [0.6, 0.8, 5.0, 2.0],
+            "the normal is unit length"
+        );
+        assert_eq!(stripes.phase[..2], [1.0, 0.0], "offset, smooth");
+        assert_eq!(stripes.color, [1.0, 0.0, 0.0, 0.5], "tinted");
+        assert_eq!(stripes.clip, [0.0, 0.0, 50.0, 50.0]);
+        assert_eq!(stripes.translation[2], 1.0, "clipped");
+    }
+
+    #[test]
+    fn stripes_with_nothing_to_paint_are_dropped() {
+        let mut d = DrawList::new();
+        let stripes = super::Stripes {
+            normal: [1.0, 0.0],
+            period: 5.0,
+            width: 2.0,
+            offset: 0.0,
+            color: [1.0; 4],
+            crisp: false,
+        };
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        d.stripes(Rect::new(0.0, 0.0, 0.0, 10.0), stripes);
+        d.stripes(
+            rect,
+            super::Stripes {
+                period: 0.0,
+                ..stripes
+            },
+        );
+        d.stripes(
+            rect,
+            super::Stripes {
+                width: 0.0,
+                ..stripes
+            },
+        );
+        d.stripes(
+            rect,
+            super::Stripes {
+                normal: [0.0, 0.0],
+                ..stripes
+            },
+        );
+        d.stripes(
+            rect,
+            super::Stripes {
+                offset: f32::NAN,
+                ..stripes
+            },
+        );
+        d.stripes(
+            rect,
+            super::Stripes {
+                color: [1.0, f32::INFINITY, 1.0, 1.0],
+                ..stripes
+            },
+        );
+        d.push_transform();
+        d.translate(f32::NAN, 0.0);
+        d.stripes(rect, stripes);
+        d.pop_transform();
+        d.push_transform();
+        d.scale(0.0, 1.0);
+        d.stripes(rect, stripes);
+        d.pop_transform();
+        assert_eq!(d.stripe_instance_count(), 0);
+        assert_eq!(d.dropped_degenerate(), 8);
+    }
+
+    #[test]
+    fn stripes_fold_a_translation_in_and_keep_any_other_transform() {
+        let stripes = super::Stripes::hatch(4.0, [1.0; 4]);
+        let rect = Rect::new(2.0, 3.0, 30.0, 20.0);
+        let mut d = DrawList::new();
+        d.push_transform();
+        d.translate(10.0, 20.0);
+        d.stripes(rect, stripes);
+        d.pop_transform();
+        let moved = d.stripe_instances().next().unwrap();
+        assert_eq!(moved.rect, [12.0, 23.0, 30.0, 20.0]);
+        assert_eq!(moved.linear, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(moved.translation[..2], [0.0, 0.0]);
+        assert_eq!(moved.phase[1], 1.0, "hatching is crisp");
+
+        d.clear();
+        d.push_transform();
+        d.translate(10.0, 20.0);
+        d.rotate(0.5);
+        let turn = d.current_transform();
+        d.stripes(rect, stripes);
+        d.pop_transform();
+        let turned = d.stripe_instances().next().unwrap();
+        assert_eq!(turned.rect, [2.0, 3.0, 30.0, 20.0], "the rect stays local");
+        assert_eq!(turned.linear, [turn.a, turn.b, turn.c, turn.d]);
+        assert_eq!(turned.translation[..2], [turn.tx, turn.ty]);
+    }
+
+    #[test]
+    fn hatching_and_dashes_are_stripes_however_large() {
+        let mut d = DrawList::new();
+        d.hatch(Rect::new(0.0, 0.0, 400.0, 300.0), 4.0, [1.0; 4]);
+        let hatch = d.stripe_instances().next().unwrap();
+        // To the edges, lines 4px apart across the area: 4/√2 across the
+        // lines, each band 1px wide, centred on its line, and hard-edged.
+        assert_eq!(hatch.rect, [0.0, 0.0, 400.0, 300.0]);
+        let across = std::f32::consts::FRAC_1_SQRT_2;
+        let expected = [across, across, 4.0 * across, 1.0];
+        assert!(
+            hatch
+                .pattern
+                .iter()
+                .zip(expected)
+                .all(|(&a, b)| approx(a, b)),
+            "{:?}",
+            hatch.pattern
+        );
+        // The first line runs through the corner of the box half a pixel in.
+        assert!(approx(hatch.phase[0], across - 0.5), "{:?}", hatch.phase);
+        assert_eq!(hatch.phase[1], 1.0);
+
+        // A 1 px wide area still hatches: the bands reach its pixels.
+        d.clear();
+        d.hatch(Rect::new(0.0, 0.0, 1.0, 40.0), 4.0, [1.0; 4]);
+        assert_eq!((d.stripe_instance_count(), d.dropped_degenerate()), (1, 0));
+
+        d.clear();
+        d.dashed_hline(10.0, 20.0, 300.0, 3.0, 2.0, [1.0; 4]);
+        let dashes = d.stripe_instances().next().unwrap();
+        assert_eq!(dashes.rect, [10.0, 20.0, 300.0, 1.0]);
+        assert_eq!(dashes.pattern, [1.0, 0.0, 5.0, 3.0]);
+        assert_eq!(dashes.phase[0], 0.0, "a dash first, at x");
+
+        d.clear();
+        d.dashed_rect_outline(Rect::new(0.0, 0.0, 100.0, 50.0), 3.0, [1.0; 4]);
+        let sides: Vec<_> = d.stripe_instances().map(|s| s.rect).collect();
+        assert_eq!(
+            sides,
+            vec![
+                [0.0, 0.0, 100.0, 1.0],
+                [0.0, 49.0, 100.0, 1.0],
+                // The sides start a period down, clear of the top's corner.
+                [0.0, 6.0, 1.0, 43.0],
+                [99.0, 6.0, 1.0, 43.0],
+            ]
+        );
+        assert!(d.indices.is_empty() && d.chrome_instance_count() == 0);
     }
 }

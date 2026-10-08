@@ -300,7 +300,9 @@ fn assert_rotated_shape(
             } else if d > 1.5 {
                 outside += 1;
                 assert_eq!(v, 0, "{name}: ({x},{y}) is {d:.2}px outside but lit {v}");
-            } else if d > 0.1 && d < 0.6 {
+            } else if d > 0.1 && d < 0.45 {
+                // A box-filtered edge reaches half a pixel past the edge at
+                // least (more when the edge runs diagonally across pixels).
                 fringe += 1;
                 assert!(
                     v > 0,
@@ -570,4 +572,56 @@ fn an_angled_gradient_lands_where_css_puts_it() {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn whole_pixel_quads_are_solid_to_their_edges_and_fractional_edges_split() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter (run under DISPLAY=:0)");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("edge coverage device"),
+            ..Default::default()
+        },
+        None,
+    ))
+    .expect("request device");
+    let mut ui = UiRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu_gameui::shared_font_system(),
+    );
+    let mut list = DrawList::new();
+    // A 1px rule and a box on whole pixels: every pixel solid, edges and
+    // corners alike, and nothing outside.
+    list.quad(10.0, 20.0, 30.0, 1.0, [1.0; 4]);
+    list.quad(10.0, 40.0, 30.0, 10.0, [1.0; 4]);
+    // A 1px rule 0.4px down a row: 60% in the first, 40% in the next.
+    list.quad(60.0, 20.4, 30.0, 1.0, [1.0; 4]);
+    let image = render_list(&device, &queue, &mut ui, &list);
+    let at = |x: u32, y: u32| image[((y * W + x) * 4) as usize];
+    for x in 10..40 {
+        assert_eq!(at(x, 20), 255, "rule ({x}, 20)");
+        assert_eq!((at(x, 19), at(x, 21)), (0, 0), "beside the rule at x {x}");
+        for y in 40..50 {
+            assert_eq!(at(x, y), 255, "box ({x}, {y})");
+        }
+        assert_eq!((at(x, 39), at(x, 50)), (0, 0), "beside the box at x {x}");
+    }
+    for y in 40..50 {
+        assert_eq!((at(9, y), at(40, y)), (0, 0), "beside the box at y {y}");
+    }
+    // Coverage blends in linear light; the target stores it sRGB-encoded:
+    // 0.6 reads back as 203, 0.4 as 170.
+    let (first, second) = (at(75, 20), at(75, 21));
+    assert!(first.abs_diff(203) <= 4, "first row {first}");
+    assert!(second.abs_diff(170) <= 4, "second row {second}");
+    assert_eq!((at(75, 19), at(75, 22)), (0, 0));
 }

@@ -303,3 +303,284 @@ fn many_bars_label_only_every_so_many_counting_from_the_newest() {
     assert!(shown.contains(&"d29"), "the newest is always labelled");
     assert!(shown.len() < 10, "not every bar: {shown:?}");
 }
+
+/// The shapes of `bars` plain bars of two series, 900px wide, no legend.
+fn shapes_of(bars: usize) -> crate::PrimCounts {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0, 2.0];
+    let bars = vec![bar(&segments); bars];
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    paint(&chart, 900.0, &s, &away()).0.prim_counts()
+}
+
+#[test]
+fn a_bar_costs_a_shape_a_series_and_its_top_while_labels_stay_as_many_as_fit() {
+    let (few, more) = (shapes_of(30), shapes_of(60));
+    // Each segment, and the lit top edge: no text, no soup.
+    assert_eq!(more.chrome_instances - few.chrome_instances, 30 * 3);
+    assert_eq!((few.indices, more.indices), (0, 0));
+    // The x labels thin out to what fits the width, whatever the count.
+    let most = shapes_of(10_000);
+    assert!(
+        most.texts <= 4 + (900.0 / LABEL_SPACING) as usize,
+        "{most:?}"
+    );
+}
+
+#[test]
+fn past_a_bar_every_two_pixels_the_cost_stops_growing() {
+    let (many, most) = (shapes_of(2_000), shapes_of(10_000));
+    assert_eq!(many, most, "both are grouped to the plot's width");
+    // Narrow bars: a shape a series a slot, no top edge.
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0, 2.0];
+    let bars = vec![bar(&segments); 10_000];
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 900.0, &s, &away());
+    let slots = chart.layout(900.0, &mut DrawList::new(), &s).slots;
+    assert!((300..450).contains(&slots), "{slots}");
+    assert_eq!(rects_of(&list, RED).len(), slots);
+    assert_eq!(rects_of(&list, BLUE).len(), slots);
+    assert!(rects_of(&list, BAR_HI).is_empty());
+}
+
+#[test]
+fn grouped_bars_show_each_groups_tallest_and_hover_reports_it() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let (usual, tall) = ([1.0], [2.0]);
+    let mut bars = vec![bar(&usual); 1_000];
+    bars[500] = bar(&tall);
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 300.0, &s, &away());
+    let drawn = rects_of(&list, RED);
+    assert!(
+        (60..=150).contains(&drawn.len()),
+        "a bar every two pixels or so of the plot, not 1,000: {}",
+        drawn.len()
+    );
+    let tallest = drawn
+        .iter()
+        .max_by(|a, b| a[3].total_cmp(&b[3]))
+        .copied()
+        .unwrap();
+    assert!(
+        drawn.iter().filter(|r| r[3] == tallest[3]).count() == 1,
+        "only the tall bar's group shows it"
+    );
+    let over = InputState {
+        mouse_x: tallest[0] + tallest[2] * 0.5,
+        mouse_y: tallest[1] + 1.0,
+        ..Default::default()
+    };
+    let (_, out) = paint(&chart, 300.0, &s, &over);
+    assert_eq!(out.hovered, Some(500));
+    let tip = out.tooltip.expect("a tooltip for it");
+    assert!(tip.bar_left <= tallest[0] && tallest[0] < tip.bar_right);
+}
+
+#[test]
+fn a_running_bar_stays_shown_in_its_group() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let (usual, small) = ([2.0], [1.0]);
+    let mut bars = vec![bar(&usual); 1_000];
+    bars[999] = Bar {
+        current: true,
+        ..bar(&small)
+    };
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 300.0, &s, &away());
+    assert!(shows(&list, "now"), "the running bar's label");
+    let drawn = rects_of(&list, RED);
+    let last = drawn.iter().max_by(|a, b| a[0].total_cmp(&b[0])).unwrap();
+    let first = drawn.iter().min_by(|a, b| a[0].total_cmp(&b[0])).unwrap();
+    assert!(last[3] < first[3], "the newest group shows the running bar");
+}
+
+#[test]
+fn narrow_bars_skip_their_top_edge_and_cap_with_a_plain_tick() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0];
+    let capped = Bar {
+        reference: Some(2.0),
+        ..bar(&segments)
+    };
+    // 200 bars in 600px: under 3px each.
+    let bars = vec![capped; 200];
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 600.0, &s, &away());
+    assert!(rects_of(&list, BAR_HI).is_empty(), "no lit top edges");
+    assert!(
+        rects_of(&list, REFERENCE_EDGE).is_empty(),
+        "no dark cap edges"
+    );
+    assert_eq!(list.stripe_instance_count(), 0, "no dashes");
+
+    // Wide bars keep both, the cap one dashed record a bar.
+    let bars = vec![capped; 3];
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 600.0, &s, &away());
+    assert_eq!(rects_of(&list, BAR_HI).len(), 3);
+    assert_eq!(rects_of(&list, REFERENCE_EDGE).len(), 6);
+    assert_eq!(list.stripe_instance_count(), 3);
+}
+
+#[test]
+fn a_cap_over_every_bar_does_not_hide_the_tallest_in_its_group() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let (usual, tall) = ([1.0], [2.0]);
+    let capped = |segments| Bar {
+        reference: Some(4.0),
+        ..bar(segments)
+    };
+    // Every peak is the cap; the stacks still differ.
+    let mut bars = vec![capped(&usual); 1_000];
+    bars[501] = capped(&tall);
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 300.0, &s, &away());
+    let drawn = rects_of(&list, RED);
+    let tallest = drawn.iter().map(|r| r[3]).fold(0.0, f32::max);
+    assert_eq!(drawn.iter().filter(|r| r[3] == tallest).count(), 1);
+    assert!(drawn.iter().any(|r| r[3] < tallest), "the rest are usual");
+}
+
+#[test]
+fn a_bar_lit_from_a_table_is_drawn_in_its_slot() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let (usual, short) = ([2.0], [1.0]);
+    let mut bars = vec![bar(&usual); 1_000];
+    let lit = Bar {
+        label: "lit",
+        ..bar(&short)
+    };
+    bars[500] = lit;
+    // Its slot shows a taller neighbour until the table lights it.
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 300.0, &s, &away());
+    let lowest = |list: &DrawList| {
+        rects_of(list, RED)
+            .iter()
+            .map(|r| r[3])
+            .fold(f32::MAX, f32::min)
+    };
+    let usual_height = lowest(&list);
+    let chart = chart.hovered(Some(500));
+    let (list, out) = paint(&chart, 300.0, &s, &away());
+    assert!(
+        lowest(&list) < usual_height,
+        "the lit bar, not its neighbour"
+    );
+    assert_eq!(out.hovered, None, "lit, not under the pointer");
+    let layout = chart.layout(300.0, &mut DrawList::new(), &s);
+    let step = layout
+        .slots
+        .div_ceil(((300.0 - layout.gutter) / LABEL_SPACING) as usize);
+    if (layout.slots - 1 - layout.slot_of(500)).is_multiple_of(step) {
+        assert!(shows(&list, "lit"), "its label, where its slot has one");
+    }
+}
+
+#[test]
+fn an_outlier_keeps_its_slot_over_the_running_bar() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let (usual, huge) = ([10.0], [100.0]);
+    let mut bars = vec![bar(&usual); 1_000];
+    bars[998] = bar(&huge);
+    bars[999] = Bar {
+        current: true,
+        ..bar(&usual)
+    };
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 300.0, &s, &away());
+    // The axis kept room for its value, so the bar and its label show.
+    assert!(shows(&list, "▲ 100"));
+}
+
+#[test]
+fn every_slot_shows_one_of_its_own_bars() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0];
+    for n in [1, 2, 99, 100, 101, 333, 1_000, 4_097] {
+        let bars = vec![bar(&segments); n];
+        let chart = BarChart::new(&bars, &series, &format).legend(false);
+        for width in [0.0, 40.0, 233.0, 300.0, 900.0] {
+            let mut layout = chart.layout(width, &mut DrawList::new(), &s);
+            layout.shown = chart.group(&layout);
+            assert!(layout.slots >= 1 && layout.slots <= n);
+            let mut last = None;
+            for k in 0..layout.slots {
+                let i = layout.shown(k);
+                assert_eq!(layout.slot_of(i), k, "n {n}, width {width}");
+                assert!(last.is_none_or(|last| last < i), "in order");
+                last = Some(i);
+            }
+            // Every bar falls in a slot, and the slots run in order.
+            assert_eq!(layout.slot_of(0), 0);
+            assert_eq!(layout.slot_of(n - 1), layout.slots - 1);
+        }
+    }
+}
+
+#[test]
+fn narrow_bars_sit_on_whole_pixels() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0];
+    let bars = vec![bar(&segments); 1_000];
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let mut list = DrawList::new();
+    chart.draw(0.3, 0.0, 333.0, &mut list, &s, &away());
+    let drawn = rects_of(&list, RED);
+    assert!(!drawn.is_empty());
+    for r in &drawn {
+        assert_eq!((r[0].fract(), r[2].fract()), (0.0, 0.0), "{r:?}");
+    }
+    let mut lefts: Vec<f32> = drawn.iter().map(|r| r[0]).collect();
+    lefts.sort_by(f32::total_cmp);
+    assert!(
+        lefts.windows(2).all(|w| w[1] - w[0] > drawn[0][2]),
+        "a gap between every two"
+    );
+}
+
+#[test]
+fn a_grouped_chart_with_no_room_draws_without_panicking() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0];
+    let bars = vec![bar(&segments); 1_000];
+    let chart = BarChart::new(&bars, &series, &format);
+    let inside = InputState {
+        mouse_x: 1.0,
+        mouse_y: 50.0,
+        ..Default::default()
+    };
+    for width in [0.0, 1.0, 10.0] {
+        let (_, out) = paint(&chart, width, &s, &inside);
+        assert!(out.height > 0.0);
+    }
+    let none: [Bar<'_>; 0] = [];
+    let chart = BarChart::new(&none, &series, &format).legend(false);
+    let (list, out) = paint(&chart, 300.0, &s, &inside);
+    assert_eq!(out.hovered, None);
+    assert!(rects_of(&list, RED).is_empty());
+}

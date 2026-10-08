@@ -1,23 +1,8 @@
 # Current task: build the Forge components the gallery is still missing
 
-## Parallel opt-in Slug A/B experiment (2026-10-02)
-
-No default renderer, service, installation or agent-ui changes. Plan read from
-`green-heron-skims.md`; contributor instructions and hot-loop allocation skill read.
-The `todo_write` tool is not exposed in this delegated environment; tracking here.
-
-- [x] Inspect shared cosmic shaping/font resolution and upstream MIT Slug reference.
-- [x] Initial independent flat quadratic outline/band preparation and WGSL coverage.
-- [ ] Wire feature-gated renderer with reusable instance scratch and incremental uploads.
-- [ ] Reproducible matched PNG harness, adapter reporting, alternating release timing.
-- [ ] Focused behavior tests, inspect actual output, lib tests/build/clippy/fmt.
-- [ ] Record measurements, limitations and reproducible commands.
-
-Current policy: natural unhinted quadratic outlines; cubic fonts explicitly error,
-not silently flattened. Eight horizontal/eight vertical overlapping bands sorted
-for early exits. Port preserves sign-bit root eligibility, dual-ray weighting,
-and half-pixel quad dilation. Warm work is visible glyph instances, not history;
-outline curves/bands/indices are append-only and scratch retained. No verdict yet.
+The unfinished Slug text-rendering A/B experiment (2026-10-02) is parked on
+the `exp/slug` branch, off main since 2026-10-08; its progress notes are
+there.
 
 Bart asked (2026-09-26): "pull the currently missing things from designsync
 and build those components". Source of truth is the Forge Design System in

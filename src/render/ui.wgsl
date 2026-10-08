@@ -102,12 +102,15 @@ fn vs_analytic(in: AnalyticVsIn) -> AnalyticVsOut {
     // like `Affine2` (x' = a·x + b·y + tx, y' = c·x + d·y + ty); `p1.xy` is
     // the translation and `p2` the local rect.
     var local: vec2<f32>;
-    if (in.kind == 0u) {
-        // Chrome. The edge's anti-aliasing ramp reaches ~1px past the rect, so
-        // under rotation/scale pad the quad by 2 screen px (converted to local
-        // units per axis) or the outer half of that ramp is never rasterized
-        // and the edges look hard. Translate-only chrome keeps its exact quad.
-        var pad = vec2<f32>(0.0);
+    if (in.kind != 1u) {
+        // Chrome and stripes. The edge's anti-aliasing ramp reaches up to
+        // ~0.7px past the rect, so pad the quad or the outer half of that ramp
+        // is never rasterized: a fractional edge then loses its outside pixel.
+        // Translate-only records pad 1px (on whole pixels those pixels come
+        // out empty and are discarded); under rotation/scale, 2 screen px
+        // converted to local units per axis. `local` is from the rect's
+        // top-left corner.
+        var pad = vec2<f32>(1.0);
         if (any(in.p0 != vec4<f32>(1.0, 0.0, 0.0, 1.0))) {
             let axis_scale = vec2<f32>(length(in.p0.xz), length(in.p0.yw));
             pad = vec2<f32>(2.0) / max(axis_scale, vec2<f32>(1e-4));
@@ -136,17 +139,43 @@ fn corner_radius(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
     return select(radii.z, radii.w, p.x < size.x * 0.5);
 }
 
-fn chrome_rounded_rect_distance(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
+// Edges are anti-aliased from a distance *and its gradient* (`vec3(d, grad)`,
+// local units): the ramp is one pixel wide across the edge, the pixel's
+// footprint taken from the local position's screen derivatives, which are
+// constant across an affine quad. `fwidth` of the distance itself collapses
+// where the field folds (it is flat across a box corner's 2x2 block, leaving
+// corners hard), and a two-pixel smoothstep left a whole-pixel edge at 84%.
+
+// Coverage of a pixel by the inside of an edge (`sdf` as above), with the
+// screen pixel pulled back to local space as `pixel_x`/`pixel_y`. A pixel
+// whose centre is half a pixel inside a whole-pixel edge is solid.
+fn edge_coverage(sdf: vec3<f32>, pixel_x: vec2<f32>, pixel_y: vec2<f32>) -> f32 {
+    let footprint = max(abs(dot(pixel_x, sdf.yz)) + abs(dot(pixel_y, sdf.yz)), 1e-4);
+    return clamp(0.5 - sdf.x / footprint, 0.0, 1.0);
+}
+
+// A box's distance and gradient from `q`, the offset `abs(p - centre) - half`
+// grown by a circular corner `radius`. The gradient's signs are dropped; only
+// its size across the pixel matters.
+fn box_sdf(q: vec2<f32>, radius: f32) -> vec3<f32> {
+    if (q.x > 0.0 && q.y > 0.0) {
+        let l = length(q);
+        return vec3<f32>(l - radius, q / l);
+    }
+    let across = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), q.x > q.y);
+    return vec3<f32>(max(q.x, q.y) - radius, across);
+}
+
+fn chrome_rounded_rect_sdf(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> vec3<f32> {
     let half = size * 0.5;
     let radius = corner_radius(p, size, radii);
-    let q = abs(p - half) - half + vec2<f32>(radius);
-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    return box_sdf(abs(p - half) - half + vec2<f32>(radius), radius);
 }
 
 // Distance to a rectangle whose corner arcs may be elliptical. This is used for
 // the padding edge: unequal adjacent border widths turn a circular outer corner
 // into an elliptical inner corner rather than overlapping rectangular bands.
-fn inner_distance(p: vec2<f32>, size: vec2<f32>, outer_radii: vec4<f32>, widths: vec4<f32>) -> f32 {
+fn inner_sdf(p: vec2<f32>, size: vec2<f32>, outer_radii: vec4<f32>, widths: vec4<f32>) -> vec3<f32> {
     let clamped_size = max(size, vec2<f32>(0.0));
     let half = clamped_size * 0.5;
     let left = p.x < half.x;
@@ -167,27 +196,29 @@ fn inner_distance(p: vec2<f32>, size: vec2<f32>, outer_radii: vec4<f32>, widths:
     // Beside a straight edge, anywhere inside, or at a square corner, the
     // plain box distance is exact. It must be used deep inside too: the arc's
     // estimate bottoms out at -radius there, so a quadrant with a radius would
-    // disagree with a square neighbour, and `fwidth` across the quadrant line
-    // would read the jump as an edge (a dark seam through the fill).
+    // disagree with a square neighbour, and read the jump as an edge (a dark
+    // seam through the fill).
     if (q.x <= 0.0 || q.y <= 0.0 || radius.x <= 1e-4 || radius.y <= 1e-4) {
-        return length(max(o, vec2<f32>(0.0))) + min(max(o.x, o.y), 0.0);
+        return box_sdf(o, 0.0);
     }
-    // In the corner box: distance to the (possibly elliptical) arc.
-    return (length(q / radius) - 1.0) * min(radius.x, radius.y);
+    // In the corner box: the (possibly elliptical) arc's estimate, scaled to
+    // about a pixel a pixel, and its gradient.
+    let scale = min(radius.x, radius.y);
+    let l = length(q / radius);
+    return vec3<f32>((l - 1.0) * scale, q / (radius * radius) / l * scale);
 }
 
 fn shade_chrome(in: AnalyticVsOut) -> vec4<f32> {
     if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
         || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
     let size = in.p2.zw;
-    let outer_d = chrome_rounded_rect_distance(in.local, size, in.p6);
-    let outer_aa = max(fwidth(outer_d), 1e-4);
-    let outer = 1.0 - smoothstep(-outer_aa, outer_aa, outer_d);
+    let pixel_x = dpdx(in.local);
+    let pixel_y = dpdy(in.local);
+    let outer = edge_coverage(chrome_rounded_rect_sdf(in.local, size, in.p6), pixel_x, pixel_y);
     let inner_origin = vec2<f32>(in.p7.w, in.p7.x);
     let inner_size = size - vec2<f32>(in.p7.w + in.p7.y, in.p7.x + in.p7.z);
-    let inner_d = inner_distance(in.local - inner_origin, inner_size, in.p6, in.p7);
-    let inner_aa = max(fwidth(inner_d), 1e-4);
-    var inner = 1.0 - smoothstep(-inner_aa, inner_aa, inner_d);
+    let inner_d = inner_sdf(in.local - inner_origin, inner_size, in.p6, in.p7);
+    var inner = edge_coverage(inner_d, pixel_x, pixel_y);
     if (inner_size.x <= 0.0 || inner_size.y <= 0.0) { inner = 0.0; }
     // The fill runs along the unit direction (p1.w, p9.w) across the quad's
     // extent in that direction, centred on it: CSS's `linear-gradient` line.
@@ -263,17 +294,20 @@ fn fs_circle(in: CircleVsOut) -> @location(0) vec4<f32> {
     let thickness = in.params.z;
     // Signed distance to the circle edge (negative inside).
     let dist = length(in.frag_pos - in.center) - radius;
+    // The distance is linear in screen space bar the very centre, so `fwidth`
+    // is the pixel's footprint across the edge; the ramp is one pixel wide,
+    // like chrome's.
     let aa = max(fwidth(dist), 1e-4);
 
     var alpha: f32;
     if (thickness <= 0.0) {
         // Filled disc: coverage inside the edge.
-        alpha = 1.0 - smoothstep(-aa, aa, dist);
+        alpha = clamp(0.5 - dist / aa, 0.0, 1.0);
     } else {
         // Ring centered on the radius path, spanning ±thickness/2.
         let half = thickness * 0.5;
-        let outer = 1.0 - smoothstep(-aa, aa, dist - half);
-        let inner = 1.0 - smoothstep(-aa, aa, dist + half);
+        let outer = clamp(0.5 - (dist - half) / aa, 0.0, 1.0);
+        let inner = clamp(0.5 - (dist + half) / aa, 0.0, 1.0);
         alpha = clamp(outer - inner, 0.0, 1.0);
     }
 
@@ -421,11 +455,54 @@ fn shade_shadow(in: AnalyticVsOut) -> vec4<f32> {
     return vec4<f32>(in.p5.rgb, alpha);
 }
 
+// Stripes (kind 2): bands `p4.w` wide every `p4.z` along the unit normal
+// `p4.xy`, from the rect's top-left corner moved `p5.x` along it. Smooth bands
+// (`p5.y` 0) take the share of the pixel's footprint across the bands that
+// they cover, so a 1 px band on whole pixels paints solid, a diagonal one stays
+// smooth, and bands too dense to tell apart fade to their average. The rect's
+// edge is smoothed like chrome's. Crisp bands (`p5.y` 1) paint a pixel fully
+// when its centre is in a band and the rect, like an unsmoothed 1 px line.
+fn shade_stripes(in: AnalyticVsOut) -> vec4<f32> {
+    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
+        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    let period = in.p4.z;
+    let half_width = in.p4.w * 0.5;
+    let t = dot(in.local, in.p4.xy) - in.p5.x - half_width;
+    // Signed distance from the nearest band's centre line, and the pixel's
+    // footprint across the bands.
+    let d = t - period * round(t / period);
+    let pixel_x = dpdx(in.local);
+    let pixel_y = dpdy(in.local);
+    let aa = max(abs(dot(pixel_x, in.p4.xy)) + abs(dot(pixel_y, in.p4.xy)), 1e-4);
+    let half_size = in.p2.zw * 0.5;
+    let edge = box_sdf(abs(in.local - half_size) - half_size, 0.0);
+    var coverage: f32;
+    if (in.p5.y > 0.5) {
+        coverage = select(0.0, 1.0, abs(d) <= half_width && edge.x <= 0.0);
+    } else {
+        // The footprint against the nearest band and one either side.
+        let lo = d - aa * 0.5;
+        let hi = d + aa * 0.5;
+        var covered = 0.0;
+        for (var k = -1; k <= 1; k++) {
+            let centre = f32(k) * period;
+            covered += max(min(hi, centre + half_width) - max(lo, centre - half_width), 0.0);
+        }
+        let average = min(2.0 * half_width / period, 1.0);
+        let across = mix(min(covered / aa, 1.0), average, smoothstep(0.5 * period, period, aa));
+        coverage = across * edge_coverage(edge, pixel_x, pixel_y);
+    }
+    let alpha = coverage * in.p3.a;
+    if (alpha <= 0.0) { discard; }
+    return vec4<f32>(in.p3.rgb, alpha);
+}
+
 @fragment
 fn fs_analytic(in: AnalyticVsOut) -> @location(0) vec4<f32> {
     // The kind is flat, so every 2x2 derivative quad follows one uniform branch;
-    // fwidth/dpdx/dpdy remain well-defined in both analytic implementations.
+    // fwidth/dpdx/dpdy remain well-defined in every analytic implementation.
     if (in.kind == 0u) { return shade_chrome(in); }
+    if (in.kind == 2u) { return shade_stripes(in); }
     return shade_shadow(in);
 }
 

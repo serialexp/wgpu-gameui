@@ -13,8 +13,8 @@ use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{
     Button, ClickTracker, CursorIcon, CursorState, DragCapture, DragHandle, DragTracker,
     DrawContext, Dropdown, DropdownState, FocusState, FontHandle, InputState, LayerStack,
-    ScrollState, ScrollView, StyleResolver, TextAlign, TextBlock, TextInput, Theme, UiContext,
-    UiRenderer,
+    Placement, ScrollState, ScrollView, StyleResolver, TextAlign, TextBlock, TextInput, Theme,
+    UiContext, UiRenderer,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -223,16 +223,23 @@ impl ApplicationHandler for App {
 
         // Upload some sprites.
         let icon_pixels = checkerboard_pixels(CHECKER_SIZE, [220, 80, 80, 255], [40, 40, 40, 255]);
-        let icon_sprite = ui.load_sprite_rgba8("icon", CHECKER_SIZE, CHECKER_SIZE, &icon_pixels);
+        // Small sprites drawn together share an atlas; anything else gets a
+        // texture of its own.
+        let chrome = Placement::Atlas(ui.create_atlas(1024));
+        let icon_sprite = ui
+            .load_sprite_rgba8("icon", CHECKER_SIZE, CHECKER_SIZE, &icon_pixels, chrome)
+            .expect("load the icon sprite");
 
         let frame_pixels = solid_with_border(32, [180, 180, 200, 255], [60, 60, 90, 255], 4);
-        let frame_sprite = ui.load_sprite_rgba8("frame", 32, 32, &frame_pixels);
+        let frame_sprite = ui
+            .load_sprite_rgba8("frame", 32, 32, &frame_pixels, chrome)
+            .expect("load the frame sprite");
         let nine_slice_id = ui.register_nine_slice("frame", frame_sprite, [4, 4, 4, 4]);
 
         // Decode an encoded (PNG) image at runtime, exactly like `UiImage(path)`.
         let png = synth_png(64, 64);
         let image_sprite = ui
-            .load_image_bytes("demo_gradient", &png)
+            .load_image_bytes("demo_gradient", &png, Placement::Own)
             .expect("decode demo image");
 
         // Load a font from bytes and select it per-`TextBlock`.

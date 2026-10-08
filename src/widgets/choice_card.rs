@@ -284,13 +284,7 @@ mod tests {
             &at(-1.0, -1.0, false),
         )
         .0;
-        let quads = |list: &DrawList| {
-            let counts = list.prim_counts();
-            counts.vertices + counts.chrome_instances
-        };
-        assert!(
-            quads(&dashed) > quads(&solid),
-            "dashes are many short quads"
-        );
+        assert_eq!(solid.stripe_instance_count(), 0);
+        assert_eq!(dashed.stripe_instance_count(), 4, "a dashed edge a side");
     }
 }

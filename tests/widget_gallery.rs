@@ -1289,7 +1289,7 @@ fn render_widget_gallery() {
     // Real PNG art from assets/ — decoded through the same `load_image_file`
     // path the game uses, so the gallery doubles as a smoke test for it.
     let load = |ui: &mut UiRenderer, name: &str| {
-        ui.load_image_file(format!("assets/{name}.png"))
+        ui.load_image_file(format!("assets/{name}.png"), wgpu_gameui::Placement::Own)
             .unwrap_or_else(|e| panic!("load assets/{name}.png: {e:?}"))
     };
     let duck = load(&mut ui, "rubberduck");
@@ -1301,7 +1301,9 @@ fn render_widget_gallery() {
 
     // Synthetic sprites for primitives that show off tinting / nine-slice.
     let frame_pixels = solid_with_border(32, [180, 180, 200, 255], [60, 60, 90, 255], 4);
-    let frame_sprite = ui.load_sprite_rgba8("frame", 32, 32, &frame_pixels);
+    let frame_sprite = ui
+        .load_sprite_rgba8("frame", 32, 32, &frame_pixels, wgpu_gameui::Placement::Own)
+        .expect("load the frame sprite");
     let nine_slice_id = ui.register_nine_slice("frame", frame_sprite, [4, 4, 4, 4]);
 
     // (Slider needs no assets — it renders procedurally from the theme.)

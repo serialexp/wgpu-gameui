@@ -6,6 +6,9 @@
 //! parts: text in any ink, a status dot, an inline meter, or a value held
 //! right-aligned in a minimum width (so changing numbers don't jitter). A
 //! zone can be clickable, and drawn pressed while what it opens shows.
+//! A drop-up zone is a key with a `▴` after its parts, held in while the
+//! detail it opens ([`StatusDetail`](super::StatusDetail)) shows above it;
+//! the bar says where it was drawn ([`StatusBarOutput::drop_up`]).
 //!
 //! The left zones give way to the right group: their text is ellipsized
 //! where it would run under it.
@@ -16,6 +19,7 @@ use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleResolver, TextSize};
 
 use super::DrawList;
+use super::glyphs::up_triangle;
 use super::meter::{INLINE_METER_HEIGHT, MeterFill, inline_meter};
 use super::status_dot::{Status, status_dot};
 
@@ -40,6 +44,17 @@ const PRESSED_H: f32 = 18.0;
 const PRESSED_OUT: f32 = 6.0;
 const PRESSED: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
 const PRESSED_RECESS: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+/// A drop-up zone's key: as tall as a toggle (`--key-status`), its parts
+/// inset 5px in it; held in while open, lit while hovered.
+const DROP_UP_INSET: f32 = 5.0;
+const DROP_UP_OPEN: [f32; 4] = [0.0, 0.0, 0.0, 0.38];
+const DROP_UP_EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+const DROP_UP_RECESS: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+const DROP_UP_LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
+/// Its `▴` (7px text in Forge): this wide and tall, 5px after the parts.
+const MARKER_W: f32 = 5.0;
+const MARKER_H: f32 = 3.0;
+const MARKER_GAP: f32 = PART_GAP - 1.0;
 /// A toggle latched on (`--accent-toggle-*`, `--key-inset-latched`), and
 /// hovered while off.
 const TOGGLE_EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
@@ -70,6 +85,8 @@ pub struct StatusZone<'a> {
     pub clickable: bool,
     /// Draw it held in (what it opens is showing).
     pub pressed: bool,
+    /// A key that opens a detail above it (see [`Self::drop_up`]).
+    pub drop_up: bool,
 }
 
 impl<'a> StatusZone<'a> {
@@ -79,6 +96,7 @@ impl<'a> StatusZone<'a> {
             parts,
             clickable: false,
             pressed: false,
+            drop_up: false,
         }
     }
 
@@ -88,6 +106,35 @@ impl<'a> StatusZone<'a> {
         self.pressed = pressed;
         self
     }
+
+    /// A key that opens a detail above it (Forge's zone with a `detail`):
+    /// clicks are reported, it draws a `▴`, lights while hovered, and is
+    /// held in while `open`. The bar says where it was drawn.
+    pub const fn drop_up(mut self, open: bool) -> Self {
+        self.clickable = true;
+        self.pressed = open;
+        self.drop_up = true;
+        self
+    }
+}
+
+/// Which end of the bar a zone is in: a drop-up aligns to its zone's left
+/// edge in the left zones, and to its right edge in the right group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneSide {
+    /// Among the zones after the toggles.
+    Left,
+    /// In the group at the bar's right end.
+    Right,
+}
+
+/// Where a drop-up zone's key was drawn, for its detail to open above.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoneAnchor {
+    /// The key.
+    pub rect: Rect,
+    /// Which end of the bar its zone is in.
+    pub side: ZoneSide,
 }
 
 /// A dock toggle key at the band's left.
@@ -100,7 +147,7 @@ pub struct StatusToggle<'a> {
 }
 
 /// What a [`ZonedStatusBar`] did this frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StatusBarOutput {
     /// A toggle clicked (its index).
     pub toggled: Option<usize>,
@@ -108,6 +155,9 @@ pub struct StatusBarOutput {
     pub left: Option<usize>,
     /// A clickable right zone clicked (its index).
     pub right: Option<usize>,
+    /// The drop-up zone clicked this frame, else the one drawn open: where
+    /// its detail goes.
+    pub drop_up: Option<ZoneAnchor>,
 }
 
 /// Forge's status bar: toggles, left zones, and a right-hand group.
@@ -134,7 +184,41 @@ fn mono_width(list: &mut DrawList, s: &StyleResolver, text: &str) -> f32 {
 
 fn parts_width(list: &mut DrawList, s: &StyleResolver, zone: &StatusZone) -> f32 {
     let parts: f32 = zone.parts.iter().map(|p| part_width(list, s, p)).sum();
-    parts + PART_GAP * zone.parts.len().saturating_sub(1) as f32
+    let marker = if zone.drop_up {
+        MARKER_GAP + MARKER_W
+    } else {
+        0.0
+    };
+    parts + PART_GAP * zone.parts.len().saturating_sub(1) as f32 + marker
+}
+
+/// A drop-up zone's key in its zone `r`, whose parts are inset by `pad`.
+fn drop_up_key(r: Rect, pad: f32) -> Rect {
+    let inset = pad - DROP_UP_INSET;
+    Rect::new(
+        r.x + inset,
+        r.y + (r.height - TOGGLE) * 0.5,
+        r.width - 2.0 * inset,
+        TOGGLE,
+    )
+}
+
+/// Say where `zone`, drawn in `r`, opens its detail: always when it was
+/// clicked, else while it is open and nothing was clicked.
+fn note_drop_up(
+    out: &mut StatusBarOutput,
+    zone: &StatusZone,
+    r: Rect,
+    pad: f32,
+    side: ZoneSide,
+    clicked: bool,
+) {
+    if zone.drop_up && (clicked || (zone.pressed && out.drop_up.is_none())) {
+        out.drop_up = Some(ZoneAnchor {
+            rect: drop_up_key(r, pad),
+            side,
+        });
+    }
 }
 
 fn divider(list: &mut DrawList, x: f32, cy: f32) {
@@ -224,9 +308,11 @@ impl<'a> ZonedStatusBar<'a> {
             }
             let w = parts_width(list, s, zone).min((right_x - x - LEFT_PAD * 2.0).max(0.0));
             let r = Rect::new(x, rect.y, w + LEFT_PAD * 2.0, rect.height);
-            if draw_zone(list, s, zone, r, LEFT_PAD, over(r), input) {
+            let clicked = draw_zone(list, s, zone, r, LEFT_PAD, over(r), input);
+            if clicked {
                 out.left = Some(i);
             }
+            note_drop_up(&mut out, zone, r, LEFT_PAD, ZoneSide::Left, clicked);
             x = r.right();
         }
 
@@ -238,9 +324,11 @@ impl<'a> ZonedStatusBar<'a> {
             }
             let w = parts_width(list, s, zone);
             let r = Rect::new(x, rect.y, w + RIGHT_PAD * 2.0, rect.height);
-            if draw_zone(list, s, zone, r, RIGHT_PAD, over(r), input) {
+            let clicked = draw_zone(list, s, zone, r, RIGHT_PAD, over(r), input);
+            if clicked {
                 out.right = Some(i);
             }
+            note_drop_up(&mut out, zone, r, RIGHT_PAD, ZoneSide::Right, clicked);
             x = r.right();
         }
         list.pop_debug_scope();
@@ -312,7 +400,9 @@ fn draw_zone(
     input: &InputState,
 ) -> bool {
     let cy = r.y + r.height * 0.5;
-    if zone.pressed {
+    if zone.drop_up {
+        draw_drop_up_key(list, s, drop_up_key(r, pad), zone.pressed, hovered);
+    } else if zone.pressed {
         let plate = Rect::new(
             r.x + pad - PRESSED_OUT,
             cy - PRESSED_H * 0.5,
@@ -335,6 +425,12 @@ fn draw_zone(
     let size = s.text_size(TextSize::Meta);
     let ty = crate::text::vcentered_line_y(r.y, r.height, size);
     let end = r.right() - pad;
+    // A drop-up's words light with its key.
+    let ink = if zone.drop_up && (hovered || zone.pressed) {
+        Ink::Value
+    } else {
+        Ink::Muted
+    };
     let mut x = r.x + pad;
     for part in zone.parts {
         if x >= end {
@@ -344,7 +440,7 @@ fn draw_zone(
         match *part {
             StatusPart::Text(text) => {
                 list.text(
-                    s.mono_block(text, x, ty, TextSize::Meta, Ink::Muted)
+                    s.mono_block(text, x, ty, TextSize::Meta, ink)
                         .with_max_width(end - x)
                         .with_ellipsis(),
                 );
@@ -374,7 +470,53 @@ fn draw_zone(
         }
         x += w + PART_GAP;
     }
+    if zone.drop_up {
+        let color = if zone.pressed {
+            s.color(crate::StyleKey::Accent)
+        } else {
+            s.ink(Ink::Dim)
+        };
+        let marker = Rect::new(
+            end - MARKER_W,
+            (cy - MARKER_H * 0.5).round(),
+            MARKER_W,
+            MARKER_H,
+        );
+        up_triangle(list, marker, color);
+    }
     zone.clickable && hovered && input.mouse_clicked
+}
+
+/// A drop-up zone's key: held in while `open` (Forge's `rgba(0,0,0,0.38)`
+/// with a dark edge, a shade from above and a light lip under it), lit
+/// while hovered, bare otherwise.
+fn draw_drop_up_key(list: &mut DrawList, s: &StyleResolver, key: Rect, open: bool, hovered: bool) {
+    let radius = s.scalar(crate::StyleKey::BorderRadius);
+    if open {
+        list.box_shadow_outset(
+            key,
+            CornerRadii::uniform(radius),
+            BoxShadow {
+                offset: [0.0, 1.0],
+                color: DROP_UP_LIP,
+                ..BoxShadow::default()
+            },
+        );
+        list.chrome_rect(key, radius, 1.0, DROP_UP_OPEN, DROP_UP_EDGE);
+        list.box_shadow_inset(
+            key.inset(1.0),
+            CornerRadii::uniform(radius),
+            BoxShadow {
+                offset: [0.0, 1.0],
+                blur: 2.0,
+                color: DROP_UP_RECESS,
+                inset: true,
+                ..BoxShadow::default()
+            },
+        );
+    } else if hovered {
+        list.chrome_rect(key, radius, 0.0, TOGGLE_HOVER, [0.0; 4]);
+    }
 }
 
 #[cfg(test)]
@@ -493,6 +635,56 @@ mod tests {
             path.x + path.max_width <= client.x,
             "ellipsized before the group"
         );
+    }
+
+    #[test]
+    fn a_drop_up_zone_says_where_its_key_is_when_clicked_and_while_open() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let conn = [
+            StatusPart::Dot(Status::Running),
+            StatusPart::Text("connected"),
+        ];
+        let fps = [StatusPart::Text("59.9 fps")];
+        let rect = Rect::new(0.0, 100.0, 800.0, 26.0);
+        let mut list = DrawList::new();
+
+        // Closed and not clicked: nowhere to open.
+        let right = [StatusZone::new(&conn).drop_up(false), StatusZone::new(&fps)];
+        let bar = ZonedStatusBar::new(&[], &[], &right);
+        let out = bar.draw(rect, &mut list, &s, &InputState::default());
+        assert_eq!(out.drop_up, None);
+
+        // Open: its key, as tall as a toggle and centred in the band, at the
+        // right end's side.
+        let right = [StatusZone::new(&conn).drop_up(true), StatusZone::new(&fps)];
+        let bar = ZonedStatusBar::new(&[], &[], &right);
+        let out = bar.draw(rect, &mut list, &s, &InputState::default());
+        let anchor = out.drop_up.expect("open drop-up anchors");
+        assert_eq!(anchor.side, ZoneSide::Right);
+        assert_eq!(anchor.rect.height, TOGGLE);
+        assert_eq!(anchor.rect.y, rect.y + (rect.height - TOGGLE) * 0.5);
+        let fps_w = mono_width(&mut list, &s, "59.9 fps") + 2.0 * RIGHT_PAD;
+        assert!(anchor.rect.right() <= rect.right() - BAND_PAD - fps_w);
+
+        // A click on it reports both the zone and the key, even while shut.
+        let right = [StatusZone::new(&conn).drop_up(false), StatusZone::new(&fps)];
+        let bar = ZonedStatusBar::new(&[], &[], &right);
+        let (cx, cy) = (anchor.rect.x + 4.0, anchor.rect.y + 4.0);
+        let out = bar.draw(rect, &mut list, &s, &click(cx, cy));
+        assert_eq!(out.right, Some(0));
+        assert_eq!(out.drop_up, Some(anchor));
+    }
+
+    #[test]
+    fn a_drop_up_zone_makes_room_for_its_marker() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let conn = [StatusPart::Text("connected")];
+        let mut list = DrawList::new();
+        let plain = parts_width(&mut list, &s, &StatusZone::new(&conn));
+        let drop_up = parts_width(&mut list, &s, &StatusZone::new(&conn).drop_up(false));
+        assert_eq!(drop_up, plain + MARKER_GAP + MARKER_W);
     }
 
     #[test]

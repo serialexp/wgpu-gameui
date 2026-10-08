@@ -47,8 +47,6 @@ pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 
 [features]
 default = ["bundled-font", "phosphor-icons", "headless"]
-# Analytic quadratic Slug A/B experiment; default renderer is unchanged.
-slug-experiment = []
 # Generic retained Tree-sitter highlighting API.
 syntax-highlighting = ["dep:tree-sitter-highlight"]
 # Lua grammar and its configured highlighter constructor.

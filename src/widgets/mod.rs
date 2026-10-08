@@ -72,6 +72,7 @@ mod slider;
 mod span_tabs;
 mod splitter;
 mod status_bar;
+mod status_detail;
 mod status_dot;
 mod status_icon;
 mod status_zones;
@@ -137,7 +138,7 @@ pub use draw_list::IconMsdf;
 pub(crate) use draw_list::PaintCmd;
 pub use draw_list::{
     AnalyticInstance, ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw,
-    NineSliceDraw, NineSliceId, PrimCounts, Vertex,
+    NineSliceDraw, NineSliceId, PrimCounts, StripeInstance, Stripes, Vertex,
 };
 pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
@@ -216,9 +217,12 @@ pub use slider::{Slider, SliderOutput};
 pub use span_tabs::{SPAN_TABS_HEIGHT, SpanTab, SpanTabs};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
 pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};
+pub use status_detail::{DetailRow, DetailSpark, DetailTone, STATUS_DETAIL_WIDTH, StatusDetail};
 pub use status_dot::{STATUS_DOT_SIZE, Status, status_dot};
 pub use status_icon::{STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, StatusIcon};
-pub use status_zones::{StatusBarOutput, StatusPart, StatusToggle, StatusZone, ZonedStatusBar};
+pub use status_zones::{
+    StatusBarOutput, StatusPart, StatusToggle, StatusZone, ZoneAnchor, ZoneSide, ZonedStatusBar,
+};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
 pub use tag_input::{TagOutput, draw as draw_tag_input};
@@ -299,6 +303,13 @@ pub struct DrawContext<'a> {
     /// IDs register their local geometry here and receive topmost-first responses
     /// resolved against the previous completed frame.
     pub interactions: Option<&'a mut crate::InteractionScene>,
+    /// Whether the widgets drawn through this context take input. `false`
+    /// (set via [`with_enabled`](Self::with_enabled), as
+    /// [`UiContext::enabled_scope`](crate::UiContext::enabled_scope) does)
+    /// registers their hit regions disabled, so they neither react nor let
+    /// the pointer through to what is under them, and leaves them out of
+    /// the Tab ring. `true` by default.
+    pub enabled: bool,
 }
 
 impl<'a> DrawContext<'a> {
@@ -323,6 +334,7 @@ impl<'a> DrawContext<'a> {
             animations: None,
             cursor: None,
             interactions: None,
+            enabled: true,
         }
     }
 
@@ -371,6 +383,13 @@ impl<'a> DrawContext<'a> {
         self
     }
 
+    /// Draw disabled (`false`) or enabled widgets; see
+    /// [`enabled`](Self::enabled). Builder-style; chain after [`new`](Self::new).
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
     /// This context, reborrowed, reading `input` instead of its own. For
     /// content whose pointer lives in another space than the screen — rows
     /// drawn under a scroll offset hit-test against the pointer moved by
@@ -389,11 +408,13 @@ impl<'a> DrawContext<'a> {
             animations: self.animations.as_deref_mut(),
             cursor: self.cursor.as_deref_mut(),
             interactions: self.interactions.as_deref_mut(),
+            enabled: self.enabled,
         }
     }
 
     /// Register a rectangular interactive allocation and return the response
-    /// resolved from the same widget ID in the previous completed frame.
+    /// resolved from the same widget ID in the previous completed frame. The
+    /// region is disabled when `enabled` is `false` or this context is.
     pub fn interact(
         &mut self,
         id: impl Into<crate::WidgetId>,
@@ -411,7 +432,7 @@ impl<'a> DrawContext<'a> {
                 transform,
                 clip,
                 layer,
-                enabled,
+                enabled && self.enabled,
                 crate::PointerPolicy::Target,
             ),
             None => crate::Response::idle(id, rect),
@@ -491,7 +512,11 @@ impl<'a> DrawContext<'a> {
     /// Register `id` as focusable in the active layer (or base if no layer).
     /// Convenience that delegates to [`FocusState::register`] or
     /// [`FocusState::register_layer`] based on [`active_layer`](Self::active_layer).
+    /// A disabled context registers nothing: Tab skips its widgets.
     pub fn register_focus(&mut self, id: FocusId) {
+        if !self.enabled {
+            return;
+        }
         match self.active_layer {
             Some(layer) => self.focus.register_layer(id, layer),
             None => self.focus.register(id),

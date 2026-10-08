@@ -1,5 +1,6 @@
 //! `UiRenderer` — single-call renderer consuming a `DrawList`.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -10,10 +11,10 @@ use crate::TextRenderer;
 use crate::color::{Clear, ColorSpace};
 use crate::layer::LayerStack;
 use crate::layout::Rect;
-use crate::render::atlas::{SpriteAtlas, SpriteId};
 use crate::render::blur::{Backdrop, Blur, BlurParams};
 use crate::render::composite::{Offscreen, TargetPlan};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
+use crate::render::textures::{self, AtlasId, Binding, Placement, SpriteError, SpriteId, Textures};
 use crate::render::uniform_arena::UniformArena;
 use crate::text::FontSystemHandle;
 use crate::widgets::{
@@ -26,7 +27,7 @@ const SHADER: &str = include_str!("ui.wgsl");
 /// Metadata describing a registered nine-slice resource.
 #[derive(Clone, Debug)]
 pub struct NineSliceMeta {
-    /// Atlas sprite the nine-slice samples from.
+    /// Sprite the nine-slice samples from.
     pub sprite: SpriteId,
     /// Border insets in source pixels: [left, top, right, bottom].
     pub border: [u32; 4],
@@ -52,6 +53,15 @@ fn frame_arena_within_cap(bytes: u64) -> bool {
     bytes <= ARENA_SANITY_CAP
 }
 
+/// Draw calls of small sprites in textures of their own (see
+/// [`RenderStats::small_texture_batches`]) in one frame from which the frame is
+/// reported: each is a texture switch an atlas would have saved.
+pub const SMALL_TEXTURE_BATCHES_WARN: usize = 32;
+
+/// Names of the small sprites in textures of their own kept per frame, to say
+/// which sprites belong in an atlas.
+const SMALL_TEXTURE_NAMES: usize = 3;
+
 #[derive(Clone, Copy)]
 struct OrderedColorUpload {
     vertex_offset: u64,
@@ -66,7 +76,7 @@ enum PreparedRun {
     /// Consecutive color commands, `paint_cmds[range]`, drawn from the frame's
     /// [`OrderedColorUpload`].
     Color(std::ops::Range<usize>),
-    /// Atlas sprites or nine-slice panels.
+    /// Sprites or nine-slice panels sampling one texture.
     Instanced(InstancedRun),
     /// MSDF text or vector icons.
     Msdf(crate::text::PreparedMsdf),
@@ -80,14 +90,14 @@ enum InstancedKind {
 }
 
 /// Uploaded icon or nine-slice instances: `count` records in `buffer` from
-/// `offset`, sampling the sprite atlas bound by `atlas` (both captured at
+/// `offset`, sampling the sprite texture bound by `texture` (both captured at
 /// upload, so a buffer that grows later in the frame doesn't disturb them).
 struct InstancedRun {
     kind: InstancedKind,
     buffer: wgpu::Buffer,
     offset: u64,
     count: u32,
-    atlas: wgpu::BindGroup,
+    texture: wgpu::BindGroup,
 }
 
 /// Per-instance icon/image record — matches `vs_icon` in `ui.wgsl`.
@@ -284,6 +294,8 @@ pub struct RenderStats {
     pub color_runs: usize,
     /// Analytic shadow instances submitted.
     pub shadow_instances: usize,
+    /// Analytic stripe instances submitted (hatching, dashed lines).
+    pub stripe_instances: usize,
     /// Render passes opened: one per ordered draw list, plus one per batch on
     /// the unordered compatibility path.
     pub render_passes: usize,
@@ -299,6 +311,14 @@ pub struct RenderStats {
     pub atlas_uploads: usize,
     /// Approximate bytes uploaded to atlas textures.
     pub atlas_bytes_uploaded: u64,
+    /// Sprites uploaded into textures of their own.
+    pub texture_uploads: usize,
+    /// Bytes uploaded into sprites' own textures.
+    pub texture_bytes_uploaded: u64,
+    /// Draw calls of small sprites (see [`SMALL_SPRITE_EDGE`](crate::render::SMALL_SPRITE_EDGE))
+    /// in textures of their own: each costs a texture switch that putting the
+    /// sprites in a shared atlas ([`UiRenderer::create_atlas`]) would save.
+    pub small_texture_batches: usize,
     /// Dynamic buffers replaced to increase capacity.
     pub buffer_reallocations: usize,
 }
@@ -331,6 +351,12 @@ impl RenderStats {
             warnings.push(format!(
                 "{} atlas uploads in one frame; batch resource/glyph registration before rendering where possible",
                 self.atlas_uploads
+            ));
+        }
+        if self.small_texture_batches >= SMALL_TEXTURE_BATCHES_WARN {
+            warnings.push(format!(
+                "{} draw calls of small sprites in textures of their own; each is a texture switch, so load sprites drawn together into a shared atlas (UiRenderer::create_atlas, Placement::Atlas)",
+                self.small_texture_batches
             ));
         }
         warnings
@@ -405,19 +431,16 @@ pub struct UiRenderer {
     /// one actionable log rather than a fatal oversized-buffer allocation.
     frame_boundary_required: bool,
 
-    // Atlas resources
-    atlas: SpriteAtlas,
-    texture: wgpu::Texture,
+    // Sprite textures: one per sprite, or shared atlases (see `render::textures`).
+    textures: Textures,
     texture_bind_group_layout: wgpu::BindGroupLayout,
-    texture_bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
-    current_atlas_size: u32,
 
     // Nine-slice registry
     nine_slices: Vec<NineSliceMeta>,
     nine_slice_names: HashMap<String, NineSliceId>,
 
-    // Decoded-image cache (path/key -> atlas sprite + dimensions)
+    // Decoded-image cache (path/key -> sprite + dimensions)
     image_cache: ImageCache,
 
     // Vertex buffers (grow as needed). Each `draw_*` call bump-allocates its
@@ -484,6 +507,9 @@ pub struct UiRenderer {
     stale_list: StaleListDetector,
     pressure: RenderPressureDetector,
     frame_stats: RenderStats,
+    /// A few of the small sprites drawn from textures of their own this frame,
+    /// named when the frame is reported for them.
+    small_texture_names: Vec<String>,
 }
 
 impl UiRenderer {
@@ -515,10 +541,9 @@ impl UiRenderer {
 
         let uniform_bgl = uniform.layout();
 
-        // Atlas + texture
-        let atlas = SpriteAtlas::new();
-        let (texture, sampler, texture_bgl, texture_bind_group) =
-            create_atlas_texture(device, atlas.width(), atlas.height());
+        // Sprite textures are created as sprites load; how they are sampled, now.
+        let (sampler, texture_bgl) = create_sprite_sampling(device);
+        let textures = Textures::new(device.limits().max_texture_dimension_2d);
 
         // Color pipeline (no texture binding)
         let color_pipeline_layout =
@@ -779,8 +804,6 @@ impl UiRenderer {
         // construction needlessly CPU-heavy for small or usually-hidden UIs.
         let text_renderer = TextRenderer::with_font_system(device, queue, work_format, font_system);
 
-        let current_atlas_size = atlas.width();
-
         let analytic_inst_capacity = (1024 * std::mem::size_of::<AnalyticInstance>()) as u64;
         let analytic_inst_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ui analytic inst buffer"),
@@ -814,12 +837,9 @@ impl UiRenderer {
             pass_uniform_offset: 0,
             view_origin: [0.0, 0.0],
             frame_boundary_required: false,
-            atlas,
-            texture,
+            textures,
             texture_bind_group_layout: texture_bgl,
-            texture_bind_group,
             sampler,
-            current_atlas_size,
             nine_slices: Vec::new(),
             nine_slice_names: HashMap::new(),
             image_cache: ImageCache::new(),
@@ -853,6 +873,7 @@ impl UiRenderer {
             stale_list: StaleListDetector::default(),
             pressure: RenderPressureDetector::default(),
             frame_stats: RenderStats::default(),
+            small_texture_names: Vec::new(),
         }
     }
 
@@ -868,18 +889,49 @@ impl UiRenderer {
         }
     }
 
-    /// Load a sprite from raw RGBA8 bytes into the atlas.
+    /// Create a shared atlas that may grow to `max_size` pixels on each side
+    /// (capped at [`max_texture_size`](Self::max_texture_size)). Sprites loaded
+    /// with [`Placement::Atlas`] naming it are packed into one texture, so
+    /// consecutive draws of them are a single draw call: use one for many small
+    /// sprites drawn together (icons, thumbnails). No GPU memory is used until
+    /// a sprite goes in; a full atlas refuses further sprites
+    /// ([`SpriteError::AtlasFull`]) rather than growing past `max_size`.
+    pub fn create_atlas(&mut self, max_size: u32) -> AtlasId {
+        self.textures.create_atlas(max_size)
+    }
+
+    /// The GPU's largest texture edge: the most a sprite in a texture of its own
+    /// may measure, and the most an atlas may grow to.
+    pub fn max_texture_size(&self) -> u32 {
+        self.textures.max_dimension()
+    }
+
+    /// Load a sprite from raw RGBA8 bytes, into a texture of its own or the
+    /// atlas `placement` names. A `name` already in use moves to the new sprite
+    /// and the old one is unloaded.
     ///
-    /// The pixels are buffered CPU-side; the atlas texture is re-uploaded lazily
-    /// in [`UiRenderer::render`] (or eagerly via [`UiRenderer::flush_atlas`])
-    /// so back-to-back loads coalesce into a single GPU upload.
-    pub fn load_sprite_rgba8(&mut self, name: &str, w: u32, h: u32, pixels: &[u8]) -> SpriteId {
-        self.atlas.insert(Some(name), w, h, pixels)
+    /// The pixels are buffered CPU-side and uploaded lazily in
+    /// [`UiRenderer::render`] (or eagerly via [`UiRenderer::flush_textures`]),
+    /// so back-to-back loads into an atlas coalesce into a single GPU upload.
+    /// Pass them owned (a `Vec<u8>`) to spare a texture of its own a copy.
+    pub fn load_sprite_rgba8<'a>(
+        &mut self,
+        name: &str,
+        w: u32,
+        h: u32,
+        pixels: impl Into<Cow<'a, [u8]>>,
+        placement: Placement,
+    ) -> Result<SpriteId, SpriteError> {
+        let sprite = self.textures.insert(Some(name), w, h, pixels, placement)?;
+        // An image loaded under the same key lost its sprite to this one; its
+        // cache entry would hand out a freed id.
+        self.image_cache.remove(name);
+        Ok(sprite)
     }
 
     /// Look up a sprite id by name.
     pub fn sprite_id(&self, name: &str) -> Option<SpriteId> {
-        self.atlas.id_for(name)
+        self.textures.id_for(name)
     }
 
     /// Pre-generate MSDF tiles for icon glyphs from an application-registered
@@ -899,22 +951,24 @@ impl UiRenderer {
             .prewarm_icon_glyphs(device, queue, glyphs);
     }
 
-    /// True if `key` resolves to a sprite already present in the atlas — a
-    /// loaded image (`load_image_*`), an out-of-band sprite
-    /// (`load_sprite_rgba8`), or any registered name. Broader than
+    /// True if `key` resolves to a loaded sprite — a loaded image
+    /// (`load_image_*`), an out-of-band sprite (`load_sprite_rgba8`), or any
+    /// registered name. Broader than
     /// [`UiRenderer::has_image`] (which only sees the decoded-image cache); a
     /// caller draining deferred image-load requests uses this to skip keys that
     /// are already drawable (so it never tries to `fs::read` an out-of-band key).
     pub fn has_sprite(&self, key: &str) -> bool {
-        self.atlas.id_for(key).is_some()
+        self.textures.id_for(key).is_some()
     }
 
-    /// Decode and load an encoded image (PNG/JPEG) from disk, returning an atlas
-    /// sprite handle. Cached by path: a repeat load of the same path is free and
-    /// returns the existing handle (no re-decode). Backs Teardown's `UiImage`.
+    /// Decode and load an encoded image (PNG/JPEG) from disk where `placement`
+    /// says, returning its sprite handle. Cached by path: a repeat load of the
+    /// same path is free and returns the existing handle (no re-decode, and
+    /// wherever it was first placed). Backs Teardown's `UiImage`.
     pub fn load_image_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
+        placement: Placement,
     ) -> Result<SpriteId, ImageError> {
         let key = path.as_ref().to_string_lossy().into_owned();
         if let Some(entry) = self.image_cache.get(&key) {
@@ -922,18 +976,25 @@ impl UiRenderer {
         }
         let bytes = std::fs::read(path.as_ref()).map_err(ImageError::Io)?;
         let (w, h, rgba) = decode_rgba8(&bytes).map_err(ImageError::Decode)?;
-        Ok(self.insert_image(&key, w, h, &rgba))
+        self.insert_image(&key, w, h, rgba, placement)
+            .map_err(ImageError::Sprite)
     }
 
     /// Decode and load an encoded image from in-memory bytes under an explicit
     /// `key` (e.g. an `include_bytes!` asset). Cached by `key` like
     /// [`UiRenderer::load_image_file`].
-    pub fn load_image_bytes(&mut self, key: &str, bytes: &[u8]) -> Result<SpriteId, ImageError> {
+    pub fn load_image_bytes(
+        &mut self,
+        key: &str,
+        bytes: &[u8],
+        placement: Placement,
+    ) -> Result<SpriteId, ImageError> {
         if let Some(entry) = self.image_cache.get(key) {
             return Ok(entry.sprite);
         }
         let (w, h, rgba) = decode_rgba8(bytes).map_err(ImageError::Decode)?;
-        Ok(self.insert_image(key, w, h, &rgba))
+        self.insert_image(key, w, h, rgba, placement)
+            .map_err(ImageError::Sprite)
     }
 
     /// Load an already-decoded RGBA8 image under an explicit `key`, skipping the
@@ -947,18 +1008,33 @@ impl UiRenderer {
     /// [`image_size`](Self::image_size) /
     /// [`unload_image`](Self::unload_image) all see it. (Contrast
     /// [`load_sprite_rgba8`](Self::load_sprite_rgba8), which registers only the
-    /// atlas name and bypasses the cache.) Cached by `key`: a repeat load is free
-    /// and returns the existing handle.
-    pub fn load_image_rgba8(&mut self, key: &str, w: u32, h: u32, rgba: &[u8]) -> SpriteId {
+    /// sprite name and bypasses the cache.) Cached by `key`: a repeat load is free
+    /// and returns the existing handle. Pass the pixels owned (a `Vec<u8>`) to
+    /// spare a texture of its own a copy.
+    pub fn load_image_rgba8<'a>(
+        &mut self,
+        key: &str,
+        w: u32,
+        h: u32,
+        rgba: impl Into<Cow<'a, [u8]>>,
+        placement: Placement,
+    ) -> Result<SpriteId, SpriteError> {
         if let Some(entry) = self.image_cache.get(key) {
-            return entry.sprite;
+            return Ok(entry.sprite);
         }
-        self.insert_image(key, w, h, rgba)
+        self.insert_image(key, w, h, rgba, placement)
     }
 
-    /// Insert decoded RGBA8 pixels into the atlas and record the cache entry.
-    fn insert_image(&mut self, key: &str, w: u32, h: u32, rgba: &[u8]) -> SpriteId {
-        let sprite = self.atlas.insert(Some(key), w, h, rgba);
+    /// Load decoded RGBA8 pixels as a sprite and record the cache entry.
+    fn insert_image<'a>(
+        &mut self,
+        key: &str,
+        w: u32,
+        h: u32,
+        rgba: impl Into<Cow<'a, [u8]>>,
+        placement: Placement,
+    ) -> Result<SpriteId, SpriteError> {
+        let sprite = self.textures.insert(Some(key), w, h, rgba, placement)?;
         self.image_cache.insert(
             key,
             ImageEntry {
@@ -967,7 +1043,7 @@ impl UiRenderer {
                 height: h,
             },
         );
-        sprite
+        Ok(sprite)
     }
 
     /// Pixel dimensions of a loaded image, if `key` has been loaded. Backs
@@ -982,40 +1058,39 @@ impl UiRenderer {
     }
 
     /// Drop the cache entry for an image `key` (next load re-decodes), and free
-    /// the sprite's atlas slot so its pixels are reclaimed. Backs Teardown's
-    /// `UiUnloadImage`.
+    /// its sprite. Backs Teardown's `UiUnloadImage`.
     ///
-    /// The freed slot is tombstoned and recycled by a later `load_*`; the
-    /// GPU texture is re-uploaded without this sprite's pixels on the next
-    /// render. Shelf *fragmentation* left by the removal is reclaimed lazily by
-    /// [`compact_atlas`](Self::compact_atlas), which a long-running app can call
-    /// on its own schedule (e.g. when [`atlas_size`](Self::atlas_size) approaches
-    /// a threshold). Idempotent for an unknown key.
+    /// A texture of its own is released (once the GPU has finished with work
+    /// already submitted). An atlas slot is tombstoned and recycled by a later
+    /// load, and the atlas is re-uploaded without the sprite's pixels on the
+    /// next render; shelf *fragmentation* left by the removal is reclaimed lazily
+    /// by [`compact_atlas`](Self::compact_atlas), which a long-running app can
+    /// call on its own schedule. Idempotent for an unknown key.
     pub fn unload_image(&mut self, key: &str) {
         if let Some(entry) = self.image_cache.remove(key) {
-            self.atlas.remove(entry.sprite);
+            self.textures.remove(entry.sprite);
         }
     }
 
-    /// Reclaim atlas shelf fragmentation left by [`unload_image`](Self::unload_image)
-    /// / [`remove`](SpriteAtlas::remove) calls, repacking every live sprite into
-    /// fresh contiguous shelves without changing any `SpriteId`. Safe to call at
-    /// any time; idempotent when nothing has been removed.
+    /// Reclaim shelf fragmentation an atlas has from unloaded sprites,
+    /// repacking every live sprite into fresh contiguous shelves without
+    /// changing any `SpriteId`. Safe to call at any time; idempotent when
+    /// nothing has been removed. Returns `false` for an unknown atlas, or when
+    /// the repacked sprites wouldn't fit, which leaves the atlas as it was.
     ///
     /// The texture dimensions are not shrunk (only the *packing* is tightened),
-    /// so this prevents the atlas from climbing toward the 4096² cap under churn
-    /// but does not release the peak texture size. Call it periodically — e.g. a
-    /// daemon that loads and discards many one-off icons — to keep growth bounded.
-    pub fn compact_atlas(&mut self) {
-        self.atlas.compact();
+    /// so this keeps the atlas from filling up under churn but does not release
+    /// the peak texture size. Call it periodically — e.g. a daemon that loads and
+    /// discards many one-off icons — to keep growth bounded.
+    pub fn compact_atlas(&mut self, atlas: AtlasId) -> bool {
+        self.textures.compact(atlas)
     }
 
-    /// Current atlas texture dimensions in pixels, as `(width, height)`. Monitor
-    /// this to decide when to call [`compact_atlas`](Self::compact_atlas); the
-    /// atlas grows (1024 → 2048 → 4096) only when a sprite doesn't fit, and
-    /// panics past 4096².
-    pub fn atlas_size(&self) -> (u32, u32) {
-        (self.atlas.width(), self.atlas.height())
+    /// An atlas' current texture dimensions in pixels, as `(width, height)`, or
+    /// `None` for an unknown atlas. It grows (1024 → 2048 → …) only when a
+    /// sprite doesn't fit, up to the maximum it was created with.
+    pub fn atlas_size(&self, atlas: AtlasId) -> Option<(u32, u32)> {
+        self.textures.atlas_size(atlas)
     }
 
     /// Register a nine-slice resource referencing an existing sprite.
@@ -1121,79 +1196,22 @@ impl UiRenderer {
         (self.view_origin[0], self.view_origin[1])
     }
 
-    /// Force-upload pending atlas changes to the GPU. Called automatically by
-    /// `render()`, exposed for callers that want to control timing.
-    pub fn flush_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    /// Upload pending sprite changes to the GPU: new sprites of their own, and
+    /// atlases that changed. Called automatically by `render()`, exposed for
+    /// callers that want to control timing.
+    pub fn flush_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         #[cfg(feature = "tracy")]
-        let _span = tracing::info_span!("gameui_flush_atlas").entered();
-        if self.atlas.width() != self.current_atlas_size {
-            self.texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("ui atlas texture"),
-                size: wgpu::Extent3d {
-                    width: self.atlas.width(),
-                    height: self.atlas.height(),
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            self.texture_bind_group = self.create_texture_bg(device);
-            self.current_atlas_size = self.atlas.width();
-            // Force a full upload after grow.
-            let _ = self.atlas.take_dirty();
-            self.upload_atlas_pixels(queue);
-        } else if self.atlas.take_dirty() {
-            self.upload_atlas_pixels(queue);
-        }
-    }
-
-    fn create_texture_bg(&self, device: &wgpu::Device) -> wgpu::BindGroup {
-        let view = self
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ui atlas bg"),
-            layout: &self.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        })
-    }
-
-    fn upload_atlas_pixels(&self, queue: &wgpu::Queue) {
-        let pixels = self.atlas.build_pixel_buffer();
-        let w = self.atlas.width();
-        let h = self.atlas.height();
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * w),
-                rows_per_image: Some(h),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+        let _span = tracing::info_span!("gameui_flush_textures").entered();
+        let uploads = self.textures.flush(
+            device,
+            queue,
+            &self.texture_bind_group_layout,
+            &self.sampler,
         );
+        self.frame_stats.atlas_uploads += uploads.atlases;
+        self.frame_stats.atlas_bytes_uploaded += uploads.atlas_bytes;
+        self.frame_stats.texture_uploads += uploads.own;
+        self.frame_stats.texture_bytes_uploaded += uploads.own_bytes;
     }
 
     /// The counters for the frame so far: everything rendered since the last
@@ -1231,10 +1249,11 @@ impl UiRenderer {
             log::warn!(
                 "wgpu-gameui: sustained render pressure for {}+ frames: {}. Inspect the returned RenderStats or attach it to DebugReport::with_render_stats().",
                 RenderPressureDetector::WARN_AFTER,
-                previous.warnings().join("; ")
+                pressure_findings(previous, &self.small_texture_names)
             );
         }
         self.frame_stats = RenderStats::default();
+        self.small_texture_names.clear();
         self.frame_boundary_required = false;
         self.color_vbo_offset = 0;
         self.color_ibo_offset = 0;
@@ -1506,7 +1525,7 @@ impl UiRenderer {
         self.pass_uniform_offset = slot as u32;
         self.text_renderer
             .resize(device, queue, viewport.0, viewport.1, scale);
-        self.flush_atlas(device, queue);
+        self.flush_textures(device, queue);
         self.check_frame_arena();
     }
 
@@ -1566,6 +1585,7 @@ impl UiRenderer {
         self.frame_stats.draw_lists += 1;
         self.frame_stats.primitives += draw_list.prim_counts().total();
         self.frame_stats.shadow_instances += draw_list.shadow_instance_count();
+        self.frame_stats.stripe_instances += draw_list.stripe_instance_count();
         self.frame_stats.paint_runs += draw_list.paint_commands().len();
         for cmd in draw_list.paint_commands() {
             match cmd {
@@ -1585,10 +1605,11 @@ impl UiRenderer {
         // Compatibility for callers which fill the public payload arrays directly.
         // Normal enqueue APIs always populate the ordered stream.
         if draw_list.paint_cmds.is_empty() {
-            let nine = self.build_nine_slice_instances(&draw_list.nine_slices);
+            let (nine, bindings) = self.build_nine_slice_instances(&draw_list.nine_slices);
             if !nine.is_empty() {
-                let run = self.upload_nine_slices(device, queue, &nine);
-                self.draw_instanced_pass(encoder, view, &run);
+                for run in self.upload_nine_slices(device, queue, &nine, &bindings) {
+                    self.draw_instanced_pass(encoder, view, &run);
+                }
             }
             if !draw_list.vertices.is_empty() && !draw_list.indices.is_empty() {
                 self.draw_color(
@@ -1600,10 +1621,11 @@ impl UiRenderer {
                     &draw_list.indices,
                 );
             }
-            let icons = self.build_icon_instances(&draw_list.icons);
+            let (icons, bindings) = self.build_icon_instances(&draw_list.icons);
             if !icons.is_empty() {
-                let run = self.upload_icons(device, queue, &icons);
-                self.draw_instanced_pass(encoder, view, &run);
+                for run in self.upload_icons(device, queue, &icons, &bindings) {
+                    self.draw_instanced_pass(encoder, view, &run);
+                }
             }
             #[cfg(feature = "phosphor-icons")]
             if let Some(run) = self
@@ -1625,7 +1647,7 @@ impl UiRenderer {
             return;
         }
 
-        // Ordered text/icon runs must all use one stable atlas extent. Resolve the
+        // Ordered text runs must all use one stable glyph atlas extent. Resolve the
         // complete frame's glyph working set before any run bakes UVs or captures
         // an atlas bind group; later runs can then render independently without
         // invalidating earlier encoded passes.
@@ -1667,15 +1689,15 @@ impl UiRenderer {
         }
     }
 
-    fn build_icon_instances(&self, icons: &[IconDraw]) -> Vec<IconInstance> {
-        let aw = self.atlas.width();
-        let ah = self.atlas.height();
+    /// Each drawable icon's instance, and the texture it samples.
+    fn build_icon_instances(&self, icons: &[IconDraw]) -> (Vec<IconInstance>, Vec<Binding>) {
         let mut out: Vec<IconInstance> = Vec::with_capacity(icons.len());
+        let mut bindings = Vec::with_capacity(icons.len());
 
         for icon in icons {
             let id = match icon.sprite {
                 Some(id) => id,
-                None => match self.atlas.id_for(&icon.icon_key) {
+                None => match self.textures.id_for(&icon.icon_key) {
                     Some(id) => id,
                     None => {
                         self.warn_missing("sprite", &icon.icon_key);
@@ -1683,10 +1705,10 @@ impl UiRenderer {
                     }
                 },
             };
-            let region = match self.atlas.region(id) {
-                Some(r) => r,
-                None => continue,
+            let Some(at) = self.textures.resolve(id) else {
+                continue;
             };
+            let (region, (aw, ah)) = (at.region, at.texture);
             let uv = apply_crop_uv(region.uv(aw, ah), icon.src);
             let clip = icon.clip.map(|c| [c.x, c.y, c.width, c.height]);
 
@@ -1710,15 +1732,19 @@ impl UiRenderer {
                 icon.wrap,
                 tile_span,
             ));
+            bindings.push(at.binding);
         }
 
-        out
+        (out, bindings)
     }
 
-    fn build_nine_slice_instances(&self, draws: &[NineSliceDraw]) -> Vec<NineSliceInstance> {
-        let aw = self.atlas.width();
-        let ah = self.atlas.height();
+    /// Each drawable panel's instance, and the texture it samples.
+    fn build_nine_slice_instances(
+        &self,
+        draws: &[NineSliceDraw],
+    ) -> (Vec<NineSliceInstance>, Vec<Binding>) {
         let mut out: Vec<NineSliceInstance> = Vec::with_capacity(draws.len());
+        let mut bindings = Vec::with_capacity(draws.len());
 
         for draw in draws {
             let id = match draw.nine_slice {
@@ -1735,10 +1761,10 @@ impl UiRenderer {
                 Some(m) => m,
                 None => continue,
             };
-            let region = match self.atlas.region(meta.sprite) {
-                Some(r) => r,
-                None => continue,
+            let Some(at) = self.textures.resolve(meta.sprite) else {
+                continue;
             };
+            let (region, (aw, ah)) = (at.region, at.texture);
 
             out.push(build_nine_slice_instance(
                 draw.local.x,
@@ -1753,9 +1779,10 @@ impl UiRenderer {
                 aw,
                 ah,
             ));
+            bindings.push(at.binding);
         }
 
-        out
+        (out, bindings)
     }
 
     /// Ensure the color vbo/ibo hold this pass's bytes at their running frame
@@ -2019,26 +2046,79 @@ impl UiRenderer {
         }
     }
 
-    /// Upload icon/image instances for one instanced draw: the chrome unit-quad
-    /// base mesh + one [`IconInstance`] per icon. The vertex shader bilinearly
-    /// interpolates the baked-in corners and the fragment samples the atlas.
+    /// Upload icon/image instances, one instanced draw per stretch sampling one
+    /// texture (`bindings`, one per instance): the chrome unit-quad base mesh +
+    /// one [`IconInstance`] per icon. The vertex shader bilinearly interpolates
+    /// the baked-in corners and the fragment samples the sprite's texture.
     fn upload_icons(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instances: &[IconInstance],
-    ) -> InstancedRun {
+        bindings: &[Binding],
+    ) -> Vec<InstancedRun> {
         let off = self.ensure_icon_capacity(device, instances.len());
         queue.write_buffer(&self.icon_inst_buffer, off, bytemuck::cast_slice(instances));
         self.frame_stats.buffer_write_calls += 1;
         self.frame_stats.buffer_bytes_uploaded += std::mem::size_of_val(instances) as u64;
         self.icon_inst_offset = off + std::mem::size_of_val(instances) as u64;
-        InstancedRun {
-            kind: InstancedKind::Icon,
-            buffer: self.icon_inst_buffer.clone(),
-            offset: off,
-            count: instances.len() as u32,
-            atlas: self.texture_bind_group.clone(),
+        let buffer = self.icon_inst_buffer.clone();
+        let stride = std::mem::size_of::<IconInstance>() as u64;
+        self.instanced_runs(InstancedKind::Icon, &buffer, off, stride, bindings)
+    }
+
+    /// One run per stretch of `bindings` sampling the same texture, over the
+    /// instances written to `buffer` from `offset`, `stride` bytes each. Counts
+    /// each run of a small sprite in a texture of its own.
+    fn instanced_runs(
+        &mut self,
+        kind: InstancedKind,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        stride: u64,
+        bindings: &[Binding],
+    ) -> Vec<InstancedRun> {
+        let mut runs = Vec::new();
+        for (binding, range) in textures::batches(bindings) {
+            // Every texture is uploaded by `prepare_pass`; skip rather than bind
+            // nothing should a caller draw before it.
+            let texture = self.textures.bind_group(binding).cloned();
+            debug_assert!(
+                texture.is_some(),
+                "{binding:?} drawn before its texture was uploaded"
+            );
+            let Some(texture) = texture else {
+                continue;
+            };
+            if let Binding::Own(id) = binding
+                && self.textures.resolve(id).is_some_and(|at| at.small_own())
+            {
+                self.frame_stats.small_texture_batches += 1;
+                self.note_small_texture(id);
+            }
+            runs.push(InstancedRun {
+                kind,
+                buffer: buffer.clone(),
+                offset: offset + range.start as u64 * stride,
+                count: range.len() as u32,
+                texture,
+            });
+        }
+        runs
+    }
+
+    /// Remember a small sprite drawn from a texture of its own, to name it when
+    /// the frame is reported.
+    fn note_small_texture(&mut self, id: SpriteId) {
+        if self.small_texture_names.len() >= SMALL_TEXTURE_NAMES {
+            return;
+        }
+        let name = match self.textures.name(id) {
+            Some(name) => name.to_owned(),
+            None => format!("sprite #{id}"),
+        };
+        if !self.small_texture_names.contains(&name) {
+            self.small_texture_names.push(name);
         }
     }
 
@@ -2049,7 +2129,7 @@ impl UiRenderer {
             InstancedKind::NineSlice => &self.nine_slice_pipeline,
         });
         pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
-        pass.set_bind_group(1, &run.atlas, &[]);
+        pass.set_bind_group(1, &run.texture, &[]);
         pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
         pass.set_vertex_buffer(1, run.buffer.slice(run.offset..));
         pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
@@ -2090,28 +2170,25 @@ impl UiRenderer {
         off
     }
 
-    /// Upload nine-slice panels for one instanced draw: the chrome unit-quad
-    /// base mesh + one [`NineSliceInstance`] per panel. The fragment remaps
-    /// local coords → source UV (nine-region piecewise map) and samples the
-    /// atlas.
+    /// Upload nine-slice panels, one instanced draw per stretch sampling one
+    /// texture (`bindings`, one per panel): the chrome unit-quad base mesh + one
+    /// [`NineSliceInstance`] per panel. The fragment remaps local coords →
+    /// source UV (nine-region piecewise map) and samples the sprite's texture.
     fn upload_nine_slices(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         instances: &[NineSliceInstance],
-    ) -> InstancedRun {
+        bindings: &[Binding],
+    ) -> Vec<InstancedRun> {
         let off = self.ensure_nine_capacity(device, instances.len());
         queue.write_buffer(&self.nine_inst_buffer, off, bytemuck::cast_slice(instances));
         self.frame_stats.buffer_write_calls += 1;
         self.frame_stats.buffer_bytes_uploaded += std::mem::size_of_val(instances) as u64;
         self.nine_inst_offset = off + std::mem::size_of_val(instances) as u64;
-        InstancedRun {
-            kind: InstancedKind::NineSlice,
-            buffer: self.nine_inst_buffer.clone(),
-            offset: off,
-            count: instances.len() as u32,
-            atlas: self.texture_bind_group.clone(),
-        }
+        let buffer = self.nine_inst_buffer.clone();
+        let stride = std::mem::size_of::<NineSliceInstance>() as u64;
+        self.instanced_runs(InstancedKind::NineSlice, &buffer, off, stride, bindings)
     }
 
     /// Upload every run of the ordered paint stream, in order, without opening
@@ -2144,23 +2221,27 @@ impl UiRenderer {
                     continue;
                 }
                 PaintCmd::NineSlice { draws } => {
-                    let instances = self.build_nine_slice_instances(
+                    let (instances, bindings) = self.build_nine_slice_instances(
                         &draw_list.nine_slices[draws.start as usize..draws.end as usize],
                     );
                     if !instances.is_empty() {
-                        runs.push(PreparedRun::Instanced(
-                            self.upload_nine_slices(device, queue, &instances),
-                        ));
+                        let uploaded =
+                            self.upload_nine_slices(device, queue, &instances, &bindings);
+                        // Counted as one draw above; it makes one per texture.
+                        self.frame_stats.draw_calls =
+                            (self.frame_stats.draw_calls + uploaded.len()).saturating_sub(1);
+                        runs.extend(uploaded.into_iter().map(PreparedRun::Instanced));
                     }
                 }
                 PaintCmd::Icon { draws } => {
-                    let instances = self.build_icon_instances(
+                    let (instances, bindings) = self.build_icon_instances(
                         &draw_list.icons[draws.start as usize..draws.end as usize],
                     );
                     if !instances.is_empty() {
-                        runs.push(PreparedRun::Instanced(
-                            self.upload_icons(device, queue, &instances),
-                        ));
+                        let uploaded = self.upload_icons(device, queue, &instances, &bindings);
+                        self.frame_stats.draw_calls =
+                            (self.frame_stats.draw_calls + uploaded.len()).saturating_sub(1);
+                        runs.extend(uploaded.into_iter().map(PreparedRun::Instanced));
                     }
                 }
                 #[cfg(feature = "phosphor-icons")]
@@ -2192,38 +2273,16 @@ impl UiRenderer {
     }
 }
 
-fn create_atlas_texture(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (
-    wgpu::Texture,
-    wgpu::Sampler,
-    wgpu::BindGroupLayout,
-    wgpu::BindGroup,
-) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("ui atlas texture"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+/// The sampler and bind group layout every sprite texture is drawn through
+/// (group 1 of the icon and nine-slice pipelines).
+fn create_sprite_sampling(device: &wgpu::Device) -> (wgpu::Sampler, wgpu::BindGroupLayout) {
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("ui atlas bgl"),
+        label: Some("ui sprite texture bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -2243,21 +2302,21 @@ fn create_atlas_texture(
             },
         ],
     });
-    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("ui atlas bg"),
-        layout: &bgl,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
-    (texture, sampler, bgl, bg)
+    (sampler, bgl)
+}
+
+/// The sustained-pressure report for a frame: its warnings, naming a few of the
+/// small sprites in textures of their own when those are among them.
+fn pressure_findings(stats: RenderStats, small_texture_names: &[String]) -> String {
+    let mut findings = stats.warnings().join("; ");
+    if stats.small_texture_batches >= SMALL_TEXTURE_BATCHES_WARN && !small_texture_names.is_empty()
+    {
+        findings.push_str(&format!(
+            " (among them: {})",
+            small_texture_names.join(", ")
+        ));
+    }
+    findings
 }
 
 /// Project the logical window `origin .. origin + (width, height)` onto the whole
@@ -2485,6 +2544,32 @@ mod tests {
             ..RenderStats::default()
         };
         assert!(large_batched.warnings().is_empty());
+    }
+
+    #[test]
+    fn many_small_sprites_in_textures_of_their_own_are_reported_and_named() {
+        let few = RenderStats {
+            small_texture_batches: SMALL_TEXTURE_BATCHES_WARN - 1,
+            ..RenderStats::default()
+        };
+        assert!(few.warnings().is_empty(), "a handful costs little");
+        let many = RenderStats {
+            small_texture_batches: SMALL_TEXTURE_BATCHES_WARN,
+            ..RenderStats::default()
+        };
+        let warnings = many.warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("shared atlas"), "{}", warnings[0]);
+        let names = ["thumb:a".to_owned(), "thumb:b".to_owned()];
+        assert!(pressure_findings(many, &names).ends_with("(among them: thumb:a, thumb:b)"));
+        // Other findings don't name the sprites that happened to be drawn.
+        let fragmented = RenderStats {
+            primitives: 160,
+            paint_runs: 140,
+            small_texture_batches: 2,
+            ..RenderStats::default()
+        };
+        assert!(!pressure_findings(fragmented, &names).contains("among them"));
     }
 
     #[test]

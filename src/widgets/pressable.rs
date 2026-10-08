@@ -246,7 +246,10 @@ impl Pressable {
         // Keyboard focus and Space/Enter activation (opt-in via `focusable`).
         let mut activated = clicked;
         if let Some(id) = self.focus_id {
-            ctx.register_focus(id);
+            // A disabled key stays out of the Tab ring.
+            if self.enabled {
+                ctx.register_focus(id);
+            }
             if clicked {
                 ctx.focus.request(id);
             }

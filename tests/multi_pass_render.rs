@@ -205,7 +205,12 @@ fn half() -> u8 {
 
 fn text_band_has_ink(img: &[u8], viewport: (u32, u32), y0: u32, y1: u32) -> bool {
     let (w, h) = viewport;
-    (y0..y1.min(h)).any(|y| (0..w).any(|x| px(img, viewport, x, y).0 > 40))
+    (y0..y1.min(h)).any(|y| {
+        (0..w).any(|x| {
+            let (r, g, b) = px(img, viewport, x, y);
+            r.max(g).max(b) > 40
+        })
+    })
 }
 
 fn device_queue() -> (wgpu::Device, wgpu::Queue) {

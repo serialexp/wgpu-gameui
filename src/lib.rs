@@ -62,8 +62,6 @@
 #[cfg(feature = "markdown")]
 mod markdown;
 mod shaping;
-#[cfg(feature = "slug-experiment")]
-pub mod slug;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax;
 mod text;
@@ -79,9 +77,8 @@ pub use syntax::SyntaxConfigurationError;
 pub use syntax::{HighlightConfiguration, SyntaxHighlighting, SyntaxTheme};
 pub use text::{
     CaretPos, FaceRange, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign,
-    TextBlock,
-    TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow, TextSpan,
-    TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
+    TextBlock, TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow,
+    TextSpan, TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
     byte_at_point, byte_on_adjacent_line, byte_under_point, caret_for_byte, load_font_bytes,
     load_font_file, register_bundled_fonts, resolve_range_color, resolve_span_color,
     selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
@@ -150,8 +147,9 @@ pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{
-    Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta, RenderStats,
-    SpriteAtlas, SpriteId, UiRenderer, capture_draw_list, capture_layers, write_png,
+    AtlasId, Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta,
+    Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, UiRenderer, capture_draw_list,
+    capture_layers, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{

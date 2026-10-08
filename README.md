@@ -25,10 +25,12 @@ framing, per-subtree styling, and a Teardown-style immediate-mode verb API.
 - **GPU-native chrome.** Fixed-size `QuadStyle` and `BoxShadow` values render
   composable gradients, unequal rounded borders, structural edge lines, and
   CSS-compatible inset/outset shadows. `SurfacePainter` supplies the standard
-  shadow → background → content → border/line ordering. Chrome and shadows share
-  one ordered tagged GPU instance stream, so arbitrary alternation remains one
-  upload and one draw; `RenderStats` exposes batching, upload, draw-call, and
-  buffer-growth counters.
+  shadow → background → content → border/line ordering. Stripe fills
+  (`DrawList::stripes`, behind `hatch`, `dashed_hline` and
+  `dashed_rect_outline`) are one shaded record however many lines they draw.
+  Chrome, shadows and stripes share one ordered tagged GPU instance stream, so
+  arbitrary alternation remains one upload and one draw; `RenderStats` exposes
+  batching, upload, draw-call, and buffer-growth counters.
 
 Dual-licensed MIT OR Apache-2.0.
 
@@ -221,17 +223,38 @@ as silently corrupted geometry.
 
 ### Image & atlas lifecycle
 
-Images enter the sprite atlas three ways: `load_image_file` / `load_image_bytes`
-(decode PNG/JPEG), `load_image_rgba8` (already-decoded pixels — skips the decode
-round-trip, for apps that hold raw buffers like rendered notification icons), and
-the out-of-band `load_sprite_rgba8`. The first three are keyed and cached, so
-`has_image` / `image_size` / `unload_image` see them. The atlas grows on demand
-(1024 → 2048 → 4096) and `SpriteId`s are stable indices that never shift.
+Images load four ways: `load_image_file` / `load_image_bytes` (decode PNG/JPEG),
+`load_image_rgba8` (already-decoded pixels — skips the decode round-trip, for apps
+that hold raw buffers like rendered notification icons), and the out-of-band
+`load_sprite_rgba8`. The first three are keyed and cached, so `has_image` /
+`image_size` / `unload_image` see them. `SpriteId`s are stable until unloaded.
 
-`unload_image` frees the slot immediately (its pixels are reclaimed and the slot
-recycled); shelf *fragmentation* left by churn is reclaimed by `compact_atlas`,
-which a long-running app should call periodically (gate on `atlas_size()`
-approaching a threshold) to keep the texture from climbing toward its 4096² cap.
+Each load says where the pixels go (`Placement`):
+
+- `Placement::Own` — a texture of the image's own, up to the GPU's largest
+  texture (`max_texture_size()`). Unloading frees it at once. Right for large
+  or one-off images (a photo, a full-window preview). The raw loaders take
+  their pixels as `impl Into<Cow<[u8]>>`: hand over a `Vec<u8>` and a large
+  image moves in rather than being copied.
+- `Placement::Atlas(id)` — packed into a shared atlas made with
+  `create_atlas(max_size)`, which grows on demand (1024 → 2048 → …) up to the
+  size you chose. Consecutive draws from one atlas are a single draw call, so
+  use one for many small images drawn together (icons, thumbnails). A full atlas
+  refuses further images (`SpriteError::AtlasFull`) instead of growing past its
+  maximum. An atlas left with no images lets its texture go.
+
+Sharing is opt-in, and the renderer tells you when you need it: a frame with
+`SMALL_TEXTURE_BATCHES_WARN` or more draw calls of small images (at most
+`SMALL_SPRITE_EDGE` px a side) in textures of their own shows up in
+`RenderStats::small_texture_batches` and its warnings, and when it persists,
+the sustained-render-pressure log names a few of the images.
+
+`unload_image` frees an atlas slot immediately (its pixels are reclaimed and the
+slot recycled); shelf *fragmentation* left by churn is reclaimed by
+`compact_atlas(id)`, which a long-running app should call periodically (gate on
+`atlas_size(id)` approaching its maximum), or when a load says the atlas is
+full. It repacks tallest first; should the repacked images not fit (shelf
+packing is no perfect fit), it returns `false` and leaves the atlas as it was.
 
 ### Caller-owned state
 
@@ -511,7 +534,9 @@ DISPLAY=:0 cargo bench --bench ui_stress
 Benchmark groups: `drawlist_build`, `frame_render`, `render_text_only`,
 `nine_slice`, `icons`, `primitives_build`, `primitives_render`, `layout_resolve`,
 `text_shape`, `interactive_widgets`, `text_input_edit`, `scroll_view`,
-`list_virtual`, `table`, `ui_context_frame`, `animation`.
+`list_virtual`, `table`, `ui_context_frame`, `animation`, `charts_build`,
+`charts_render` (bar charts of 30 to 10,000 bars, waffles of 100 to 10,000
+cells; each prints what it drew).
 
 ---
 

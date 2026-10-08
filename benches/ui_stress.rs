@@ -30,6 +30,10 @@
 //!   layer, draw, composite) at 1080p and 4K, **waiting for the GPU**. The gap
 //!   between the two is the offscreen cost; the budget is ≤ 1 ms per render
 //!   call at 4K.
+//! - `charts_build` / `charts_render` — the bar chart (30 to 10k bars, idle
+//!   and hovered) and the waffle (100 to 10k cells) drawn and rendered, to
+//!   find how much data a chart can take a frame. Each case's shape counts
+//!   are printed once.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
@@ -42,6 +46,7 @@ use wgpu_gameui::{
     NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn,
     TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
 };
+use wgpu_gameui::{Bar, BarChart, BarSeries, Waffle, WaffleCategory, WaffleFill};
 use wgpu_gameui::{
     DragItem, DragList, DragListState, INSPECTOR_WIDTH, Inspector, InspectorSelection,
     InspectorState, PropertyGroup, PropertyRow, PropertyScrub,
@@ -110,12 +115,17 @@ impl Harness {
 
         // A registered nine-slice for the nine-slice render bench.
         let frame = solid_with_border(32, [180, 180, 200, 255], [60, 60, 90, 255], 4);
-        let frame_sprite = ui.load_sprite_rgba8(NINE_SLICE_KEY, 32, 32, &frame);
+        // Both sprites share an atlas, as an application drawing many of them should.
+        let chrome = wgpu_gameui::Placement::Atlas(ui.create_atlas(1024));
+        let frame_sprite = ui
+            .load_sprite_rgba8(NINE_SLICE_KEY, 32, 32, &frame, chrome)
+            .expect("load the frame sprite");
         ui.register_nine_slice(NINE_SLICE_KEY, frame_sprite, [4, 4, 4, 4]);
 
         // A registered sprite (resolved by name at draw time) for the icon bench.
         let icon = solid_with_border(32, [120, 200, 240, 255], [30, 60, 90, 255], 3);
-        ui.load_sprite_rgba8(ICON_KEY, 32, 32, &icon);
+        ui.load_sprite_rgba8(ICON_KEY, 32, 32, &icon, chrome)
+            .expect("load the icon sprite");
 
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ui_stress target"),
@@ -1459,6 +1469,259 @@ fn bench_animation(c: &mut Criterion) {
     group.finish();
 }
 
+/// Bar counts for the chart benches: a month, a quarter and a year of days,
+/// then two past anything a chart a screen wide can give a pixel each.
+const CHART_BARS: &[usize] = &[30, 90, 365, 2_000, 10_000];
+/// Waffle cell counts: Forge's 10×10, then denser grids.
+const WAFFLE_CELLS: &[usize] = &[100, 400, 2_500, 10_000];
+/// A wide dialog's chart.
+const CHART_W: f32 = 900.0;
+const CHART_SERIES: [BarSeries<'static>; 4] = [
+    BarSeries {
+        name: "Input",
+        color: [0.35, 0.62, 0.85, 1.0],
+        estimated: false,
+    },
+    BarSeries {
+        name: "Output",
+        color: [0.85, 0.55, 0.30, 1.0],
+        estimated: false,
+    },
+    BarSeries {
+        name: "Thinking",
+        color: [0.62, 0.45, 0.85, 1.0],
+        estimated: true,
+    },
+    BarSeries {
+        name: "Cache",
+        color: [0.55, 0.55, 0.55, 1.0],
+        estimated: false,
+    },
+];
+
+/// `bars` days of [`CHART_SERIES`], each with a cap and the newest running,
+/// as the usage window draws them: every part of a bar is exercised.
+struct ChartData {
+    labels: Vec<String>,
+    segments: Vec<[f64; 4]>,
+}
+
+impl ChartData {
+    fn new(bars: usize) -> Self {
+        Self {
+            labels: (0..bars)
+                .map(|i| format!("{:02}-{:02}", 1 + i / 28 % 12, 1 + i % 28))
+                .collect(),
+            segments: (0..bars)
+                .map(|i| {
+                    let f = (i % 17) as f64;
+                    [
+                        1000.0 + 90.0 * f,
+                        400.0 + 25.0 * f,
+                        50.0 * (i % 5) as f64,
+                        200.0,
+                    ]
+                })
+                .collect(),
+        }
+    }
+
+    fn bars(&self) -> Vec<Bar<'_>> {
+        let n = self.labels.len();
+        self.labels
+            .iter()
+            .zip(&self.segments)
+            .enumerate()
+            .map(|(i, (label, segments))| Bar {
+                label,
+                long_label: label,
+                segments,
+                reference: Some(4000.0),
+                current: i + 1 == n,
+            })
+            .collect()
+    }
+}
+
+fn chart_format(value: f64) -> String {
+    format!("{:.1}k", value / 1000.0)
+}
+
+/// The pointer over the middle of the plot, so a bar is lit, the others
+/// dimmed, and its tooltip drawn.
+fn chart_hover() -> InputState {
+    InputState {
+        mouse_x: 20.0 + CHART_W * 0.5,
+        mouse_y: 120.0,
+        ..Default::default()
+    }
+}
+
+/// Draw `chart` as a caller does: the chart, then its tooltip when one is up.
+fn build_bar_chart(
+    list: &mut DrawList,
+    chart: &BarChart<'_>,
+    s: &StyleResolver,
+    input: &InputState,
+) {
+    let out = chart.draw(20.0, 20.0, CHART_W, list, s, input);
+    if let Some(tip) = out.tooltip {
+        chart.draw_tooltip(&tip, Rect::new(0.0, 0.0, W as f32, H as f32), list, s);
+    }
+}
+
+/// Five categories: four solid, and free space hatched as the context
+/// popover draws it.
+fn waffle_categories() -> [WaffleCategory<'static>; 5] {
+    let solid = |name, color| WaffleCategory {
+        name,
+        amount: "12.4k",
+        percent: "6.2%",
+        fill: WaffleFill::Solid(color),
+        aside: false,
+    };
+    [
+        solid("System prompt", [0.35, 0.62, 0.85, 1.0]),
+        solid("Tools", [0.85, 0.55, 0.30, 1.0]),
+        solid("Messages", [0.62, 0.45, 0.85, 1.0]),
+        solid("Memory", [0.45, 0.75, 0.50, 1.0]),
+        WaffleCategory {
+            name: "Free space",
+            amount: "80k",
+            percent: "40%",
+            fill: WaffleFill::Hatched,
+            aside: true,
+        },
+    ]
+}
+
+/// `count` cells, the first `solid` share of them in the four solid
+/// categories and the rest free space.
+fn waffle_cells(count: usize, solid: f32) -> Vec<u8> {
+    let taken = (count as f32 * solid) as usize;
+    (0..count)
+        .map(|i| {
+            if i < taken {
+                (i * 4 / taken.max(1)) as u8
+            } else {
+                4
+            }
+        })
+        .collect()
+}
+
+/// The chart cases: name, then how many bars or cells.
+fn chart_cases() -> Vec<(&'static str, usize)> {
+    let mut cases = Vec::new();
+    for &bars in CHART_BARS {
+        cases.push(("bar_chart", bars));
+        cases.push(("bar_chart_hovered", bars));
+    }
+    for &cells in WAFFLE_CELLS {
+        cases.push(("waffle_solid", cells));
+        cases.push(("waffle_free", cells));
+    }
+    cases
+}
+
+/// Build chart case `kind` of `count` into `list`.
+fn build_chart(list: &mut DrawList, s: &StyleResolver, kind: &str, data: &ChartData, cells: &[u8]) {
+    match kind {
+        "bar_chart" | "bar_chart_hovered" => {
+            let bars = data.bars();
+            let format = chart_format;
+            let mut chart = BarChart::new(&bars, &CHART_SERIES, &format);
+            let input = if kind == "bar_chart" {
+                InputState::default()
+            } else {
+                chart = chart.hovered(Some(bars.len() / 2));
+                chart_hover()
+            };
+            build_bar_chart(list, &chart, s, &input);
+        }
+        _ => {
+            let categories = waffle_categories();
+            let columns = (cells.len() as f64).sqrt().ceil() as usize;
+            Waffle::new(&categories, cells, columns).draw(
+                20.0,
+                20.0,
+                CHART_W,
+                list,
+                s,
+                &InputState::default(),
+            );
+        }
+    }
+}
+
+/// CPU cost of drawing the charts into a `DrawList` each frame, as the
+/// immediate-mode caller does: the bar chart at a month to 10k bars (idle,
+/// and hovered with its tooltip), the waffle at 100 to 10k cells (all solid,
+/// and 40% hatched free space). Each case's shape and text counts are printed
+/// once, so the timings can be read against what was drawn.
+fn bench_charts_build(c: &mut Criterion) {
+    let harness = Harness::new();
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let mut list = harness.draw_list();
+
+    let mut group = c.benchmark_group("charts_build");
+    for (kind, count) in chart_cases() {
+        let data = ChartData::new(count);
+        let cells = waffle_cells(count, if kind == "waffle_free" { 0.6 } else { 1.0 });
+        list.clear();
+        build_chart(&mut list, &s, kind, &data, &cells);
+        let counts = list.prim_counts();
+        eprintln!(
+            "charts_build/{kind}/{count}: {} primitives, {} soup vertices, {} texts",
+            counts.total(),
+            counts.vertices,
+            counts.texts
+        );
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::new(kind, count), &count, |b, _| {
+            b.iter(|| {
+                list.clear();
+                build_chart(&mut list, &s, kind, &data, &cells);
+                std::hint::black_box(&list);
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Full render cost of each chart case, built once: tessellation upload,
+/// text shaping, encode and submit (see [`bench_frame_render`]).
+fn bench_charts_render(c: &mut Criterion) {
+    let mut harness = Harness::new();
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+
+    let mut group = c.benchmark_group("charts_render");
+    group.sample_size(30);
+    for (kind, count) in chart_cases() {
+        let data = ChartData::new(count);
+        let cells = waffle_cells(count, if kind == "waffle_free" { 0.6 } else { 1.0 });
+        let mut list = harness.draw_list();
+        build_chart(&mut list, &s, kind, &data, &cells);
+        // Warm the glyph atlas and buffers once before timing.
+        harness.render_frame(&list);
+        let stats = harness.ui.frame_stats();
+        eprintln!(
+            "charts_render/{kind}/{count}: {} draw calls, {} paint runs, {} KiB uploaded",
+            stats.draw_calls,
+            stats.paint_runs,
+            stats.buffer_bytes_uploaded / 1024
+        );
+
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::new(kind, count), &count, |b, _| {
+            b.iter(|| harness.render_frame(&list));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_drawlist_build,
@@ -1486,5 +1749,7 @@ criterion_group!(
     bench_ui_context_frame,
     bench_recursive_menu,
     bench_animation,
+    bench_charts_build,
+    bench_charts_render,
 );
 criterion_main!(benches);

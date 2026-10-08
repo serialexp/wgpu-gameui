@@ -20,7 +20,7 @@
 //! ```
 
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{DrawList, FontSystemHandle, UiRenderer};
+use wgpu_gameui::{DrawList, FontSystemHandle, Placement, UiRenderer};
 
 const W: u32 = 480;
 const H: u32 = 320;
@@ -231,7 +231,18 @@ fn instanced_nine_slice_matches_immediate() {
     let mut ui = UiRenderer::new(&device, &queue, format, font_system.clone());
 
     let pixels = nine_region_sprite();
-    let sprite = ui.load_sprite_rgba8("parity_frame", SPRITE, SPRITE, &pixels);
+    // In a shared atlas, so the border math runs against a texture larger than
+    // the sprite.
+    let atlas = ui.create_atlas(1024);
+    let sprite = ui
+        .load_sprite_rgba8(
+            "parity_frame",
+            SPRITE,
+            SPRITE,
+            &pixels,
+            Placement::Atlas(atlas),
+        )
+        .expect("load the frame sprite");
     let id = ui.register_nine_slice("parity_frame", sprite, [BORDER, BORDER, BORDER, BORDER]);
 
     let rects = panel_rects();

@@ -1175,7 +1175,7 @@ impl TextRenderer {
 /// `[f32; 4]`. No decode: the renderer blends in sRGB space, exactly like the
 /// colored-quad pipeline's pass-through `Vertex` colors, so a hex text colour
 /// renders as that hex.
-pub(crate) fn color_to_rgba(c: Color) -> [f32; 4] {
+fn color_to_rgba(c: Color) -> [f32; 4] {
     [
         c.r() as f32 / 255.0,
         c.g() as f32 / 255.0,

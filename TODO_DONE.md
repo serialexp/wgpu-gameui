@@ -2059,3 +2059,42 @@ of 80.
 - [x] **MiniMeter** (`data`) — `mini_meter(list, s, x, center_y, value,
   warn_at) -> right edge`: a 30×5 well and its percentage, amber from
   `warn_at` (`MINI_METER_WARN`, 0.8). `MINI_METER_WIDTH`.
+
+## 2026-10-08 — Disabled widgets
+
+- [x] **A disabled widget took clicks, or let them through.** Found from
+  agent-ui, where `enabled_scope(false, …)` greyed a `text_button` that still
+  reported clicks once the retained interaction scene resolved it (from the
+  second frame), while a key disabled by its own flag dropped out of hit
+  testing, so the click landed on whatever was under it. Now
+  `DrawContext::enabled` (`with_enabled`, set by every `UiContext` verb from
+  its enabled scope) registers hit regions disabled; `InteractionScene` keeps
+  disabled regions in hit testing as blockers with idle responses, never
+  captures one, and stops talking to a held region once it is disabled.
+  `DrawContext::register_focus` skips a disabled context, a disabled
+  `Pressable` stays out of the Tab ring, and so do `UiContext`'s tree and
+  list views inside a disabled scope.
+
+## 2026-10-08 — Edge anti-aliasing and chart drawing cost
+
+- [x] **A whole-pixel quad's edge pixels painted at 84%.** `shade_chrome`
+  ramped its edges with `1 - smoothstep(-aa, aa, d)`, two pixels wide, so a
+  white 1 px `quad` read 237, and it took `aa` from `fwidth` of the distance,
+  which collapses where the field folds (flat across a box corner's 2x2 block
+  and along a thin rule's centre line), so corners and fractional thin rules
+  came out hard. Chrome, stripes and circles now use a one-pixel ramp centred
+  on the edge (`edge_coverage`), sized from the distance's gradient
+  (`box_sdf`, `chrome_rounded_rect_sdf`, `inner_sdf`) and the pixel pulled
+  back to local space; translate-only chrome and stripe quads pad 1px so a
+  fractional edge keeps its outside pixel. Text underlines snap to whole
+  pixels when untransformed. Regression:
+  `tests/chrome_instancing.rs::whole_pixel_quads_are_solid_to_their_edges_and_fractional_edges_split`.
+  `tests/multi_pass_render.rs` had only passed through a quad's old 16% bleed
+  (it looked for cyan text in the red channel); it checks every channel now.
+- [x] **Charts drew one shape per hatch line and per bar.** `DrawList::stripes`
+  (`Stripes`, `Stripes::hatch`, `crisp`) draws hatching and dashes as one
+  analytic record (`hatch`, `dashed_hline`, `dashed_rect_outline`);
+  `BarChart` groups bars past one per 2px and draws narrow bars on whole
+  pixels without a top edge. Benchmarks: `charts_build`, `charts_render`;
+  shader checks: `tests/stripes.rs`.
+

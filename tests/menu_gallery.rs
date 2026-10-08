@@ -10,8 +10,8 @@
 use wgpu_gameui::layout::{Anchor, MainAlign, Positioned, Rect, Size, VStack};
 use wgpu_gameui::{
     ArrowFocusNav, Button, DrawContext, FocusState, Image, ImageFit, InputState, KeyboardNav,
-    LayerStack, MenuList, SettingsForm, SettingsFormState, SettingsSpec, StyleResolver, Theme,
-    UiRenderer, default_values, draw_scrim, map_gamepad,
+    LayerStack, MenuList, Placement, SettingsForm, SettingsFormState, SettingsSpec, StyleResolver,
+    Theme, UiRenderer, default_values, draw_scrim, map_gamepad,
 };
 
 const W: u32 = 640;
@@ -55,7 +55,9 @@ fn render_menu_gallery() {
     // A tileable 32x32 texture (opaque center + distinct border so the tile
     // grid is visible in the PNG).
     let tile_pixels = solid_with_border(32, [70, 90, 110, 255], [30, 40, 55, 255], 2);
-    let tile_sprite = ui.load_sprite_rgba8("tile", 32, 32, &tile_pixels);
+    let tile_sprite = ui
+        .load_sprite_rgba8("tile", 32, 32, &tile_pixels, Placement::Own)
+        .expect("load the tile sprite");
 
     let theme = Theme::default();
     let input = InputState::default();

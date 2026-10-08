@@ -9,7 +9,8 @@
 //! There's no independent immediate path left to diff against, so this is a
 //! golden-pixel test: render a 4-quadrant sprite and assert the sampled colors
 //! land where the UV mapping says they should — for a plain draw, a cropped
-//! draw, and a rotated draw.
+//! draw, and a rotated draw, from a texture of the sprite's own and from a
+//! shared atlas, and for draws that switch between the two.
 //!
 //! GPU-only, like `widget_gallery` — run with:
 //! ```
@@ -17,7 +18,7 @@
 //! ```
 
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{DrawList, FontSystemHandle, UiRenderer};
+use wgpu_gameui::{DrawList, FontSystemHandle, Placement, SpriteId, UiRenderer};
 
 const W: u32 = 256;
 const H: u32 = 256;
@@ -47,6 +48,22 @@ fn quadrant_sprite() -> Vec<u8> {
         }
     }
     out
+}
+
+/// The quadrant sprite in a texture of its own and in a shared atlas: drawing
+/// must look the same from either.
+fn quadrant_sprites(ui: &mut UiRenderer) -> [(&'static str, SpriteId); 2] {
+    let atlas = ui.create_atlas(1024);
+    [("own", Placement::Own), ("atlas", Placement::Atlas(atlas))].map(|(name, placement)| {
+        let sprite = ui
+            .load_sprite_rgba8(name, SPRITE, SPRITE, quadrant_sprite(), placement)
+            .expect("load the quadrant sprite");
+        (name, sprite)
+    })
+}
+
+fn solid(color: [u8; 4]) -> Vec<u8> {
+    color.repeat((SPRITE * SPRITE) as usize)
 }
 
 fn render_list(
@@ -188,71 +205,135 @@ fn setup() -> (wgpu::Device, wgpu::Queue, UiRenderer, FontSystemHandle) {
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn instanced_icon_maps_quadrants() {
     let (device, queue, mut ui, font_system) = setup();
-    let sprite = ui.load_sprite_rgba8("quad", SPRITE, SPRITE, &quadrant_sprite());
+    for (placed, sprite) in quadrant_sprites(&mut ui) {
+        // Plain full draw into a 200×200 rect at (28,28). Quadrant centers should
+        // sample their source quadrant colors.
+        let dest = Rect::new(28.0, 28.0, 200.0, 200.0);
+        let mut list = DrawList::with_font_system(font_system.clone());
+        list.image(sprite, dest, [1.0; 4]);
+        let img = render_list(&device, &queue, &mut ui, &list);
 
-    // Plain full draw into a 200×200 rect at (28,28). Quadrant centers should
-    // sample their source quadrant colors.
-    let dest = Rect::new(28.0, 28.0, 200.0, 200.0);
-    let mut list = DrawList::with_font_system(font_system.clone());
-    list.image(sprite, dest, [1.0; 4]);
-    let img = render_list(&device, &queue, &mut ui, &list);
+        std::fs::create_dir_all("test_output").ok();
+        image::RgbaImage::from_raw(W, H, img.clone()).and_then(|i| {
+            i.save(format!("test_output/icon_full_{placed}.png"))
+                .ok()
+                .map(|_| i)
+        });
 
-    std::fs::create_dir_all("test_output").ok();
-    image::RgbaImage::from_raw(W, H, img.clone())
-        .and_then(|i| i.save("test_output/icon_full.png").ok().map(|_| i));
-
-    // Quadrant centers: quarter/three-quarter of the dest in each axis.
-    let q = |fx: f32, fy: f32| {
-        sample(
-            &img,
-            (dest.x + dest.width * fx) as u32,
-            (dest.y + dest.height * fy) as u32,
-        )
-    };
-    assert_eq!(classify(q(0.25, 0.25)), "R", "top-left should be red");
-    assert_eq!(classify(q(0.75, 0.25)), "G", "top-right should be green");
-    assert_eq!(classify(q(0.25, 0.75)), "B", "bottom-left should be blue");
-    assert_eq!(
-        classify(q(0.75, 0.75)),
-        "Y",
-        "bottom-right should be yellow"
-    );
-}
-
-#[test]
-#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
-fn instanced_icon_crop_samples_subrect() {
-    let (device, queue, mut ui, font_system) = setup();
-    let sprite = ui.load_sprite_rgba8("quad", SPRITE, SPRITE, &quadrant_sprite());
-
-    // Crop the top-left quarter (all red) and stretch it across the dest: every
-    // quadrant center should now read red.
-    let dest = Rect::new(28.0, 28.0, 200.0, 200.0);
-    let mut list = DrawList::with_font_system(font_system.clone());
-    list.image_cropped(sprite, dest, [0.0, 0.0, 0.5, 0.5], [1.0; 4]);
-    let img = render_list(&device, &queue, &mut ui, &list);
-
-    let q = |fx: f32, fy: f32| {
-        sample(
-            &img,
-            (dest.x + dest.width * fx) as u32,
-            (dest.y + dest.height * fy) as u32,
-        )
-    };
-    for (fx, fy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+        // Quadrant centers: quarter/three-quarter of the dest in each axis.
+        let q = |fx: f32, fy: f32| {
+            sample(
+                &img,
+                (dest.x + dest.width * fx) as u32,
+                (dest.y + dest.height * fy) as u32,
+            )
+        };
         assert_eq!(
-            classify(q(fx, fy)),
+            classify(q(0.25, 0.25)),
             "R",
-            "cropped TL-quarter should be red everywhere"
+            "{placed}: top-left should be red"
+        );
+        assert_eq!(
+            classify(q(0.75, 0.25)),
+            "G",
+            "{placed}: top-right should be green"
+        );
+        assert_eq!(
+            classify(q(0.25, 0.75)),
+            "B",
+            "{placed}: bottom-left should be blue"
+        );
+        assert_eq!(
+            classify(q(0.75, 0.75)),
+            "Y",
+            "{placed}: bottom-right should be yellow"
         );
     }
 }
 
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn instanced_icon_crop_samples_subrect() {
+    let (device, queue, mut ui, font_system) = setup();
+    for (placed, sprite) in quadrant_sprites(&mut ui) {
+        // Crop the top-left quarter (all red) and stretch it across the dest:
+        // every quadrant center should now read red.
+        let dest = Rect::new(28.0, 28.0, 200.0, 200.0);
+        let mut list = DrawList::with_font_system(font_system.clone());
+        list.image_cropped(sprite, dest, [0.0, 0.0, 0.5, 0.5], [1.0; 4]);
+        let img = render_list(&device, &queue, &mut ui, &list);
+
+        let q = |fx: f32, fy: f32| {
+            sample(
+                &img,
+                (dest.x + dest.width * fx) as u32,
+                (dest.y + dest.height * fy) as u32,
+            )
+        };
+        for (fx, fy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+            assert_eq!(
+                classify(q(fx, fy)),
+                "R",
+                "{placed}: cropped TL-quarter should be red everywhere"
+            );
+        }
+    }
+}
+
+/// Draws that switch between a texture of a sprite's own and a shared atlas
+/// keep their paint order: each switch starts a new draw call rather than the
+/// sprites being regrouped by texture. Only the small sprite of its own counts
+/// as a batch an atlas would have saved.
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn switching_textures_keeps_paint_order() {
+    let (device, queue, mut ui, font_system) = setup();
+    let atlas = ui.create_atlas(256);
+    let red = ui
+        .load_sprite_rgba8("red", SPRITE, SPRITE, solid(RED), Placement::Atlas(atlas))
+        .unwrap();
+    let blue = ui
+        .load_sprite_rgba8("blue", SPRITE, SPRITE, solid(BLUE), Placement::Atlas(atlas))
+        .unwrap();
+    let green = ui
+        .load_sprite_rgba8("green", SPRITE, SPRITE, solid(GREEN), Placement::Own)
+        .unwrap();
+
+    // Red everywhere, green over the left half, blue over the top-left quarter.
+    let dest = Rect::new(28.0, 28.0, 200.0, 200.0);
+    let (half_w, half_h) = (dest.width / 2.0, dest.height / 2.0);
+    let mut list = DrawList::with_font_system(font_system.clone());
+    list.image(red, dest, [1.0; 4]);
+    list.image(
+        green,
+        Rect::new(dest.x, dest.y, half_w, dest.height),
+        [1.0; 4],
+    );
+    list.image(blue, Rect::new(dest.x, dest.y, half_w, half_h), [1.0; 4]);
+    let img = render_list(&device, &queue, &mut ui, &list);
+
+    let q = |fx: f32, fy: f32| {
+        classify(sample(
+            &img,
+            (dest.x + dest.width * fx) as u32,
+            (dest.y + dest.height * fy) as u32,
+        ))
+    };
+    assert_eq!(q(0.25, 0.25), "B", "blue was drawn last, over green");
+    assert_eq!(q(0.25, 0.75), "G", "green over red");
+    assert_eq!(q(0.75, 0.25), "R");
+    assert_eq!(q(0.75, 0.75), "R");
+    let stats = ui.frame_stats();
+    assert_eq!(stats.small_texture_batches, 1, "{stats:?}");
+}
+
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn instanced_icon_rotation_permutes_quadrants() {
     let (device, queue, mut ui, font_system) = setup();
-    let sprite = ui.load_sprite_rgba8("quad", SPRITE, SPRITE, &quadrant_sprite());
+    let sprite = ui
+        .load_sprite_rgba8("quad", SPRITE, SPRITE, quadrant_sprite(), Placement::Own)
+        .unwrap();
 
     let dest = Rect::new(28.0, 28.0, 200.0, 200.0);
     let cx = dest.x + dest.width / 2.0;
@@ -307,4 +388,78 @@ fn instanced_icon_rotation_permutes_quadrants() {
     let rot_tl = q(&img_rot, 0.25, 0.25);
     assert_eq!(plain_tl, "R");
     assert_ne!(rot_tl, "R", "rotation should move red out of the top-left");
+}
+
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn a_sprite_loaded_under_an_image_key_retires_the_image() {
+    let (_device, _queue, mut ui, _font_system) = setup();
+    ui.load_image_rgba8("shared-key", 2, 2, &solid(RED)[..16], Placement::Own)
+        .unwrap();
+    assert!(ui.has_image("shared-key"));
+    ui.load_sprite_rgba8("shared-key", 2, 2, &solid(GREEN)[..16], Placement::Own)
+        .unwrap();
+    // The image's sprite was freed for the name, so its cache entry is gone
+    // too: a load under the key loads again rather than handing out a freed
+    // (and maybe reused) id.
+    assert!(!ui.has_image("shared-key"));
+    let again = ui
+        .load_image_rgba8("shared-key", 2, 2, &solid(BLUE)[..16], Placement::Own)
+        .unwrap();
+    assert_eq!(ui.sprite_id("shared-key"), Some(again));
+}
+
+#[test]
+#[ignore = "requires a GPU adapter (DISPLAY=:0)"]
+fn uploads_are_counted_as_they_happen() {
+    let (device, queue, mut ui, font_system) = setup();
+    let atlas = ui.create_atlas(256);
+    let shared = ui
+        .load_image_rgba8(
+            "shared",
+            SPRITE,
+            SPRITE,
+            solid(RED),
+            Placement::Atlas(atlas),
+        )
+        .unwrap();
+    let own = ui
+        .load_sprite_rgba8("own", SPRITE, SPRITE, solid(GREEN), Placement::Own)
+        .unwrap();
+    let draw = |ui: &mut UiRenderer, sprites: &[SpriteId]| {
+        let mut list = DrawList::with_font_system(font_system.clone());
+        for &sprite in sprites {
+            list.image(sprite, Rect::new(0.0, 0.0, 32.0, 32.0), [1.0; 4]);
+        }
+        render_list(&device, &queue, ui, &list);
+        ui.frame_stats()
+    };
+    let stats = draw(&mut ui, &[shared, own]);
+    let sprite_bytes = u64::from(SPRITE * SPRITE * 4);
+    assert_eq!(stats.atlas_uploads, 1, "{stats:?}");
+    assert_eq!(stats.texture_uploads, 1, "{stats:?}");
+    assert_eq!(stats.texture_bytes_uploaded, sprite_bytes, "{stats:?}");
+    // Nothing changed: nothing goes up again.
+    let stats = draw(&mut ui, &[shared, own]);
+    assert_eq!(
+        (stats.atlas_uploads, stats.texture_uploads),
+        (0, 0),
+        "{stats:?}"
+    );
+    // An atlas left empty is not uploaded again (its texture is let go), and
+    // one that gets a sprite again is.
+    ui.unload_image("shared");
+    let stats = draw(&mut ui, &[own]);
+    assert_eq!(stats.atlas_uploads, 0, "{stats:?}");
+    let again = ui
+        .load_image_rgba8(
+            "shared",
+            SPRITE,
+            SPRITE,
+            solid(BLUE),
+            Placement::Atlas(atlas),
+        )
+        .unwrap();
+    let stats = draw(&mut ui, &[again]);
+    assert_eq!(stats.atlas_uploads, 1, "{stats:?}");
 }

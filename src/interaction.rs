@@ -92,7 +92,9 @@ pub struct HitRegion {
     pub clip: Option<Rect>,
     /// Visual/input ordering key.
     pub order: OrderKey,
-    /// Whether this region can receive input.
+    /// Whether this region can receive input. A disabled region still takes
+    /// part in hit testing, so it keeps the pointer from what lies under it,
+    /// but its response stays idle.
     pub enabled: bool,
     /// Whether the region targets or passes through pointer input.
     pub pointer_policy: PointerPolicy,
@@ -187,7 +189,6 @@ impl InteractionScene {
             .iter()
             .copied()
             .enumerate()
-            .filter(|(_, region)| region.enabled)
             .filter_map(|(index, region)| {
                 region
                     .local_point(world)
@@ -199,11 +200,13 @@ impl InteractionScene {
         self.candidates
             .extend(hits.iter().map(|(_, _, region, _)| region.id));
 
-        let hover = hits
+        // The topmost target takes the pointer; a disabled one takes it from
+        // everything below and keeps it.
+        self.winner = hits
             .iter()
             .find(|(_, _, region, _)| region.pointer_policy == PointerPolicy::Target)
-            .map(|(_, _, region, local)| (*region, *local));
-        self.winner = hover.map(|(region, _)| region.id);
+            .filter(|(_, _, region, _)| region.enabled)
+            .map(|(_, _, region, _)| region.id);
 
         if input.mouse_clicked {
             self.capture = self.winner;
@@ -211,6 +214,16 @@ impl InteractionScene {
         let owner = self.capture.or(self.winner);
 
         for region in &self.previous {
+            if !region.enabled {
+                self.responses.insert(
+                    region.id,
+                    Response {
+                        resolved: true,
+                        ..Response::idle(region.id, region.shape.bounds())
+                    },
+                );
+                continue;
+            }
             let local = region.local_point(world);
             let is_hover = self.winner == Some(region.id) && local.is_some();
             let owns_pointer = owner == Some(region.id);
@@ -293,7 +306,8 @@ impl InteractionScene {
         &self.candidates
     }
 
-    /// Topmost target region under the pointer this frame.
+    /// Topmost target region under the pointer this frame, unless that
+    /// region is disabled.
     pub fn winner(&self) -> Option<WidgetId> {
         self.winner
     }
@@ -450,6 +464,89 @@ mod tests {
             ..Default::default()
         });
         assert!(region(&mut scene, 9, Rect::new(0.0, 0.0, 10.0, 10.0), 0).released);
+    }
+
+    fn region_enabled(
+        scene: &mut InteractionScene,
+        id: u64,
+        rect: Rect,
+        enabled: bool,
+    ) -> Response {
+        scene.register(
+            WidgetId(id),
+            HitShape::Rect(rect),
+            Affine2::IDENTITY,
+            None,
+            0,
+            enabled,
+            PointerPolicy::Target,
+        )
+    }
+
+    #[test]
+    fn a_disabled_region_keeps_the_pointer_from_what_is_under_it() {
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let mut scene = InteractionScene::new();
+        scene.begin_frame(&InputState::default());
+        region_enabled(&mut scene, 1, rect, true);
+        region_enabled(&mut scene, 2, rect, false);
+        scene.end_frame();
+
+        scene.begin_frame(&InputState {
+            mouse_x: 2.0,
+            mouse_y: 2.0,
+            mouse_clicked: true,
+            mouse_down: true,
+            scroll_delta: 1.0,
+            ..Default::default()
+        });
+        let under = region_enabled(&mut scene, 1, rect, true);
+        let over = region_enabled(&mut scene, 2, rect, false);
+        assert_eq!(
+            under,
+            Response {
+                resolved: true,
+                ..Response::idle(WidgetId(1), rect)
+            }
+        );
+        assert_eq!(
+            over,
+            Response {
+                resolved: true,
+                ..Response::idle(WidgetId(2), rect)
+            }
+        );
+        assert_eq!(scene.winner(), None);
+        assert_eq!(scene.candidates(), &[WidgetId(2), WidgetId(1)]);
+    }
+
+    #[test]
+    fn a_held_region_that_becomes_disabled_hears_nothing_more() {
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let mut scene = InteractionScene::new();
+        scene.begin_frame(&InputState::default());
+        region_enabled(&mut scene, 9, rect, true);
+        scene.end_frame();
+
+        let press = InputState {
+            mouse_x: 2.0,
+            mouse_y: 2.0,
+            mouse_clicked: true,
+            mouse_down: true,
+            ..Default::default()
+        };
+        scene.begin_frame(&press);
+        assert!(region_enabled(&mut scene, 9, rect, false).clicked);
+        scene.end_frame();
+
+        scene.begin_frame(&InputState {
+            mouse_x: 2.0,
+            mouse_y: 2.0,
+            mouse_released: true,
+            ..Default::default()
+        });
+        let released = region_enabled(&mut scene, 9, rect, false);
+        assert!(!released.released && !released.hovered);
     }
 
     #[test]
