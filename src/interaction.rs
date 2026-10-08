@@ -153,6 +153,28 @@ impl Response {
             ..Self::default()
         }
     }
+
+    /// This response as a widget drawn with `input` may act on it: with no
+    /// pointer state when `input` is
+    /// [consumed](InputState::mouse_consumed).
+    ///
+    /// The scene picks a winner from geometry alone, and a modal or popup
+    /// layer registers no geometry of its own, so the widget under one still
+    /// wins there. The layer stack's verdict arrives as the consumed flag on
+    /// the widget's input; a clickable that resolves through the scene
+    /// passes its response through here to honour it, as the immediate path
+    /// does. Identity, bounds and `resolved` are kept.
+    pub fn for_input(self, input: &InputState) -> Self {
+        if !input.mouse_consumed {
+            return self;
+        }
+        Self {
+            id: self.id,
+            rect: self.rect,
+            resolved: self.resolved,
+            ..Self::default()
+        }
+    }
 }
 
 /// The area a modal's blocker covers: farther than any screen reaches.

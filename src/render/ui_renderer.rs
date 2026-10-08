@@ -1215,6 +1215,12 @@ impl UiRenderer {
         self.text_renderer.text_contrast()
     }
 
+    /// The text glyph atlas's dimensions in pixels (see
+    /// [`TextRenderer::glyph_atlas_size`](crate::TextRenderer::glyph_atlas_size)).
+    pub fn glyph_atlas_size(&self) -> (u32, u32) {
+        self.text_renderer.glyph_atlas_size()
+    }
+
     /// The logical canvas point drawn at the target's top-left corner (see
     /// [`set_view_origin`](Self::set_view_origin)).
     pub fn view_origin(&self) -> (f32, f32) {
@@ -2278,6 +2284,8 @@ impl UiRenderer {
                         queue,
                         &draw_list.icons_msdf[draws.start as usize..draws.end as usize],
                     ) {
+                        self.frame_stats.buffer_write_calls += 1;
+                        self.frame_stats.buffer_bytes_uploaded += run.uploaded_bytes();
                         runs.push(PreparedRun::Msdf(run));
                     }
                 }
@@ -2287,6 +2295,8 @@ impl UiRenderer {
                         queue,
                         &draw_list.texts[draws.start as usize..draws.end as usize],
                     ) {
+                        self.frame_stats.buffer_write_calls += 1;
+                        self.frame_stats.buffer_bytes_uploaded += run.uploaded_bytes();
                         runs.push(PreparedRun::Msdf(run));
                     }
                 }

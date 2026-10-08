@@ -91,6 +91,9 @@ struct Gpu {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     ui: UiRenderer,
+    /// Kept across frames and cleared each one, sharing the renderer's font
+    /// system: a fresh stack would re-scan fonts and re-shape every label.
+    layers: LayerStack,
     icon_sprite: u32,
     nine_slice_id: u32,
     image_sprite: u32,
@@ -160,7 +163,7 @@ impl ApplicationHandler for App {
         }
         let attrs = Window::default_attributes()
             .with_title("hello_ui — wgpu-gameui")
-            .with_inner_size(winit::dpi::LogicalSize::new(800.0, 480.0));
+            .with_inner_size(winit::dpi::LogicalSize::new(960.0, 540.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.window = Some(window.clone());
 
@@ -219,6 +222,7 @@ impl ApplicationHandler for App {
         // shapes against.
         let font_system = wgpu_gameui::shared_font_system();
         let font_for_loading = font_system.clone();
+        let layers = LayerStack::with_font_system(font_system.clone());
         let mut ui = UiRenderer::new(&device, &queue, format, font_system);
 
         // Upload some sprites.
@@ -255,6 +259,7 @@ impl ApplicationHandler for App {
             queue,
             config,
             ui,
+            layers,
             icon_sprite,
             nine_slice_id,
             image_sprite,
@@ -286,8 +291,10 @@ impl ApplicationHandler for App {
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.input.mouse_x = position.x as f32;
-                self.input.mouse_y = position.y as f32;
+                // The UI lays out in logical pixels; winit reports physical.
+                let scale = window.scale_factor() as f32;
+                self.input.mouse_x = position.x as f32 / scale;
+                self.input.mouse_y = position.y as f32 / scale;
                 window.request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -429,12 +436,20 @@ impl ApplicationHandler for App {
                 // after drawing. Fresh each frame.
                 let mut frame_cursor = CursorState::new();
 
-                // Build a LayerStack so we can demo modal layers.
-                let mut layers = LayerStack::new();
+                // The UI lays out in logical pixels: the window's size divided
+                // by its scale factor (the renderer scales back up).
+                let scale = window.scale_factor() as f32;
+                let screen_w = gpu.config.width as f32 / scale;
+                let screen_h = gpu.config.height as f32 / scale;
+
+                // One LayerStack for the app's lifetime, cleared each frame;
+                // it carries the modal and dropdown layers.
+                let layers = &mut gpu.layers;
+                layers.clear();
 
                 // Push the modal first (if open) so layer dispatch sees the
                 // full z-order when computing `input_for_base`.
-                let modal_rect = Rect::new(220.0, 100.0, 360.0, 200.0);
+                let modal_rect = Rect::new(300.0, 170.0, 360.0, 200.0);
                 let modal_idx = if self.state.modal_open {
                     Some(layers.push_modal(modal_rect))
                 } else {
@@ -459,7 +474,7 @@ impl ApplicationHandler for App {
                 // `&mut` is deliberate: an open list claims this frame's Escape
                 // and arrow intents so `focus` (below) never sees them.
                 self.state.dropdowns.begin_frame(&mut self.input);
-                let dropdown_popup = self.state.dropdowns.push_open_layer(&mut layers);
+                let dropdown_popup = self.state.dropdowns.push_open_layer(layers);
 
                 // Resolve input for the base layer. When a modal is open this
                 // sets `mouse_consumed = true` so base widgets can't fire.
@@ -527,8 +542,9 @@ impl ApplicationHandler for App {
                 );
 
                 // ---------- ScrollView demo ----------
-                // 30 rows of overflowing content in a 200x240 viewport.
-                let scroll_viewport = Rect::new(560.0, 60.0, 200.0, 240.0);
+                // 30 rows of overflowing content in a 200x260 viewport beside
+                // the panel.
+                let scroll_viewport = Rect::new(560.0, 40.0, 200.0, 260.0);
                 list.rounded_rect(scroll_viewport, 6.0, [0.06, 0.07, 0.10, 1.0]);
                 self.state.scroll.content_size = [180.0, 30.0 * 24.0];
 
@@ -563,18 +579,21 @@ impl ApplicationHandler for App {
                     self.state.focus.begin_frame(&base_input);
 
                     // Position the two text inputs.
+                    // Below the panel, the page has three columns: inputs and
+                    // buttons at x 80, the dropdown and pointer demos at x 340,
+                    // images and text at x 560.
                     self.state.text_input.x = 80.0;
-                    self.state.text_input.y = 300.0;
+                    self.state.text_input.y = 338.0;
                     self.state.text_input.width = 240.0;
                     self.state.text_input.height = 28.0;
                     self.state.text_input2.x = 80.0;
-                    self.state.text_input2.y = 336.0;
+                    self.state.text_input2.y = 374.0;
                     self.state.text_input2.width = 240.0;
                     self.state.text_input2.height = 28.0;
 
                     // Background label for the inputs.
                     list.text(
-                        TextBlock::new("Text Input (Tab to cycle):", 80.0, 280.0)
+                        TextBlock::new("Text Input (Tab to cycle):", 80.0, 320.0)
                             .with_size(12.0)
                             .with_color(180, 190, 210),
                     );
@@ -584,8 +603,8 @@ impl ApplicationHandler for App {
                             &mut self.state.focus,
                             &self.theme,
                             &base_input,
-                            gpu.config.width as f32,
-                            gpu.config.height as f32,
+                            screen_w,
+                            screen_h,
                         )
                         .with_cursor(&mut frame_cursor);
                         self.state.text_input.draw(TEXT_ID_A, &mut ctx);
@@ -599,11 +618,11 @@ impl ApplicationHandler for App {
                         list.text(
                             TextBlock::new(
                                 format!(
-                                    "Buttons (Tab to focus, Space/Enter to click): {} clicks",
+                                    "Buttons (Tab, Space/Enter): {} clicks",
                                     self.state.button_clicks
                                 ),
                                 80.0,
-                                372.0,
+                                414.0,
                             )
                             .with_size(12.0)
                             .with_color(180, 190, 210),
@@ -613,19 +632,19 @@ impl ApplicationHandler for App {
                             &mut self.state.focus,
                             &self.theme,
                             &base_input,
-                            gpu.config.width as f32,
-                            gpu.config.height as f32,
+                            screen_w,
+                            screen_h,
                         )
                         .with_cursor(&mut frame_cursor);
                         if Button::new("Click A")
                             .focusable(BTN_A_ID)
-                            .draw(Rect::new(80.0, 390.0, 100.0, 28.0), &mut ctx)
+                            .draw(Rect::new(80.0, 432.0, 100.0, 28.0), &mut ctx)
                         {
                             self.state.button_clicks += 1;
                         }
                         if Button::new("Click B")
                             .focusable(BTN_B_ID)
-                            .draw(Rect::new(190.0, 390.0, 100.0, 28.0), &mut ctx)
+                            .draw(Rect::new(190.0, 432.0, 100.0, 28.0), &mut ctx)
                         {
                             self.state.button_clicks += 1;
                         }
@@ -639,18 +658,18 @@ impl ApplicationHandler for App {
                 // after the base scope (into the popup pushed at frame-top).
                 {
                     list.text(
-                        TextBlock::new("Dropdown:", 340.0, 280.0)
+                        TextBlock::new("Dropdown:", 340.0, 320.0)
                             .with_size(12.0)
                             .with_color(180, 190, 210),
                     );
-                    let dd_rect = Rect::new(340.0, 300.0, 150.0, 28.0);
+                    let dd_rect = Rect::new(340.0, 338.0, 150.0, 28.0);
                     let mut ctx = DrawContext::new(
                         list,
                         &mut self.state.focus,
                         &self.theme,
                         &base_input,
-                        gpu.config.width as f32,
-                        gpu.config.height as f32,
+                        screen_w,
+                        screen_h,
                     )
                     .with_cursor(&mut frame_cursor);
                     Dropdown::new(&DROPDOWN_ITEMS, self.state.dropdown_sel).draw(
@@ -666,32 +685,32 @@ impl ApplicationHandler for App {
                 // to its top-left quarter (UV [0,0,0.5,0.5]) stretched to match.
                 list.image(
                     gpu.image_sprite,
-                    Rect::new(80.0, 320.0, 64.0, 64.0),
+                    Rect::new(560.0, 320.0, 64.0, 64.0),
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 list.image_cropped(
                     gpu.image_sprite,
-                    Rect::new(152.0, 320.0, 64.0, 64.0),
+                    Rect::new(632.0, 320.0, 64.0, 64.0),
                     [0.0, 0.0, 0.5, 0.5],
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 // A line shaped in the runtime-loaded custom font.
                 list.text(
-                    TextBlock::new("Custom font: IBM Plex Mono", 232.0, 322.0)
+                    TextBlock::new("Custom font: IBM Plex Mono", 560.0, 396.0)
                         .with_size(16.0)
                         .with_color(255, 228, 160)
                         .with_font(gpu.custom_font.clone()),
                 );
                 // Center- and right-aligned lines within a 300px-wide box.
                 list.text(
-                    TextBlock::new("centered in 300px", 232.0, 348.0)
+                    TextBlock::new("centered in 300px", 560.0, 422.0)
                         .with_size(14.0)
                         .with_color(200, 210, 230)
                         .with_max_width(300.0)
                         .with_align(TextAlign::Center),
                 );
                 list.text(
-                    TextBlock::new("right-aligned in 300px", 232.0, 366.0)
+                    TextBlock::new("right-aligned in 300px", 560.0, 440.0)
                         .with_size(14.0)
                         .with_color(200, 210, 230)
                         .with_max_width(300.0)
@@ -699,13 +718,13 @@ impl ApplicationHandler for App {
                 );
                 // Bold + italic, using the bundled default sans-serif (real faces).
                 list.text(
-                    TextBlock::new("Bold", 232.0, 388.0)
+                    TextBlock::new("Bold", 560.0, 464.0)
                         .with_size(16.0)
                         .with_color(255, 255, 255)
                         .bold(),
                 );
                 list.text(
-                    TextBlock::new("Italic", 290.0, 388.0)
+                    TextBlock::new("Italic", 618.0, 464.0)
                         .with_size(16.0)
                         .with_color(255, 255, 255)
                         .italic(),
@@ -713,11 +732,13 @@ impl ApplicationHandler for App {
 
                 // A small UiContext font-stack snippet: push a bold 18px font,
                 // draw a line via `text_line`, then pop back to the default.
+                // The translate goes inside the push: it changes the list's
+                // transform, and only `pop` puts it back for what follows.
                 let stack_font = gpu.custom_font.clone();
                 {
                     let mut ui = UiContext::new(list);
-                    ui.translate(232.0, 410.0);
                     ui.push();
+                    ui.translate(560.0, 490.0);
                     ui.font(stack_font, 18.0);
                     ui.bold(true);
                     ui.text_line("font-stack: pushed bold", [0.7, 0.9, 1.0, 1.0]);
@@ -731,13 +752,7 @@ impl ApplicationHandler for App {
 
                     let m = &mut layers.layers_mut()[idx].list;
                     // Dim the background with a full-screen scrim.
-                    m.quad(
-                        0.0,
-                        0.0,
-                        gpu.config.width as f32,
-                        gpu.config.height as f32,
-                        [0.0, 0.0, 0.0, 0.55],
-                    );
+                    m.quad(0.0, 0.0, screen_w, screen_h, [0.0, 0.0, 0.0, 0.55]);
                     m.rounded_rect(modal_rect, 8.0, [0.18, 0.20, 0.26, 1.0]);
                     m.text(
                         TextBlock::new("Modal Dialog", modal_rect.x + 16.0, modal_rect.y + 16.0)
@@ -787,7 +802,7 @@ impl ApplicationHandler for App {
                     .state
                     .dropdowns
                     .draw_open_layer(
-                        &mut layers,
+                        layers,
                         dropdown_popup,
                         &StyleResolver::new(&self.theme),
                         &self.input,
@@ -802,9 +817,9 @@ impl ApplicationHandler for App {
                 // (built via UiContext::with_layers so it stays clipped to the
                 // base list).
                 {
-                    let mut ui = UiContext::with_layers(&mut layers);
+                    let mut ui = UiContext::with_layers(layers);
                     ui.push();
-                    ui.translate(660.0, 320.0);
+                    ui.translate(860.0, 170.0);
                     ui.rotate(15.0_f32.to_radians());
                     ui.center();
                     ui.rounded_rect(160.0, 40.0, 6.0, [0.95, 0.45, 0.30, 1.0]);
@@ -824,8 +839,8 @@ impl ApplicationHandler for App {
                             &mut self.state.focus,
                             &self.theme,
                             &base_input,
-                            gpu.config.width as f32,
-                            gpu.config.height as f32,
+                            screen_w,
+                            screen_h,
                         )
                         .with_cursor(&mut frame_cursor);
                         DragHandle::bare().draw(
@@ -854,7 +869,7 @@ impl ApplicationHandler for App {
 
                 // ---------- Double-click / hold demo (ClickTracker) ----------
                 {
-                    let demo_rect = Rect::new(340.0, 430.0, 150.0, 56.0);
+                    let demo_rect = Rect::new(340.0, 448.0, 150.0, 56.0);
                     let on_btn = !base_input.mouse_consumed
                         && demo_rect.contains(base_input.mouse_x, base_input.mouse_y);
                     let color = if on_btn && base_input.mouse_held {
@@ -922,8 +937,8 @@ impl ApplicationHandler for App {
                     &mut encoder,
                     &view,
                     (gpu.config.width, gpu.config.height),
-                    window.scale_factor() as f32,
-                    &layers,
+                    scale,
+                    &gpu.layers,
                 );
 
                 gpu.queue.submit(Some(encoder.finish()));
@@ -946,7 +961,7 @@ fn main() {
         theme: Theme::default(),
         state: UiState::default(),
         drag: DragTracker::new(),
-        drag_box: Rect::new(340.0, 360.0, 150.0, 56.0),
+        drag_box: Rect::new(340.0, 380.0, 150.0, 56.0),
         drag_capture: DragCapture::new(),
         clicks: ClickTracker::new(),
         start: Instant::now(),

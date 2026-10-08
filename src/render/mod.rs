@@ -53,7 +53,9 @@ pub use atlas::{AtlasRegion, AtlasSlot, SpriteAtlas};
 pub use blur::{Backdrop, BlurParams, ColorEncoding};
 #[cfg(feature = "headless")]
 pub use capture::HeadlessGpu;
-pub use capture::{CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, write_png};
+pub use capture::{
+    CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, capture_with, write_png,
+};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub use text_contrast::TextContrast;
 pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId};

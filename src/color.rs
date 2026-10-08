@@ -81,6 +81,24 @@ pub fn oklch(l: f32, c: f32, h: f32, alpha: f32) -> [f32; 4] {
     ]
 }
 
+/// The inverse of [`oklch`]: an sRGB-encoded colour's `[L, C, H]` in OKLCH,
+/// with the hue in degrees in `[0, 360)`. Alpha is not part of the result.
+///
+/// For an achromatic colour (chroma near zero) the hue carries no meaning
+/// and is whatever the arithmetic gives.
+pub fn to_oklch(color: [f32; 4]) -> [f32; 3] {
+    let [r, g, b] = [color[0], color[1], color[2]].map(srgb_channel_to_linear);
+    let l = 0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b;
+    let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+    let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+    let (l_, m_, s_) = (l.cbrt(), m.cbrt(), s.cbrt());
+    let lightness = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+    let a = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+    let b = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
+    let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
+    [lightness, a.hypot(b), hue]
+}
+
 /// Forge's fixed hues (`--hue-*` in `tokens/colors.css`), in degrees. A hue
 /// names a meaning; lightness and chroma name the role, so a token is
 /// `oklch(l, c, HUE_*, a)` written where it's used.
@@ -540,6 +558,27 @@ mod tests {
             0.16,
             "alpha passes through"
         );
+    }
+
+    #[test]
+    fn to_oklch_inverts_oklch_inside_the_gamut() {
+        // In-gamut tokens (no channel clipped) come back to their coordinates.
+        for (l, c, h) in [
+            (0.74, 0.11, 200.0),
+            (0.82, 0.10, 200.0),
+            (0.60, 0.18, 25.0),
+            (0.70, 0.14, 145.0),
+            (0.30, 0.01, 248.0),
+        ] {
+            let [l2, c2, h2] = to_oklch(oklch(l, c, h, 1.0));
+            assert!((l2 - l).abs() < 1e-4, "L of oklch({l} {c} {h}): {l2}");
+            assert!((c2 - c).abs() < 1e-4, "C of oklch({l} {c} {h}): {c2}");
+            assert!((h2 - h).abs() < 0.05, "H of oklch({l} {c} {h}): {h2}");
+        }
+        // White is L 1, achromatic; black is L 0.
+        let [l, c, _] = to_oklch([1.0, 1.0, 1.0, 1.0]);
+        assert!((l - 1.0).abs() < 1e-4 && c < 1e-4);
+        assert!(to_oklch([0.0, 0.0, 0.0, 1.0])[0].abs() < 1e-6);
     }
 
     #[test]

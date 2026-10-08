@@ -106,6 +106,7 @@ pub mod layer;
 pub mod layout;
 mod measure;
 mod nav;
+mod preset;
 pub mod projection;
 pub mod render;
 mod shadow;
@@ -143,20 +144,25 @@ pub use measure::{
 pub use nav::{
     ArrowFocusNav, GamepadNav, KeyboardNav, ManualNav, NavInput, NavMap, map_gamepad, map_keyboard,
 };
+pub use preset::{ColorFamily, ColorSeed, NEUTRAL_CHROMA, ThemePreset, ThemeSeeds};
+#[cfg(feature = "preset")]
+pub use preset::{PRESET_FORMAT, PresetError};
 pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{
     AtlasId, Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta,
     Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, TextContrast, UiRenderer,
-    capture_draw_list, capture_layers, write_png,
+    capture_draw_list, capture_layers, capture_with, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{
     IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
 };
 pub use shadow::{BoxShadow, CornerRadii, ShadowInstance};
-pub use style::{Ink, StyleKey, StyleOverlay, StyleResolver, StyleValue, TextSize, Tracking};
+pub use style::{
+    Ink, StyleKey, StyleOverlay, StyleResolver, StyleShape, StyleValue, TextSize, Tracking,
+};
 pub use theme::Theme;
 pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};
 pub use widgets::*;

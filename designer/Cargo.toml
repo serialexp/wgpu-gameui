@@ -1,0 +1,17 @@
+[package]
+name = "gameui-designer"
+version = "0.1.0"
+edition = "2024"
+description = "Theme designer for wgpu-gameui: edit a preset's seeds and overrides with a live preview"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "gameui-designer"
+path = "src/main.rs"
+
+[dependencies]
+wgpu-gameui = { path = "..", features = ["preset"] }
+wgpu = "24"
+winit = "0.30"
+pollster = "0.3"

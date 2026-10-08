@@ -463,6 +463,14 @@ pub(crate) struct PreparedMsdf {
     uniform_offset: u32,
 }
 
+impl PreparedMsdf {
+    /// The vertex bytes uploading this run wrote, for
+    /// [`RenderStats::buffer_bytes_uploaded`](crate::RenderStats::buffer_bytes_uploaded).
+    pub(crate) fn uploaded_bytes(&self) -> u64 {
+        self.vertices as u64 * std::mem::size_of::<MsdfVertex>() as u64
+    }
+}
+
 /// GPU text renderer: owns the MSDF glyph atlas (and optional Phosphor icon
 /// atlas), the shaping font system, and the wgpu pipeline/buffers that draw
 /// shaped glyph quads. One instance is created per [`crate::UiRenderer`].
@@ -781,6 +789,12 @@ impl TextRenderer {
     /// [`set_text_contrast`](Self::set_text_contrast)).
     pub fn text_contrast(&self) -> TextContrast {
         self.contrast
+    }
+
+    /// The text glyph atlas's dimensions in pixels, as `(width, height)`: what
+    /// the MSDF glyph cache occupies on the GPU (four bytes a pixel).
+    pub fn glyph_atlas_size(&self) -> (u32, u32) {
+        (self.atlas.width(), self.atlas.height())
     }
 
     /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.

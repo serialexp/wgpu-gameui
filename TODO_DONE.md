@@ -2265,3 +2265,30 @@ when something could have changed. gameui gained what a host like that needs.
   fonts and caches, as before) sharing the mappings. The lib tests went from
   ~156 s to under 10 s; in an app, a new text style no longer reopens the
   font files.
+
+## 2026-10-05 — Retained hits leaked through modal and popup layers
+
+- [x] **P1 — A focusable `Pressable` (or `Checkbox`) under a modal or popup
+  was clicked when the base context had an `InteractionScene`.** The scene
+  picks its winner from geometry, and modal/popup layers register none, so
+  the retained path ignored `LayerStack::input_for_base`'s verdict. Closed by
+  `Response::for_input(&InputState)`: a retained response loses its pointer
+  state (hover, press, click, release, hold, local position, wheel) when the
+  input is consumed, keeping id, bounds and `resolved`. `Pressable` and
+  `Checkbox` pass their retained responses through it; the menubar, which
+  needs hover-to-switch under its own blocker, deliberately does not.
+  Regressions: `a_retained_key_under_a_modal_is_not_pressed`,
+  `a_retained_checkbox_under_a_popup_is_not_clicked`.
+
+## 2026-10-05 — `hello_ui` / `event_driven_ui` example fixes
+
+- [x] **P2 — `hello_ui` example: overlapping layout + per-frame `LayerStack`.**
+  Both examples now keep one `LayerStack::with_font_system(fonts.clone())`
+  on the host's GPU state and `clear()` it each frame. They also divide
+  `CursorMoved` by the window scale factor, because the UI lays out in
+  logical px and the pointer was off on HiDPI. `hello_ui` lays out in
+  logical `screen_w`/`screen_h` in a 960×540 window and its rows no longer
+  overlap. Its font-stack snippet called `ui.translate` *before*
+  `ui.push()`, so the shift leaked into every later draw and pushed the
+  rotated badge, drag box and double-click box off-screen. The translate now
+  sits inside the push/pop.

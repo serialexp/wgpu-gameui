@@ -6,6 +6,11 @@ description = "Custom wgpu-based game UI library"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/serialexp/wgpu-gameui"
 
+# The library is the root package; `designer/` is the theme designer, a
+# binary built only from the library's widgets.
+[workspace]
+members = [".", "designer"]
+
 [dependencies]
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
@@ -44,6 +49,7 @@ tree-sitter-lua = { version = "0.5.0", optional = true }
 # Markdown parsing for the opt-in `markdown` module (CommonMark plus the GFM
 # tables, strikethrough and task lists). No HTML output is needed.
 pulldown-cmark = { version = "0.13", optional = true, default-features = false }
+toml = { version = "1.1", optional = true }
 
 [features]
 default = ["bundled-font", "phosphor-icons", "headless"]
@@ -56,6 +62,9 @@ syntax-lua = ["syntax-highlighting", "dep:tree-sitter-lua"]
 markdown = ["dep:pulldown-cmark"]
 # Emit tracing spans around the render path for Tracy profiling.
 tracy = ["dep:tracing"]
+# Read and write theme presets as TOML (`ThemePreset::from_toml`/`to_toml`).
+# Seeds, overrides and `ThemePreset::resolve` work without it.
+preset = ["dep:toml"]
 # Embed IBM Plex Sans (the default UI face) and IBM Plex Mono (the technical
 # companion face). Disable (`--no-default-features`) to drop ~1.5 MB and fall
 # back to system fonts only.
@@ -124,6 +133,10 @@ required-features = ["headless"]
 
 [[test]]
 name = "view_origin"
+required-features = ["headless"]
+
+[[test]]
+name = "render_stats"
 required-features = ["headless"]
 
 [[bench]]

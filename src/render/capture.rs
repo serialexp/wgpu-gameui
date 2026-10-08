@@ -51,10 +51,15 @@ fn padded_bytes_per_row(width: u32) -> u32 {
     (width * 4 + 255) & !255
 }
 
-/// Shared body of [`capture_draw_list`] / [`capture_layers`]. The caller declares
-/// the frame boundary (`UiRenderer::begin_frame`) because the closure below holds
-/// the unique borrow of `ui`.
-fn capture_with(
+/// Render offscreen with any drawing code and read the result back as
+/// tightly-packed RGBA8: makes a [`CAPTURE_FORMAT`] target of `size`, clears it
+/// to `clear`, lets `draw` record into it, and copies it out.
+///
+/// The body of [`capture_draw_list`] / [`capture_layers`], public for pipelines
+/// of the caller's own that should be captured the same way. The caller
+/// declares any frame boundary (`UiRenderer::begin_frame`) itself, since
+/// `draw` holds whatever it borrows.
+pub fn capture_with(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     size: (u32, u32),

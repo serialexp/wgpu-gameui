@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::layout::column_widths;
-use super::outline::{Face, Outline, Shape, count_words, lines};
+use super::outline::{Outline, count_words, lines};
 use super::parse::{Block, Inline, flags, parse};
 use super::{Markdown, MarkdownStyle};
 use crate::layout::Rect;
@@ -364,50 +364,22 @@ fn an_outline_lays_the_blocks_out_flat_in_order() {
         "# Head\n\n> quoted\n>\n> - in\n\n- one\n- two\n\n  more\n\n```\ncode\n```\n\n---\n\n\
          | a | b |\n|---|---|\n| c |",
     );
-    let outline = Outline::of(&blocks);
-    let kinds: Vec<String> = outline
-        .shapes()
-        .iter()
-        .map(|shape| match shape {
-            Shape::Text { face, .. } => match face {
-                Face::Body => "text".into(),
-                Face::Heading(level) => format!("h{level}"),
-                Face::Code => "code".into(),
-            },
-            Shape::Quote { len } => format!("quote {len}"),
-            Shape::List { len } => format!("list {len}"),
-            Shape::Item { len } => format!("item {len}"),
-            Shape::Rule => "rule".into(),
-            Shape::Table { columns, rows } => format!("table {columns}x{rows}"),
-            Shape::Column(_) => "column".into(),
-            Shape::Cell(_) => "cell".into(),
-        })
-        .collect();
     assert_eq!(
-        kinds,
-        [
-            "h1",
-            "quote 4",
-            "text",
-            "list 2",
-            "item 1",
-            "text",
-            "list 5",
-            "item 1",
-            "text",
-            "item 2",
-            "text",
-            "text",
-            "code",
-            "rule",
-            "table 2x1",
-            "column",
-            "column",
-            "cell",
-            "cell",
-            "cell",
-            "cell",
-        ]
+        Outline::of(&blocks).describe(),
+        "h1:1 quote[text:1 list[item[text:1]]] list[item[text:1] item[text:1 text:1]] code:1 \
+         rule table 2x1[column column cell:1 cell:1 cell:1 cell:0]"
+    );
+}
+
+/// Every count in an outline is two units, so a text, a container or a table
+/// past 65,535 units still reads back whole.
+#[test]
+fn an_outline_holds_counts_past_a_units_range() {
+    let words = "w ".repeat(70_000);
+    let blocks = parse(&format!("> {words}\n\n- {words}\n\nafter"));
+    assert_eq!(
+        Outline::of(&blocks).describe(),
+        "quote[text:70000] list[item[text:70000]] text:1"
     );
 }
 

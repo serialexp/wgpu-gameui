@@ -9,6 +9,13 @@
 //! `test_output/widget_gallery/components/`, and
 //! `test_output/widget_gallery/index.html` to browse them all.
 //!
+//! To render it in a theme preset instead of Forge, name the preset file:
+//! ```
+//! GAMEUI_PRESET=presets/aldermoor-hearth.toml \
+//!     cargo test --features preset --test widget_gallery -- --ignored --nocapture
+//! ```
+//! That writes to `test_output/widget_gallery-<file stem>/` instead.
+//!
 //! Layout is driven by [`Flow`] — a left-to-right, wrapping grid of labeled
 //! cells. Each preview reserves a cell (which draws its label) and gets back a
 //! content `Rect` to draw into, so adding a widget is one `flow.cell(...)` call
@@ -957,12 +964,57 @@ fn crop_with_margin(pages: &[GalleryPage], rect: Rect, margin: u32) -> image::Rg
         .to_image()
 }
 
+/// The theme the gallery renders in: Forge, or the theme preset in the TOML
+/// file `GAMEUI_PRESET` names (which needs `--features preset`).
+fn gallery_theme() -> Theme {
+    match std::env::var_os("GAMEUI_PRESET") {
+        None => Theme::default(),
+        Some(path) => load_preset(std::path::Path::new(&path)),
+    }
+}
+
+#[cfg(feature = "preset")]
+fn load_preset(path: &std::path::Path) -> Theme {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("read GAMEUI_PRESET {}: {e}", path.display()));
+    let preset = wgpu_gameui::ThemePreset::from_toml(&text)
+        .unwrap_or_else(|e| panic!("GAMEUI_PRESET {}: {e}", path.display()));
+    eprintln!(
+        "rendering in preset {:?} from {}",
+        preset.name,
+        path.display()
+    );
+    preset.resolve()
+}
+
+#[cfg(not(feature = "preset"))]
+fn load_preset(path: &std::path::Path) -> Theme {
+    panic!(
+        "GAMEUI_PRESET={} needs the preset feature: add `--features preset`",
+        path.display()
+    )
+}
+
+/// Where under `test_output/` the gallery writes: `widget_gallery` for Forge,
+/// `widget_gallery-<file stem>` for a preset, so rendering a preset never
+/// replaces the Forge images.
+fn gallery_output_name() -> String {
+    match std::env::var_os("GAMEUI_PRESET") {
+        None => "widget_gallery".to_owned(),
+        Some(path) => {
+            let path = std::path::Path::new(&path);
+            let stem = path.file_stem().unwrap_or(path.as_os_str());
+            format!("widget_gallery-{}", stem.to_string_lossy())
+        }
+    }
+}
+
 /// Cut the rendered pages into one image per section
 /// (`<group>/<Component>.png`) and one per labeled cell
 /// (`<group>/<Component>/<label>.png`), and write `index.html` to browse
 /// them by group, with Forge's missing components listed.
 fn save_gallery_images(pages: &[GalleryPage], sections: &[GallerySection], cells: &[GalleryCell]) {
-    let output_dir = "test_output/widget_gallery";
+    let output_dir = &format!("test_output/{}", gallery_output_name());
     // Start from an empty directory so a renamed or removed section or cell
     // never leaves a stale PNG behind.
     match std::fs::remove_dir_all(output_dir) {
@@ -1389,7 +1441,7 @@ fn render_widget_gallery() {
     // (Slider needs no assets — it renders procedurally from the theme.)
 
     let mut layers = LayerStack::new();
-    let theme = Theme::default();
+    let theme = gallery_theme();
     let mut input = InputState::default();
     let gallery_sections;
     let gallery_cells;
@@ -6493,12 +6545,13 @@ fn render_widget_gallery() {
         let screen = Rect::new(0.0, 0.0, W as f32, h as f32);
         let report = DebugReport::measured_layers(&mut layers, screen);
         std::fs::create_dir_all("test_output").unwrap();
-        std::fs::write("test_output/widget_gallery.debug.txt", report.to_text())
+        let name = gallery_output_name();
+        std::fs::write(format!("test_output/{name}.debug.txt"), report.to_text())
             .expect("write debug report");
-        std::fs::write("test_output/widget_gallery.debug.json", report.to_json())
+        std::fs::write(format!("test_output/{name}.debug.json"), report.to_json())
             .expect("write debug json");
         eprintln!(
-            "wrote test_output/widget_gallery.debug.txt — {} nodes, {} problems ({} inferred names)",
+            "wrote test_output/{name}.debug.txt — {} nodes, {} problems ({} inferred names)",
             report.nodes.len(),
             report.problems.len(),
             report.inferred_count()

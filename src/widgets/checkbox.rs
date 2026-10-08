@@ -153,14 +153,15 @@ impl Checkbox {
         ctx: &mut DrawContext,
     ) -> crate::Response {
         ctx.push_debug_scope_rect(crate::widgets::scope_name("Checkbox", label), rect);
+        // Honor layer capture (`mouse_consumed`) on both paths.
+        let input = ctx.input;
         let retained = self
             .focus_id
             .filter(|_| ctx.has_interactions())
             .map(|id| ctx.interact(crate::WidgetId(id), rect, true))
-            .filter(|response| response.resolved);
-        let input = ctx.input;
+            .filter(|response| response.resolved)
+            .map(|response| response.for_input(input));
         let s = ctx.styles();
-        // Honor layer capture (`mouse_consumed`) on the compatibility path.
         let hovered = retained.as_ref().map_or_else(
             || rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed,
             |response| response.hovered,
@@ -693,6 +694,48 @@ mod tests {
         assert!(
             l2.chrome_instance_count() > base_quads,
             "fading-in hover overlay should add quad geometry"
+        );
+    }
+
+    #[test]
+    fn a_retained_checkbox_under_a_popup_is_not_clicked() {
+        let th = theme();
+        let row = Rect::new(0.0, 0.0, 120.0, 20.0);
+        let press = |popup: bool| {
+            let mut layers = crate::LayerStack::new();
+            let mut focus = FocusState::new();
+            let mut scene = crate::InteractionScene::new();
+            let mut clicks = Vec::new();
+            for frame in 0..4 {
+                layers.clear();
+                let input = InputState {
+                    mouse_down: frame >= 2,
+                    mouse_clicked: frame == 2,
+                    ..input_at(10.0, 10.0)
+                };
+                scene.begin_frame(&input);
+                if popup {
+                    layers.push_popup(Rect::new(0.0, 0.0, 60.0, 60.0));
+                    layers.pop_layer();
+                }
+                let base = layers.input_for_base(&input);
+                let mut ctx =
+                    DrawContext::new(layers.base_mut(), &mut focus, &th, &base, 800.0, 600.0)
+                        .with_interactions(&mut scene);
+                let response = Checkbox::new()
+                    .focusable(9)
+                    .draw_response(false, "Snap", row, &mut ctx);
+                clicks.push((response.resolved, response.clicked, response.hovered));
+                scene.end_frame();
+            }
+            clicks
+        };
+        assert_eq!(press(false)[2], (true, true, true), "the scene path works");
+        assert!(
+            press(true)
+                .iter()
+                .all(|&(_, clicked, hovered)| !clicked && !hovered),
+            "the popup over it took the pointer"
         );
     }
 }

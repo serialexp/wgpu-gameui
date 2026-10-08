@@ -259,11 +259,6 @@ harden those foundations rather than create parallel replacements.
   shows 1000 buttons at ~47 ms/frame *including* GPU wait on both target
   paths, so it is likely GPU-bound (button chrome/shadow fill?). Bisect
   between the June baseline and `719dc88`.
-- [ ] **P2 — `hello_ui` example: overlapping layout + per-frame `LayerStack`.**
-  The text-input/dropdown row sits under the demo panel and the gradient
-  swatches overlap the "Custom font" / "Click A/B" rows; it also trips the
-  renderer's "freshly-constructed `LayerStack` for 120+ frames" warning (it
-  should build one stack and `.clear()` it). Both reproduce on `719dc88`.
 
 ## 2026-09-25 — Sidebar pieces (Forge `components/sidebar`, for agent-ui)
 

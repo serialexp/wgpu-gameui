@@ -64,224 +64,265 @@ pub(crate) const fn fnv1a64(name: &str) -> u64 {
     hash
 }
 
-/// A typed address for a style value: one variant per built-in [`Theme`] field,
-/// plus [`StyleKey::Custom`] for mod-defined keys.
-///
-/// Colors and scalars share the enum; [`StyleResolver::color`] /
-/// [`StyleResolver::scalar`] pick the matching shape (a built-in key always
-/// resolves to its declared shape).
+/// Which kind of value a built-in [`StyleKey`] holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum StyleKey {
+pub enum StyleShape {
+    /// An RGBA colour ([`StyleValue::Color`]).
+    Color,
+    /// A size, duration or factor ([`StyleValue::Scalar`]).
+    Scalar,
+}
+
+/// Declares [`StyleKey`] from one list that gives every key without a role
+/// index its name and shape, so the enum, [`StyleKey::name`],
+/// [`StyleKey::shape`] and [`StyleKey::builtin`] cannot drift apart.
+macro_rules! style_keys {
+    ($(
+        $(#[$attr:meta])*
+        $variant:ident($name:literal, $shape:ident),
+    )*) => {
+        /// A typed address for a style value: one variant per built-in
+        /// [`Theme`] field, plus [`StyleKey::Custom`] for mod-defined keys.
+        ///
+        /// Colors and scalars share the enum; [`StyleResolver::color`] /
+        /// [`StyleResolver::scalar`] pick the matching shape (a built-in key
+        /// always resolves to its declared [`shape`](Self::shape)).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum StyleKey {
+            $($(#[$attr])* $variant,)*
+            /// One step of Forge's ink ladder: the closed set of text and glyph
+            /// colours (see [`Ink`]).
+            Ink(Ink),
+            /// One step of Forge's type scale, in pixels (see [`TextSize`]).
+            TextSize(TextSize),
+            /// Letter spacing for a text role, in em (see [`Tracking`]).
+            Tracking(Tracking),
+            /// A mod-defined key, addressed by the FNV-1a hash of its name (see
+            /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a
+            /// [`StyleOverlay`].
+            Custom(u64),
+        }
+
+        impl StyleKey {
+            /// Every built-in key without a role index, in declaration order.
+            const PLAIN: &'static [StyleKey] = &[$(StyleKey::$variant,)*];
+
+            /// Name and shape of a key without a role index; `None` for the
+            /// indexed and custom keys.
+            const fn plain_info(self) -> Option<(&'static str, StyleShape)> {
+                match self {
+                    $(StyleKey::$variant => Some(($name, StyleShape::$shape)),)*
+                    StyleKey::Ink(_)
+                    | StyleKey::TextSize(_)
+                    | StyleKey::Tracking(_)
+                    | StyleKey::Custom(_) => None,
+                }
+            }
+        }
+    };
+}
+
+style_keys! {
     // --- Colors ---
     /// Window/screen backdrop fill.
-    Background,
+    Background("background", Color),
     /// Fullscreen dim drawn behind a modal, menu screen, or pause overlay —
     /// the translucent darkening layer that pushes the scene back. Read by
     /// [`draw_scrim`](crate::draw_scrim); a good value is black at ~0.5 alpha.
-    Scrim,
+    Scrim("scrim", Color),
     /// Panel/container surface fill.
-    Panel,
+    Panel("panel", Color),
     /// Border stroke around panels/containers.
-    PanelBorder,
+    PanelBorder("panel_border", Color),
     /// Button fill in its resting state.
-    Button,
+    Button("button", Color),
     /// Button fill while hovered.
-    ButtonHover,
+    ButtonHover("button_hover", Color),
     /// Button fill while pressed.
-    ButtonPressed,
+    ButtonPressed("button_pressed", Color),
     /// Border stroke around buttons.
-    ButtonBorder,
+    ButtonBorder("button_border", Color),
     /// Text-input field fill.
-    InputBackground,
+    InputBackground("input_background", Color),
     /// Border stroke around an unfocused text input.
-    InputBorder,
+    InputBorder("input_border", Color),
     /// Border stroke around a focused text input.
-    InputFocusBorder,
+    InputFocusBorder("input_focus_border", Color),
     /// Primary body text color.
-    Text,
+    Text("text", Color),
     /// Dimmed/secondary text color.
-    TextDim,
+    TextDim("text_dim", Color),
     /// Emphasized/highlighted text color.
-    TextHighlight,
+    TextHighlight("text_highlight", Color),
     /// Accent color for primary/active elements.
-    Accent,
+    Accent("accent", Color),
     /// Lighter accent for small marks on dark surfaces (menu ticks, radio
     /// dots).
-    AccentTick,
+    AccentTick("accent_tick", Color),
     /// Informational severity accent (see [`Severity`](crate::Severity)). Themeable
     /// palette entry; the severity→key mapping is the only fixed policy.
-    Info,
+    Info("info", Color),
     /// Success / confirmation severity accent.
-    Success,
+    Success("success", Color),
     /// Warning / caution severity accent.
-    Warning,
+    Warning("warning", Color),
     /// Failure severity accent (shared with the general error color).
-    Error,
+    Error("error", Color),
     /// Outline color of the keyboard-focus ring.
-    FocusRing,
+    FocusRing("focus_ring", Color),
     /// Fill of an inactive (unselected) tab.
-    TabInactive,
+    TabInactive("tab_inactive", Color),
     /// Fill of the active (selected) tab.
-    TabActive,
+    TabActive("tab_active", Color),
     /// Fill of a hovered tab.
-    TabHover,
+    TabHover("tab_hover", Color),
     /// Border stroke around tabs.
-    TabBorder,
+    TabBorder("tab_border", Color),
     /// Progress-bar track (unfilled) color.
-    ProgressBackground,
+    ProgressBackground("progress_background", Color),
     /// Progress-bar fill color for normal/healthy values.
-    ProgressFill,
+    ProgressFill("progress_fill", Color),
     /// Progress-bar fill color for low/critical values.
-    ProgressFillLow,
+    ProgressFillLow("progress_fill_low", Color),
     /// Progress-bar fill color for medium values.
-    ProgressFillMedium,
+    ProgressFillMedium("progress_fill_medium", Color),
     // --- Scalars ---
     /// Default inner padding, in pixels.
-    Padding,
+    Padding("padding", Scalar),
     /// Default gap between stacked elements, in pixels.
-    Spacing,
+    Spacing("spacing", Scalar),
     /// Default corner radius, in pixels.
-    BorderRadius,
+    BorderRadius("border_radius", Scalar),
     /// Default border stroke width, in pixels.
-    BorderWidth,
+    BorderWidth("border_width", Scalar),
     /// Default body text size, in pixels.
-    FontSize,
+    FontSize("font_size", Scalar),
     /// Title/heading text size, in pixels.
-    FontSizeTitle,
+    FontSizeTitle("font_size_title", Scalar),
     /// Default button height, in pixels.
-    ButtonHeight,
+    ButtonHeight("button_height", Scalar),
     /// Default text-input height, in pixels.
-    InputHeight,
+    InputHeight("input_height", Scalar),
     /// Hover/press transition duration in seconds (see
     /// [`AnimationState`](crate::AnimationState)). `0.0` disables animation
     /// (instant color switches).
-    AnimationDuration,
+    AnimationDuration("animation_duration", Scalar),
     /// Height of the menu bar strip, in pixels (26px in the Forge design).
-    MenuBarHeight,
+    MenuBarHeight("menu_bar_height", Scalar),
     /// Height of one menu-item row inside a dropdown sheet, in pixels.
-    MenuRowHeight,
+    MenuRowHeight("menu_row_height", Scalar),
     /// Floor for a menu column's width, in pixels.
-    MenuItemMinWidth,
+    MenuItemMinWidth("menu_item_min_width", Scalar),
     /// Gap between a menu item's label and its accelerator hint, in pixels.
-    MenuAccelGap,
+    MenuAccelGap("menu_accel_gap", Scalar),
     /// Seconds a pointer must rest on a submenu parent before it opens or replaces
     /// the currently-open child column.
-    MenuHoverDelay,
+    MenuHoverDelay("menu_hover_delay", Scalar),
     // --- 4a material keys (colors) ---
     /// Plinth fill beneath a raised face (see [`Theme::plinth`]).
-    Plinth,
+    Plinth("plinth", Color),
     /// Raised face gradient top, idle state (see [`Theme::face_top`]).
-    FaceTop,
+    FaceTop("face_top", Color),
     /// Raised face gradient top, hovered.
-    FaceTopHover,
+    FaceTopHover("face_top_hover", Color),
     /// Raised face gradient top, pressed.
-    FaceTopPressed,
+    FaceTopPressed("face_top_pressed", Color),
     /// Raised face gradient bottom, idle state (see [`Theme::face_bottom`]).
-    FaceBottom,
+    FaceBottom("face_bottom", Color),
     /// Raised face gradient bottom, hovered.
-    FaceBottomHover,
+    FaceBottomHover("face_bottom_hover", Color),
     /// Raised face gradient bottom, pressed.
-    FaceBottomPressed,
+    FaceBottomPressed("face_bottom_pressed", Color),
     /// Top-edge highlight line on a raised face, idle.
-    EdgeHighlight,
+    EdgeHighlight("edge_highlight", Color),
     /// Top-edge highlight line on a raised face, hovered.
-    EdgeHighlightHover,
+    EdgeHighlightHover("edge_highlight_hover", Color),
     /// Top-edge highlight line on a raised face, pressed.
-    EdgeHighlightPressed,
+    EdgeHighlightPressed("edge_highlight_pressed", Color),
     /// Inset shadow color for sunken surfaces (wells, tracks).
-    InnerShadow,
+    InnerShadow("inner_shadow", Color),
     /// Bottom-edge light line under a sunken surface.
-    EdgeShadow,
+    EdgeShadow("edge_shadow", Color),
     /// Accent-face gradient top, idle (primary controls).
-    AccentFaceTop,
+    AccentFaceTop("accent_face_top", Color),
     /// Accent-face gradient top, hovered.
-    AccentFaceTopHover,
+    AccentFaceTopHover("accent_face_top_hover", Color),
     /// Accent-face gradient top, pressed.
-    AccentFaceTopPressed,
+    AccentFaceTopPressed("accent_face_top_pressed", Color),
     /// Accent-face gradient bottom, idle.
-    AccentFaceBottom,
+    AccentFaceBottom("accent_face_bottom", Color),
     /// Accent-face gradient bottom, hovered.
-    AccentFaceBottomHover,
+    AccentFaceBottomHover("accent_face_bottom_hover", Color),
     /// Accent-face gradient bottom, pressed.
-    AccentFaceBottomPressed,
+    AccentFaceBottomPressed("accent_face_bottom_pressed", Color),
     /// Text/icon color on accent faces.
-    OnAccent,
+    OnAccent("on_accent", Color),
     /// Danger-face gradient top, idle (destructive controls).
-    DangerFaceTop,
+    DangerFaceTop("danger_face_top", Color),
     /// Danger-face gradient top, hovered.
-    DangerFaceTopHover,
+    DangerFaceTopHover("danger_face_top_hover", Color),
     /// Danger-face gradient top, pressed.
-    DangerFaceTopPressed,
+    DangerFaceTopPressed("danger_face_top_pressed", Color),
     /// Danger-face gradient bottom, idle.
-    DangerFaceBottom,
+    DangerFaceBottom("danger_face_bottom", Color),
     /// Danger-face gradient bottom, hovered.
-    DangerFaceBottomHover,
+    DangerFaceBottomHover("danger_face_bottom_hover", Color),
     /// Danger-face gradient bottom, pressed.
-    DangerFaceBottomPressed,
+    DangerFaceBottomPressed("danger_face_bottom_pressed", Color),
     /// Text/icon color on danger faces.
-    OnDanger,
+    OnDanger("on_danger", Color),
     // --- 4a material keys (scalars) ---
     /// Press travel: how far a face drops when pressed, in pixels.
-    Travel,
+    Travel("travel", Scalar),
     /// Depth of the inset "sunken" shadow fading down from a well's top edge,
     /// in pixels (the design's `inset 0 2px 4px` band).
-    InnerShadowDepth,
+    InnerShadowDepth("inner_shadow_depth", Scalar),
     // --- Toolbar / dock / shell scalars ---
     /// Side length of one toolbar tool button, in pixels.
-    ToolbarButtonSize,
+    ToolbarButtonSize("toolbar_button_size", Scalar),
     /// Edge padding inside the toolbar strip, in pixels.
-    ToolbarPadding,
+    ToolbarPadding("toolbar_padding", Scalar),
     /// Height of a dock panel's tab header row, in pixels.
-    DockTabHeight,
+    DockTabHeight("dock_tab_height", Scalar),
     /// Width (or height, for horizontal) of the resize splitter between a dock
     /// panel and the viewport, in pixels.
-    DockSplitterWidth,
+    DockSplitterWidth("dock_splitter_width", Scalar),
     /// Height of a movable [`Window`](crate::Window)'s title strip, in pixels.
-    WindowTitleHeight,
+    WindowTitleHeight("window_title_height", Scalar),
     // --- Forge roles (colors) ---
-    /// One step of Forge's ink ladder: the closed set of text and glyph
-    /// colours (see [`Ink`]).
-    Ink(Ink),
     /// Search-match highlight on a dark surface (Forge `--accent-match`).
-    AccentMatch,
+    AccentMatch("accent_match", Color),
     /// Every other row of a list, over its background (`--row-zebra`).
-    RowZebra,
+    RowZebra("row_zebra", Color),
     /// A hovered list row (`--row-hover`).
-    RowHover,
+    RowHover("row_hover", Color),
     /// A selected row in a list that doesn't have the keyboard: a neutral
     /// held fill, so the focused list's accent selection stands out.
-    RowHeld,
+    RowHeld("row_held", Color),
     /// Deep sunken surface, e.g. an empty-state box (`--well-deep`).
-    WellDeep,
+    WellDeep("well_deep", Color),
     /// Hard black edge around sunken boxes (`--edge-hard`).
-    EdgeHard,
+    EdgeHard("edge_hard", Color),
     /// A healthy or running state: a status dot, a connected light (`--ok`).
-    StatusOk,
+    StatusOk("status_ok", Color),
     /// A state waiting on the user, as a dot or meta text (`--warn-meta`).
-    WarnMeta,
+    WarnMeta("warn_meta", Color),
     /// Text that says what waits on the user (`--warn-soft-ink`).
-    WarnSoftInk,
+    WarnSoftInk("warn_soft_ink", Color),
     /// Something new and unseen: an unread dot, a dirty tab (`--accent-dirty`).
-    AccentDirty,
+    AccentDirty("accent_dirty", Color),
     /// A handle being dragged: a scrubbed property label, a splitter grip
     /// (`--accent-grip`).
-    AccentGrip,
+    AccentGrip("accent_grip", Color),
     /// A linked file's glyph (`--accent-glyph`).
-    AccentGlyph,
+    AccentGlyph("accent_glyph", Color),
     /// Text of a destructive action, such as a danger menu row
     /// (`--danger-text`).
-    DangerText,
+    DangerText("danger_text", Color),
     // --- Forge roles (scalars) ---
-    /// One step of Forge's type scale, in pixels (see [`TextSize`]).
-    TextSize(TextSize),
-    /// Letter spacing for a text role, in em (see [`Tracking`]).
-    Tracking(Tracking),
     /// Height of one list, tree or dock-section header row, in pixels
     /// (`--h-list-row`).
-    ListRowHeight,
-    /// A mod-defined key, addressed by the FNV-1a hash of its name (see
-    /// [`StyleKey::custom`]). Lives in [`Theme`]'s custom map / a [`StyleOverlay`].
-    Custom(u64),
+    ListRowHeight("list_row_height", Scalar),
 }
 
 impl StyleKey {
@@ -292,82 +333,58 @@ impl StyleKey {
         StyleKey::Custom(fnv1a64(name))
     }
 
-    /// Whether this key denotes a color (vs a scalar). Built-in keys have a
-    /// fixed shape; `Custom` keys are shapeless (whatever value was stored), so
-    /// this returns `false` for them.
-    pub fn is_color(self) -> bool {
-        use StyleKey::*;
-        matches!(
-            self,
-            Background
-                | Panel
-                | PanelBorder
-                | Button
-                | ButtonHover
-                | ButtonPressed
-                | ButtonBorder
-                | InputBackground
-                | InputBorder
-                | InputFocusBorder
-                | Text
-                | TextDim
-                | TextHighlight
-                | Accent
-                | AccentTick
-                | Info
-                | Success
-                | Warning
-                | Error
-                | FocusRing
-                | TabInactive
-                | TabActive
-                | TabHover
-                | TabBorder
-                | ProgressBackground
-                | ProgressFill
-                | ProgressFillLow
-                | ProgressFillMedium
-                | Plinth
-                | FaceTop
-                | FaceTopHover
-                | FaceTopPressed
-                | FaceBottom
-                | FaceBottomHover
-                | FaceBottomPressed
-                | EdgeHighlight
-                | EdgeHighlightHover
-                | EdgeHighlightPressed
-                | InnerShadow
-                | EdgeShadow
-                | AccentFaceTop
-                | AccentFaceTopHover
-                | AccentFaceTopPressed
-                | AccentFaceBottom
-                | AccentFaceBottomHover
-                | AccentFaceBottomPressed
-                | OnAccent
-                | DangerFaceTop
-                | DangerFaceTopHover
-                | DangerFaceTopPressed
-                | DangerFaceBottom
-                | DangerFaceBottomHover
-                | DangerFaceBottomPressed
-                | OnDanger
-                | Ink(_)
-                | AccentMatch
-                | RowZebra
-                | RowHover
-                | RowHeld
-                | WellDeep
-                | EdgeHard
-                | StatusOk
-                | WarnMeta
-                | WarnSoftInk
-                | AccentDirty
-                | AccentGrip
-                | AccentGlyph
-                | DangerText
-        )
+    /// The shape of value this key holds. Built-in keys have a fixed shape;
+    /// `Custom` keys are shapeless (whatever value was stored), so they give
+    /// `None`.
+    pub const fn shape(self) -> Option<StyleShape> {
+        match self {
+            StyleKey::Ink(_) => Some(StyleShape::Color),
+            StyleKey::TextSize(_) | StyleKey::Tracking(_) => Some(StyleShape::Scalar),
+            StyleKey::Custom(_) => None,
+            plain => match plain.plain_info() {
+                Some((_, shape)) => Some(shape),
+                None => None,
+            },
+        }
+    }
+
+    /// Whether this key denotes a color (vs a scalar). `Custom` keys are
+    /// shapeless, so this returns `false` for them.
+    pub const fn is_color(self) -> bool {
+        matches!(self.shape(), Some(StyleShape::Color))
+    }
+
+    /// The key's name in a preset file: the [`Theme`] field name for a plain
+    /// key (`"accent_face_top"`), `ink.<role>`, `text_size.<step>` or
+    /// `tracking.<role>` for the indexed ones. A `Custom` key only keeps the
+    /// hash of its name, so it reports `"custom"`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            StyleKey::Ink(role) => role.name(),
+            StyleKey::TextSize(step) => step.name(),
+            StyleKey::Tracking(role) => role.name(),
+            StyleKey::Custom(_) => "custom",
+            plain => match plain.plain_info() {
+                Some((name, _)) => name,
+                None => "custom",
+            },
+        }
+    }
+
+    /// Every built-in key: the plain keys in declaration order, then each
+    /// [`Ink`] role, [`TextSize`] step and [`Tracking`] role.
+    pub fn builtin() -> impl Iterator<Item = StyleKey> {
+        Self::PLAIN
+            .iter()
+            .copied()
+            .chain(Ink::ALL.into_iter().map(StyleKey::Ink))
+            .chain(TextSize::ALL.into_iter().map(StyleKey::TextSize))
+            .chain(Tracking::ALL.into_iter().map(StyleKey::Tracking))
+    }
+
+    /// The built-in key called `name` (see [`name`](Self::name)), if any.
+    pub fn from_name(name: &str) -> Option<StyleKey> {
+        Self::builtin().find(|key| key.name() == name)
     }
 }
 
@@ -469,6 +486,39 @@ impl Ink {
         Ink::Primary,
         Ink::OnAccentSecond,
     ];
+
+    /// The role's key name in a preset file (see [`StyleKey::name`]).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Ink::White => "ink.white",
+            Ink::Max => "ink.max",
+            Ink::Value => "ink.value",
+            Ink::Emph => "ink.emph",
+            Ink::Menu => "ink.menu",
+            Ink::Title => "ink.title",
+            Ink::Row => "ink.row",
+            Ink::Cell => "ink.cell",
+            Ink::Second => "ink.second",
+            Ink::Icon => "ink.icon",
+            Ink::Chip => "ink.chip",
+            Ink::Glyph => "ink.glyph",
+            Ink::Tab => "ink.tab",
+            Ink::TipHint => "ink.tip_hint",
+            Ink::Body2 => "ink.body2",
+            Ink::Muted => "ink.muted",
+            Ink::Shortcut => "ink.shortcut",
+            Ink::Label => "ink.label",
+            Ink::Caption => "ink.caption",
+            Ink::Dim => "ink.dim",
+            Ink::Disabled => "ink.disabled",
+            Ink::DisabledGlyph => "ink.disabled_glyph",
+            Ink::DisabledKey => "ink.disabled_key",
+            Ink::Empty => "ink.empty",
+            Ink::Brand => "ink.brand",
+            Ink::Primary => "ink.primary",
+            Ink::OnAccentSecond => "ink.on_accent_second",
+        }
+    }
 }
 
 /// Forge's type scale below body text. Body text itself is
@@ -496,6 +546,17 @@ impl TextSize {
         TextSize::Row,
         TextSize::Menu,
     ];
+
+    /// The step's key name in a preset file (see [`StyleKey::name`]).
+    pub const fn name(self) -> &'static str {
+        match self {
+            TextSize::Caption => "text_size.caption",
+            TextSize::Meta => "text_size.meta",
+            TextSize::Dense => "text_size.dense",
+            TextSize::Row => "text_size.row",
+            TextSize::Menu => "text_size.menu",
+        }
+    }
 }
 
 /// Letter spacing per text role, in em (multiply by the font size for
@@ -523,6 +584,17 @@ impl Tracking {
         Tracking::Section,
         Tracking::Brand,
     ];
+
+    /// The role's key name in a preset file (see [`StyleKey::name`]).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Tracking::Badge => "tracking.badge",
+            Tracking::Prop => "tracking.prop",
+            Tracking::Caption => "tracking.caption",
+            Tracking::Section => "tracking.section",
+            Tracking::Brand => "tracking.brand",
+        }
+    }
 }
 
 /// A caller-owned sparse set of style overrides layered over a [`Theme`].
@@ -1076,101 +1148,6 @@ impl<'a> StyleResolver<'a> {
     }
 }
 
-/// All built-in color keys, paired with the value the default theme stores —
-/// used by the round-trip test and handy for tooling.
-#[cfg(test)]
-pub(crate) const COLOR_KEYS: &[StyleKey] = &[
-    StyleKey::Background,
-    StyleKey::Scrim,
-    StyleKey::Panel,
-    StyleKey::PanelBorder,
-    StyleKey::Button,
-    StyleKey::ButtonHover,
-    StyleKey::ButtonPressed,
-    StyleKey::ButtonBorder,
-    StyleKey::InputBackground,
-    StyleKey::InputBorder,
-    StyleKey::InputFocusBorder,
-    StyleKey::Text,
-    StyleKey::TextDim,
-    StyleKey::TextHighlight,
-    StyleKey::Accent,
-    StyleKey::AccentTick,
-    StyleKey::Info,
-    StyleKey::Success,
-    StyleKey::Warning,
-    StyleKey::Error,
-    StyleKey::FocusRing,
-    StyleKey::TabInactive,
-    StyleKey::TabActive,
-    StyleKey::TabHover,
-    StyleKey::TabBorder,
-    StyleKey::ProgressBackground,
-    StyleKey::ProgressFill,
-    StyleKey::ProgressFillLow,
-    StyleKey::ProgressFillMedium,
-    StyleKey::Plinth,
-    StyleKey::FaceTop,
-    StyleKey::FaceTopHover,
-    StyleKey::FaceTopPressed,
-    StyleKey::FaceBottom,
-    StyleKey::FaceBottomHover,
-    StyleKey::FaceBottomPressed,
-    StyleKey::EdgeHighlight,
-    StyleKey::EdgeHighlightHover,
-    StyleKey::EdgeHighlightPressed,
-    StyleKey::InnerShadow,
-    StyleKey::EdgeShadow,
-    StyleKey::AccentFaceTop,
-    StyleKey::AccentFaceTopHover,
-    StyleKey::AccentFaceTopPressed,
-    StyleKey::AccentFaceBottom,
-    StyleKey::AccentFaceBottomHover,
-    StyleKey::AccentFaceBottomPressed,
-    StyleKey::OnAccent,
-    StyleKey::DangerFaceTop,
-    StyleKey::DangerFaceTopHover,
-    StyleKey::DangerFaceTopPressed,
-    StyleKey::DangerFaceBottom,
-    StyleKey::DangerFaceBottomHover,
-    StyleKey::DangerFaceBottomPressed,
-    StyleKey::OnDanger,
-    StyleKey::AccentMatch,
-    StyleKey::RowZebra,
-    StyleKey::RowHover,
-    StyleKey::RowHeld,
-    StyleKey::WellDeep,
-    StyleKey::EdgeHard,
-    StyleKey::StatusOk,
-    StyleKey::WarnMeta,
-    StyleKey::WarnSoftInk,
-    StyleKey::AccentDirty,
-    StyleKey::AccentGrip,
-    StyleKey::AccentGlyph,
-    StyleKey::DangerText,
-];
-
-#[cfg(test)]
-pub(crate) const SCALAR_KEYS: &[StyleKey] = &[
-    StyleKey::Padding,
-    StyleKey::Spacing,
-    StyleKey::BorderRadius,
-    StyleKey::BorderWidth,
-    StyleKey::FontSize,
-    StyleKey::FontSizeTitle,
-    StyleKey::ButtonHeight,
-    StyleKey::InputHeight,
-    StyleKey::AnimationDuration,
-    StyleKey::MenuBarHeight,
-    StyleKey::MenuRowHeight,
-    StyleKey::MenuItemMinWidth,
-    StyleKey::MenuAccelGap,
-    StyleKey::MenuHoverDelay,
-    StyleKey::Travel,
-    StyleKey::InnerShadowDepth,
-    StyleKey::ListRowHeight,
-];
-
 /// Internal helper for [`Theme`]'s custom map type (kept here so the key/value
 /// types live together).
 pub(crate) type CustomStyles = HashMap<u64, StyleValue>;
@@ -1197,6 +1174,33 @@ mod tests {
         // Built-in keys are not colored-coded as custom.
         assert!(StyleKey::Accent.is_color());
         assert!(!StyleKey::Padding.is_color());
+    }
+
+    #[test]
+    fn builtin_key_names_are_unique_and_resolve_back() {
+        let mut seen = std::collections::HashSet::new();
+        for key in StyleKey::builtin() {
+            assert!(seen.insert(key.name()), "duplicate name {}", key.name());
+            assert_eq!(StyleKey::from_name(key.name()), Some(key));
+        }
+        assert_eq!(seen.len(), StyleKey::PLAIN.len() + 27 + 5 + 5);
+        assert_eq!(StyleKey::from_name("custom"), None);
+        assert_eq!(StyleKey::from_name("no_such_key"), None);
+    }
+
+    #[test]
+    fn plain_key_names_are_the_snake_case_variant_names() {
+        // The names are the `Theme` field names, which follow the variants.
+        for &key in StyleKey::PLAIN {
+            let mut snake = String::new();
+            for (i, c) in format!("{key:?}").chars().enumerate() {
+                if c.is_ascii_uppercase() && i > 0 {
+                    snake.push('_');
+                }
+                snake.push(c.to_ascii_lowercase());
+            }
+            assert_eq!(key.name(), snake);
+        }
     }
 
     #[test]

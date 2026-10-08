@@ -50,6 +50,29 @@ A widget isn't done until **all** of these are true — treat it as the checklis
 4. **TODO.md.** Move the item to `TODO_DONE.md`, checked off, with a note of
    the resulting API.
 
+## Theme presets and the designer
+
+A `ThemePreset` (`src/preset.rs`) is a few seeds that re-skin Forge plus
+per-token overrides; `resolve()` builds the `Theme`, and the `preset` feature
+reads and writes it as TOML. Design and open gaps:
+`docs/design/theme-designer.md`. The designer is the `designer/` workspace
+member:
+
+```
+cargo run -p gameui-designer -- presets/aldermoor-hearth.toml
+```
+
+To look at the designer without a window (or to check a change to it), render
+it headlessly: `cargo run -p gameui-designer -- <preset> --capture
+test_output/designer/out.png [--size 1440x900] [--select accent]`. The
+designer's own chrome stays Forge; only the preview and swatches use the
+preset.
+
+Render the gallery in a preset with
+`GAMEUI_PRESET=<file> cargo test --features preset --test widget_gallery -- --ignored`.
+A colour a widget hard-codes instead of reading from the theme shows up there
+unchanged — that is a bug to fix by moving it into `Theme`.
+
 ## Conventions
 
 - **Caller-owned state.** Don't stash mutable widget state in globals or

@@ -50,6 +50,9 @@ struct App {
 
 struct Gpu {
     ui: UiRenderer,
+    /// Kept across frames and cleared each one, sharing the renderer's font
+    /// system: a fresh stack would re-scan fonts and re-shape every label.
+    layers: LayerStack,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
@@ -185,9 +188,12 @@ impl ApplicationHandler for App {
         };
         surface.configure(&device, &config);
 
-        let ui = UiRenderer::new(&device, &queue, format, wgpu_gameui::shared_font_system());
+        let fonts = wgpu_gameui::shared_font_system();
+        let layers = LayerStack::with_font_system(fonts.clone());
+        let ui = UiRenderer::new(&device, &queue, format, fonts);
         self.gpu = Some(Gpu {
             ui,
+            layers,
             surface,
             config,
             device,
@@ -217,8 +223,10 @@ impl ApplicationHandler for App {
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.input.mouse_x = position.x as f32;
-                self.input.mouse_y = position.y as f32;
+                // The UI lays out in logical pixels; winit reports physical.
+                let scale = window.scale_factor() as f32;
+                self.input.mouse_x = position.x as f32 / scale;
+                self.input.mouse_y = position.y as f32 / scale;
                 window.request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -258,7 +266,7 @@ impl ApplicationHandler for App {
                     .texture
                     .create_view(&wgpu::TextureViewDescriptor::default());
 
-                let mut layers = LayerStack::new();
+                gpu.layers.clear();
                 // Field-level borrows keep the UI build and the GPU render
                 // from fighting over `self` (same as `hello_ui`). The caret
                 // clock was advanced at the top of `window_event`.
@@ -272,7 +280,7 @@ impl ApplicationHandler for App {
                         &mut self.last_frame,
                         caret_on,
                         caret_remaining,
-                        &mut layers,
+                        &mut gpu.layers,
                     );
 
                     let mut encoder =
@@ -307,7 +315,7 @@ impl ApplicationHandler for App {
                     &view,
                     (gpu.config.width, gpu.config.height),
                     window.scale_factor() as f32,
-                    &layers,
+                    &gpu.layers,
                 );
                 gpu.queue.submit(Some(encoder.finish()));
                 frame.present();

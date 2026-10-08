@@ -21,7 +21,9 @@
 //!   each parsed apart as a transcript keeps them: what a frame of dragging
 //!   a window's edge costs a transcript of that many agent messages.
 //! - `estimate_one` — the same count of estimates of one message, always in
-//!   cache: the arithmetic alone, apart from reaching each document.
+//!   cache: the arithmetic alone, apart from reaching each document. The
+//!   message is one of the history's with a table, which cost the most, so
+//!   this is above what the history's arithmetic costs, not below it.
 //!
 //! Budget, at 2,000 paragraphs and a 300-row table: parse under 5 ms, a cold
 //! layout under 250 ms (the desktop measures off the UI thread), and a frame's

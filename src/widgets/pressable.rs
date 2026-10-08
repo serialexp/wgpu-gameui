@@ -184,13 +184,15 @@ impl Pressable {
 
         // With a retained scene, a focusable key's id identifies its hit
         // region and the previous frame's topmost winner decides; otherwise
-        // (and on the first frame) it is an immediate rect test.
+        // (and on the first frame) it is an immediate rect test. Either way a
+        // pointer a higher layer took (`mouse_consumed`) is not ours.
+        let input = ctx.input;
         let retained = self
             .focus_id
             .filter(|_| ctx.has_interactions())
             .map(|id| ctx.interact(WidgetId(id), rect, self.enabled))
-            .filter(|response| response.resolved);
-        let input = ctx.input;
+            .filter(|response| response.resolved)
+            .map(|response| response.for_input(input));
         let hovered = retained.as_ref().map_or_else(
             || self.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y),
             |response| response.hovered,
@@ -535,5 +537,49 @@ mod tests {
         assert!(focused.clicked);
         let (_, _, disabled) = draw(&key.clone().enabled(false), &keys, &mut focus);
         assert!(!disabled.clicked, "a disabled key ignores the keyboard");
+    }
+
+    /// Press on a focusable key resolved through a retained scene for a few
+    /// frames, with a full-screen modal over it when `modal`; returns each
+    /// frame's response.
+    fn pressed_through_scene(modal: bool) -> Vec<Response> {
+        let theme = Theme::default();
+        let mut layers = crate::LayerStack::new();
+        let mut focus = FocusState::new();
+        let mut scene = crate::InteractionScene::new();
+        (0..4)
+            .map(|frame| {
+                layers.clear();
+                let input = inside(frame >= 2, frame == 2);
+                scene.begin_frame(&input);
+                if modal {
+                    layers.push_modal(Rect::new(0.0, 0.0, 800.0, 600.0));
+                    layers.pop_layer();
+                }
+                let base = layers.input_for_base(&input);
+                let mut ctx =
+                    DrawContext::new(layers.base_mut(), &mut focus, &theme, &base, 800.0, 600.0)
+                        .with_interactions(&mut scene);
+                let response = Pressable::new()
+                    .focusable(7)
+                    .draw(RECT, &mut ctx, |_, _| {});
+                scene.end_frame();
+                response
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_retained_key_under_a_modal_is_not_pressed() {
+        let open = pressed_through_scene(false);
+        assert!(open[2].resolved && open[2].clicked, "the scene path works");
+        assert!(open[3].pressed);
+
+        for (frame, response) in pressed_through_scene(true).iter().enumerate() {
+            assert!(
+                !(response.hovered || response.pressed || response.clicked),
+                "frame {frame}: the modal took the pointer, {response:?}"
+            );
+        }
     }
 }

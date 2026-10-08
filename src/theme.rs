@@ -528,29 +528,29 @@ mod tests {
 
     #[test]
     fn builtin_keys_round_trip_through_get_set() {
-        use crate::style::{COLOR_KEYS, SCALAR_KEYS};
+        use crate::style::StyleShape;
+        // A distinct probe per key, so two keys writing one field would show.
+        let probe = |i: usize, shape| match shape {
+            StyleShape::Color => StyleValue::Color([i as f32 / 512.0, 0.2, 0.3, 1.0]),
+            StyleShape::Scalar => StyleValue::Scalar(100.0 + i as f32),
+        };
         let mut theme = Theme::default();
-        // Every color key reads back the field, and set writes it.
-        for &k in COLOR_KEYS {
-            let orig = theme.get(k).unwrap().as_color().unwrap();
-            let probe = [orig[0] * 0.5 + 0.1, 0.2, 0.3, 1.0];
-            theme.set(k, StyleValue::Color(probe));
-            assert_eq!(theme.get(k).unwrap().as_color().unwrap(), probe, "{k:?}");
+        for (i, k) in StyleKey::builtin().enumerate() {
+            let shape = k.shape().unwrap();
+            // The declared shape is the shape the field holds.
+            let stored = theme.get(k).unwrap();
+            assert_eq!(stored.as_color().is_some(), k.is_color(), "{k:?}");
+            theme.set(k, probe(i, shape));
         }
-        let roles = crate::Ink::ALL.map(StyleKey::Ink);
-        for k in roles {
-            let probe = [0.1, 0.2, 0.3, 1.0];
-            theme.set(k, StyleValue::Color(probe));
-            assert_eq!(theme.get(k).unwrap().as_color().unwrap(), probe, "{k:?}");
-            assert!(k.is_color(), "{k:?}");
+        for (i, k) in StyleKey::builtin().enumerate() {
+            assert_eq!(theme.get(k), Some(probe(i, k.shape().unwrap())), "{k:?}");
         }
-        let sizes = crate::TextSize::ALL.map(StyleKey::TextSize);
-        let tracking = crate::Tracking::ALL.map(StyleKey::Tracking);
-        for &k in SCALAR_KEYS.iter().chain(&sizes).chain(&tracking) {
-            theme.set(k, StyleValue::Scalar(123.5));
-            assert_eq!(theme.get(k).unwrap().as_scalar().unwrap(), 123.5, "{k:?}");
-            assert!(!k.is_color(), "{k:?}");
-        }
+    }
+
+    #[test]
+    fn scrim_is_a_colour_key() {
+        // It once fell out of a hand-kept list of colour keys.
+        assert!(StyleKey::Scrim.is_color());
     }
 
     #[test]

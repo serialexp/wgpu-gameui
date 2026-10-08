@@ -958,9 +958,459 @@ impl Default for ChromeTheme {
     }
 }
 
+impl ChromeTheme {
+    /// Hand every colour in the chrome — surfaces, gradient stops, borders,
+    /// lines and shadows — to `f`, which may change it in place. Theme
+    /// presets re-colour the chrome through this.
+    pub fn map_colors(&mut self, mut f: impl FnMut(&mut [f32; 4])) {
+        self.visit(&mut ChromeVisitor {
+            color: &mut f,
+            radii: &mut |_| {},
+        });
+    }
+
+    /// Hand every corner radius in the chrome to `f`, which may change it in
+    /// place.
+    pub fn map_corner_radii(&mut self, mut f: impl FnMut(&mut CornerRadii)) {
+        self.visit(&mut ChromeVisitor {
+            color: &mut |_| {},
+            radii: &mut f,
+        });
+    }
+}
+
+/// What [`Visit`] hands each colour and corner radius to.
+struct ChromeVisitor<'a> {
+    color: &'a mut dyn FnMut(&mut [f32; 4]),
+    radii: &'a mut dyn FnMut(&mut CornerRadii),
+}
+
+/// Walks every colour and corner radius inside a chrome value. The impls
+/// destructure each struct without `..`, so a new field fails to compile
+/// until it is visited (or deliberately ignored).
+trait Visit {
+    fn visit(&mut self, v: &mut ChromeVisitor);
+}
+
+impl Visit for [f32; 4] {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        (v.color)(self);
+    }
+}
+
+impl Visit for CornerRadii {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        (v.radii)(self);
+    }
+}
+
+impl<T: Visit, const N: usize> Visit for [T; N] {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        for item in self {
+            item.visit(v);
+        }
+    }
+}
+
+impl Visit for Background {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        match self {
+            Background::Solid(color) => color.visit(v),
+            Background::LinearGradient {
+                start,
+                end,
+                axis: _,
+            } => {
+                start.visit(v);
+                end.visit(v);
+            }
+        }
+    }
+}
+
+impl Visit for QuadStyle {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let QuadStyle {
+            background,
+            border_widths: _,
+            border_color,
+            corner_radii,
+        } = self;
+        background.visit(v);
+        border_color.visit(v);
+        corner_radii.visit(v);
+    }
+}
+
+impl Visit for EdgeStyle {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let EdgeStyle {
+            thickness: _,
+            color,
+        } = self;
+        color.visit(v);
+    }
+}
+
+impl Visit for StructuralLine {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let StructuralLine {
+            edge: _,
+            offset: _,
+            style,
+        } = self;
+        style.visit(v);
+    }
+}
+
+impl Visit for BoxShadow {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let BoxShadow {
+            offset: _,
+            blur: _,
+            spread: _,
+            color,
+            inset: _,
+        } = self;
+        color.visit(v);
+    }
+}
+
+impl Visit for MenuBarChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let MenuBarChrome {
+            surface,
+            shadows,
+            lines,
+        } = self;
+        surface.visit(v);
+        shadows.visit(v);
+        lines.visit(v);
+    }
+}
+
+impl Visit for MenuSheetChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let MenuSheetChrome {
+            surface,
+            shadows,
+            lines,
+            separator,
+            row_highlight_insets,
+        } = self;
+        surface.visit(v);
+        shadows.visit(v);
+        lines.visit(v);
+        separator.visit(v);
+        row_highlight_insets.visit(v);
+    }
+}
+
+impl Visit for ToolbarChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let ToolbarChrome {
+            rail_colors,
+            dock_edge,
+            dock_highlight,
+            rail_shadow,
+            tool_idle,
+            tool_hover,
+            tool_pressed,
+            tool_latched,
+            tool_insets,
+            grip_colors,
+            grip_counter_edge,
+            popup,
+            separator,
+        } = self;
+        rail_colors.visit(v);
+        dock_edge.visit(v);
+        dock_highlight.visit(v);
+        rail_shadow.visit(v);
+        tool_idle.visit(v);
+        tool_hover.visit(v);
+        tool_pressed.visit(v);
+        tool_latched.visit(v);
+        tool_insets.visit(v);
+        grip_colors.visit(v);
+        grip_counter_edge.visit(v);
+        popup.visit(v);
+        separator.visit(v);
+    }
+}
+
+impl Visit for DockChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let DockChrome {
+            body,
+            header,
+            lines,
+            active_tab,
+            tab_hover,
+            active_tab_inset,
+        } = self;
+        body.visit(v);
+        header.visit(v);
+        lines.visit(v);
+        active_tab.visit(v);
+        tab_hover.visit(v);
+        active_tab_inset.visit(v);
+    }
+}
+
+impl Visit for GroupListChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let GroupListChrome {
+            header,
+            header_highlight,
+            header_rule,
+            row_rule,
+            toolbar,
+            toolbar_rule,
+            toolbar_highlight,
+        } = self;
+        header.visit(v);
+        header_highlight.visit(v);
+        header_rule.visit(v);
+        row_rule.visit(v);
+        toolbar.visit(v);
+        toolbar_rule.visit(v);
+        toolbar_highlight.visit(v);
+    }
+}
+
+impl Visit for DockSectionChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let DockSectionChrome {
+            header,
+            top_rule,
+            header_highlight,
+            header_rule,
+            toolbar,
+            toolbar_rule,
+            toolbar_highlight,
+        } = self;
+        header.visit(v);
+        top_rule.visit(v);
+        header_highlight.visit(v);
+        header_rule.visit(v);
+        toolbar.visit(v);
+        toolbar_rule.visit(v);
+        toolbar_highlight.visit(v);
+    }
+}
+
+impl Visit for ScrollbarChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let ScrollbarChrome {
+            thumb,
+            thumb_insets,
+        } = self;
+        thumb.visit(v);
+        thumb_insets.visit(v);
+    }
+}
+
+impl Visit for SplitterChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let SplitterChrome {
+            track_colors,
+            outer_edges,
+            inner_highlight,
+            grip_idle,
+            grip_hover,
+            grip_dragging,
+            grip_counter_edge,
+            dragging_glow,
+        } = self;
+        track_colors.visit(v);
+        outer_edges.visit(v);
+        inner_highlight.visit(v);
+        grip_idle.visit(v);
+        grip_hover.visit(v);
+        grip_dragging.visit(v);
+        grip_counter_edge.visit(v);
+        dragging_glow.visit(v);
+    }
+}
+
+impl Visit for StatusBarChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let StatusBarChrome {
+            surface,
+            lines,
+            divider,
+            latched_inset,
+        } = self;
+        surface.visit(v);
+        lines.visit(v);
+        divider.visit(v);
+        latched_inset.visit(v);
+    }
+}
+
+impl Visit for FloatingSurfaceChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let FloatingSurfaceChrome {
+            surface,
+            shadow,
+            lines,
+        } = self;
+        surface.visit(v);
+        shadow.visit(v);
+        lines.visit(v);
+    }
+}
+
+impl Visit for SheetChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let SheetChrome {
+            surface,
+            shadows,
+            footer,
+            footer_rule,
+            backdrop,
+        } = self;
+        surface.visit(v);
+        shadows.visit(v);
+        footer.visit(v);
+        footer_rule.visit(v);
+        backdrop.visit(v);
+    }
+}
+
+impl Visit for InspectorChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let InspectorChrome {
+            surface,
+            shadows,
+            header,
+            header_highlight,
+            header_rule,
+            footer,
+            footer_rule,
+        } = self;
+        surface.visit(v);
+        shadows.visit(v);
+        header.visit(v);
+        header_highlight.visit(v);
+        header_rule.visit(v);
+        footer.visit(v);
+        footer_rule.visit(v);
+    }
+}
+
+impl Visit for WindowChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let WindowChrome {
+            surface,
+            shadow,
+            lines,
+            header,
+            header_lines,
+            close_hover,
+            grip_colors,
+        } = self;
+        surface.visit(v);
+        shadow.visit(v);
+        lines.visit(v);
+        header.visit(v);
+        header_lines.visit(v);
+        close_hover.visit(v);
+        grip_colors.visit(v);
+    }
+}
+
+impl Visit for ChromeTheme {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let ChromeTheme {
+            menu_bar,
+            menu_sheet,
+            toolbar,
+            dock,
+            dock_section,
+            group_list,
+            scrollbar,
+            splitter,
+            status_bar,
+            dropdown,
+            popover,
+            tooltip,
+            toast,
+            curve_key,
+            sheet,
+            inspector,
+            window,
+        } = self;
+        menu_bar.visit(v);
+        menu_sheet.visit(v);
+        toolbar.visit(v);
+        dock.visit(v);
+        dock_section.visit(v);
+        group_list.visit(v);
+        scrollbar.visit(v);
+        splitter.visit(v);
+        status_bar.visit(v);
+        dropdown.visit(v);
+        popover.visit(v);
+        tooltip.visit(v);
+        toast.visit(v);
+        curve_key.visit(v);
+        sheet.visit(v);
+        inspector.visit(v);
+        window.visit(v);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_colors_reaches_every_colour() {
+        const MARK: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
+        let mut chrome = ChromeTheme::default();
+        let mut visited = 0;
+        chrome.map_colors(|c| {
+            visited += 1;
+            *c = MARK;
+        });
+        assert!(visited > 100, "only {visited} colours visited");
+        // Spot checks across the nesting: a quad border, a gradient stop, a
+        // shadow, a structural line, a bare colour, an array of colours.
+        assert_eq!(chrome.menu_bar.surface.border_color, MARK);
+        let Background::LinearGradient { start, end, .. } = chrome.menu_bar.surface.background
+        else {
+            panic!("the menu bar is a gradient");
+        };
+        assert_eq!((start, end), (MARK, MARK));
+        assert_eq!(chrome.splitter.dragging_glow.color, MARK);
+        assert_eq!(chrome.status_bar.lines[1].style.color, MARK);
+        assert_eq!(chrome.sheet.backdrop, MARK);
+        assert_eq!(chrome.window.grip_colors, [MARK; 2]);
+        assert_eq!(chrome.toolbar.tool_insets[3][1].color, MARK);
+        // A second pass sees nothing but the mark.
+        chrome.map_colors(|c| assert_eq!(*c, MARK));
+    }
+
+    #[test]
+    fn map_corner_radii_reaches_every_quad() {
+        let mut chrome = ChromeTheme::default();
+        let mut visited = 0;
+        chrome.map_corner_radii(|r| {
+            visited += 1;
+            *r = CornerRadii::uniform(9.0);
+        });
+        assert!(visited > 20, "only {visited} radii visited");
+        assert_eq!(
+            chrome.dock.active_tab.corner_radii,
+            CornerRadii::uniform(9.0)
+        );
+        assert_eq!(
+            chrome.scrollbar.thumb[2].corner_radii,
+            CornerRadii::uniform(9.0)
+        );
+    }
     use crate::widgets::PaintCmd;
 
     fn close(a: f32, b: f32) -> bool {

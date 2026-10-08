@@ -64,6 +64,37 @@ run its gallery with `CARGO_TARGET_DIR=/tmp/gameui_head/target`, then
 
 ---
 
+# Also open: theme designer and presets (2026-10-05)
+
+Bart: "make something like a theme designer that will allow us to configure
+the styling of gameui, and potentially export it to be used as a completely
+different preset", with live preview. Design and Bart's decisions:
+`docs/design/theme-designer.md`.
+
+- [x] Phase 1 — library: `StyleKey` names + complete list, OKLCH inverse,
+      `ChromeTheme` visitors, `ThemeSeeds`/`ThemePreset`/`resolve`, TOML
+      behind feature `preset`.
+- [x] Phase 2 — gallery honours `GAMEUI_PRESET`.
+- [x] Phase 3 — `designer/` workspace crate (`gameui-designer`). Forge
+      chrome; Seeds dock (left), Tokens dock with filter + colour/number
+      override editor (right), proof page in the viewport. File menu
+      New/Open/Save/Save as/Quit with discard confirmation; Preset menu
+      resets seeds / clears overrides. `--capture out.png [--size WxH]
+      [--select token]` renders headlessly (captures land in
+      `test_output/designer/`). 14 tests incl. pointer-driven ones (slider
+      drag, filter + hex override) that locate widgets by debug scope.
+- [ ] Phase 4 — the gaps listed in the design doc. The designer makes them
+      visible: e.g. slider knob and prompt-dialog error ink are hard-coded.
+- [ ] Not yet: the full gallery inside the designer (design doc gap 8);
+      three primaries (gap 6); chrome overrides (gap 7).
+
+The Slug A/B experiment is off main (parked on `exp/slug`). Its 2026-10-05
+work (the GPU path, `slug_compare`, `tests/slug_render.rs` and
+`docs/design/slug-experiment.md`, awaiting Bart's verdict) is in commit
+`d7dc71f`, not on main.
+
+---
+
 # Also open: build the Forge components the gallery is still missing
 
 The unfinished Slug text-rendering A/B experiment (2026-10-02) is parked on
