@@ -390,3 +390,116 @@ harden those foundations rather than create parallel replacements.
   (a ring with start and end angles, or an analytic arc kind with the full
   affine, which could take circles in too; see "Rotated quads and circles
   still tessellate" above).
+
+## Learned from gpui (compared with ~/Projects/gpuix, 2026-10-08)
+
+- [ ] **P1 — Measure draw-call batching before building anything.** gameui
+      draws in strict paint order, so a screen of buttons alternates "box,
+      text, box, text": roughly 2,000 draw calls for 1,000 buttons. gpui
+      gives each primitive an order number from what it overlaps and then
+      draws every non-overlapping box in one batch and every glyph in
+      another. Check first with `RenderStats::draw_calls` /
+      `fragmentation_ratio` in the `ui_stress` bench whether this explains
+      part of the `frame_render` slowdown above; only then decide whether
+      overlap-based reordering is worth it.
+- [ ] **P2 — Focus can stay on a widget that is no longer drawn.**
+      `FocusState::focused` survives frames in which its widget never
+      registers (a dialog closed, a row scrolled out of a list), so Tab
+      starts from a ghost and keys can go to nothing. gpui notices when the
+      focused element is gone and moves focus to its nearest focusable
+      parent. A cheaper first step for gameui: in `end_frame`, drop focus
+      whose id was not registered this frame (text fields the app keeps
+      focused off-screen need checking before doing so).
+- [ ] **P2 — Show the focus ring only after keyboard navigation.** Today a
+      click focuses a widget and its ring is drawn, as CSS `:focus` would.
+      gpui (like CSS `:focus-visible`) shows it only when focus arrived by
+      keyboard. A `FocusState` flag set by Tab/arrow navigation and cleared
+      by a pointer press, read where the rings are drawn (`pressable.rs`,
+      `toggle.rs`, `checkbox.rs`, `radio.rs`, `slider.rs` and friends).
+
+- [ ] **P1 — `List` with measured row heights and an item-anchored scroll
+      position.** `List` only handles fixed row heights. gpui's list keeps
+      its position as "item N, this far into it" instead of a pixel offset,
+      so when rows above the view change height nothing moves and nothing
+      needs correcting. agent-ui's transcript already measures rows, but
+      keeps a pixel offset and corrects it on every change (`hold` /
+      `reading` in `crates/desktop/src/transcript_pane.rs`). Moving that
+      measuring into `List`, with gpui's anchor, would serve both.
+- [ ] **P2 — One text layout for drawing, caret and hit testing.** gpui
+      shapes a string once and uses that layout to draw it, place the caret
+      and map a click to a character. gameui's text widgets shape separately
+      for each. gpui also caches per line, so typing in a long field
+      reshapes only the edited line. (Related: "Ellipsis shapes the full
+      text twice" and "A `TextBlock` costs 3 heap allocations" above; gpui
+      keeps short strings inline and shares long ones, which is its answer
+      to the second.)
+- [ ] **P2 — Upload only the changed part of the glyph atlas.**
+      `text.rs` `write_pixels` rebuilds the whole atlas pixel buffer
+      (`build_pixel_buffer`) and writes the full texture whenever any glyph
+      was added. gpui writes just the new glyph's rectangle. Track a dirty
+      rectangle (or per-glyph rects) in `MsdfGlyphAtlas` instead of a flag.
+- [ ] **P2 — Popovers don't flip when there is no room.** `place_popover`
+      takes a caller-chosen `PopoverSide` and only nudges horizontally, so
+      a popover near the bottom runs off the window. Tooltips and menubar
+      submenus already flip; gpui's anchored element flips to the other side when
+      it doesn't fit. (agent-ui's TODO has the same request for `dropdown`.)
+- [ ] **P3 — Sideways scrolling, locked to one axis per gesture.**
+      `InputState::scroll_delta_x` is filled in, but no gameui widget reads
+      it: `ScrollView` and `List` scroll only vertically by wheel (agent-ui
+      reads it itself, for code blocks in `transcript_pane.rs`). gpui
+      scrolls both axes and locks a trackpad gesture to its dominant axis,
+      so a slightly diagonal swipe doesn't drift sideways.
+- [ ] **P3 — Spring animations.** When a target changes mid-flight,
+      `AnimationState` starts the new tween from the current value (no
+      jump), but the speed restarts along the easing curve, so a reversing
+      panel visibly stops and starts again. gpui has springs
+      (`gpui/src/spring.rs`, `SpringConfig { stiffness, damping, mass }`, a
+      damped oscillator) that keep their velocity when retargeted.
+- [ ] **P3 — Snap layout to whole device pixels.** gpui has
+      `Window::pixel_snap` / `round_to_device_pixel` (and a stroke variant)
+      for rounding positions and sizes to device pixels, which avoids 1 px
+      seams and blurry edges between neighbours at fractional scale
+      factors. gameui snaps glyphs (`text.rs`) and strokes (`stroke.rs`) to
+      device pixels, but not layout boxes.
+- [ ] **P3 — A shortcut table with contexts.** gpui binds keys to actions
+      in a table scoped by context (a text field, a list, a dialog), and
+      resolves "a shortcut wins if one matches, otherwise the key types
+      text". gameui leaves shortcuts to each app, and agent-ui writes them
+      out by hand (see its AltGr/Ctrl typing TODO, which this would fix).
+- [ ] **P3 — Full IME support.** `FocusState` already asks for IME and
+      reports a caret rect (`take_ime_request`), but agent-ui never reads
+      it or handles `WindowEvent::Ime`, so the macOS candidate window and
+      accent menu don't work. Needs preedit text drawn in the field and the
+      committed text inserted, as gpui's input handler does.
+- [ ] **P3 — Drag and drop that carries data.** gameui tracks a drag, but
+      nothing carries a payload to a drop target. gpui attaches typed data
+      to a drag (`on_drag`) and lets elements accept it (`on_drop::<T>`).
+- [ ] **P3 — Accessibility through AccessKit.** gpui exposes its element
+      tree to screen readers; gameui exposes nothing. Ties in with keyed
+      layers ("stable, reusable keyed layers" above), since both need
+      stable widget ids across frames.
+- [ ] **P3 — Images loaded in the background, and vector paths.** gpui
+      decodes images off the main thread and draws arbitrary paths with
+      smooth edges. gameui's new `Stroke` covers lines; filled paths
+      remain.
+
+Already on this list, with gpui's answer: "Reuse interaction dispatch
+scratch" (gpui walks regions in reverse paint order, no sort or
+allocation) and "Stable, reusable keyed layers" (gpui reuses unchanged
+parts of the previous frame). Where gameui is ahead of gpui and nothing
+needs learning: scroll easing, backdrop blur, the debug report, MSDF text
+sharp at any size, list selection and gamepad navigation.
+
+## agent-ui follow-up from the layer blockers (2026-10-08)
+
+- [ ] **P3 — Popovers could use `UiState::block_under_layer`.** agent-ui's
+      `usage_popovers.rs`, `task_popover.rs` and `drop_up.rs` (the status
+      bar's frame and connection details) push a screen-sized modal layer
+      and register a hand-made enabled backdrop on it
+      (`cx.interact(BACKDROP_ID, screen, true)`) so a click outside closes
+      them. They already block clicks correctly. Moving them to
+      `block_under_layer` would also mark them as the top modal, confining
+      Tab inside the popover (and doing nothing when it has no focusables)
+      — a behaviour change for Bart to decide on, so they were left as
+      they are. The outside-click-closes behaviour would still need its own
+      check, since the blocker is disabled and reports no click.
