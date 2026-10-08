@@ -393,7 +393,9 @@ impl Estimate<'_> {
             .map_or(1.0, |head| row_lines(head, head_advance));
         let head = head * m.head_size * LINE_HEIGHT_RATIO + pad_y * 2.0;
         let line = m.size * m.line_height;
-        let body: f32 = rows.map(|row| row_lines(row, advance) * line + pad_y * 2.0).sum();
+        let body: f32 = rows
+            .map(|row| row_lines(row, advance) * line + pad_y * 2.0)
+            .sum();
         let scrollbar = if least > width + 0.5 {
             SCROLLBAR_GAP + m.scrollbar_height
         } else {

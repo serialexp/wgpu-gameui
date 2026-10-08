@@ -386,9 +386,27 @@ fn an_outline_lays_the_blocks_out_flat_in_order() {
     assert_eq!(
         kinds,
         [
-            "h1", "quote 4", "text", "list 2", "item 1", "text", "list 5", "item 1", "text",
-            "item 2", "text", "text", "code", "rule", "table 2x1", "column", "column", "cell",
-            "cell", "cell", "cell",
+            "h1",
+            "quote 4",
+            "text",
+            "list 2",
+            "item 1",
+            "text",
+            "list 5",
+            "item 1",
+            "text",
+            "item 2",
+            "text",
+            "text",
+            "code",
+            "rule",
+            "table 2x1",
+            "column",
+            "column",
+            "cell",
+            "cell",
+            "cell",
+            "cell",
         ]
     );
 }
