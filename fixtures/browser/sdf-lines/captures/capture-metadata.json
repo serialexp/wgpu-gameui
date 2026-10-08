@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-10-08T05:56:21.164Z",
+  "browser": "148.0.7778.96",
+  "engine": "Playwright Chromium",
+  "source": "cases.json via reference.html",
+  "crop_css_px": 120,
+  "device_scale_factors": [
+    1,
+    1.5,
+    2
+  ]
+}

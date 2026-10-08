@@ -670,8 +670,12 @@ fn draw_chevron(list: &mut DrawList, rect: Rect, s: &StyleResolver, open: bool) 
         let cx = x + size * 0.5;
         let cy = y + size * 0.5;
         let dy = if open { -CHEVRON * 0.5 } else { CHEVRON * 0.5 };
-        list.line([cx - CHEVRON, cy - dy], [cx, cy + dy], 1.5, color);
-        list.line([cx + CHEVRON, cy - dy], [cx, cy + dy], 1.5, color);
+        let chevron = [
+            [cx - CHEVRON, cy - dy],
+            [cx, cy + dy],
+            [cx + CHEVRON, cy - dy],
+        ];
+        list.stroke_polyline(&chevron, &super::Stroke::new(1.5), color);
     }
 }
 

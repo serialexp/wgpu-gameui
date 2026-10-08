@@ -207,6 +207,10 @@ pub struct UiState {
     /// Whether the tree's single Tab stop has been registered this frame (so it
     /// joins the Tab ring exactly once even across many tree rows).
     tree_focus_registered: bool,
+    /// The topmost modal layer [`block_under_layer`](Self::block_under_layer)
+    /// was told about this frame: [`end_frame`](Self::end_frame) keeps Tab
+    /// inside it. Reset by [`begin_frame`](Self::begin_frame).
+    top_modal: Option<usize>,
     /// Hover/press color-transition clock for animated verbs. Ticked once per
     /// frame by [`begin_frame`](Self::begin_frame) with the caller-supplied `dt`;
     /// a `dt` of `0.0` or `theme.animation_duration == 0` (the default) keeps
@@ -304,6 +308,7 @@ impl UiState {
         self.item_gap = theme.spacing;
         self.next_auto_id = 0;
         self.tree_focus_registered = false;
+        self.top_modal = None;
         self.app_deadlines.clear();
         // One sanitized clock for every timed source this frame: the animation
         // easing, toast aging, and tooltip hover-delay. Ticking here (rather
@@ -349,7 +354,7 @@ impl UiState {
         // Dismiss the open dropdown on Escape or click-outside; a claimed row
         // click is handed to focus first so it does not blur.
         self.dropdowns.end_frame(&mut self.focus);
-        self.focus.end_frame(None);
+        self.focus.end_frame(self.top_modal);
         self.interactions.end_frame();
         // Aggregate every timed source into the host-facing result: an
         // in-flight transition, a visible toast, a pending tooltip hover, a
@@ -405,7 +410,42 @@ impl UiState {
     /// Returns the layer index to pass to
     /// [`draw_dropdown_layer`](Self::draw_dropdown_layer).
     pub fn push_dropdown_layer(&mut self, layers: &mut LayerStack) -> Option<usize> {
-        self.dropdowns.push_open_layer(layers)
+        let popup = self.dropdowns.push_open_layer(layers);
+        if let Some(index) = popup {
+            self.block_under_layer(layers, index);
+        }
+        popup
+    }
+
+    /// Tell the interaction scene and the Tab ring about `layers`' layer
+    /// `index`, the way [`LayerStack::input_for_layer`] routes input: a
+    /// modal takes the pointer from every layer below it, a popup only over
+    /// its rect, and a tooltip from none. While a modal is up, Tab stays
+    /// among its focusables (widgets drawn with its index as their
+    /// [`active_layer`](crate::DrawContext::active_layer)).
+    ///
+    /// [`UiContext::interactive_layer`], [`UiContext::modal_begin`] /
+    /// [`popup_begin`](UiContext::popup_begin) and
+    /// [`push_dropdown_layer`](Self::push_dropdown_layer) call this
+    /// themselves; a host that draws into a layer some other way (a dialog
+    /// over its own list, the toast layer) calls it once per frame, any time
+    /// before [`end_frame`](Self::end_frame). Telling it twice changes
+    /// nothing. A layer that shapes its own blocking — the [`MenuBar`](crate::MenuBar)'s
+    /// viewport layer, which leaves the bar itself live — is not one to tell.
+    pub fn block_under_layer(&mut self, layers: &LayerStack, index: usize) {
+        let Some(layer) = layers.layers().get(index) else {
+            debug_assert!(false, "UiState::block_under_layer: no layer {index}");
+            return;
+        };
+        let scene_layer = index as u32 + 1;
+        match layer.kind {
+            LayerKind::Modal => {
+                self.interactions.block(scene_layer, None);
+                self.top_modal = self.top_modal.max(Some(index));
+            }
+            LayerKind::Popup => self.interactions.block(scene_layer, Some(layer.rect)),
+            LayerKind::Tooltip => {}
+        }
     }
 
     /// Draw the open dropdown's floating option list into the popup layer pushed
@@ -477,6 +517,13 @@ pub struct UiContext<'a> {
     /// modal_end / popup_end to verify the caller closed the right kind, and
     /// to detect unbalanced begin/end pairs. Length == number of open layers.
     open_layer_kinds: Vec<LayerKind>,
+    /// The [`LayerStack`] layers this context draws into, innermost last:
+    /// the one [`interactive_layer`](Self::interactive_layer) was given, then
+    /// one per open [`modal_begin`](Self::modal_begin) /
+    /// [`popup_begin`](Self::popup_begin). Empty while drawing into the base
+    /// list. Every widget gets the last as its
+    /// [`active_layer`](crate::DrawContext::active_layer).
+    drawing_layers: Vec<usize>,
     /// Number of local rectangle scopes opened by [`rect_begin`](Self::rect_begin)
     /// and not yet closed by [`rect_end`](Self::rect_end). Kept separate from the
     /// general push stack so bindings get a useful mismatched-end assertion.
@@ -556,6 +603,7 @@ impl<'a> UiContext<'a> {
             debug_scope_depth_stack: Vec::new(),
             entry_debug_scopes,
             open_layer_kinds: Vec::new(),
+            drawing_layers: Vec::new(),
             open_rect_scopes: 0,
             warned_align_tokens: std::collections::HashSet::new(),
             font_stack: vec![FontSpec::default()],
@@ -585,6 +633,7 @@ impl<'a> UiContext<'a> {
             debug_scope_depth_stack: Vec::new(),
             entry_debug_scopes,
             open_layer_kinds: Vec::new(),
+            drawing_layers: Vec::new(),
             open_rect_scopes: 0,
             warned_align_tokens: std::collections::HashSet::new(),
             font_stack: vec![FontSpec::default()],
@@ -636,6 +685,41 @@ impl<'a> UiContext<'a> {
         ctx.theme = Some(theme);
         ctx.apply_theme_font_default(theme);
         ctx
+    }
+
+    /// An **interactive** context (see [`interactive`](Self::interactive))
+    /// drawing into `layers`' layer `index`, which the host pushed — a
+    /// dialog's modal, a popover's popup. Its widgets are hit-tested and
+    /// Tab-ordered as that layer's: the layer keeps the pointer from those
+    /// below it ([`UiState::block_under_layer`]), and while it is the top
+    /// modal, Tab stays among its widgets. `input` is the layer's own,
+    /// [`LayerStack::input_for_layer`]. Several contexts may draw into the
+    /// same layer in one frame.
+    pub fn interactive_layer(
+        layers: &'a mut LayerStack,
+        index: usize,
+        input: &'a InputState,
+        state: &'a mut UiState,
+        theme: &'a Theme,
+    ) -> Self {
+        state.block_under_layer(layers, index);
+        Self::interactive(&mut layers.layers_mut()[index].list, input, state, theme).on_layer(index)
+    }
+
+    /// Draw as layer `index`'s widgets: for a context built over that
+    /// layer's own list (`&mut layers.layers_mut()[index].list`), which the
+    /// host tells [`UiState::block_under_layer`] about.
+    /// [`interactive_layer`](Self::interactive_layer) is both in one call.
+    /// Without it, the widgets count as the base list's: below the layer's
+    /// blocker, where they take no pointer.
+    pub fn on_layer(mut self, index: usize) -> Self {
+        debug_assert!(
+            self.drawing_layers.is_empty(),
+            "UiContext::on_layer: the context already draws into layer {:?}",
+            self.drawing_layers.last()
+        );
+        self.drawing_layers.push(index);
+        self
     }
 
     fn apply_theme_font_default(&mut self, theme: &Theme) {
@@ -1655,6 +1739,7 @@ impl<'a> UiContext<'a> {
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -1732,6 +1817,7 @@ impl<'a> UiContext<'a> {
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -1816,6 +1902,7 @@ impl<'a> UiContext<'a> {
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             // Reuse the DragId value as the FocusId so the slider is also
             // keyboard-adjustable (arrow keys) through the façade.
@@ -1859,6 +1946,7 @@ impl<'a> UiContext<'a> {
             let UiState { focus, anim, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim);
             checkbox
@@ -1906,6 +1994,7 @@ impl<'a> UiContext<'a> {
                 .expect("radio_group requires interactive state");
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             RadioGroup::new(options)
                 .focusable(fid)
@@ -2076,6 +2165,7 @@ impl<'a> UiContext<'a> {
             let before = ti.value.clone();
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -2209,6 +2299,7 @@ impl<'a> UiContext<'a> {
                 .or_insert_with(|| TextInput::new(local.x, local.y, local.width, local.height));
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             let out = NumberInput::new()
                 .with_range(min, max)
@@ -2260,11 +2351,12 @@ impl<'a> UiContext<'a> {
         // The whole tree is one Tab stop: wire its focus id and register it in
         // the ring exactly once per frame (the first enabled row drawn).
         let enabled = !self.input_disabled;
+        let layer = self.drawing_layers.last().copied();
         if let Some(s) = self.state.as_mut() {
             s.tree.set_focus_id(TREE_FOCUS_ID);
             if enabled && !s.tree_focus_registered {
                 s.tree_focus_registered = true;
-                s.focus.register(TREE_FOCUS_ID);
+                s.focus.register_in(TREE_FOCUS_ID, layer);
             }
         }
         let out = {
@@ -2279,6 +2371,7 @@ impl<'a> UiContext<'a> {
             let UiState { tree, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             let out = node.with_depth(depth).draw(id, local, tree, &mut ctx);
             // Focus ring on the selected row while the tree holds keyboard focus.
@@ -2405,6 +2498,7 @@ impl<'a> UiContext<'a> {
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -2458,6 +2552,7 @@ impl<'a> UiContext<'a> {
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             ColorPicker::new().draw(*hsva, id, drag, local, &mut ctx)
         };
@@ -2492,6 +2587,7 @@ impl<'a> UiContext<'a> {
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             DragHandle::new().draw(id, drag, local, &mut ctx)
         };
@@ -2649,6 +2745,7 @@ impl<'a> UiContext<'a> {
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             dropdown.draw(id, local, dropdowns, &mut ctx)
         };
@@ -2687,6 +2784,7 @@ impl<'a> UiContext<'a> {
                 .expect("toggle requires interactive state");
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             toggle.focusable(fid).draw(on, local, &mut ctx)
         };
@@ -2724,6 +2822,7 @@ impl<'a> UiContext<'a> {
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_tag_input(local, tags, draft, focused, &mut ctx)
         };
@@ -2800,7 +2899,7 @@ impl<'a> UiContext<'a> {
             };
             let focus = &mut ui_state.focus;
             if !self.input_disabled {
-                focus.register(id);
+                focus.register_in(id, self.drawing_layers.last().copied());
             }
             // A click in the list focuses it in this frame, so the row it
             // selects already wears the accent.
@@ -3026,6 +3125,7 @@ impl<'a> UiContext<'a> {
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
@@ -3060,6 +3160,7 @@ impl<'a> UiContext<'a> {
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             bc.draw(local, &mut ctx)
         };
@@ -3099,6 +3200,7 @@ impl<'a> UiContext<'a> {
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             Pager::new().draw(page, total, local, &mut ctx)
         };
@@ -3134,6 +3236,7 @@ impl<'a> UiContext<'a> {
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             AssetGrid::new(items, glyph).draw(local, selected, &mut ctx)
         };
@@ -3179,6 +3282,7 @@ impl<'a> UiContext<'a> {
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             vf.draw(local, scrub, drag, id, &mut ctx)
         };
@@ -3229,6 +3333,7 @@ impl<'a> UiContext<'a> {
             let UiState { drag, focus, .. } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_gradient_ramp(local, stops, selected, drag_stop, drag, id, &mut ctx)
         };
@@ -3267,6 +3372,7 @@ impl<'a> UiContext<'a> {
             };
             let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
                 .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_combo_trigger(local, label, open, focused, &mut ctx)
         };
@@ -3290,8 +3396,12 @@ impl<'a> UiContext<'a> {
                 );
             }
             Backend::Layers(s) => {
-                s.push_modal(rect);
+                let index = s.push_modal(rect);
                 self.open_layer_kinds.push(LayerKind::Modal);
+                self.drawing_layers.push(index);
+                if let Some(state) = self.state.as_mut() {
+                    state.block_under_layer(s, index);
+                }
             }
         }
     }
@@ -3315,8 +3425,12 @@ impl<'a> UiContext<'a> {
                 );
             }
             Backend::Layers(s) => {
-                s.push_popup(rect);
+                let index = s.push_popup(rect);
                 self.open_layer_kinds.push(LayerKind::Popup);
+                self.drawing_layers.push(index);
+                if let Some(state) = self.state.as_mut() {
+                    state.block_under_layer(s, index);
+                }
             }
         }
     }
@@ -3342,6 +3456,7 @@ impl<'a> UiContext<'a> {
                 if !self.open_layer_kinds.is_empty() {
                     s.pop_layer();
                     self.open_layer_kinds.pop();
+                    self.drawing_layers.pop();
                 }
                 debug_assert!(top.is_some(), "UiContext::*_end called with no open layer");
                 debug_assert!(
@@ -3694,6 +3809,212 @@ mod tests {
             clicks = (bottom, over);
         }
         clicks
+    }
+
+    /// Where a host-pushed layer's content is drawn, relative to the base.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Drawn {
+        AfterBase,
+        BeforeBase,
+    }
+
+    /// Runs `frames` frames of `input` over a base button at the origin and,
+    /// on a layer the host pushed (`kind`, covering `layer_rect`), a button
+    /// at (200, 200), the way agent-ui draws a dialog. Both are 100×30.
+    /// Returns the last frame's (base, layer) clicks.
+    fn host_layer_clicks(
+        kind: LayerKind,
+        layer_rect: Rect,
+        drawn: Drawn,
+        input: &InputState,
+    ) -> (bool, bool) {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut clicks = (false, false);
+        for _ in 0..2 {
+            let mut input = input.clone();
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut layers = LayerStack::new();
+            let index = match kind {
+                LayerKind::Modal => layers.push_modal(layer_rect),
+                LayerKind::Popup => layers.push_popup(layer_rect),
+                LayerKind::Tooltip => layers.push_tooltip(layer_rect),
+            };
+            layers.pop_layer();
+            let base_input = layers.input_for_base(&input);
+            let layer_input = layers.input_for_layer(index, &input);
+            let draw_layer = |layers: &mut LayerStack, state: &mut UiState| {
+                let mut ui =
+                    UiContext::interactive_layer(layers, index, &layer_input, state, &theme);
+                ui.translate(200.0, 200.0);
+                ui.text_button("In the layer", Some(100.0), Some(30.0))
+            };
+            let mut over = false;
+            if drawn == Drawn::BeforeBase {
+                over = draw_layer(&mut layers, &mut state);
+            }
+            let under = {
+                let mut ui =
+                    UiContext::interactive_layers(&mut layers, &base_input, &mut state, &theme);
+                ui.text_button("Behind", Some(100.0), Some(30.0))
+            };
+            if drawn == Drawn::AfterBase {
+                over = draw_layer(&mut layers, &mut state);
+            }
+            state.end_frame();
+            clicks = (under, over);
+        }
+        clicks
+    }
+
+    const DIALOG: Rect = Rect {
+        x: 180.0,
+        y: 180.0,
+        width: 200.0,
+        height: 100.0,
+    };
+
+    #[test]
+    fn a_button_behind_a_host_dialog_takes_no_click() {
+        let behind = click_at(10.0, 10.0);
+        for drawn in [Drawn::AfterBase, Drawn::BeforeBase] {
+            assert_eq!(
+                host_layer_clicks(LayerKind::Modal, DIALOG, drawn, &behind),
+                (false, false)
+            );
+        }
+    }
+
+    #[test]
+    fn a_host_dialogs_own_button_takes_its_click_however_it_is_drawn() {
+        let on_it = click_at(210.0, 210.0);
+        for drawn in [Drawn::AfterBase, Drawn::BeforeBase] {
+            assert_eq!(
+                host_layer_clicks(LayerKind::Modal, DIALOG, drawn, &on_it),
+                (false, true)
+            );
+        }
+    }
+
+    #[test]
+    fn a_popup_blocks_only_its_own_rect() {
+        let outside = click_at(10.0, 10.0);
+        assert_eq!(
+            host_layer_clicks(LayerKind::Popup, DIALOG, Drawn::AfterBase, &outside),
+            (true, false),
+            "outside the popup, the base still works"
+        );
+        let over_base = Rect::new(0.0, 0.0, 120.0, 40.0);
+        assert_eq!(
+            host_layer_clicks(LayerKind::Popup, over_base, Drawn::AfterBase, &outside),
+            (false, false),
+            "over the base button, the popup takes the pointer"
+        );
+        assert_eq!(
+            host_layer_clicks(LayerKind::Tooltip, over_base, Drawn::AfterBase, &outside),
+            (true, false),
+            "a tooltip takes nothing"
+        );
+    }
+
+    #[test]
+    fn modal_begin_keeps_the_pointer_from_the_base() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut clicks = (false, false);
+        // The first frame has no retained geometry yet, so clicks are tested
+        // against the drawn rects: the check starts with the second.
+        for (frame, at) in [10.0, 10.0, 210.0].into_iter().enumerate() {
+            let mut input = click_at(at, at);
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut layers = LayerStack::new();
+            {
+                let mut ui = UiContext::interactive_layers(&mut layers, &input, &mut state, &theme);
+                ui.set_auto_advance(false);
+                let under = ui.text_button("Behind", Some(100.0), Some(30.0));
+                ui.modal_begin(DIALOG);
+                ui.translate(200.0, 200.0);
+                let over = ui.text_button("In the dialog", Some(100.0), Some(30.0));
+                ui.modal_end();
+                clicks = (under, over);
+            }
+            state.end_frame();
+            if frame == 1 {
+                assert!(!clicks.0, "the button behind the dialog takes no click");
+            }
+        }
+        assert_eq!(clicks, (false, true), "the dialog's own button does");
+    }
+
+    /// Two Tab presses over a base button and a host modal drawn by two
+    /// contexts, holding `buttons` buttons. Returns where focus went.
+    fn tab_through_host_dialog(buttons: usize) -> Vec<Option<FocusId>> {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut focused = Vec::new();
+        for _ in 0..3 {
+            let mut input = InputState {
+                key_tab: true,
+                ..InputState::default()
+            };
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut layers = LayerStack::new();
+            let index = layers.push_modal(DIALOG);
+            layers.pop_layer();
+            // A dialog with nothing in it draws no context: the host says
+            // which layer it pushed.
+            state.block_under_layer(&layers, index);
+            let base_input = layers.input_for_base(&input);
+            let layer_input = layers.input_for_layer(index, &input);
+            {
+                let mut ui =
+                    UiContext::interactive_layers(&mut layers, &base_input, &mut state, &theme);
+                ui.text_button("Behind", Some(100.0), Some(30.0));
+            }
+            for _ in 0..buttons {
+                let mut ui = UiContext::interactive_layer(
+                    &mut layers,
+                    index,
+                    &layer_input,
+                    &mut state,
+                    &theme,
+                );
+                ui.text_button("In the dialog", Some(100.0), Some(30.0));
+            }
+            state.end_frame();
+            focused.push(state.focus.focused());
+        }
+        focused
+    }
+
+    #[test]
+    fn tab_stays_inside_a_host_dialog() {
+        // The base button takes auto id 0, the dialog's two 1 and 2: Tab
+        // goes 1, 2, 1 and never back to 0.
+        let ids = [AUTO_ID_BASE + 1, AUTO_ID_BASE + 2, AUTO_ID_BASE + 1].map(Some);
+        assert_eq!(tab_through_host_dialog(2), ids);
+    }
+
+    #[test]
+    fn tab_in_a_dialog_with_nothing_to_focus_goes_nowhere() {
+        assert_eq!(tab_through_host_dialog(0), [None, None, None]);
+    }
+
+    #[test]
+    fn two_contexts_drawing_one_layer_block_it_once() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut input = InputState::default();
+        state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+        let mut layers = LayerStack::new();
+        let index = layers.push_modal(DIALOG);
+        layers.pop_layer();
+        for _ in 0..2 {
+            UiContext::interactive_layer(&mut layers, index, &input, &mut state, &theme);
+        }
+        state.block_under_layer(&layers, index);
+        assert_eq!(state.interactions.duplicate_ids().count(), 0);
+        state.end_frame();
     }
 
     #[test]

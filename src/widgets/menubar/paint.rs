@@ -10,7 +10,7 @@ use crate::color::rgb8;
 use crate::layout::Rect;
 use crate::{
     Affine2, CornerRadii, DrawContext, Edge, HitShape, InteractionScene, LayerStack, PointerPolicy,
-    StyleKey, SurfacePainter,
+    Stroke, StyleKey, SurfacePainter,
 };
 
 use super::model::{
@@ -348,18 +348,12 @@ pub(super) fn draw_columns<'a>(
                     let stroke = (row_h * CHECK_STROKE).max(1.0);
                     let (x, w, h) = (row_x + 8.0, check_w, row_h);
                     let color = if highlighted { rgb8([4, 20, 24]) } else { tick };
-                    list.line(
+                    let check = [
                         [x + w * 0.16, y + h * 0.52],
                         [x + w * 0.40, y + h * 0.76],
-                        stroke,
-                        color,
-                    );
-                    list.line(
-                        [x + w * 0.40, y + h * 0.76],
                         [x + w * 0.84, y + h * 0.22],
-                        stroke,
-                        color,
-                    );
+                    ];
+                    list.stroke_polyline(&check, &Stroke::new(stroke), color);
                 }
                 if row.submenu {
                     let half = row_h * CHEVRON;

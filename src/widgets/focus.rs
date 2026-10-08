@@ -33,10 +33,12 @@
 //! ## Layer-scoped Tab trapping
 //!
 //! Call [`register_layer`](FocusState::register_layer) for focusables inside
-//! modal/popup layers and pass the layer index to
+//! modal/popup layers and pass the top modal's index to
 //! [`end_frame`](FocusState::end_frame) — Tab cycling is then scoped to that
 //! layer's ring exclusively, preventing Tab from reaching base-layer widgets
-//! while a modal is open. Click-to-focus already respects `mouse_consumed`,
+//! while a modal is open. [`UiState`](crate::UiState) does both for widgets
+//! drawn on a layer it was told about
+//! ([`block_under_layer`](crate::UiState::block_under_layer)). Click-to-focus already respects `mouse_consumed`,
 //! so a modal won't mis-focus a base-layer widget on click either.
 
 use crate::InputState;
@@ -137,13 +139,24 @@ impl FocusState {
     }
 
     /// Register `id` as focusable inside a specific layer (modal/popup).
-    /// Focusables registered here are only reachable via Tab when that layer
-    /// is the active layer passed to [`end_frame`](Self::end_frame).
+    /// While a modal is the active layer passed to
+    /// [`end_frame`](Self::end_frame), Tab reaches only that layer's
+    /// focusables; with none, it reaches every layer's after the base's.
     pub fn register_layer(&mut self, id: FocusId, layer: usize) {
         while self.layer_orders.len() <= layer {
             self.layer_orders.push(Vec::new());
         }
         self.layer_orders[layer].push(id);
+    }
+
+    /// Register `id` in `layer`'s ring, or the base's for `None`: the
+    /// [`register_layer`](Self::register_layer) or [`register`](Self::register)
+    /// a widget drawing on an optional layer wants.
+    pub fn register_in(&mut self, id: FocusId, layer: Option<usize>) {
+        match layer {
+            Some(layer) => self.register_layer(id, layer),
+            None => self.register(id),
+        }
     }
 
     /// True when `id` currently holds focus.
@@ -214,10 +227,11 @@ impl FocusState {
 
     /// End a frame: resolve Escape, click-elsewhere blur, and Tab navigation.
     ///
-    /// `active_layer` scopes Tab cycling to a specific modal/popup layer's
-    /// focusables (registered via [`register_layer`](Self::register_layer)).
-    /// Pass `None` for the base layer (Tab cycles through all base-layer
-    /// focusables as before).
+    /// `active_layer` is the modal on top, if any: Tab then cycles through
+    /// that layer's focusables (registered via
+    /// [`register_layer`](Self::register_layer)) and nothing else, and does
+    /// nothing when it has none. With `None`, Tab cycles through the base
+    /// layer's focusables and then every layer's, in layer order.
     ///
     /// Call once per frame, after drawing the focusable widgets.
     pub fn end_frame(&mut self, active_layer: Option<usize>) {
@@ -229,20 +243,21 @@ impl FocusState {
         if self.mouse_clicked && !self.click_claimed {
             self.focused = None;
         }
-        // Tab / Shift+Tab cycle through the active layer's focusables only.
-        // If no layer-specific order exists, fall back to the base order.
+        // Tab / Shift+Tab cycle through the modal's focusables only, or
+        // through every ring when no modal is up.
         if self.tab != 0 {
-            let order = active_layer
-                .and_then(|idx| self.layer_orders.get(idx))
-                .filter(|o| !o.is_empty())
-                .map(|o| o.as_slice())
-                .unwrap_or(&self.order[..]);
-            if !order.is_empty() {
-                let len = order.len() as i32;
-                let next = match self
-                    .focused
-                    .and_then(|f| order.iter().position(|&x| x == f))
-                {
+            let order: &[FocusId] = match active_layer {
+                Some(idx) => self.layer_orders.get(idx).map_or(&[], Vec::as_slice),
+                None => &self.order,
+            };
+            let layers: &[Vec<FocusId>] = match active_layer {
+                Some(_) => &[],
+                None => &self.layer_orders,
+            };
+            let ring = || order.iter().chain(layers.iter().flatten()).copied();
+            let len = ring().count() as i32;
+            if len > 0 {
+                let next = match self.focused.and_then(|f| ring().position(|x| x == f)) {
                     Some(idx) => (idx as i32 + self.tab).rem_euclid(len) as usize,
                     // Nothing focused yet: forward → first, backward → last.
                     None => {
@@ -253,7 +268,7 @@ impl FocusState {
                         }
                     }
                 };
-                self.focused = Some(order[next]);
+                self.focused = ring().nth(next);
             }
         }
         // Clear all orders for the next frame.
@@ -549,19 +564,34 @@ mod tests {
     }
 
     #[test]
-    fn tab_active_layer_with_no_focusables_falls_back_to_base() {
-        // active_layer points to a layer index that has no focusables.
+    fn tab_in_a_modal_with_no_focusables_goes_nowhere() {
+        // The modal on top (layer 99) has nothing registered: Tab must not
+        // escape to the base behind it.
         let mut f = FocusState::new();
         f.focus(10);
         f.begin_frame(&input(true, false, false, false));
         f.register(10);
         f.register(20);
-        // Layer 99 has nothing registered.
         f.end_frame(Some(99));
-        assert!(
-            f.is_focused(20),
-            "falls back to base order when layer has no focusables"
-        );
+        assert!(f.is_focused(10), "Tab leaves focus where it was");
+    }
+
+    #[test]
+    fn without_a_modal_tab_reaches_the_layers_after_the_base() {
+        let mut f = FocusState::new();
+        f.focus(20);
+        f.begin_frame(&input(true, false, false, false));
+        f.register_layer(30, 1);
+        f.register(10);
+        f.register(20);
+        f.end_frame(None);
+        assert!(f.is_focused(30), "the popup's field follows the base's");
+        f.begin_frame(&input(true, false, false, false));
+        f.register(10);
+        f.register(20);
+        f.register_layer(30, 1);
+        f.end_frame(None);
+        assert!(f.is_focused(10), "and wraps back to the base");
     }
 
     #[test]

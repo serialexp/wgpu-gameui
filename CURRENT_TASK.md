@@ -1,4 +1,60 @@
-# Current task: build the Forge components the gallery is still missing
+# Current task: SDF lines (anti-aliased strokes)
+
+Bart asked (2026-10-08) to implement `docs/design/sdf-lines.md`. That doc's
+"Implementation status" is the checklist; this section is how to resume.
+
+## Where it stands
+
+Phases 0-3 and the caller migration (5) are done and pass. Read the design
+doc's status and "Known limitation" first.
+
+- **Code.** `src/widgets/stroke.rs` (`Stroke`, `Cap`, `Join`, `Dash`, the
+  CPU builder `build_segments`), analytic kind 3 in `src/render/ui.wgsl`
+  (`shade_segment` and helpers), `DrawList::{line, stroke_line,
+  stroke_polyline, stroke_closed}`, `Uniforms.view` (the fragment stage needs
+  the exact screen-to-world mapping, so neighbouring segments agree on every
+  corner pixel). `polyline` is gone.
+- **Tests.** Unit tests in `stroke.rs` and `draw_list.rs`;
+  `tests/strokes.rs` (GPU); `tests/stroke_browser_parity.rs` against
+  `fixtures/browser/sdf-lines/` (README there says how to re-capture; any
+  Playwright works, set `NODE_PATH`). Run the GPU tests with
+  `cargo test --features headless --test strokes --test stroke_browser_parity -- --ignored`.
+- **Checked on 2026-10-08:** lib tests (1651), both GPU suites, clippy
+  (`--all-targets`, with `--all-features` and with `--no-default-features`)
+  and fmt. The widget gallery was compared with HEAD: 16 images changed, all
+  line-drawn (curve editor, line sample, spinner, pager arrows, placeholder,
+  combo chevron, menu tick), and they look right.
+- **agent-ui** (`crates/desktop/src/transcript_cards.rs`): card, panel and
+  tile outlines are one `stroke_closed` (`edge_box`). Needs this gameui.
+
+## Next
+
+1. **Phase 4, arcs.** Decided 2026-10-08 (recommended, Bart said OK): an
+   analytic **arc kind** in the same stream (full affine, reusing the segments' caps, dashes,
+   coverage and clip), not angles on the ring instance. Covers `stroked_arc`
+   and transformed `circle_outline`. Under uneven scale, measure in the arc's
+   space and correct to screen pixels as segments do. Add Chromium cases (SVG
+   `path` arcs) and GPU tests like the segments'. Moving circles themselves
+   into the stream (open question 6) is a separate step afterwards, with
+   before/after checks.
+2. **Benchmarks.** Run `strokes_build` / `strokes_render` (and the
+   `primitives_*` groups) on a quiet machine and record them in the design
+   doc; on 2026-10-08 the load was too high for render timings to mean
+   anything (recording was ~80-90 ns a line on both old and new).
+3. Optional: the combo box chevron's mitred tip reaches a pixel lower than
+   before; round joins would match the Phosphor carets. Bart hasn't decided.
+4. Follow-ups are in TODO.md "SDF lines follow-ups".
+
+## How to compare the gallery with HEAD
+
+Export HEAD with `git checkout-index` into /tmp/gameui_head (no worktree),
+run its gallery with `CARGO_TARGET_DIR=/tmp/gameui_head/target`, then
+`magick compare -metric AE` per image; build side-by-sides with `+repage`
+(the PNGs carry page geometry, so `+append` otherwise shows one image).
+
+---
+
+# Also open: build the Forge components the gallery is still missing
 
 The unfinished Slug text-rendering A/B experiment (2026-10-02) is parked on
 the `exp/slug` branch, off main since 2026-10-08; its progress notes are

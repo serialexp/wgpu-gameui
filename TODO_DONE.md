@@ -2098,3 +2098,38 @@ of 80.
   pixels without a top edge. Benchmarks: `charts_build`, `charts_render`;
   shader checks: `tests/stripes.rs`.
 
+## 2026-10-08 — Layers in the hit scene and the Tab ring
+
+- [x] **P2 — `UiContext::modal_begin` doesn't scope focus to its layer**, and
+  the wider bug under it: a widget behind a modal still took clicks outside
+  the modal's panel (from the second frame, when the retained interaction
+  scene decides), because the scene knew nothing of layers — every
+  `UiContext` widget registered on layer 0 and nothing stood for the
+  backdrop. Now `UiState::block_under_layer(layers, index)` registers the
+  layer's blocker (`InteractionScene::block`: a disabled region at sequence
+  0 of the layer, everywhere for a modal, over the rect for a popup, none
+  for a tooltip) and records the top modal, whose ring `end_frame` keeps Tab
+  in (`FocusState::end_frame(Some(modal))` no longer falls back to the base
+  ring when the modal has nothing to focus; with no modal, Tab reaches the
+  layers' rings after the base's). `UiContext::interactive_layer(layers,
+  index, …)` draws into a host-pushed layer and blocks it;
+  `UiContext::on_layer(index)` marks a context built over a layer's own
+  list; `modal_begin`/`popup_begin` and `UiState::push_dropdown_layer` block
+  their layers. Every `UiContext` widget gets its layer as
+  `DrawContext::active_layer` (`with_active_layer`), and its tree and list
+  views join that layer's ring (`FocusState::register_in`).
+
+## 2026-10-08 — Anti-aliased strokes (SDF lines, `docs/design/sdf-lines.md`)
+
+- [x] **Lines were hard-edged soup quads, with no joins, caps or dashes.**
+  `line` now records one analytic segment (kind 3 in the analytic stream,
+  full affine, clip), and `stroke_line`, `stroke_polyline` and
+  `stroke_closed` take a `Stroke` (`Cap`, `Join`, miter limit, `Dash` with
+  an offset). Corners paint each pixel once, so translucent strokes no
+  longer darken where segments meet; whole-pixel axis-aligned strokes snap
+  to the pixels the soup quad covered. `polyline` is removed; the spinner,
+  checkbox and menubar ticks, chevrons, curve editor and the placeholder's
+  dashed circle use the new calls. Shader checks: `tests/strokes.rs`;
+  Chromium comparisons: `tests/stroke_browser_parity.rs` with
+  `fixtures/browser/sdf-lines/`; benchmarks `strokes_build`,
+  `strokes_render`.

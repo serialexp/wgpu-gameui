@@ -77,6 +77,7 @@ pollster = "0.3"
 env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+serde_json = "1"
 
 [[example]]
 name = "hello_ui"
@@ -103,6 +104,14 @@ required-features = ["headless"]
 
 [[test]]
 name = "analytic_shadow_browser_parity"
+required-features = ["headless"]
+
+[[test]]
+name = "stroke_browser_parity"
+required-features = ["headless"]
+
+[[test]]
+name = "strokes"
 required-features = ["headless"]
 
 [[test]]

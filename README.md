@@ -28,9 +28,13 @@ framing, per-subtree styling, and a Teardown-style immediate-mode verb API.
   shadow → background → content → border/line ordering. Stripe fills
   (`DrawList::stripes`, behind `hatch`, `dashed_hline` and
   `dashed_rect_outline`) are one shaded record however many lines they draw.
-  Chrome, shadows and stripes share one ordered tagged GPU instance stream, so
-  arbitrary alternation remains one upload and one draw; `RenderStats` exposes
-  batching, upload, draw-call, and buffer-growth counters.
+  Lines are anti-aliased strokes (`line`, `stroke_line`, `stroke_polyline`,
+  `stroke_closed` with a `Stroke`): SVG's caps, joins, miter limit and dashes,
+  one record a segment, each pixel painted once at a corner, and whole-pixel
+  axis-aligned lines kept crisp. Chrome, shadows, stripes and strokes share one
+  ordered tagged GPU instance stream, so arbitrary alternation remains one
+  upload and one draw; `RenderStats` exposes batching, upload, draw-call, and
+  buffer-growth counters.
 
 Dual-licensed MIT OR Apache-2.0.
 
@@ -360,8 +364,13 @@ The app fills an `InputState` struct (mouse position/buttons, scroll delta,
 keyboard edges, text input, IME preedit, and a device-agnostic `NavInput` for
 keyboard/gamepad navigation). The library never reads devices. Layer-aware
 input dispatch (`LayerStack::input_for_base` / `input_for_layer`) sets
-`mouse_consumed` so lower layers don't fire through popups/modals. Tab focus
-cycles through registered `FocusId`s, scoped to the active layer.
+`mouse_consumed` so lower layers don't fire through popups/modals, and
+`UiState::block_under_layer` tells the retained hit scene the same, so a
+widget under a modal or popup takes no click there either. Draw a layer you
+pushed with `UiContext::interactive_layer` (or `.on_layer(index)` over its
+list), which does both and hit-tests its widgets above the layers below. Tab
+focus cycles through registered `FocusId`s; while a modal is up, only through
+the modal's.
 
 ---
 
@@ -536,7 +545,8 @@ Benchmark groups: `drawlist_build`, `frame_render`, `render_text_only`,
 `text_shape`, `interactive_widgets`, `text_input_edit`, `scroll_view`,
 `list_virtual`, `table`, `ui_context_frame`, `animation`, `charts_build`,
 `charts_render` (bar charts of 30 to 10,000 bars, waffles of 100 to 10,000
-cells; each prints what it drew).
+cells; each prints what it drew), `strokes_build`, `strokes_render` (chart lines
+of 1,000 and 10,000 points: plain, dashed, and under a translucent halo).
 
 ---
 

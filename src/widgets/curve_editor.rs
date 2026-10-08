@@ -10,9 +10,9 @@ use crate::chrome::{Background, SurfacePainter};
 use crate::layout::Rect;
 use crate::style::StyleKey;
 
-use super::DrawContext;
 use super::drag::{DragCapture, DragId};
 use super::material::draw_inset_shadow;
+use super::{DrawContext, Stroke};
 
 /// Outcome of drawing the curve editor.
 #[derive(Debug, Clone, Default)]
@@ -125,13 +125,9 @@ pub fn draw(
                 fill_b,
             );
         }
-        // Line: chords between keys.
-        let line_c = accent;
-        for w in keys.windows(2) {
-            let a = to_screen(plot, w[0][0], w[0][1]);
-            let b = to_screen(plot, w[1][0], w[1][1]);
-            list.line(a, b, 1.6, line_c);
-        }
+        // Line: chords between keys, joined.
+        let line: Vec<[f32; 2]> = keys.iter().map(|k| to_screen(plot, k[0], k[1])).collect();
+        list.stroke_polyline(&line, &Stroke::new(1.6), accent);
     } else if keys.len() == 1 {
         let p = to_screen(plot, keys[0][0], keys[0][1]);
         list.line(

@@ -76,6 +76,7 @@ mod status_detail;
 mod status_dot;
 mod status_icon;
 mod status_zones;
+mod stroke;
 mod table;
 mod tabs;
 mod tag_input;
@@ -223,6 +224,7 @@ pub use status_icon::{STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, StatusIcon};
 pub use status_zones::{
     StatusBarOutput, StatusPart, StatusToggle, StatusZone, ZoneAnchor, ZoneSide, ZonedStatusBar,
 };
+pub use stroke::{Cap, Dash, Join, SegmentInstance, Stroke};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
 pub use tag_input::{TagOutput, draw as draw_tag_input};
@@ -277,7 +279,9 @@ pub struct DrawContext<'a> {
     pub screen_height: f32,
     /// When drawing into a specific layer (modal/popup), set this to the
     /// layer index so [`register_focus`](Self::register_focus) automatically
-    /// scopes the focusable to that layer's Tab ring.
+    /// scopes the focusable to that layer's Tab ring, and
+    /// [`interact`](Self::interact) hit-tests the widget as that layer's, above
+    /// everything drawn on the layers below it.
     pub active_layer: Option<usize>,
     /// Optional scoped style overrides layered over [`theme`](Self::theme).
     /// `None` (the default) resolves every key straight from the theme; set via
@@ -352,6 +356,14 @@ impl<'a> DrawContext<'a> {
     /// [`new`](Self::new).
     pub fn with_layer(mut self, layer: usize) -> Self {
         self.active_layer = Some(layer);
+        self
+    }
+
+    /// Draw into overlay layer `layer`, or the base list for `None`; see
+    /// [`with_layer`](Self::with_layer). Builder-style; chain after
+    /// [`new`](Self::new).
+    pub fn with_active_layer(mut self, layer: Option<usize>) -> Self {
+        self.active_layer = layer;
         self
     }
 
@@ -514,12 +526,8 @@ impl<'a> DrawContext<'a> {
     /// [`FocusState::register_layer`] based on [`active_layer`](Self::active_layer).
     /// A disabled context registers nothing: Tab skips its widgets.
     pub fn register_focus(&mut self, id: FocusId) {
-        if !self.enabled {
-            return;
-        }
-        match self.active_layer {
-            Some(layer) => self.focus.register_layer(id, layer),
-            None => self.focus.register(id),
+        if self.enabled {
+            self.focus.register_in(id, self.active_layer);
         }
     }
 

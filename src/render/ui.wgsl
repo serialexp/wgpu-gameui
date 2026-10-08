@@ -5,7 +5,8 @@
 //   - `vs_color`/`fs_color`: colored quads (DrawList vertices); supports per-vertex
 //     scissor via the (clip, clip_enabled) attributes.
 //   - `vs_analytic`/`fs_analytic`: one tagged, ordered instance stream for SDF
-//     rounded-rect chrome and full-affine analytic shadows.
+//     rounded-rect chrome, full-affine analytic shadows, stripe fills and
+//     stroke segments (lines and polylines).
 //   - `vs_circle`/`fs_circle`: instanced SDF circle (filled disc + ring outline).
 //   - `vs_icon`/`fs_icon`: instanced textured quads (icons, sprites, images);
 //     corners baked per-instance, bilinearly interpolated, atlas × tint.
@@ -17,6 +18,10 @@
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
+    // `xy`: the logical position of the target's top-left corner; `z`: logical
+    // px per physical px. Maps a fragment's position on the target back to
+    // logical (world) space exactly, with no interpolation.
+    view: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -102,7 +107,29 @@ fn vs_analytic(in: AnalyticVsIn) -> AnalyticVsOut {
     // like `Affine2` (x' = a·x + b·y + tx, y' = c·x + d·y + ty); `p1.xy` is
     // the translation and `p2` the local rect.
     var local: vec2<f32>;
-    if (in.kind != 1u) {
+    if (in.kind == 3u) {
+        // A stroke segment from `p2.xy` to `p2.zw`: a quad along it, past each
+        // end by that end's reach (`p5.zw`) and `p1.w` to either side, plus
+        // room for the anti-aliasing ramp. `local` is (along, across) from
+        // `p2.xy`.
+        let a = in.p2.xy;
+        let span = in.p2.zw - a;
+        let seg_len = max(length(span), 1e-6);
+        let along = span / seg_len;
+        let across = vec2<f32>(-along.y, along.x);
+        var pad = 1.0;
+        if (any(in.p0 != vec4<f32>(1.0, 0.0, 0.0, 1.0))) {
+            // Two screen px in local units however the transform squashes:
+            // |M| / |det M| bounds one over its smallest stretch.
+            let det = in.p0.x * in.p0.w - in.p0.y * in.p0.z;
+            pad = 2.0 * length(in.p0) / max(abs(det), 1e-8);
+        }
+        let uv = vec2<f32>(
+            mix(-in.p5.z - pad, seg_len + in.p5.w + pad, in.corner.x),
+            mix(-in.p1.w - pad, in.p1.w + pad, in.corner.y));
+        local = a + along * uv.x + across * uv.y;
+        out.local = uv;
+    } else if (in.kind != 1u) {
         // Chrome and stripes. The edge's anti-aliasing ramp reaches up to
         // ~0.7px past the rect, so pad the quad or the outer half of that ramp
         // is never rasterized: a fractional edge then loses its outside pixel.
@@ -497,12 +524,213 @@ fn shade_stripes(in: AnalyticVsOut) -> vec4<f32> {
     return vec4<f32>(in.p3.rgb, alpha);
 }
 
+// ---- Stroke segments (kind 3) ---------------------------------------------
+//
+// One record per segment of a line or polyline (`widgets/stroke.rs`):
+//   p0 the linear part, p1 [tx, ty, clip_enabled, half width], p2 [a, b],
+//   p3 the colour, p4 [the point before a, the point after b],
+//   p5 [start style, end style, start reach, end reach],
+//   p6 the dashes [on, off, offset, the stroke's length],
+//   p7 [the stroke's length before a, dash cap, closed, 0], p8 the clip.
+// End styles: 0 butt, 1 square, 2 round cap (open ends); 3 round join,
+// 4 miter, 5 bevel (corners). Dash caps: 0 butt, 1 square, 2 round.
+//
+// Near a corner both segments reach into the same pixels. Each pixel goes to
+// whichever of this segment and its two neighbours is nearest. Where two are
+// equally near (past the corner's outside, where both are nearest at the
+// corner point) the line halving the corner's angle splits them. Neighbours
+// compute these from the same points and the same exact pixel position, so
+// they agree on every pixel: a translucent stroke paints each pixel once.
+
+fn segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let ab = b - a;
+    let t = dot(p - a, ab) / dot(ab, ab);
+    // Past an end, the distance to that point, computed alike by both
+    // segments that share it.
+    if (t <= 0.0) { return length(p - a); }
+    if (t >= 1.0) { return length(p - b); }
+    return length(p - a - ab * t);
+}
+
+// Whether `p` is on the side the segment leaving the corner `at` (towards
+// `next`) owns, of the line halving the corner's angle.
+fn owns_corner_side(p: vec2<f32>, prev: vec2<f32>, at: vec2<f32>, next: vec2<f32>) -> bool {
+    let incoming = normalize(at - prev);
+    let outgoing = normalize(next - at);
+    var split = incoming + outgoing;
+    if (dot(split, split) < 1e-12) {
+        // Turned right back: split along the line itself.
+        split = vec2<f32>(-outgoing.y, outgoing.x);
+    }
+    return dot(p - at, split) >= 0.0;
+}
+
+// The larger of two distances (the intersection of their shapes). Outside
+// both, with `corner`, the distance to the corner where two perpendicular
+// edges meet.
+fn sdf_max(a: vec3<f32>, b: vec3<f32>, corner: bool) -> vec3<f32> {
+    if (corner && a.x > 0.0 && b.x > 0.0) {
+        let l = length(vec2<f32>(a.x, b.x));
+        return vec3<f32>(l, (a.yz * a.x + b.yz * b.x) / l);
+    }
+    return select(b, a, a.x > b.x);
+}
+
+// The stroke's distance past one end of the segment, `q` = (how far past the
+// end along the segment, across it), in the (along, across) frame. `bevel` is
+// the corner's outward direction in that frame (towards past the end along
+// `q.x`) and the cosine of half its turn, for a bevel.
+fn segment_end_sdf(style: f32, q: vec2<f32>, half: f32, bevel: vec3<f32>) -> vec3<f32> {
+    let band = vec3<f32>(abs(q.y) - half, 0.0, 1.0);
+    if (style < 0.5) { return box_sdf(vec2<f32>(q.x, abs(q.y) - half), 0.0); }
+    if (style < 1.5) { return box_sdf(vec2<f32>(q.x - half, abs(q.y) - half), 0.0); }
+    if (style < 3.5) {
+        let l = max(length(q), 1e-6);
+        return vec3<f32>(l - half, q / l);
+    }
+    if (style < 4.5) { return band; }
+    if (dot(bevel.xy, bevel.xy) < 1e-12) { return band; }
+    let cut = vec3<f32>(dot(q, bevel.xy) - half * bevel.z, bevel.xy);
+    return sdf_max(band, cut, false);
+}
+
+// For a bevel at the corner between `incoming` and `outgoing` (unit, local
+// space): the outward direction in the frame (`frame_along`, `frame_across`),
+// with its along part measured from the corner past the end in question
+// (`sign` -1 at the start, 1 at the end), and the cosine of half the turn.
+fn bevel_of(incoming: vec2<f32>, outgoing: vec2<f32>, frame_along: vec2<f32>,
+            frame_across: vec2<f32>, sign: f32) -> vec3<f32> {
+    let outward = incoming - outgoing;
+    let l = length(outward);
+    if (l < 1e-6) { return vec3<f32>(0.0); }
+    let w = outward / l;
+    return vec3<f32>(sign * dot(w, frame_along), dot(w, frame_across),
+                     0.5 * length(incoming + outgoing));
+}
+
+// Signed distance along the stroke from `s` to the nearest dash (negative
+// inside one): dashes run `on` from every `period`, the pattern `offset` in.
+// An open stroke's dashes are cut to its `length`, and one starting at its
+// very end is not drawn (as Chromium and Skia do).
+fn dash_distance(s: f32, on: f32, period: f32, offset: f32, length: f32, open: bool) -> f32 {
+    let first = floor((s + offset) / period) * period - offset;
+    var nearest = 1e30;
+    for (var k = -1; k <= 1; k++) {
+        var lo = first + f32(k) * period;
+        var hi = lo + on;
+        if (open) {
+            if (lo >= length || hi < 0.0) { continue; }
+            lo = max(lo, 0.0);
+            hi = min(hi, length);
+        }
+        nearest = min(nearest, max(lo - s, s - hi));
+    }
+    return nearest;
+}
+
+// Coverage of a pixel by the inside of a stroke's edge (`sdf` as for
+// `edge_coverage`): a ramp one screen pixel wide along the edge's normal.
+// Narrower than `edge_coverage`'s across a diagonal edge (which spans the
+// whole pixel's extent), and closer to how Chromium draws SVG strokes.
+fn stroke_coverage(sdf: vec3<f32>, pixel_x: vec2<f32>, pixel_y: vec2<f32>) -> f32 {
+    let footprint = max(length(vec2<f32>(dot(pixel_x, sdf.yz), dot(pixel_y, sdf.yz))), 1e-4);
+    return clamp(0.5 - sdf.x / footprint, 0.0, 1.0);
+}
+
+fn shade_segment(in: AnalyticVsOut) -> vec4<f32> {
+    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
+        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    // The pixel centre in the stroke's space, from its position on the target
+    // rather than an interpolated value, so neighbouring segments agree.
+    let scale = uniforms.view.z;
+    let world = uniforms.view.xy + in.clip_position.xy * scale;
+    let m = in.p0;
+    let inv = vec4<f32>(m.w, -m.y, -m.z, m.x) / (m.x * m.w - m.y * m.z);
+    let rel = world - in.p1.xy;
+    let p = vec2<f32>(inv.x * rel.x + inv.y * rel.y, inv.z * rel.x + inv.w * rel.y);
+
+    let a = in.p2.xy;
+    let b = in.p2.zw;
+    let start = in.p5.x;
+    let end = in.p5.y;
+    let own = segment_distance(p, a, b);
+    if (start > 2.5) {
+        let other = segment_distance(p, in.p4.xy, a);
+        if (other < own || (other == own && !owns_corner_side(p, in.p4.xy, a, b))) { discard; }
+    }
+    if (end > 2.5) {
+        let other = segment_distance(p, b, in.p4.zw);
+        if (other < own || (other == own && owns_corner_side(p, a, b, in.p4.zw))) { discard; }
+    }
+
+    // The (along, across) frame from `a`, and the screen pixel in it.
+    let half = in.p1.w;
+    let seg_len = length(b - a);
+    let e = (b - a) / seg_len;
+    let n = vec2<f32>(-e.y, e.x);
+    let uv = vec2<f32>(dot(p - a, e), dot(p - a, n));
+    let screen_x = vec2<f32>(inv.x, inv.z) * scale;
+    let screen_y = vec2<f32>(inv.y, inv.w) * scale;
+    let pixel_x = vec2<f32>(dot(screen_x, e), dot(screen_x, n));
+    let pixel_y = vec2<f32>(dot(screen_y, e), dot(screen_y, n));
+
+    let on = in.p6.x;
+    let period = on + in.p6.y;
+    let dashed = period > 0.0;
+    // Past an open end of a dashed stroke the dashes draw the caps.
+    var sdf = vec3<f32>(abs(uv.y) - half, 0.0, 1.0);
+    if (uv.x < 0.0 && (start > 2.5 || !dashed)) {
+        var bevel = vec3<f32>(0.0);
+        if (start > 4.5) { bevel = bevel_of(normalize(a - in.p4.xy), e, e, n, -1.0); }
+        sdf = segment_end_sdf(start, vec2<f32>(-uv.x, uv.y), half, bevel);
+    } else if (uv.x > seg_len && (end > 2.5 || !dashed)) {
+        var bevel = vec3<f32>(0.0);
+        if (end > 4.5) { bevel = bevel_of(e, normalize(in.p4.zw - b), e, n, 1.0); }
+        sdf = segment_end_sdf(end, vec2<f32>(uv.x - seg_len, uv.y), half, bevel);
+    }
+    let solid = stroke_coverage(sdf, pixel_x, pixel_y);
+    var coverage = solid;
+    if (dashed) {
+        // How far along the stroke the pixel is. Past a corner both segments
+        // hold the corner's position, so the pattern meets itself there.
+        var along = uv.x;
+        if (start > 2.5) { along = max(along, 0.0); }
+        if (end > 2.5) { along = min(along, seg_len); }
+        let s = in.p7.x + along;
+        let d = dash_distance(s, on, period, in.p6.z, in.p6.w, in.p7.z < 0.5);
+        let cap = in.p7.y;
+        var dash_sdf: vec3<f32>;
+        var cap_reach = 0.0;
+        if (cap < 1.5) {
+            cap_reach = select(0.0, half, cap > 0.5);
+            dash_sdf = sdf_max(sdf, vec3<f32>(d - cap_reach, 1.0, 0.0), true);
+        } else {
+            cap_reach = half;
+            dash_sdf = sdf;
+            if (d > 0.0) {
+                let q = vec2<f32>(d, max(sdf.x + half, 0.0));
+                let l = max(length(q), 1e-6);
+                dash_sdf = vec3<f32>(l - half, q / l);
+            }
+        }
+        // Dashes too close together to tell apart fade to their average.
+        let footprint = abs(pixel_x.x) + abs(pixel_y.x);
+        let duty = clamp((on + 2.0 * cap_reach) / period, 0.0, 1.0);
+        coverage = mix(stroke_coverage(dash_sdf, pixel_x, pixel_y), solid * duty,
+                       smoothstep(0.5 * period, period, footprint));
+    }
+    let alpha = coverage * in.p3.a;
+    if (alpha <= 0.0) { discard; }
+    return vec4<f32>(in.p3.rgb, alpha);
+}
+
 @fragment
 fn fs_analytic(in: AnalyticVsOut) -> @location(0) vec4<f32> {
     // The kind is flat, so every 2x2 derivative quad follows one uniform branch;
     // fwidth/dpdx/dpdy remain well-defined in every analytic implementation.
     if (in.kind == 0u) { return shade_chrome(in); }
     if (in.kind == 2u) { return shade_stripes(in); }
+    if (in.kind == 3u) { return shade_segment(in); }
     return shade_shadow(in);
 }
 

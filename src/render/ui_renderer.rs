@@ -37,6 +37,10 @@ pub struct NineSliceMeta {
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
+    /// `[origin_x, origin_y, logical px per physical px, 0]`: maps a fragment's
+    /// position on the target back to logical space exactly (stroke segments
+    /// need the same pixel position in every record that touches it).
+    view: [f32; 4],
 }
 
 /// Size of one ortho uniform, and therefore of one dynamic-offset slot.
@@ -296,6 +300,8 @@ pub struct RenderStats {
     pub shadow_instances: usize,
     /// Analytic stripe instances submitted (hatching, dashed lines).
     pub stripe_instances: usize,
+    /// Analytic stroke segment instances submitted (lines and polylines).
+    pub segment_instances: usize,
     /// Render passes opened: one per ordered draw list, plus one per batch on
     /// the unordered compatibility path.
     pub render_passes: usize,
@@ -536,7 +542,7 @@ impl UiRenderer {
             device,
             "ui uniform buffer",
             UNIFORM_SIZE,
-            wgpu::ShaderStages::VERTEX,
+            wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
         );
 
         let uniform_bgl = uniform.layout();
@@ -1510,6 +1516,7 @@ impl UiRenderer {
         let logical_h = viewport.1 as f32 / scale;
         let uniforms = Uniforms {
             view_proj: ortho_matrix(self.view_origin, logical_w, logical_h),
+            view: [self.view_origin[0], self.view_origin[1], 1.0 / scale, 0.0],
         };
         let (slot, grew) = self.uniform.allocate(device);
         if grew {
@@ -1586,6 +1593,7 @@ impl UiRenderer {
         self.frame_stats.primitives += draw_list.prim_counts().total();
         self.frame_stats.shadow_instances += draw_list.shadow_instance_count();
         self.frame_stats.stripe_instances += draw_list.stripe_instance_count();
+        self.frame_stats.segment_instances += draw_list.segment_instance_count();
         self.frame_stats.paint_runs += draw_list.paint_commands().len();
         for cmd in draw_list.paint_commands() {
             match cmd {

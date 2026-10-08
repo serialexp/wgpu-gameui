@@ -352,10 +352,6 @@ harden those foundations rather than create parallel replacements.
 
 ## 2026-09-26 — Missing Forge components, batch B (dialogs)
 
-- [ ] **P2 — `UiContext::modal_begin` doesn't scope focus to its layer.**
-  `ui_context.rs` registers its widgets with `focus.register` (around
-  lines 2220 and 2748) instead of the layer's ring, the bug `TextInput`
-  had. Tab inside a `UiContext` modal can reach base widgets.
 - [ ] **P3 — `TextInput` has one font.** Its caret layout assumes the
   default font, so `PromptDialog` can't offer Forge's `mono` field.
 - [ ] **P3 — Dialog backdrop blur is up to the app.** Forge blurs behind the
@@ -375,3 +371,22 @@ harden those foundations rather than create parallel replacements.
   text can lose its last glyph to float rounding (the PropertyGroup bug
   above; `SpanTabs` pads its box by 0.5 px for the same reason). A small
   tolerance there would make every caller safe.
+
+## SDF lines follow-ups (found 2026-10-08)
+
+- [ ] **P3 — Chrome's edge ramp may match Chromium better as strokes' does.**
+  Strokes ramp coverage over one screen pixel along the edge's normal
+  (`stroke_coverage` in `ui.wgsl`), which roughly halved the mean difference
+  from Chromium on diagonal strokes compared with chrome's `edge_coverage`
+  (an L1 pixel footprint). Rotated chrome might gain the same; measure with
+  `tests/analytic_shadow_browser_parity.rs` (the `gpu-chrome-shadows`
+  captures) before switching.
+- [ ] **P3 — Self-overlapping strokes paint their soft edge twice.** A segment
+  only shares pixels out with its two neighbours, so a translucent line that
+  folds back over itself (a dense chart line) is slightly darker along the
+  fold. See the known limitation in `docs/design/sdf-lines.md`.
+- [ ] **Arcs (sdf-lines Phase 4).** `stroked_arc` and transformed
+  `circle_outline` still tessellate; waiting on that doc's open question 6
+  (a ring with start and end angles, or an analytic arc kind with the full
+  affine, which could take circles in too; see "Rotated quads and circles
+  still tessellate" above).

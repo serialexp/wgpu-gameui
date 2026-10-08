@@ -424,8 +424,9 @@ impl ToastStack {
 
     /// Push the popup layer the toasts are drawn into, so the widgets under
     /// them don't get their clicks. Call before resolving the base layer's
-    /// input; `None` when no toast is shown. `area` is where toasts may go,
-    /// as for [`draw`](Self::draw).
+    /// input, and tell [`UiState::block_under_layer`](crate::UiState::block_under_layer)
+    /// about the layer so the retained hit scene agrees; `None` when no toast
+    /// is shown. `area` is where toasts may go, as for [`draw`](Self::draw).
     pub fn push_layer(
         &mut self,
         layers: &mut LayerStack,

@@ -34,6 +34,10 @@
 //!   and hovered) and the waffle (100 to 10k cells) drawn and rendered, to
 //!   find how much data a chart can take a frame. Each case's shape counts
 //!   are printed once.
+//! - `strokes_build` / `strokes_render` — a chart line of 1k and 10k points
+//!   as one polyline (solid, dashed, and a wide translucent halo): cutting it
+//!   into segment records, and its frame **waiting for the GPU**, so the
+//!   segment shader's fill is in the sample.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
@@ -46,7 +50,7 @@ use wgpu_gameui::{
     NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn,
     TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
 };
-use wgpu_gameui::{Bar, BarChart, BarSeries, Waffle, WaffleCategory, WaffleFill};
+use wgpu_gameui::{Bar, BarChart, BarSeries, Stroke, Waffle, WaffleCategory, WaffleFill};
 use wgpu_gameui::{
     DragItem, DragList, DragListState, INSPECTOR_WIDTH, Inspector, InspectorSelection,
     InspectorState, PropertyGroup, PropertyRow, PropertyScrub,
@@ -1722,6 +1726,77 @@ fn bench_charts_render(c: &mut Criterion) {
     group.finish();
 }
 
+/// A chart-like line of `count` points across the target.
+fn chart_points(count: usize) -> Vec<[f32; 2]> {
+    (0..count)
+        .map(|i| {
+            let x = 10.0 + i as f32 * (W as f32 - 20.0) / count as f32;
+            let y = H as f32 * 0.5 + 400.0 * (i as f32 * 0.37).sin() * (i as f32 * 0.013).cos();
+            [x, y]
+        })
+        .collect()
+}
+
+/// The strokes a line chart draws: a solid line, a dashed one (estimates),
+/// and a wide translucent halo under the line.
+const STROKE_KINDS: &[&str] = &["polyline", "dashed", "halo"];
+
+fn build_stroke(list: &mut DrawList, kind: &str, points: &[[f32; 2]]) {
+    let stroke = match kind {
+        "polyline" => Stroke::new(1.5),
+        "dashed" => Stroke::new(1.5).dashed(4.0, 3.0),
+        "halo" => Stroke::new(3.5),
+        other => unreachable!("unknown stroke kind {other}"),
+    };
+    let color = if kind == "halo" {
+        [0.0, 0.0, 0.0, 0.55]
+    } else {
+        [0.3, 0.55, 0.85, 1.0]
+    };
+    list.stroke_polyline(points, &stroke, color);
+}
+
+/// CPU cost of cutting a `count`-point polyline into segment records.
+fn bench_strokes_build(c: &mut Criterion) {
+    let harness = Harness::new();
+    let mut list = harness.draw_list();
+    let mut group = c.benchmark_group("strokes_build");
+    for &kind in STROKE_KINDS {
+        for &count in &[1_000usize, 10_000] {
+            let points = chart_points(count);
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(BenchmarkId::new(kind, count), &count, |b, _| {
+                b.iter(|| {
+                    list.clear();
+                    build_stroke(&mut list, kind, &points);
+                    std::hint::black_box(&list);
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+/// A `count`-point polyline's frame, waited on so the GPU's fill (the segment
+/// shader) is in the sample.
+fn bench_strokes_render(c: &mut Criterion) {
+    let mut harness = Harness::new();
+    let mut group = c.benchmark_group("strokes_render");
+    group.sample_size(30);
+    for &kind in STROKE_KINDS {
+        for &count in &[1_000usize, 10_000] {
+            let mut list = harness.draw_list();
+            build_stroke(&mut list, kind, &chart_points(count));
+            harness.render_frame_and_wait(&list);
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(BenchmarkId::new(kind, count), &count, |b, _| {
+                b.iter(|| harness.render_frame_and_wait(&list));
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_drawlist_build,
@@ -1751,5 +1826,7 @@ criterion_group!(
     bench_animation,
     bench_charts_build,
     bench_charts_render,
+    bench_strokes_build,
+    bench_strokes_render,
 );
 criterion_main!(benches);

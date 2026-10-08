@@ -10,7 +10,7 @@
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 
-use super::DrawList;
+use super::{DrawList, Stroke};
 
 /// Draw one frame of a skeleton bar: a rounded bar with a moving highlight.
 /// `phase` is the app-owned shimmer position in `[0, 1)` (wrap it each frame).
@@ -47,17 +47,14 @@ pub fn spinner(
     let track = s.color(StyleKey::ButtonHover);
     list.circle_outline(center, radius, 2.0, track);
     let accent = s.color(StyleKey::Accent);
-    // Approximate the arc with chords (a spinner doesn't need true arcs).
-    let steps = 14;
-    let mut prev: Option<[f32; 2]> = None;
-    for i in 0..=steps {
-        let a = phase + sweep * (i as f32 / steps as f32);
-        let p = [center.0 + radius * a.cos(), center.1 + radius * a.sin()];
-        if let Some(p0) = prev {
-            list.line(p0, p, 2.0, accent);
-        }
-        prev = Some(p);
-    }
+    // Approximate the arc with chords, joined (a spinner doesn't need true
+    // arcs).
+    const STEPS: usize = 14;
+    let points: [[f32; 2]; STEPS + 1] = std::array::from_fn(|i| {
+        let a = phase + sweep * (i as f32 / STEPS as f32);
+        [center.0 + radius * a.cos(), center.1 + radius * a.sin()]
+    });
+    list.stroke_polyline(&points, &Stroke::new(2.0), accent);
 }
 
 /// Draw three accent dots pulsing at `phase` (app-owned clock; stagger by
@@ -110,6 +107,11 @@ mod tests {
         spinner(&mut list, &s, (20.0, 20.0), 8.0, 0.0, 1.6);
         dots(&mut list, &s, (60.0, 20.0), 0.3);
         assert!(!list.circle_instances.is_empty(), "ring + dots are circles");
-        assert!(!list.vertices.is_empty(), "arc chords are line quads");
+        assert_eq!(
+            list.segment_instance_count(),
+            14,
+            "the arc is one joined stroke"
+        );
+        assert!(list.vertices.is_empty());
     }
 }

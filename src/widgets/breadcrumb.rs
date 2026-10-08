@@ -9,7 +9,7 @@ use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
 
-use super::{DrawContext, DrawList};
+use super::{DrawContext, DrawList, Stroke};
 
 /// A breadcrumb trail. `segments` are the labels; all are drawn, the last one
 /// as the current location (bright, not clickable).
@@ -209,8 +209,8 @@ impl Pager {
             } else {
                 (cx - d * 0.4, cx + d * 0.4)
             };
-            list.line([x1, cy - d], [x2, cy], 1.5, color);
-            list.line([x2, cy], [x1, cy + d], 1.5, color);
+            let chevron = [[x1, cy - d], [x2, cy], [x1, cy + d]];
+            list.stroke_polyline(&chevron, &Stroke::new(1.5), color);
             if clicked {
                 out.page = if left {
                     out.page.saturating_sub(1)

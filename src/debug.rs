@@ -119,6 +119,8 @@ pub enum NodeKind {
     Shadow,
     /// An analytic stripe fill (hatching, a dashed line).
     Stripes,
+    /// One segment of an analytic stroke (a line or polyline).
+    Segment,
     /// Aggregated triangle-soup geometry (gradients, polygons, lines).
     Geometry,
     /// A textured atlas icon or image.
@@ -141,6 +143,7 @@ impl NodeKind {
             NodeKind::Circle => "circle",
             NodeKind::Shadow => "shadow",
             NodeKind::Stripes => "stripes",
+            NodeKind::Segment => "segment",
             NodeKind::Geometry => "geometry",
             NodeKind::Icon => "icon",
             NodeKind::IconMsdf => "icon_msdf",
@@ -1213,6 +1216,7 @@ fn collect_nodes(
     let mut circle_order = vec![(stream_len + 1, 0); list.circle_instances.len()];
     let mut shadow_order = vec![(stream_len + 1, 0); list.shadow_instance_count()];
     let mut stripe_order = vec![(stream_len + 1, 0); list.stripe_instance_count()];
+    let mut segment_order = vec![(stream_len + 1, 0); list.segment_instance_count()];
     let mut icon_order = vec![(stream_len + 2, 0); list.icons.len()];
     #[cfg(feature = "phosphor-icons")]
     let mut msdf_order = vec![(stream_len + 3, 0); list.icons_msdf.len()];
@@ -1263,13 +1267,16 @@ fn collect_nodes(
     }
 
     let mut chrome_index = 0;
-    // Shadows and stripes fill their order slots in analytic order.
+    // Shadows, stripes and segments fill their order slots in analytic order.
     let mut shadow_slots = shadow_order.iter_mut();
     let mut stripe_slots = stripe_order.iter_mut();
+    let mut segment_slots = segment_order.iter_mut();
     for (analytic_index, instance) in list.analytic_instances.iter().enumerate() {
         let Some(c) = instance.as_chrome() else {
             let slot = if instance.as_stripes().is_some() {
                 stripe_slots.next()
+            } else if instance.as_segment().is_some() {
+                segment_slots.next()
             } else {
                 shadow_slots.next()
             };
@@ -1387,6 +1394,47 @@ fn collect_nodes(
             n.effects.push("invisible");
         }
         n.order = (list_order, stripe_order[i].0, stripe_order[i].1);
+        out.push(n);
+    }
+
+    for (i, segment) in list.segment_instances().enumerate() {
+        let transform = crate::Affine2::new(
+            segment.linear[0],
+            segment.linear[1],
+            segment.translation[0],
+            segment.linear[2],
+            segment.linear[3],
+            segment.translation[1],
+        );
+        // The segment's box, grown by its half width and the furthest its
+        // ends reach.
+        let [ax, ay, bx, by] = segment.ends;
+        let grow = segment.translation[3]
+            .max(segment.styles[2])
+            .max(segment.styles[3]);
+        let local = Rect::new(
+            ax.min(bx) - grow,
+            ay.min(by) - grow,
+            (ax - bx).abs() + 2.0 * grow,
+            (ay - by).abs() + 2.0 * grow,
+        );
+        let mut n = RawNode::new(
+            format!("segment#{i}"),
+            false,
+            NodeKind::Segment,
+            RenderPass::Color,
+            i,
+        );
+        n.parent = own(i, |c| c.segment_instances);
+        n.bounds = transform.transform_rect_aabb(local);
+        n.axis_aligned = transform.is_axis_aligned() && (ax == bx || ay == by);
+        n.clip = clip_from_parts(segment.clip, segment.translation[2]);
+        n.counts.segment_instances = 1;
+        n.layer = layer;
+        if segment.color[3] <= 0.0 {
+            n.effects.push("invisible");
+        }
+        n.order = (list_order, segment_order[i].0, segment_order[i].1);
         out.push(n);
     }
 
@@ -1578,6 +1626,7 @@ fn list_counts(list: &DrawList) -> PrimCounts {
         circle_instances: list.circle_instances.len(),
         shadow_instances: list.shadow_instance_count(),
         stripe_instances: list.stripe_instance_count(),
+        segment_instances: list.segment_instance_count(),
         dropped_degenerate: list.dropped_degenerate() as usize,
     }
 }
@@ -2140,7 +2189,7 @@ impl DebugReport {
         ));
         if let Some(stats) = self.render_stats {
             s.push_str("RENDER:\n");
-            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} render_passes={} shadow_instances={} stripe_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} texture_uploads={} texture_bytes_uploaded={} small_texture_batches={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.small_texture_batches, stats.buffer_reallocations));
+            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} render_passes={} shadow_instances={} stripe_instances={} segment_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} texture_uploads={} texture_bytes_uploaded={} small_texture_batches={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.segment_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.small_texture_batches, stats.buffer_reallocations));
             for warning in stats.warnings() {
                 s.push_str(&format!("!! WARN  render {warning}\n"));
             }
@@ -2259,7 +2308,7 @@ impl DebugReport {
 
         match self.render_stats {
             Some(stats) => {
-                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"render_passes\": {}, \"shadow_instances\": {}, \"stripe_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"texture_uploads\": {}, \"texture_bytes_uploaded\": {}, \"small_texture_batches\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.small_texture_batches, stats.buffer_reallocations, stats.fragmentation_ratio()));
+                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"render_passes\": {}, \"shadow_instances\": {}, \"stripe_instances\": {}, \"segment_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"texture_uploads\": {}, \"texture_bytes_uploaded\": {}, \"small_texture_batches\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.segment_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.small_texture_batches, stats.buffer_reallocations, stats.fragmentation_ratio()));
                 for (i, warning) in stats.warnings().iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
@@ -3522,6 +3571,7 @@ mod tests {
             color_runs: 3,
             shadow_instances: 0,
             stripe_instances: 5,
+            segment_instances: 6,
             render_passes: 1,
             text_runs: 2,
             icon_runs: 2,
@@ -3544,7 +3594,8 @@ mod tests {
         assert!(json.contains("\"buffer_bytes_uploaded\": 4096"));
         assert!(json.contains("\"small_texture_batches\": 40"));
         assert!(json.contains("\"stripe_instances\": 5"));
-        assert!(text.contains("shadow_instances=0 stripe_instances=5"));
+        assert!(json.contains("\"segment_instances\": 6"));
+        assert!(text.contains("shadow_instances=0 stripe_instances=5 segment_instances=6"));
         assert!(
             text.contains("texture_uploads=3 texture_bytes_uploaded=768 small_texture_batches=40")
         );

@@ -8,10 +8,12 @@ use crate::render::SpriteId;
 use crate::render::{IconGlyph, PhosphorIcon};
 use crate::shadow::{BoxShadow, CornerRadii, ShadowInstance};
 use crate::text::{FontHandle, FontSystemHandle, FontVMetrics, TextBlock, TextMeasurer, Underline};
+use crate::widgets::stroke::{self, SegmentInstance, Stroke};
 
 const ANALYTIC_KIND_CHROME: u32 = 0;
 const ANALYTIC_KIND_SHADOW: u32 = 1;
 const ANALYTIC_KIND_STRIPES: u32 = 2;
+const ANALYTIC_KIND_SEGMENT: u32 = 3;
 
 /// Monotonic source of per-`DrawList` identity. Each `DrawList` gets a unique,
 /// never-reused id at construction so the renderer can detect the "freshly
@@ -197,7 +199,7 @@ pub struct StripeInstance {
 pub struct AnalyticInstance {
     /// Kind-specific payload, uploaded directly as ten `vec4<f32>` attributes.
     pub payload: [[f32; 4]; 10],
-    /// Flat shader tag: zero for chrome, one for shadow.
+    /// Flat shader tag: chrome, shadow, stripes or a stroke segment.
     pub kind: u32,
     /// Explicit alignment padding; keeps the record stride vertex-buffer safe.
     pub padding: [u32; 3],
@@ -264,6 +266,25 @@ impl AnalyticInstance {
         }
     }
 
+    fn segment(value: SegmentInstance) -> Self {
+        Self {
+            payload: [
+                value.linear,
+                value.translation,
+                value.ends,
+                value.color,
+                value.neighbours,
+                value.styles,
+                value.dash,
+                value.phase,
+                value.clip,
+                [0.0; 4],
+            ],
+            kind: ANALYTIC_KIND_SEGMENT,
+            padding: [0; 3],
+        }
+    }
+
     /// Decode this record as chrome, or return `None` for another kind.
     pub fn as_chrome(&self) -> Option<ChromeInstance> {
         (self.kind == ANALYTIC_KIND_CHROME).then(|| ChromeInstance {
@@ -305,6 +326,22 @@ impl AnalyticInstance {
             color: self.payload[3],
             pattern: self.payload[4],
             phase: self.payload[5],
+            clip: self.payload[8],
+        })
+    }
+
+    /// Decode this record as a stroke segment, or return `None` for another
+    /// kind.
+    pub fn as_segment(&self) -> Option<SegmentInstance> {
+        (self.kind == ANALYTIC_KIND_SEGMENT).then(|| SegmentInstance {
+            linear: self.payload[0],
+            translation: self.payload[1],
+            ends: self.payload[2],
+            color: self.payload[3],
+            neighbours: self.payload[4],
+            styles: self.payload[5],
+            dash: self.payload[6],
+            phase: self.payload[7],
             clip: self.payload[8],
         })
     }
@@ -438,6 +475,8 @@ pub struct PrimCounts {
     pub shadow_instances: usize,
     /// Stripe fills ([`DrawList::stripe_instances`]).
     pub stripe_instances: usize,
+    /// Stroke segments ([`DrawList::segment_instances`]).
+    pub segment_instances: usize,
     /// Primitives silently dropped by a non-positive size/radius/thickness
     /// guard. These leave **no trace in any buffer**, so this counter is the
     /// only evidence that an element collapsed — see
@@ -463,6 +502,7 @@ impl PrimCounts {
             + self.circle_instances
             + self.shadow_instances
             + self.stripe_instances
+            + self.segment_instances
     }
 
     /// Element-wise `self - earlier`, saturating at zero. Use this to turn a
@@ -488,6 +528,9 @@ impl PrimCounts {
             stripe_instances: self
                 .stripe_instances
                 .saturating_sub(earlier.stripe_instances),
+            segment_instances: self
+                .segment_instances
+                .saturating_sub(earlier.segment_instances),
             dropped_degenerate: self
                 .dropped_degenerate
                 .saturating_sub(earlier.dropped_degenerate),
@@ -576,6 +619,10 @@ pub struct DrawList {
     analytic_chrome_count: usize,
     analytic_shadow_count: usize,
     analytic_stripe_count: usize,
+    analytic_segment_count: usize,
+    /// A stroke's cleaned-up points while it is cut into segments; kept so
+    /// strokes allocate nothing once warmed up.
+    stroke_points: Vec<[f32; 2]>,
     /// Instanced circles (filled discs + ring outlines). Drawn by the circle
     /// SDF pipeline; interleaved with soup/chrome via `DrawList::paint_cmds`.
     pub circle_instances: Vec<CircleInstance>,
@@ -632,6 +679,8 @@ impl Default for DrawList {
             analytic_chrome_count: 0,
             analytic_shadow_count: 0,
             analytic_stripe_count: 0,
+            analytic_segment_count: 0,
+            stroke_points: Vec::new(),
             circle_instances: Vec::new(),
             paint_cmds: Vec::new(),
             soup_committed_indices: 0,
@@ -685,6 +734,8 @@ impl DrawList {
             analytic_chrome_count: 0,
             analytic_shadow_count: 0,
             analytic_stripe_count: 0,
+            analytic_segment_count: 0,
+            stroke_points: Vec::new(),
             circle_instances: Vec::new(),
             paint_cmds: Vec::new(),
             soup_committed_indices: 0,
@@ -731,6 +782,7 @@ impl DrawList {
         self.analytic_chrome_count = 0;
         self.analytic_shadow_count = 0;
         self.analytic_stripe_count = 0;
+        self.analytic_segment_count = 0;
         self.circle_instances.clear();
         self.paint_cmds.clear();
         self.soup_committed_indices = 0;
@@ -990,6 +1042,7 @@ impl DrawList {
             circle_instances: self.circle_instances.len(),
             shadow_instances: self.analytic_shadow_count,
             stripe_instances: self.analytic_stripe_count,
+            segment_instances: self.analytic_segment_count,
             dropped_degenerate: self.dropped_degenerate as usize,
         }
     }
@@ -1462,39 +1515,70 @@ impl DrawList {
         self.pop_clip();
     }
 
-    /// Add a thick line segment as a quad.
+    /// A straight line `thickness` px wide with flat (butt) ends: one
+    /// [`stroke_line`](Self::stroke_line) with [`Stroke::new`].
     pub fn line(&mut self, p0: [f32; 2], p1: [f32; 2], thickness: f32, color: [f32; 4]) {
-        let dx = p1[0] - p0[0];
-        let dy = p1[1] - p0[1];
-        let len = (dx * dx + dy * dy).sqrt();
-        if len <= f32::EPSILON || thickness <= 0.0 {
-            self.dropped_degenerate += 1;
-            return;
-        }
-
-        let half = thickness * 0.5;
-        let ox = -dy / len * half;
-        let oy = dx / len * half;
-        let base = self.vertices.len() as u32;
-
-        // Compute offsets in local space; transform happens inside `vertex()`.
-        self.vertices
-            .push(self.vertex(p0[0] + ox, p0[1] + oy, color));
-        self.vertices
-            .push(self.vertex(p1[0] + ox, p1[1] + oy, color));
-        self.vertices
-            .push(self.vertex(p1[0] - ox, p1[1] - oy, color));
-        self.vertices
-            .push(self.vertex(p0[0] - ox, p0[1] - oy, color));
-        self.indices
-            .extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 3, base]);
+        self.stroke_line(p0, p1, &Stroke::new(thickness), color);
     }
 
-    /// Add connected thick line segments without joins or caps.
-    pub fn polyline(&mut self, points: &[[f32; 2]], thickness: f32, color: [f32; 4]) {
-        for segment in points.windows(2) {
-            self.line(segment[0], segment[1], thickness, color);
+    /// A straight line drawn with `stroke` (its caps and dashes).
+    pub fn stroke_line(&mut self, p0: [f32; 2], p1: [f32; 2], stroke: &Stroke, color: [f32; 4]) {
+        self.stroke_points_through(&[p0, p1], false, stroke, color);
+    }
+
+    /// An open polyline through `points`, drawn with `stroke`: its joins at
+    /// the corners, its caps at the two ends, its dashes running on round the
+    /// corners. A translucent stroke covers each pixel once, corners included.
+    pub fn stroke_polyline(&mut self, points: &[[f32; 2]], stroke: &Stroke, color: [f32; 4]) {
+        self.stroke_points_through(points, false, stroke, color);
+    }
+
+    /// A closed outline through `points`, the last joined back to the first.
+    pub fn stroke_closed(&mut self, points: &[[f32; 2]], stroke: &Stroke, color: [f32; 4]) {
+        self.stroke_points_through(points, true, stroke, color);
+    }
+
+    /// Record a stroke as one analytic segment instance per segment, in the
+    /// ordered stream with the chrome around it: smooth at any angle, scale
+    /// and DPR, and crisp when it is a whole number of px wide on the pixel
+    /// grid. See [`Stroke`] for what fewer than two distinct points or a bad
+    /// width do (they count as [`dropped_degenerate`](Self::dropped_degenerate)).
+    fn stroke_points_through(
+        &mut self,
+        points: &[[f32; 2]],
+        closed: bool,
+        stroke: &Stroke,
+        color: [f32; 4],
+    ) {
+        let paint = stroke::Paint {
+            transform: self.current_transform(),
+            color: self.apply_tint(color),
+            clip: self.current_clip().map(|c| [c.x, c.y, c.width, c.height]),
+        };
+        let first = self.analytic_instances.len();
+        let mut scratch = std::mem::take(&mut self.stroke_points);
+        let instances = &mut self.analytic_instances;
+        let built =
+            stroke::build_segments(points, closed, stroke, paint, &mut scratch, |segment| {
+                instances.push(AnalyticInstance::segment(segment))
+            });
+        self.stroke_points = scratch;
+        match built {
+            Ok(()) => {}
+            Err(stroke::Skip::Degenerate) => {
+                self.dropped_degenerate += 1;
+                return;
+            }
+            Err(stroke::Skip::Invisible) => return,
         }
+        let end = self.analytic_instances.len();
+        self.analytic_segment_count += end - first;
+        // The records are already in place, after any soup drawn before them:
+        // commit that soup first so paint order holds.
+        self.flush_soup();
+        self.push_paint_cmd(PaintCmd::Analytic {
+            instances: first as u32..end as u32,
+        });
     }
 
     /// Add a rounded rectangle as one fill-only SDF instance: the shader clamps
@@ -2290,6 +2374,18 @@ impl DrawList {
             .filter_map(AnalyticInstance::as_stripes)
     }
 
+    /// Number of stroke segment records in the heterogeneous analytic stream.
+    pub fn segment_instance_count(&self) -> usize {
+        self.analytic_segment_count
+    }
+
+    /// Iterate stroke segment payloads in paint order.
+    pub fn segment_instances(&self) -> impl Iterator<Item = SegmentInstance> + '_ {
+        self.analytic_instances
+            .iter()
+            .filter_map(AnalyticInstance::as_segment)
+    }
+
     /// Index range for soup not yet represented by an explicit command.
     ///
     /// The renderer submits this once after the command stream. Keeping the
@@ -2942,7 +3038,9 @@ mod tests {
     use crate::layout::Rect;
     use crate::shadow::{BoxShadow, CornerRadii};
 
-    use super::{DrawList, PaintCmd, PrimCounts, css_spread_radius, normalize_shadow_radii};
+    use super::{
+        DrawList, PaintCmd, PrimCounts, Stroke, css_spread_radius, normalize_shadow_radii,
+    };
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -3126,12 +3224,67 @@ mod tests {
     }
 
     #[test]
-    fn line_emits_quad_geometry() {
+    fn a_line_is_one_analytic_segment() {
         let mut list = DrawList::new();
+        list.set_tint([0.5, 0.5, 0.5, 1.0]);
+        list.push_clip(Rect::new(1.0, 2.0, 30.0, 40.0));
         list.line([0.0, 0.0], [10.0, 0.0], 2.0, [1.0, 1.0, 1.0, 1.0]);
+        assert!(list.vertices.is_empty() && list.indices.is_empty());
+        assert_eq!(list.segment_instance_count(), 1);
+        assert_eq!(list.prim_counts().segment_instances, 1);
+        let segment = list.segment_instances().next().unwrap();
+        assert_eq!(segment.ends, [0.0, 0.0, 10.0, 0.0]);
+        assert_eq!(segment.translation, [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(segment.color, [0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(segment.clip, [1.0, 2.0, 30.0, 40.0]);
+        assert_eq!(
+            list.paint_cmds,
+            vec![PaintCmd::Analytic { instances: 0..1 }]
+        );
+    }
 
-        assert_eq!(list.vertices.len(), 4);
-        assert_eq!(list.indices.len(), 6);
+    #[test]
+    fn strokes_join_the_analytic_run_in_paint_order() {
+        let mut list = DrawList::new();
+        list.triangle((0.0, 0.0), (4.0, 0.0), (0.0, 4.0), [1.0; 4]);
+        list.stroke_polyline(
+            &[[0.0, 0.0], [5.0, 3.0], [9.0, 0.0]],
+            &Stroke::new(1.5),
+            [1.0; 4],
+        );
+        list.rounded_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, [1.0; 4]);
+        list.stroke_closed(
+            &[[1.0, 1.0], [6.0, 1.0], [3.0, 5.0]],
+            &Stroke::new(1.5),
+            [1.0; 4],
+        );
+        assert_eq!(
+            list.paint_cmds,
+            vec![
+                PaintCmd::Soup { indices: 0..3 },
+                PaintCmd::Analytic { instances: 0..6 },
+            ]
+        );
+        assert_eq!(list.segment_instance_count(), 5);
+        assert_eq!(list.chrome_instance_count(), 1);
+    }
+
+    #[test]
+    fn bad_strokes_count_as_dropped_and_invisible_ones_do_not() {
+        let mut list = DrawList::new();
+        list.line([1.0, 1.0], [1.0, 1.0], 2.0, [1.0; 4]);
+        list.line([0.0, 0.0], [5.0, 0.0], 0.0, [1.0; 4]);
+        list.stroke_polyline(&[[0.0, 0.0]], &Stroke::new(1.0), [1.0; 4]);
+        assert_eq!(list.dropped_degenerate(), 3);
+        list.stroke_line(
+            [0.0, 0.0],
+            [5.0, 0.0],
+            &Stroke::new(1.0).dashed(0.0, 2.0),
+            [1.0; 4],
+        );
+        assert_eq!(list.dropped_degenerate(), 3);
+        assert_eq!(list.segment_instance_count(), 0);
+        assert!(list.paint_cmds.is_empty());
     }
 
     #[test]
@@ -3885,40 +4038,40 @@ mod tests {
     #[test]
     fn chrome_rect_interleaves_with_soup_in_order() {
         let mut list = DrawList::new();
-        // soup, chrome, soup, chrome. `line` stays in the soup (it is not
+        // soup, chrome, soup, chrome. `triangle` stays in the soup (it is not
         // instanced), so it produces genuine Soup runs to interleave with chrome.
-        list.line([0.0, 0.0], [10.0, 0.0], 2.0, [1.0; 4]); // 6 indices
+        list.triangle((0.0, 0.0), (10.0, 0.0), (0.0, 10.0), [1.0; 4]); // 3 indices
         list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
-        list.line([0.0, 0.0], [10.0, 0.0], 2.0, [1.0; 4]); // 6 more indices
+        list.triangle((0.0, 0.0), (10.0, 0.0), (0.0, 10.0), [1.0; 4]); // 3 more indices
         list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
         assert_eq!(
             list.paint_cmds,
             vec![
-                super::PaintCmd::Soup { indices: 0..6 },
+                super::PaintCmd::Soup { indices: 0..3 },
                 super::PaintCmd::Analytic { instances: 0..1 },
-                super::PaintCmd::Soup { indices: 6..12 },
+                super::PaintCmd::Soup { indices: 3..6 },
                 super::PaintCmd::Analytic { instances: 1..2 },
             ]
         );
         // Trailing soup (after the last command) is implicit: committed cursor
         // sits at the last flush, anything past it is the trailing run.
-        assert_eq!(list.soup_committed_indices, 12);
-        assert_eq!(list.indices.len(), 12);
+        assert_eq!(list.soup_committed_indices, 6);
+        assert_eq!(list.indices.len(), 6);
     }
 
     #[test]
     fn chrome_rect_trailing_soup_left_uncommitted() {
         let mut list = DrawList::new();
         list.chrome_rect(Rect::new(0.0, 0.0, 8.0, 8.0), 2.0, 1.0, [1.0; 4], [0.0; 4]);
-        list.line([0.0, 0.0], [10.0, 0.0], 2.0, [1.0; 4]); // soup after chrome
-        // The trailing line is NOT in a command; the renderer draws
+        list.triangle((0.0, 0.0), (10.0, 0.0), (0.0, 10.0), [1.0; 4]); // soup after chrome
+        // The trailing triangle is NOT in a command; the renderer draws
         // indices[committed..total] as the trailing run.
         assert_eq!(
             list.paint_cmds,
             vec![super::PaintCmd::Analytic { instances: 0..1 }]
         );
         assert_eq!(list.soup_committed_indices, 0);
-        assert_eq!(list.indices.len(), 6);
+        assert_eq!(list.indices.len(), 3);
     }
 
     #[test]
@@ -3956,7 +4109,7 @@ mod tests {
     #[test]
     fn paint_quad_records_affine_gradient_radii_widths_tint_and_order() {
         let mut list = DrawList::new();
-        list.line([0.0, 0.0], [4.0, 0.0], 1.0, [1.0; 4]);
+        list.triangle((0.0, 0.0), (4.0, 0.0), (0.0, 4.0), [1.0; 4]);
         list.set_tint([0.5, 0.25, 1.0, 0.5]);
         list.rotate(0.25);
         list.paint_quad(
@@ -3982,7 +4135,7 @@ mod tests {
         assert_eq!(
             list.paint_cmds,
             vec![
-                PaintCmd::Soup { indices: 0..6 },
+                PaintCmd::Soup { indices: 0..3 },
                 PaintCmd::Analytic { instances: 0..1 },
             ]
         );

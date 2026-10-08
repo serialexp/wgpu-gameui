@@ -5,7 +5,7 @@ use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 
-use super::DrawList;
+use super::{DrawList, Stroke};
 
 /// Height of one text bar, and the gap between rows.
 const BAR: f32 = 6.0;
@@ -275,23 +275,23 @@ fn clip_to_circle(p0: [f32; 2], p1: [f32; 2], c: [f32; 2], r: f32) -> Option<([f
     Some((at(t0), at(t1)))
 }
 
-/// A 1 px dashed circle: [`DASH`]-long arcs with equal gaps.
+/// A 1 px dashed circle: [`DASH`]-long arcs with equal gaps, a whole number
+/// of them round it.
 fn dashed_circle(list: &mut DrawList, c: [f32; 2], r: f32, color: [f32; 4]) {
     if r <= 0.0 {
         return;
     }
-    let circumference = std::f32::consts::TAU * r;
-    let dashes = (circumference / (DASH * 2.0)).floor().max(1.0);
-    let step = std::f32::consts::TAU / dashes;
-    let on = step * 0.5;
-    let point = |a: f32| [c[0] + r * a.cos(), c[1] + r * a.sin()];
-    for i in 0..dashes as usize {
-        let a0 = i as f32 * step;
-        // Two chords per dash keep a small dash on a big circle round.
-        let mid = a0 + on * 0.5;
-        list.line(point(a0), point(mid), 1.0, color);
-        list.line(point(mid), point(a0 + on), 1.0, color);
-    }
+    // Within 0.15 px of the circle up to a radius of 120.
+    const SIDES: usize = 64;
+    let step = std::f32::consts::TAU / SIDES as f32;
+    let outline: [[f32; 2]; SIDES] = std::array::from_fn(|i| {
+        let a = i as f32 * step;
+        [c[0] + r * a.cos(), c[1] + r * a.sin()]
+    });
+    let perimeter = SIDES as f32 * 2.0 * r * (step * 0.5).sin();
+    let dashes = (perimeter / (DASH * 2.0)).floor().max(1.0);
+    let half = perimeter / dashes * 0.5;
+    list.stroke_closed(&outline, &Stroke::new(1.0).dashed(half, half), color);
 }
 
 #[cfg(test)]

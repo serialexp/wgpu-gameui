@@ -1,6 +1,6 @@
 # SDF lines
 
-**Status:** Draft
+**Status:** Phases 0-3 and 5 implemented; Phase 4 (arcs) next
 **Last updated:** 2026-10-08
 
 ## Implementation status
@@ -9,26 +9,39 @@ Tracking the gap between this design and what's on the main branch.
 
 ### Done
 
-(nothing yet)
+- [x] Phase 0: Chromium captures of 18 SVG stroke cases at DPR 1 / 1.5 / 2
+  (`fixtures/browser/sdf-lines/`, compared by `tests/stroke_browser_parity.rs`); benchmarks
+  `strokes_build` and `strokes_render` (1k and 10k chart points: plain, dashed, translucent halo)
+- [x] Phase 1: segment instances, analytic kind 3 (`ANALYTIC_KIND_SEGMENT`), in the existing 176-byte
+  analytic instance; full affine; clip; `line` records one; `Stroke { width, cap, join, miter_limit,
+  dash }` with butt / round / square caps; whole-pixel axis-aligned strokes snap to the grid and paint
+  exactly the pixels the soup quad did
+- [x] Phase 2: `stroke_polyline` and `stroke_closed` with miter / round / bevel joins and the miter
+  limit; each pixel is painted once at a corner; `polyline` removed
+- [x] Phase 3: dashes with an offset, carried across corners; zero-length round dashes draw dots;
+  dashes much finer than a pixel fade to their duty cycle
+- [x] Phase 5: gameui callers moved (`busy`, `checkbox`, `combo_box`, `dropdown`, `breadcrumb`,
+  `menubar/paint`, `curve_editor`, `placeholder`); every other `line` call is a segment without
+  changes. agent-ui's desktop: card and tile outlines are one closed stroke (`edge_box`), which also
+  fixes the missing top-left corner pixel and the doubly painted bottom-right one
+- Decisions: open question 1 (a), the analytic stream; 3, flatten on the CPU; 5, `dashed_rect_outline`
+  and `dashed_hline` stay on the stripe shader as the cheap axis-aligned case
 
 ### Outstanding
 
-- [ ] Phase 0: Chromium reference captures of SVG strokes (caps, joins, dashes, translucent, hairlines) at DPR 1 / 1.5 / 2, and a benchmark of today's soup `line` as the baseline
-- [ ] Phase 1: segment instance kind in the analytic stream (`ANALYTIC_SEGMENT`), pixel-area coverage, full affine, clip
-- [ ] Phase 1: `DrawList::line` records a segment instance (butt caps, as today) instead of a soup quad
-- [ ] Phase 1: `Stroke { width, cap }` with butt / round / square caps
-- [ ] Phase 1: axis-aligned hairlines snap to the pixel grid and come out crisp (one pixel, full coverage)
-- [ ] Phase 2: `DrawList::stroke_polyline(points, &Stroke, color)` with round / miter / bevel joins and a miter limit
-- [ ] Phase 2: joins split by the angle bisector, so each pixel is drawn once and translucent strokes don't darken at corners
-- [ ] Phase 2: `polyline` (no joins) removed; its callers move to `stroke_polyline`
-- [ ] Phase 3: dashes (`Stroke.dash`: on, off, offset) evaluated in the shader, continuing across a polyline's segments
-- [ ] Phase 3: `dashed_rect_outline` re-checked against the dashed stroke (kept or rebuilt on it; see open question 5)
-- [ ] Phase 4: arcs: the ring instance gains a start and end angle; `stroked_arc` and transformed `circle_outline` stop tessellating
-- [ ] Phase 5: migrate gameui callers (`busy.rs`, `curve_editor.rs`, `placeholder.rs`, `waffle.rs`, `menubar/paint.rs`, `dropdown.rs`, `combo_box.rs`, `breadcrumb.rs`) and agent-ui's desktop (`transcript_cards.rs`, `main_view.rs`)
-- [ ] Phase 5: remove the soup paths for lines and arcs; the gallery and the Chromium comparisons pass
-- [ ] Phase 6: README, benchmarks and this doc's status updated
+- [ ] Phase 4: arcs (`stroked_arc`, transformed `circle_outline` still tessellate), as an analytic arc
+  kind (open question 6)
+- [ ] Phase 6: benchmark numbers recorded here (the machine was too loaded for render timings to mean
+  anything; recording costs about the same as the soup line, 80-90 ns a line)
 - [ ] Triangles (carets, popover arrows) (deferred: open question 2)
-- [ ] Curves drawn exactly in the shader (deferred: open question 3; curves are flattened into polylines until then)
+- [ ] Curves drawn exactly in the shader (deferred: open question 3)
+
+### Known limitation
+
+Pixels are shared out between a segment and its two neighbours only. Where a line folds back over
+itself, as a chart line with two points a pixel does, segments that aren't neighbours each paint the
+soft pixels along the shared edge: the dense zigzag fixture is about 2% heavier than Chromium at DPR 1,
+and a translucent stroke there is slightly darker. Solid strokes look the same.
 
 ## Why this exists
 
@@ -105,17 +118,19 @@ an anti-aliasing margin. The fragment shader:
 3. decides whether this segment owns the pixel at a join (below), and discards it if not;
 4. applies the cap past either end (butt: none; square: a box of half the width; round: a disc);
 5. applies the dash pattern along `t`, each dash taking the stroke's cap;
-6. turns the distance into coverage with a box filter over the pixel, in screen pixels (through
-   `dpdx`/`dpdy`, as chrome does). An axis-aligned edge then gets exactly the coverage of the pixel area
-   it covers, which keeps aligned hairlines crisp, rather than the soft ramp `smoothstep` gives;
+6. turns the distance into coverage with a linear ramp one screen pixel wide across the nearest
+   edge (the edge's normal measured in screen pixels). An axis-aligned edge then gets exactly the
+   coverage of the pixel area it covers, which keeps aligned hairlines crisp. This matched Chromium
+   about twice as closely as chrome's L1 pixel footprint did on diagonal edges;
 7. returns the colour with `alpha × coverage`, straight alpha, as the other analytic kinds do.
 
 ### Joins without overlap
 
 Two segments that meet at a corner both reach into the same pixels around it. Drawing both is what
-darkens translucent strokes today. The fix is to split the corner along the bisector of its angle: each
-segment only draws pixels on its own side. The distance to the whole stroke is the same on both sides of
-that line, so the two halves meet without a seam and each pixel is drawn once:
+darkened translucent strokes. Instead each segment draws a pixel only if it is the nearest of itself
+and its two neighbours; a tie goes by the side of the corner's bisector. Both segments compute the
+pixel's position the same way, from the fragment's screen position, so they agree on every pixel, and
+each pixel is drawn once:
 
 - **round join:** each side draws its own part of the disc at the corner point;
 - **miter join:** each side extends its edge to the bisector, making the pointed corner; past the miter
@@ -177,6 +192,8 @@ even widths), as browsers do for borders. Diagonal lines are never snapped.
 4. **Instance size.** Carrying neighbour directions, join, dash and phase makes a segment instance about
    100 bytes, against four soup vertices and six indices today. Acceptable for UI line counts (hundreds
    to low thousands), but Phase 0's benchmark should confirm it at 10k.
+   > **Implemented:** segments use the existing 176-byte analytic instance rather than a layout of
+   > their own, so the stream keeps one instance size.
 5. **`dashed_rect_outline`.** It's axis-aligned quads and already crisp. Keep it as it is, or rebuild it
    on the dashed stroke so there is one dash implementation?
    > **2026-10-08 update:** `DrawList::stripes(rect, Stripes)` (a shader-drawn stripe fill, one record
@@ -187,6 +204,9 @@ even widths), as browsers do for borders. Diagonal lines are never snapped.
 6. **Circles into the analytic stream.** Moving circles in too would remove their soup fallback under
    rotation and scale, and one `PaintCmd` kind. Out of scope here unless Phase 4's arc work makes it the
    natural step.
+   > **2026-10-08 decision:** arcs become their own analytic kind (full affine, the segments' caps,
+   > dashes, coverage and clip), not start and end angles on the ring instance. Moving circles in is
+   > a separate step after that, with its own before-and-after checks.
 
 ## References
 

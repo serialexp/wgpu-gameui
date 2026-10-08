@@ -6,6 +6,8 @@ use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{AnimSlot, SpriteId, StyleKey, StyleResolver};
 
+#[cfg(not(feature = "phosphor-icons"))]
+use super::Stroke;
 use super::material::draw_inset_shadow;
 use super::radio::socket_rim;
 use super::{DrawContext, DrawList, FocusId};
@@ -318,7 +320,7 @@ pub(crate) fn draw_vector_box(
                 [box_rect.x + size * 0.42, box_rect.y + size * 0.72],
                 [box_rect.x + size * 0.78, box_rect.y + size * 0.28],
             ];
-            list.polyline(&pts, t, mark);
+            list.stroke_polyline(&pts, &Stroke::new(t), mark);
         }
         // 1px inset highlight under the top edge (raised-face read).
         let hl = s.color(StyleKey::EdgeHighlight);

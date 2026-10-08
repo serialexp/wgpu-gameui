@@ -75,7 +75,8 @@ pub enum PointerPolicy {
 pub struct OrderKey {
     /// Outer layer order (`0` is the base list; larger values are above it).
     pub layer: u32,
-    /// Submission sequence within the layer.
+    /// Submission sequence within the layer. `0` is a layer's
+    /// [`block`](InteractionScene::block)er, below everything drawn on it.
     pub sequence: u64,
 }
 
@@ -152,6 +153,20 @@ impl Response {
             ..Self::default()
         }
     }
+}
+
+/// The area a modal's blocker covers: farther than any screen reaches.
+const EVERYWHERE: Rect = Rect {
+    x: -1.0e9,
+    y: -1.0e9,
+    width: 2.0e9,
+    height: 2.0e9,
+};
+
+/// The id of `layer`'s [`block`](InteractionScene::block)er: a range of its
+/// own, apart from `UiContext`'s automatic ids and its tree's.
+fn blocker_id(layer: u32) -> WidgetId {
+    WidgetId(0xB10C_0000_0000_0000 | u64::from(layer))
 }
 
 /// Previous/current retained interaction geometry for one UI surface.
@@ -279,6 +294,7 @@ impl InteractionScene {
             .get(&id)
             .copied()
             .unwrap_or_else(|| Response::idle(id, shape.bounds()));
+        self.next_sequence += 1;
         self.current.push(HitRegion {
             id,
             shape,
@@ -291,8 +307,28 @@ impl InteractionScene {
             enabled,
             pointer_policy,
         });
-        self.next_sequence += 1;
         response
+    }
+
+    /// Keep the pointer on `layer` from every layer below it: over `area`,
+    /// or everywhere for `None` (a modal). The blocker is a disabled region
+    /// under everything drawn on `layer` itself, whenever that is drawn, so
+    /// the layer's own widgets still take the pointer. Blocking a layer
+    /// again in the same frame changes nothing.
+    pub fn block(&mut self, layer: u32, area: Option<Rect>) {
+        let id = blocker_id(layer);
+        if self.current.iter().any(|region| region.id == id) {
+            return;
+        }
+        self.current.push(HitRegion {
+            id,
+            shape: HitShape::Rect(area.unwrap_or(EVERYWHERE)),
+            transform: Affine2::IDENTITY,
+            clip: None,
+            order: OrderKey { layer, sequence: 0 },
+            enabled: false,
+            pointer_policy: PointerPolicy::Target,
+        });
     }
 
     /// Complete collection and retain this frame's regions for next-frame input.

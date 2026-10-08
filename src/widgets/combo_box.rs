@@ -11,8 +11,8 @@ use crate::layout::Rect;
 use crate::style::StyleKey;
 use crate::text::TextBlock;
 
-use super::DrawContext;
 use super::material;
+use super::{DrawContext, Stroke};
 
 /// Outcome of drawing the combo trigger.
 #[derive(Debug, Clone, Default)]
@@ -110,13 +110,17 @@ pub fn draw_trigger(
         1.0,
         hl,
     );
-    // Caret: two lines.
+    // Caret: one stroke, mitred at its point.
     let cx = chev_rect.x + chev_rect.width * 0.5;
     let cy = chev_rect.y + chev_rect.height * 0.5;
     let d = 2.5;
     let glyph = s.color(StyleKey::Text);
-    list.line([cx - d, cy - d * 0.6], [cx, cy + d * 0.6], 1.4, glyph);
-    list.line([cx, cy + d * 0.6], [cx + d, cy - d * 0.6], 1.4, glyph);
+    let caret = [
+        [cx - d, cy - d * 0.6],
+        [cx, cy + d * 0.6],
+        [cx + d, cy - d * 0.6],
+    ];
+    list.stroke_polyline(&caret, &Stroke::new(1.4), glyph);
     if chev_hover && input.mouse_clicked {
         out.toggle_requested = true;
     }
