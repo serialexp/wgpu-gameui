@@ -164,6 +164,14 @@ icons! {
     DotsThree = '\u{e1fe}', "dots-three";
     /// Two stacked rows (a group of items, such as quiet projects).
     Rows = '\u{e5a2}', "rows";
+    /// Paper plane in flight (a message sent).
+    PaperPlaneTilt = '\u{e398}', "paper-plane-tilt";
+    /// Mailbox (a message received).
+    Mailbox = '\u{ec1e}', "mailbox";
+    /// Question mark in a circle (a question asked).
+    Question = '\u{e3e8}', "question";
+    /// Square speech bubble (a reply).
+    Chat = '\u{e15c}', "chat";
 }
 
 impl PhosphorIcon {
