@@ -148,13 +148,20 @@ impl IconKey {
     }
 
     /// The pressable the key is drawn with: interaction, focus and material.
+    /// Its debug scope names the face (`IconKey FolderPlus`, `IconKey ■`),
+    /// so a test can find one key among several.
     fn pressable(&self) -> Pressable {
+        let name = match self.face {
+            #[cfg(feature = "phosphor-icons")]
+            KeyFace::Icon(icon) => format!("IconKey {icon:?}"),
+            KeyFace::Glyph(glyph) => format!("IconKey {glyph}"),
+        };
         let mut key = Pressable::new()
             .tone(self.tone)
             .held(self.held)
             .enabled(self.enabled)
             .hollow(self.hollow)
-            .name("IconKey");
+            .name(name);
         if let Some(id) = self.focus_id {
             key = key.focusable(id);
         }
@@ -301,6 +308,30 @@ mod tests {
                 IconKey::glyph("+", size).outer_size(&s),
                 [size, size + travel]
             );
+        }
+    }
+
+    #[test]
+    fn the_debug_scope_names_the_face() {
+        let (list, _) = draw(IconKey::glyph("■", IconKey::TOOLBAR), &away());
+        let names: Vec<&str> = list
+            .debug_scopes()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(names.contains(&"IconKey ■"), "{names:?}");
+        #[cfg(feature = "phosphor-icons")]
+        {
+            let (list, _) = draw(
+                IconKey::new(PhosphorIcon::FolderPlus, IconKey::TOOLBAR),
+                &away(),
+            );
+            let names: Vec<&str> = list
+                .debug_scopes()
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect();
+            assert!(names.contains(&"IconKey FolderPlus"), "{names:?}");
         }
     }
 

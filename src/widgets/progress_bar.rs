@@ -81,6 +81,14 @@ pub fn indeterminate_step(elapsed: std::time::Duration) -> u64 {
     (elapsed.as_millis() / INDETERMINATE_STEP.as_millis()) as u64
 }
 
+/// How long after `elapsed` the indeterminate clock takes its next step: when
+/// a bar drawn now moves, for [`DrawList::repaint_after`](crate::DrawList::repaint_after).
+pub fn indeterminate_next_step(elapsed: std::time::Duration) -> std::time::Duration {
+    let step = INDETERMINATE_STEP.as_millis();
+    let into = elapsed.as_millis() % step;
+    std::time::Duration::from_millis((step - into) as u64)
+}
+
 /// The sweep's width, as a share of the track.
 const SWEEP_W: f32 = 0.34;
 
@@ -303,6 +311,21 @@ mod tests {
         // top (the visual layering around it is covered by the gallery).
         let style = StyleResolver::new(theme);
         bar.fill.color(bar.value, &style)
+    }
+
+    #[test]
+    fn the_next_step_comes_when_the_step_changes() {
+        let ms = std::time::Duration::from_millis;
+        for elapsed in [0, 1, 119, 120, 250, 1_000] {
+            let next = indeterminate_next_step(ms(elapsed));
+            assert!(next > ms(0) && next <= INDETERMINATE_STEP, "{elapsed} ms");
+            let at = ms(elapsed) + next;
+            assert_eq!(indeterminate_step(at), indeterminate_step(ms(elapsed)) + 1);
+            assert_eq!(
+                indeterminate_step(at - ms(1)),
+                indeterminate_step(ms(elapsed))
+            );
+        }
     }
 
     #[test]

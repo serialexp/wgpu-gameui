@@ -21,28 +21,30 @@
 //! wide sit on whole pixels, drop their lit top edge, and their reference is
 //! a plain tick rather than an edged dash.
 //!
+//! An overlay ([`BarChart::overlay`]) adds one more value a bar on its own
+//! axis to the right, in the same thirds: a line with dots through the bar
+//! centres, broken where a bar has no value. Its legend entry fades the
+//! bars, and a series' fades it.
+//!
 //! Like [`Waffle`](super::Waffle), the widget only paints and reports what
 //! the pointer is over: the caller feeds the hovered bar back (and may share
 //! it with a table of the same rows), and paints the tooltip last, above
 //! whatever the chart sits among ([`BarChart::draw_tooltip`]).
 
 use crate::InputState;
-use crate::SurfacePainter;
 use crate::layout::Rect;
-use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 
 use super::DrawList;
+use super::chart::{
+    self, AxisSide, CHART_HEIGHT, DASH, DASH_GAP, DOT, DOT_RING, DOT_SPACING, EDGE_ROOM,
+    LABEL_SPACING, LEGEND_DASH, LEGEND_GAP, LEGEND_LINE, NOW_TICK, PAD, SERIES_FADED, SWATCH_GAP,
+    TIP_PAD_X, TIP_ROW, TIP_ROW_GAP, TIP_SWATCH_GAP, TIP_VALUE_GAP, TIP_ZERO, X_LABELS, nice_max,
+};
 
-/// The plot's height when the caller doesn't say.
-pub const BAR_CHART_HEIGHT: f32 = 190.0;
 /// The widest a bar gets when the caller doesn't say.
 const MAX_BAR_WIDTH: f32 = 56.0;
-/// The row of x labels under the plot.
-const X_LABELS: f32 = 16.0;
-/// Room over the plot for the tallest bar's top.
-const PAD: f32 = 10.0;
-/// More room over it for an outlier's value.
+/// More room over the plot for an outlier's value.
 const OUTLIER_ROOM: f32 = 4.0;
 /// The gap between bars, and the narrower one once there are many.
 const BAR_GAP: f32 = 3.0;
@@ -61,74 +63,33 @@ const OUTLIER_HEADROOM: f64 = 1.15;
 /// The outlier's break: a gap this far below its top, this tall.
 const BREAK_AT: f32 = 8.0;
 const BREAK: f32 = 3.0;
-/// The space an x label wants, and how near an edge one is pinned to it.
-const LABEL_SPACING: f32 = 64.0;
-const EDGE_ROOM: f32 = 28.0;
-/// The narrowest the y axis' gutter gets, and the room right of its labels.
-const MIN_GUTTER: f32 = 24.0;
-const GUTTER_GAP: f32 = 6.0;
-/// The other bars while one is hovered; the other series while a legend
-/// entry is.
+/// The other bars while one is hovered.
 const DIMMED: f32 = 0.45;
-const SERIES_FADED: f32 = 0.25;
 /// An estimated series' fill, over the ground; its outline is full colour.
 const ESTIMATED_FILL: f32 = 0.4;
-const GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
-const BASELINE: [f32; 4] = [1.0, 1.0, 1.0, 0.14];
-const BASELINE_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 /// A bar's lit top edge.
 const BAR_HI: [f32; 4] = [1.0, 1.0, 1.0, 0.22];
 /// The current bar's hatch.
 const HATCH: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
 const HATCH_STEP: f32 = 4.0;
-/// The reference line: 3px dashes 2px apart, at this strength, edged dark.
-const DASH: f32 = 3.0;
-const DASH_GAP: f32 = 2.0;
+/// The reference line, at this strength, edged dark.
 const REFERENCE: f32 = 0.85;
 const REFERENCE_EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
-/// The current bar's "now" tick under the baseline.
-const NOW_TICK: f32 = 2.0;
-/// The legend: under the plot, entries wrapped in rows.
-const LEGEND_GAP: f32 = 8.0;
-const LEGEND_ROW: f32 = 16.0;
-const LEGEND_ROW_GAP: f32 = 4.0;
-const LEGEND_COL_GAP: f32 = 14.0;
+/// The legend's square swatch.
 const LEGEND_SWATCH: f32 = 8.0;
-const LEGEND_DASH: f32 = 12.0;
-const SWATCH_GAP: f32 = 6.0;
 /// The tooltip: beside the bar, its rows of series.
 const TIP_GAP: f32 = 8.0;
 const TIP_MIN_WIDTH: f32 = 160.0;
-const TIP_PAD_X: f32 = 8.0;
-const TIP_PAD_Y: f32 = 6.0;
-const TIP_ROW: f32 = 14.0;
-const TIP_ROW_GAP: f32 = 3.0;
 const TIP_SWATCH: f32 = 7.0;
-const TIP_VALUE_GAP: f32 = 14.0;
+/// The reference's and the overlay's swatch in the tooltip: a short line.
+const TIP_LINE: f32 = 10.0;
 const TIP_RULE: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 const TIP_RULE_LIT: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
-/// A series that is zero in the hovered bar.
-const TIP_ZERO: f32 = 0.5;
-
-/// The axis maxima: each divides cleanly into thirds.
-const NICE: [f64; 9] = [1.2, 1.5, 2.4, 3.0, 4.5, 6.0, 7.5, 9.0, 12.0];
-
-/// The smallest "nice" value at or over `value`: 1.2, 1.5, 2.4, 3, 4.5, 6,
-/// 7.5, 9 or 12 times a power of ten, so the axis divides into thirds on
-/// round numbers. 1 for nothing to show.
-pub fn nice_max(value: f64) -> f64 {
-    if value.is_nan() || value <= 0.0 {
-        return 1.0;
-    }
-    let power = 10f64.powf(value.log10().floor());
-    let fraction = value / power;
-    let nice = NICE
-        .iter()
-        .copied()
-        .find(|&nice| nice >= fraction - 1e-9)
-        .unwrap_or(12.0);
-    nice * power
-}
+/// The overlay: its line's halo, its axis labels' strength, and what its
+/// legend entry says.
+const OVERLAY_HALO: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+const OVERLAY_LABELS: f32 = 0.85;
+const RIGHT_AXIS: &str = "RIGHT AXIS";
 
 /// One series of a [`BarChart`]: a layer of every bar, and a legend entry.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,13 +131,42 @@ impl Bar<'_> {
     }
 }
 
+/// A line over a [`BarChart`]'s bars, one value a bar, on its own axis to
+/// the right (a rate beside the counts, say).
+#[derive(Clone, Copy)]
+pub struct BarOverlay<'a> {
+    /// Its legend entry and tooltip row.
+    pub label: &'a str,
+    /// Its line, dots and axis labels.
+    pub color: [f32; 4],
+    /// One per bar; `None` (or a value that isn't finite) breaks the line.
+    pub values: &'a [Option<f64>],
+    /// The axis maximum; a nice one over the values when `None`.
+    pub max: Option<f64>,
+    /// How a value is written on the axis and in the tooltip.
+    pub format: &'a dyn Fn(f64) -> String,
+}
+
+impl BarOverlay<'_> {
+    /// The value at bar `i`, if there is one.
+    fn value(&self, i: usize) -> Option<f64> {
+        self.values
+            .get(i)
+            .copied()
+            .flatten()
+            .filter(|v| v.is_finite())
+    }
+}
+
 /// What a [`BarChart`] did this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BarChartOutput {
     /// The bar under the pointer, if any.
     pub hovered: Option<usize>,
-    /// The legend entry under the pointer, if any.
+    /// The series whose legend entry is under the pointer, if any.
     pub hovered_series: Option<usize>,
+    /// Whether the overlay's legend entry is under the pointer.
+    pub hovered_overlay: bool,
     /// The height it took, legend included.
     pub height: f32,
     /// Where the hovered bar's tooltip goes, for
@@ -207,8 +197,13 @@ struct Layout {
     all_zero: bool,
     /// Room over the plot, with more for an outlier's value.
     top: f32,
-    /// The y labels' column, left of the plot.
+    /// The y labels' column, left of the plot, and the overlay's, right of
+    /// it (none without one).
     gutter: f32,
+    right_gutter: f32,
+    /// The overlay's axis maximum and labels, bottom up.
+    overlay_max: f64,
+    overlay_ticks: [String; 4],
     /// Each slot's share of the plot's width, and the bar's own width.
     slot: f32,
     bar_width: f32,
@@ -279,6 +274,8 @@ pub struct BarChart<'a> {
     max_bar_width: f32,
     hovered: Option<usize>,
     hovered_series: Option<usize>,
+    overlay: Option<BarOverlay<'a>>,
+    hovered_overlay: bool,
     legend: bool,
     reference_label: &'a str,
     empty_label: &'a str,
@@ -297,10 +294,12 @@ impl<'a> BarChart<'a> {
             bars,
             series,
             format,
-            height: BAR_CHART_HEIGHT,
+            height: CHART_HEIGHT,
             max_bar_width: MAX_BAR_WIDTH,
             hovered: None,
             hovered_series: None,
+            overlay: None,
+            hovered_overlay: false,
             legend: true,
             reference_label: "cap (estimated)",
             empty_label: "No usage in this range",
@@ -334,6 +333,19 @@ impl<'a> BarChart<'a> {
         self
     }
 
+    /// A line over the bars on its own axis to the right.
+    pub fn overlay(mut self, overlay: BarOverlay<'a>) -> Self {
+        self.overlay = Some(overlay);
+        self
+    }
+
+    /// Whether to light the overlay: last frame's
+    /// [`BarChartOutput::hovered_overlay`].
+    pub fn hovered_overlay(mut self, hovered: bool) -> Self {
+        self.hovered_overlay = hovered;
+        self
+    }
+
     /// Whether to draw the legend under the plot.
     pub fn legend(mut self, legend: bool) -> Self {
         self.legend = legend;
@@ -351,6 +363,11 @@ impl<'a> BarChart<'a> {
         self.empty_label = empty;
         self.zero_label = zero;
         self
+    }
+
+    /// The overlay, unless there are no bars for it to run over.
+    fn shown_overlay(&self) -> Option<&BarOverlay<'a>> {
+        self.overlay.as_ref().filter(|_| !self.bars.is_empty())
     }
 
     fn layout(&self, width: f32, list: &mut DrawList, s: &StyleResolver) -> Layout {
@@ -374,25 +391,25 @@ impl<'a> BarChart<'a> {
         } else {
             first
         });
-        let ticks = std::array::from_fn(|k| {
-            if all_zero && k > 0 {
-                String::new()
-            } else if all_zero {
-                (self.format)(0.0)
-            } else {
-                (self.format)(max * k as f64 / 3.0)
-            }
-        });
+        let ticks = chart::axis_ticks(max, all_zero, self.format);
         let gutter = if n == 0 {
             0.0
         } else {
-            let widest = ticks
-                .iter()
-                .map(|tick: &String| s.mono_width(list, tick, TextSize::Meta))
-                .fold(0.0, f32::max);
-            (widest + GUTTER_GAP + 2.0).ceil().max(MIN_GUTTER)
+            chart::gutter(&ticks, list, s)
         };
-        let plot = (width - gutter).max(0.0);
+        let (overlay_max, overlay_ticks, right_gutter) = match self.shown_overlay() {
+            Some(overlay) => {
+                let max = overlay.max.filter(|max| *max > 0.0).unwrap_or_else(|| {
+                    let most = (0..n).filter_map(|i| overlay.value(i)).fold(0.0, f64::max);
+                    nice_max(most)
+                });
+                let ticks = chart::axis_ticks(max, false, overlay.format);
+                let gutter = chart::gutter(&ticks, list, s);
+                (max, ticks, gutter)
+            }
+            None => (1.0, Default::default(), 0.0),
+        };
+        let plot = (width - gutter - right_gutter).max(0.0);
         let slots = n.min(((plot / MIN_SLOT).floor() as usize).max(1));
         let slot = if n == 0 { 0.0 } else { plot / slots as f32 };
         let gap = if slots > CROWDED {
@@ -408,6 +425,9 @@ impl<'a> BarChart<'a> {
             all_zero,
             top: PAD + if outlier { OUTLIER_ROOM } else { 0.0 },
             gutter,
+            right_gutter,
+            overlay_max,
+            overlay_ticks,
             slot,
             bar_width: if snap { bar_width.floor() } else { bar_width },
             snap,
@@ -466,7 +486,7 @@ impl<'a> BarChart<'a> {
         let plot = Rect::new(
             area.x + layout.gutter,
             area.y,
-            area.width - layout.gutter,
+            area.width - layout.gutter - layout.right_gutter,
             area.height,
         );
         if !plot.contains(input.mouse_x, input.mouse_y) {
@@ -482,7 +502,7 @@ impl<'a> BarChart<'a> {
         let mut height = layout.top + self.height + X_LABELS;
         if self.legend && !self.series.is_empty() {
             let rows = self.legend_entries(width, &layout, list, s, |_, _, _| {});
-            height += LEGEND_GAP + legend_height(rows);
+            height += LEGEND_GAP + chart::legend_height(rows);
         }
         height
     }
@@ -513,18 +533,13 @@ impl<'a> BarChart<'a> {
             } else {
                 self.zero_label
             };
-            let caption = caption.to_uppercase();
-            let size = s.text_size(TextSize::Caption);
-            let mut block = s.mono_block(
-                &caption,
-                0.0,
-                crate::text::vcentered_line_y(base - self.height, self.height, size),
-                TextSize::Caption,
-                Ink::Caption,
+            let plot = Rect::new(
+                x + layout.gutter,
+                base - self.height,
+                width - layout.gutter,
+                self.height,
             );
-            let (w, _) = list.measure_block(&block);
-            block.x = x + layout.gutter + ((width - layout.gutter - w) * 0.5).max(0.0);
-            list.text(block);
+            chart::draw_empty_caption(list, s, plot, caption);
         }
 
         let scale = self.height as f64 / layout.max;
@@ -539,23 +554,27 @@ impl<'a> BarChart<'a> {
             self.draw_bar(bar, left, base, scale, &layout, list, s);
             list.pop_tint();
         }
+        if let Some(overlay) = self.shown_overlay() {
+            self.draw_overlay(overlay, x + layout.gutter, base, &layout, lit, list, s);
+        }
         self.draw_x_labels(area, base, &layout, lit, list, s);
 
-        let mut hovered_series = None;
+        let (mut hovered_series, mut hovered_overlay) = (None, false);
         let mut height = area.height;
         if self.legend && !self.series.is_empty() {
             let legend_y = area.bottom() + LEGEND_GAP;
             let rows = self.legend_entries(width, &layout, list, s, |list, entry, r| {
                 let r = Rect::new(x + r.x, legend_y + r.y, r.width, r.height);
-                if let LegendEntry::Series(index) = entry
-                    && !input.mouse_consumed
-                    && r.contains(input.mouse_x, input.mouse_y)
-                {
-                    hovered_series = Some(index);
+                if !input.mouse_consumed && r.contains(input.mouse_x, input.mouse_y) {
+                    match entry {
+                        LegendEntry::Series(index) => hovered_series = Some(index),
+                        LegendEntry::Overlay => hovered_overlay = true,
+                        LegendEntry::Reference | LegendEntry::Current => {}
+                    }
                 }
                 self.draw_legend_entry(entry, r, list, s);
             });
-            height += LEGEND_GAP + legend_height(rows);
+            height += LEGEND_GAP + chart::legend_height(rows);
         }
 
         let tooltip = hit.map(|index| {
@@ -572,6 +591,7 @@ impl<'a> BarChart<'a> {
         BarChartOutput {
             hovered: hit,
             hovered_series,
+            hovered_overlay,
             height,
             tooltip,
         }
@@ -586,25 +606,63 @@ impl<'a> BarChart<'a> {
         s: &StyleResolver,
     ) {
         let left = area.x + layout.gutter;
-        let width = area.right() - left;
-        let meta = s.text_size(TextSize::Meta);
-        for (k, tick) in layout.ticks.iter().enumerate() {
-            let line_y = base - (self.height * k as f32 / 3.0).round();
-            if k == 0 {
-                list.quad(left, line_y, width, 1.0, BASELINE);
-                list.quad(left, line_y + 1.0, width, 1.0, BASELINE_SHADOW);
-            } else {
-                list.quad(left, line_y, width, 1.0, GRID);
-            }
-            if self.bars.is_empty() || tick.is_empty() {
-                continue;
-            }
-            let mut block = s.mono_block(tick, 0.0, 0.0, TextSize::Meta, Ink::Dim);
-            let (w, _) = list.measure_block(&block);
-            block.x = left - GUTTER_GAP - w;
-            block.y = crate::text::vcentered_line_y(line_y - 6.0, 12.0, meta);
-            list.text(block);
+        let right = area.right() - layout.right_gutter;
+        let plot = Rect::new(left, base - self.height, right - left, self.height);
+        chart::draw_gridlines(list, plot);
+        if !self.bars.is_empty() {
+            chart::draw_axis_labels(list, s, plot, AxisSide::Left, &layout.ticks, None);
         }
+        if let Some(overlay) = self.shown_overlay() {
+            let mut color = overlay.color;
+            color[3] *= OVERLAY_LABELS;
+            let ticks = &layout.overlay_ticks;
+            chart::draw_axis_labels(list, s, plot, AxisSide::Right, ticks, Some(color));
+        }
+    }
+
+    /// The overlay's line through the bar centres from `origin` (the plot's
+    /// left edge), broken where a bar has no value; a dot on each point
+    /// while the slots are wide enough, and the lit bar's ringed. Faded
+    /// while a series is lit.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_overlay(
+        &self,
+        overlay: &BarOverlay<'_>,
+        origin: f32,
+        base: f32,
+        layout: &Layout,
+        lit: Option<usize>,
+        list: &mut DrawList,
+        s: &StyleResolver,
+    ) {
+        let points: Vec<Option<[f32; 2]>> = (0..layout.slots)
+            .map(|k| {
+                let value = overlay.value(layout.drawn(k, lit))?;
+                let t = (value / layout.overlay_max).clamp(0.0, 1.0) as f32;
+                Some([origin + layout.center(k), base - t * self.height])
+            })
+            .collect();
+        list.push_tint();
+        if self.hovered_series.is_some() {
+            list.multiply_tint([1.0, 1.0, 1.0, SERIES_FADED]);
+        }
+        let color = overlay.color;
+        for run in points.split(Option::is_none) {
+            if run.len() > 1 {
+                let run: Vec<[f32; 2]> = run.iter().flatten().copied().collect();
+                chart::stroke_with_halo(list, &run, OVERLAY_HALO, color, None);
+            }
+        }
+        let lit_slot = lit.map(|i| layout.slot_of(i));
+        for (k, point) in points.iter().enumerate() {
+            let Some([px, py]) = *point else { continue };
+            if lit_slot == Some(k) {
+                chart::hovered_dot(list, s, (px, py), color);
+            } else if layout.slot >= DOT_SPACING {
+                chart::dot(list, (px, py), DOT, color, DOT_RING);
+            }
+        }
+        list.pop_tint();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -671,18 +729,7 @@ impl<'a> BarChart<'a> {
             }
         }
         if bar.current {
-            let accent = s.color(StyleKey::Accent);
-            let tick = Rect::new(left, base + 1.0, width, NOW_TICK);
-            list.box_shadow_outset(
-                tick,
-                CornerRadii::uniform(0.0),
-                BoxShadow {
-                    blur: 4.0,
-                    color: [accent[0], accent[1], accent[2], accent[3] * 0.5],
-                    ..BoxShadow::default()
-                },
-            );
-            list.quad(tick.x, tick.y, tick.width, tick.height, accent);
+            chart::draw_now_tick(list, s, Rect::new(left, base + 1.0, width, NOW_TICK));
         }
     }
 
@@ -723,7 +770,7 @@ impl<'a> BarChart<'a> {
         let Some(series) = self.series.get(index) else {
             return;
         };
-        let faded = self.hovered_series.is_some_and(|lit| lit != index);
+        let faded = self.hovered_overlay || self.hovered_series.is_some_and(|lit| lit != index);
         list.push_tint();
         if faded {
             list.multiply_tint([1.0, 1.0, 1.0, SERIES_FADED]);
@@ -745,7 +792,7 @@ impl<'a> BarChart<'a> {
         if n == 0 {
             return;
         }
-        let plot = area.width - layout.gutter;
+        let plot = area.width - layout.gutter - layout.right_gutter;
         let fits = ((plot / LABEL_SPACING).floor() as usize).max(2);
         let step = n.div_ceil(fits).max(1);
         let size = s.text_size(TextSize::Caption);
@@ -770,7 +817,7 @@ impl<'a> BarChart<'a> {
             }
             let (w, _) = list.measure_block(&block);
             let half = layout.bar_width * 0.5;
-            block.x = if area.right() - center < EDGE_ROOM {
+            block.x = if area.right() - layout.right_gutter - center < EDGE_ROOM {
                 center + half - w
             } else if center - (area.x + layout.gutter) < EDGE_ROOM {
                 (center - half).max(area.x + layout.gutter)
@@ -790,26 +837,19 @@ impl<'a> BarChart<'a> {
         layout: &Layout,
         list: &mut DrawList,
         s: &StyleResolver,
-        mut place: impl FnMut(&mut DrawList, LegendEntry, Rect),
+        place: impl FnMut(&mut DrawList, LegendEntry, Rect),
     ) -> usize {
         let has_reference = self.bars.iter().any(|bar| bar.reference.is_some());
         let has_current = self.bars.iter().any(|bar| bar.current);
-        let entries = (0..self.series.len())
+        let has_overlay = self.shown_overlay().is_some();
+        let entries: Vec<(LegendEntry, f32)> = (0..self.series.len())
             .map(LegendEntry::Series)
+            .chain(has_overlay.then_some(LegendEntry::Overlay))
             .chain(has_reference.then_some(LegendEntry::Reference))
-            .chain(has_current.then_some(LegendEntry::Current));
-        let (mut x, mut row) = (layout.gutter, 0);
-        for entry in entries {
-            let w = self.legend_entry_width(entry, list, s);
-            if x > layout.gutter && x + w > width {
-                x = layout.gutter;
-                row += 1;
-            }
-            let y = row as f32 * (LEGEND_ROW + LEGEND_ROW_GAP);
-            place(list, entry, Rect::new(x, y, w, LEGEND_ROW));
-            x += w + LEGEND_COL_GAP;
-        }
-        row + 1
+            .chain(has_current.then_some(LegendEntry::Current))
+            .map(|entry| (entry, self.legend_entry_width(entry, list, s)))
+            .collect();
+        chart::legend_rows(list, width, layout.gutter, entries, place)
     }
 
     fn legend_entry_width(
@@ -818,10 +858,7 @@ impl<'a> BarChart<'a> {
         list: &mut DrawList,
         s: &StyleResolver,
     ) -> f32 {
-        let text = |list: &mut DrawList, text: &str| {
-            list.measure_block(&s.sans_block(text, 0.0, 0.0, TextSize::Row, Ink::Second))
-                .0
-        };
+        let text = |list: &mut DrawList, text: &str| chart::row_text_width(list, s, text);
         match entry {
             LegendEntry::Series(index) => {
                 let series = &self.series[index];
@@ -830,6 +867,14 @@ impl<'a> BarChart<'a> {
                     w += SWATCH_GAP + s.mono_width(list, "EST.", TextSize::Caption);
                 }
                 w
+            }
+            LegendEntry::Overlay => {
+                let label = self.overlay.as_ref().map_or("", |overlay| overlay.label);
+                LEGEND_LINE
+                    + SWATCH_GAP
+                    + text(list, label)
+                    + SWATCH_GAP
+                    + s.mono_width(list, RIGHT_AXIS, TextSize::Caption)
             }
             LegendEntry::Reference => LEGEND_DASH + SWATCH_GAP + text(list, self.reference_label),
             LegendEntry::Current => LEGEND_SWATCH + SWATCH_GAP + text(list, "current window"),
@@ -875,6 +920,28 @@ impl<'a> BarChart<'a> {
                     ));
                 }
             }
+            LegendEntry::Overlay => {
+                let Some(overlay) = &self.overlay else { return };
+                let mid = (r.y + r.height * 0.5).round();
+                chart::legend_line(list, r.x, mid, overlay.color, false, true);
+                let ink = if self.hovered_overlay {
+                    Ink::Value
+                } else {
+                    Ink::Second
+                };
+                let label_x = r.x + LEGEND_LINE + SWATCH_GAP;
+                let block = s.sans_block(overlay.label, label_x, text_y, TextSize::Row, ink);
+                let (w, _) = list.measure_block(&block);
+                list.text(block);
+                let caption = s.text_size(TextSize::Caption);
+                list.text(s.mono_block(
+                    RIGHT_AXIS,
+                    label_x + w + SWATCH_GAP,
+                    crate::text::vcentered_line_y(r.y, r.height, caption),
+                    TextSize::Caption,
+                    Ink::Dim,
+                ));
+            }
             LegendEntry::Reference => {
                 let mid = (r.y + r.height * 0.5).round();
                 list.dashed_hline(r.x, mid, LEGEND_DASH, DASH, DASH_GAP, s.ink(Ink::Value));
@@ -909,13 +976,8 @@ impl<'a> BarChart<'a> {
     ) -> Option<Rect> {
         let bar = self.bars.get(tip.index)?;
         let total = bar.total();
-        let chrome = s.tooltip();
-        let border = chrome.surface.border_widths;
         let mono = |list: &mut DrawList, text: &str| s.mono_width(list, text, TextSize::Meta);
-        let sans = |list: &mut DrawList, text: &str| {
-            list.measure_block(&s.sans_block(text, 0.0, 0.0, TextSize::Row, Ink::Second))
-                .0
-        };
+        let sans = |list: &mut DrawList, text: &str| chart::row_text_width(list, s, text);
 
         // Rows: the title, each series, a rule, the total, the reference.
         let values: Vec<String> = (0..self.series.len())
@@ -930,10 +992,20 @@ impl<'a> BarChart<'a> {
             };
             format!("{} · {share}%", (self.format)(reference))
         });
-        let label_x = TIP_SWATCH + SWATCH_GAP;
+        let overlay = self.overlay.as_ref().map(|overlay| {
+            let value = overlay.value(tip.index);
+            (
+                overlay,
+                value.map_or_else(|| "—".to_owned(), overlay.format),
+            )
+        });
+        // Labels follow their swatch: a square for a series, a short line for
+        // the reference and the overlay.
+        let label_x = TIP_SWATCH + TIP_SWATCH_GAP;
+        let line_label_x = TIP_LINE + TIP_SWATCH_GAP;
         let mut content = sans(list, bar.long_label)
             + if bar.current {
-                TIP_VALUE_GAP + mono(list, "RUNNING")
+                TIP_VALUE_GAP + chart::running_width(list, s)
             } else {
                 0.0
             };
@@ -947,20 +1019,23 @@ impl<'a> BarChart<'a> {
             content = content.max(label_x + name + TIP_VALUE_GAP + mono(list, value));
         }
         content = content.max(sans(list, "Total") + TIP_VALUE_GAP + mono(list, &total_text));
+        let mut line_row = |list: &mut DrawList, label: &str, value: &str| {
+            content =
+                content.max(line_label_x + sans(list, label) + TIP_VALUE_GAP + mono(list, value));
+        };
         if let Some(reference) = &reference_text {
-            content = content.max(
-                label_x + sans(list, self.reference_label) + TIP_VALUE_GAP + mono(list, reference),
-            );
+            line_row(list, self.reference_label, reference);
         }
-        let rows = 2 + self.series.len() + usize::from(reference_text.is_some());
+        if let Some((overlay, value)) = &overlay {
+            line_row(list, overlay.label, value);
+        }
+        let rows = 2
+            + self.series.len()
+            + usize::from(reference_text.is_some())
+            + usize::from(overlay.is_some());
         let rule = TIP_ROW_GAP * 2.0 + 1.0;
-        let width = (content + TIP_PAD_X * 2.0 + border.left + border.right).max(TIP_MIN_WIDTH);
-        let height = rows as f32 * TIP_ROW
-            + (rows - 1) as f32 * TIP_ROW_GAP
-            + rule
-            + TIP_PAD_Y * 2.0
-            + border.top
-            + border.bottom;
+        let content_height = rows as f32 * TIP_ROW + (rows - 1) as f32 * TIP_ROW_GAP + rule;
+        let (width, height) = chart::tooltip_size(s, content, content_height, TIP_MIN_WIDTH);
         let x = if tip.right_of_bar {
             tip.bar_right + TIP_GAP
         } else {
@@ -974,43 +1049,18 @@ impl<'a> BarChart<'a> {
             .round();
         let rect = Rect::new(x, y, width, height);
 
-        let padding_box = rect.inset(border.left);
-        let mut surface = SurfacePainter::new(
-            list,
-            rect,
-            padding_box,
-            chrome.surface.corner_radii,
-            chrome.surface,
-            std::slice::from_ref(&chrome.shadow),
-            &chrome.lines,
-        );
-        surface.paint_pre_content();
-        {
-            let list = surface.draw_list();
-            let left = padding_box.x + TIP_PAD_X;
-            let right = padding_box.right() - TIP_PAD_X;
+        chart::paint_tooltip(list, s, rect, |list, inner| {
+            let (left, right) = (inner.x, inner.right());
             let row_size = s.text_size(TextSize::Row);
-            let mut y = padding_box.y + TIP_PAD_Y;
+            let mut y = inner.y;
             let text_y = |y: f32| crate::text::vcentered_line_y(y, TIP_ROW, row_size);
             let value = |list: &mut DrawList, text: &str, y: f32, ink: Ink| {
-                let meta = s.text_size(TextSize::Meta);
-                let mut block = s.mono_block(text, 0.0, 0.0, TextSize::Meta, ink);
-                let (w, _) = list.measure_block(&block);
-                block.x = right - w;
-                block.y = crate::text::vcentered_line_y(y, TIP_ROW, meta);
-                list.text(block);
+                chart::draw_tip_value(list, s, text, right, y, ink, None);
             };
 
             list.text(s.sans_block(bar.long_label, left, text_y(y), TextSize::Row, Ink::Max));
             if bar.current {
-                let caption = s.text_size(TextSize::Caption);
-                let mut block = s
-                    .mono_block("RUNNING", 0.0, 0.0, TextSize::Caption, Ink::Dim)
-                    .with_color_f32(s.color(StyleKey::Accent));
-                let (w, _) = list.measure_block(&block);
-                block.x = right - w;
-                block.y = crate::text::vcentered_line_y(y, TIP_ROW, caption);
-                list.text(block);
+                chart::draw_running(list, s, right, y);
             }
             y += TIP_ROW + TIP_ROW_GAP;
             for (index, series) in self.series.iter().enumerate().rev() {
@@ -1037,9 +1087,10 @@ impl<'a> BarChart<'a> {
                 list.pop_tint();
                 y += TIP_ROW + TIP_ROW_GAP;
             }
-            // The rule sits halfway through the space `rule` adds.
+            // The rule sits halfway through the space `rule` adds, across
+            // the padding too.
             let rule_y = (y + TIP_ROW_GAP * 0.5).round();
-            let (x, w) = (padding_box.x, padding_box.width);
+            let (x, w) = (inner.x - TIP_PAD_X, inner.width + TIP_PAD_X * 2.0);
             list.quad(x, rule_y, w, 1.0, TIP_RULE);
             list.quad(x, rule_y + 1.0, w, 1.0, TIP_RULE_LIT);
             y += rule;
@@ -1048,43 +1099,45 @@ impl<'a> BarChart<'a> {
             if let (Some(reference), Some(text)) = (bar.reference, &reference_text) {
                 y += TIP_ROW + TIP_ROW_GAP;
                 let mid = (y + TIP_ROW * 0.5).round();
-                list.dashed_hline(left, mid, 10.0, DASH, DASH_GAP, s.ink(Ink::Value));
+                list.dashed_hline(left, mid, TIP_LINE, DASH, DASH_GAP, s.ink(Ink::Value));
                 list.text(s.sans_block(
                     self.reference_label,
-                    left + label_x,
+                    left + line_label_x,
                     text_y(y),
                     TextSize::Row,
                     Ink::Second,
                 ));
-                if total > reference {
-                    let meta = s.text_size(TextSize::Meta);
-                    let mut block = s
-                        .mono_block(text, 0.0, 0.0, TextSize::Meta, Ink::Value)
-                        .with_color_f32(s.color(StyleKey::WarnMeta));
-                    let (w, _) = list.measure_block(&block);
-                    block.x = right - w;
-                    block.y = crate::text::vcentered_line_y(y, TIP_ROW, meta);
-                    list.text(block);
-                } else {
-                    value(list, text, y, Ink::Value);
-                }
+                let warn = (total > reference).then(|| s.color(StyleKey::WarnMeta));
+                chart::draw_tip_value(list, s, text, right, y, Ink::Value, warn);
             }
-        }
-        surface.paint_post_content();
+            if let Some((overlay, text)) = &overlay {
+                y += TIP_ROW + TIP_ROW_GAP;
+                list.push_tint();
+                if overlay.value(tip.index).is_none() {
+                    list.multiply_tint([1.0, 1.0, 1.0, TIP_ZERO]);
+                }
+                let mid = (y + TIP_ROW * 0.5).round();
+                chart::line_swatch(list, left, mid, TIP_LINE, overlay.color, false);
+                let label_x = left + line_label_x;
+                let ink = Ink::Second;
+                list.text(s.sans_block(overlay.label, label_x, text_y(y), TextSize::Row, ink));
+                let color = Some(overlay.color);
+                chart::draw_tip_value(list, s, text, right, y, Ink::Value, color);
+                list.pop_tint();
+            }
+        });
         Some(rect)
     }
 }
 
-/// An entry of the legend: a series, the reference line, the current bar.
+/// An entry of the legend: a series, the overlay, the reference line, the
+/// current bar.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum LegendEntry {
     Series(usize),
+    Overlay,
     Reference,
     Current,
-}
-
-fn legend_height(rows: usize) -> f32 {
-    rows as f32 * LEGEND_ROW + rows.saturating_sub(1) as f32 * LEGEND_ROW_GAP
 }
 
 /// Fill `rect` the way `series` is painted: solid, or (estimated) faint

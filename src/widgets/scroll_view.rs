@@ -675,6 +675,10 @@ impl ScrollView {
         // Ease the drawn offset the rest of the way toward its target with this
         // frame's clock, before the transform below reads it.
         state.advance(state.smoothing, input.frame_dt);
+        // A glide changes what is drawn every frame until it lands.
+        if let Some(delay) = state.pending_deadline() {
+            list.repaint_after(delay);
+        }
 
         // An overlay thumb lies over the content: while the pointer is on it
         // (or dragging it) it takes the mouse, so the content drawn next
@@ -1580,7 +1584,8 @@ mod tests {
     /// Ends with [`InputState::end_frame`], the way a host does: per-frame edges
     /// (the wheel delta and `scroll_consumed`) last exactly one frame, so a test
     /// that wheels twice must do so on two frames.
-    fn draw_frame(state: &mut ScrollState, input: &mut InputState, theme: &Theme) {
+    /// Draw one frame; the repaint it asked for.
+    fn draw_frame(state: &mut ScrollState, input: &mut InputState, theme: &Theme) -> Option<f32> {
         let mut list = DrawList::new();
         ScrollView::new(Rect::new(0.0, 0.0, 200.0, 200.0)).draw(
             state,
@@ -1590,6 +1595,7 @@ mod tests {
             |_, _| {},
         );
         input.end_frame();
+        list.next_repaint()
     }
 
     fn scroll_state() -> ScrollState {
@@ -1630,14 +1636,17 @@ mod tests {
         let theme = theme();
         let mut input = input_at(50.0, 50.0);
         input.scroll_delta = -3.0;
-        draw_frame(&mut state, &mut input, &theme);
+        // Each frame of the glide asks its list for the next.
+        assert!(draw_frame(&mut state, &mut input, &theme).is_some_and(|d| d <= 1.0 / 60.0));
 
         // Let the glide run on a 60Hz clock; it must land bit-exactly, not
         // asymptotically — that is what lets an idle UI report no repaint.
+        let mut asked = Some(0.0);
         for _ in 0..120 {
             input.scroll_delta = 0.0;
-            draw_frame(&mut state, &mut input, &theme);
+            asked = draw_frame(&mut state, &mut input, &theme);
         }
+        assert_eq!(asked, None, "a landed scroll asks for nothing");
         assert_eq!(state.offset[1], state.target[1]);
         assert_eq!(state.offset[1], 60.0);
         assert!(!state.is_gliding());

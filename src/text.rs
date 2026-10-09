@@ -26,7 +26,7 @@ use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
 use crate::render::{DEFAULT_PX_RANGE, IconGlyph, PhosphorIcon, icon_font_snapshot};
 use crate::render::{
-    GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, UniformArena, ortho_matrix,
+    GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, TextContrast, UniformArena, ortho_matrix,
 };
 use crate::shaping::{LayoutSpec, ShapedGlyph, SharedFontSystem};
 #[cfg(feature = "phosphor-icons")]
@@ -45,8 +45,19 @@ const MSDF_SHADER: &str = include_str!("render/ui_msdf.wgsl");
 #[cfg(feature = "phosphor-icons")]
 const ICON_REF_PX: f32 = 64.0;
 
-/// Size of the ortho uniform this renderer writes — one dynamic-offset arena slot.
-const UNIFORM_SIZE: u64 = std::mem::size_of::<[[f32; 4]; 4]>() as u64;
+/// The MSDF pipeline's per-pass uniform (`Uniforms` in `ui_msdf.wgsl`).
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct MsdfUniforms {
+    view_proj: [[f32; 4]; 4],
+    /// [`TextContrast::gamma_ratios`].
+    gamma_ratios: [f32; 4],
+    /// `x`: [`TextContrast::enhanced_contrast`]; the rest is padding.
+    contrast: [f32; 4],
+}
+
+/// Size of one [`MsdfUniforms`] — one dynamic-offset arena slot.
+const UNIFORM_SIZE: u64 = std::mem::size_of::<MsdfUniforms>() as u64;
 
 /// Shared handle to the font system.
 ///
@@ -462,6 +473,9 @@ pub struct TextRenderer {
     /// Generate small text from hinted, size-specific fields. See
     /// [`set_glyph_hinting`](Self::set_glyph_hinting).
     hint: bool,
+    /// Coverage correction for the text's colour. See
+    /// [`set_text_contrast`](Self::set_text_contrast).
+    contrast: TextContrast,
 }
 
 impl TextRenderer {
@@ -488,15 +502,16 @@ impl TextRenderer {
     ) -> Self {
         let atlas = MsdfGlyphAtlas::new();
 
-        // Uniform (group 0): ortho projection, matching the main UI pipelines.
-        // One arena slot per pass, for the same reason as the vertex buffer below:
-        // several passes share one submit, and a shared slot would let a later
-        // pass's matrix reach the GPU first.
+        // Uniform (group 0): ortho projection, matching the main UI pipelines,
+        // plus the text contrast the fragment shader applies. One arena slot per
+        // pass, for the same reason as the vertex buffer below: several passes
+        // share one submit, and a shared slot would let a later pass's values
+        // reach the GPU first.
         let uniform = UniformArena::new(
             device,
             "msdf text uniform",
             UNIFORM_SIZE,
-            wgpu::ShaderStages::VERTEX,
+            wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
         );
         let uniform_bgl = uniform.layout();
 
@@ -584,6 +599,7 @@ impl TextRenderer {
             scale_factor: 1.0,
             snap: GlyphSnap::default(),
             hint: true,
+            contrast: TextContrast::default(),
         }
     }
 
@@ -630,14 +646,15 @@ impl TextRenderer {
         // Glyph snapping rounds onto device pixels, so it needs the ratio too.
         self.scale_factor = scale;
         let (slot, _grew) = self.uniform.allocate(device);
+        let uniforms = MsdfUniforms {
+            view_proj: ortho_matrix(self.view_origin, self.width as f32, self.height as f32),
+            gamma_ratios: self.contrast.gamma_ratios(),
+            contrast: [self.contrast.contrast(), 0.0, 0.0, 0.0],
+        };
         queue.write_buffer(
             self.uniform.buffer(),
             slot,
-            bytemuck::cast_slice(&[ortho_matrix(
-                self.view_origin,
-                self.width as f32,
-                self.height as f32,
-            )]),
+            bytemuck::cast_slice(&[uniforms]),
         );
         self.uniform_offset = slot;
     }
@@ -696,6 +713,22 @@ impl TextRenderer {
     /// [`set_glyph_hinting`](Self::set_glyph_hinting)).
     pub fn glyph_hinting(&self) -> bool {
         self.hint
+    }
+
+    /// How text and icon coverage is corrected for its colour, from the next
+    /// [`resize`](Self::resize) on. See [`TextContrast`]; defaults to
+    /// [`TextContrast::GPUI`].
+    ///
+    /// [`UiRenderer::set_text_contrast`](crate::UiRenderer::set_text_contrast)
+    /// forwards here; set it there rather than here.
+    pub fn set_text_contrast(&mut self, contrast: TextContrast) {
+        self.contrast = contrast;
+    }
+
+    /// The current text contrast (see
+    /// [`set_text_contrast`](Self::set_text_contrast)).
+    pub fn text_contrast(&self) -> TextContrast {
+        self.contrast
     }
 
     /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.

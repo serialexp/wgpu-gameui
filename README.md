@@ -13,7 +13,10 @@ framing, per-subtree styling, and a Teardown-style immediate-mode verb API.
   `ScrollState`, `FocusState`, `DragCapture`, …).
 - **MSDF text.** Glyphs are rendered through a custom multi-channel signed
   distance field atlas (via `fdsm`), so text supports outlines, shadows, and
-  glow at any zoom without re-rasterizing. Shaping is cosmic-text.
+  glow at any zoom without re-rasterizing. Shaping is cosmic-text. Edges are
+  corrected for the text's colour, as DirectWrite and gpui do, so light text
+  on a dark background is as heavy as dark text on a light one
+  (`UiRenderer::set_text_contrast`, on by default).
 - **Dual API.** Draw raw widgets against a `DrawContext` for full control, or
   use the `UiContext` / `Frame` façade for auto-advancing, stateful verbs
   (`text_button`, `slider`, `text_input`, …) — the Teardown port target.
@@ -544,8 +547,9 @@ Benchmark groups: `drawlist_build`, `frame_render`, `render_text_only`,
 `nine_slice`, `icons`, `primitives_build`, `primitives_render`, `layout_resolve`,
 `text_shape`, `interactive_widgets`, `text_input_edit`, `scroll_view`,
 `list_virtual`, `table`, `ui_context_frame`, `animation`, `charts_build`,
-`charts_render` (bar charts of 30 to 10,000 bars, waffles of 100 to 10,000
-cells; each prints what it drew), `strokes_build`, `strokes_render` (chart lines
+`charts_render` (bar charts of 30 to 10,000 bars, plain and with an overlay
+line, line charts of 30 to 100,000 points, scatters of 14 to 10,000 readings,
+waffles of 100 to 10,000 cells; each prints what it drew), `strokes_build`, `strokes_render` (chart lines
 of 1,000 and 10,000 points: plain, dashed, and under a translucent halo).
 
 ---

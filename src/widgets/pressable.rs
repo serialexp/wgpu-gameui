@@ -240,7 +240,13 @@ impl Pressable {
             ctx.draw_list.pop_tint();
         }
         if self.bare {
-            draw_bare_wash(ctx.draw_list, rect, hovered, pressed);
+            draw_bare_wash(
+                ctx.draw_list,
+                rect,
+                self.radius.unwrap_or(0.0),
+                hovered,
+                pressed,
+            );
         }
 
         // Keyboard focus and Space/Enter activation (opt-in via `focusable`).
@@ -281,8 +287,9 @@ impl Pressable {
 }
 
 /// A bare pressable's feedback over its content: a darken while pressed, a
-/// faint lighten while hovered.
-fn draw_bare_wash(list: &mut DrawList, rect: Rect, hovered: bool, pressed: bool) {
+/// faint lighten while hovered, in the key's corners (square unless
+/// [`radius`](Pressable::radius) is set).
+fn draw_bare_wash(list: &mut DrawList, rect: Rect, radius: f32, hovered: bool, pressed: bool) {
     let wash = if pressed {
         [0.0, 0.0, 0.0, 0.2]
     } else if hovered {
@@ -290,7 +297,7 @@ fn draw_bare_wash(list: &mut DrawList, rect: Rect, hovered: bool, pressed: bool)
     } else {
         return;
     };
-    list.quad(rect.x, rect.y, rect.width, rect.height, wash);
+    list.rounded_rect(rect, radius, wash);
 }
 
 #[cfg(test)]

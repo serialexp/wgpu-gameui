@@ -2133,3 +2133,102 @@ of 80.
   Chromium comparisons: `tests/stroke_browser_parity.rs` with
   `fixtures/browser/sdf-lines/`; benchmarks `strokes_build`,
   `strokes_render`.
+
+## 2026-10-09 — Text contrast (from the gpui comparison)
+
+- [x] **P2 — Stem darkening / coverage gamma.** Light text on a dark
+  background looked thinner than dark text on a light one, because edges
+  blend in sRGB space. `ui_msdf.wgsl` now corrects crisp edge coverage for
+  the text's colour with DirectWrite's enhanced contrast and gamma ratios,
+  as Windows Terminal and gpui do (`render/text_contrast.rs`: `TextContrast`,
+  the ratio table, and a CPU twin of the shader formula that the unit tests
+  pin). `UiRenderer::set_text_contrast(TextContrast)` sets it; the default
+  is `TextContrast::GPUI` (gamma 1.8, enhanced contrast 1.0), and
+  `TextContrast::OFF` draws coverage as before. Icons share the shader and
+  get it too; soft edges (shadows, glows) don't. `tests/text_contrast.rs`
+  (GPU, ignored) checks that light-on-dark text gains about 17% ink, dark-on-
+  light text changes by under 6%, and soft edges are untouched, and writes
+  `test_output/text_contrast.png` (off left, on right). As the original note
+  said, it makes text denser, not sharper: it complements grid fitting.
+
+## 2026-10-09 — The rest of Forge's charts (`components/data`)
+
+Built from Forge's `LineChart`, `ScatterPlot` and `BarChart`'s overlay
+(`*.jsx`, `*.prompt.md`, `linechart*.card.html`). The gallery now covers 77
+of Forge's 83 components.
+
+- [x] **Shared chart frame** — `widgets/chart.rs` holds what `BarChart` and
+  `LineChart` share: `nice_max`, the axis in thirds and its gutter,
+  gridlines and axis labels on either side of a plot `Rect`, the empty
+  captions, the "now" tick, legend rows, the tooltip surface and its rows,
+  and the line pieces (a stroke over its halo, dots, the hovered dot, line
+  swatches). `BAR_CHART_HEIGHT` is now `CHART_HEIGHT`. `widgets/chart_time.rs`
+  ticks a time axis on whole local hours, days, Mondays or months (the finest
+  that fits) from a fixed UTC offset, and writes the tooltip's date.
+- [x] **LineChart** (`data`) — `LineChart::new(&[LineSeries], &format)` with
+  `.x(&[f64])` (indexes or epoch ms), `.time(offset_secs)`, `.current(i)`,
+  `.labels(..)`, `.long_labels(..)`, `.x_format(..)`, `.height(..)`,
+  `.hovered(..)`, `.hovered_series(..)`, `.legend(bool)`, `.reference(y)`,
+  `.reference_label(..)`, `.empty_labels(..)`; `measure_height`, `draw ->
+  LineChartOutput { hovered, hovered_series, height, tooltip }` and
+  `draw_tooltip(&LineTooltip, ..)`. A `LineSeries` is a 1.5px line over a
+  3.5px halo, broken at `None` (a lone point is a dot), with optional
+  `dots` (hidden past one per 4px), a fading `area` and `estimated` dashes.
+  Hover snaps to the nearest x with a guide; past two points a pixel each
+  column keeps its lowest and highest, so 100,000 points draw like 800.
+- [x] **BarChart overlay** — `.overlay(BarOverlay { label, color, values,
+  max, format })`: a line with dots through the bar centres on its own
+  right axis, broken at `None`; a legend entry ("RIGHT AXIS") whose hover
+  (`BarChartOutput::hovered_overlay`, `.hovered_overlay(bool)`) fades the
+  bars, a series' hover fading it; a tooltip row. Tooltip labels now sit 8px
+  after their swatch, as Forge has them (they were 6px).
+- [x] **ScatterPlot** (`data`) — `ScatterPlot::new(&[ScatterPoint], &format)`
+  with `.color(..)`, `.height(..)` (`SCATTER_HEIGHT`, 110), `.reference(y)`,
+  `.reference_label(..)`, `.x_labels(..)`, `.min_points(n)`,
+  `.empty_labels(..)`, `.flagged_label(..)`, `.hovered(..)`; `draw ->
+  ScatterPlotOutput` and `draw_tooltip(&ScatterTooltip, ..)`. Readings in a
+  sunken well on a nice axis with 8% headroom, x over 0..1 or the readings'
+  span, flagged ones amber and on top, hover within 10px, and under the
+  minimum an empty state over the readings at half strength.
+- [x] **The gallery's chart tooltips were drawn 13,000px up the page.** Its
+  `BarChart` cell kept them inside the first 4,000px, from when the page was
+  that short; they now stay inside the whole page (`PAGE`). The new cells
+  draw the Forge cards' own data from the cards' seeded generator.
+- [x] **`DrawList::triangle_strip`** — a strip of coloured corners, each
+  shared by the triangles beside it. `LineChart`'s area and `CurveEditor`'s
+  fill use it, drawing the same triangles from a third of the vertices (the
+  2,000-point line chart's soup went from 10,320 vertices to 3,442).
+- [x] **Benches** — `ui_stress`'s `charts_build` / `charts_render` gained
+  `bar_chart_overlay`, `line_chart` (30 to 100,000 points, three series, one
+  dotted and one dashed), `line_chart_hovered` and `scatter` (14 to 10,000).
+  The line chart's per-column reduction keeps each extreme's value with it
+  and finds the column with one multiply. On 2026-10-09 (load average ~15,
+  so only rough): building `line_chart/100000` ~3 ms, `/10000` ~0.8 ms,
+  `scatter/10000` ~0.3 ms; rendering `line_chart/100000` ~1.5 ms and
+  `scatter/10000` ~0.7 ms.
+
+## 2026-10-09 — Frames only when something changed (for agent-ui)
+
+agent-ui's desktop now ticks at the display's rate but builds a frame only
+when something could have changed. gameui gained what a host like that needs.
+
+- [x] **`DrawList::repaint_after(seconds)` / `animating()` / `next_repaint()`**
+  — what was just drawn says when it changes on its own; the earliest wins,
+  `clear` drops it, so a request lasts the frame that drew it.
+  `LayerStack::next_repaint()` is the earliest over every layer.
+- [x] **Widgets that move ask for themselves** — `ScrollView::begin` reports a
+  glide still in flight; `busy::{skeleton, spinner, dots}` ask for the next
+  frame. `indeterminate_next_step(elapsed)` says when an indeterminate
+  `ProgressBar` next steps.
+- [x] **`UiState::tick_clocks(input, dt)`** — ages the toasts and the tooltip
+  hover delay on ticks that build nothing (`begin_frame` uses the same step),
+  so a host that skips frames doesn't lose the time to `MAX_DT`'s clamp: a
+  2 s toast took ~20 s to go without it. Not the hover/press animations: one
+  in flight asks for every frame, and ticking the store twice without a frame
+  between reaped every entry.
+- [x] **`UiFrameResult::next_deadline` is enough to schedule on** — `0.0` now
+  means the next frame, and wins over later deadlines. An in-flight hover/press
+  transition reports `0.0` rather than its end (a host that woke only at the
+  end drew a jump, not a fade); `needs_repaint` is `next_deadline.is_some()`.
+- [x] **`ClickTracker::hold_due_in(time)`** — when a press still held latches
+  `mouse_held`, so the frame that sees it is built.

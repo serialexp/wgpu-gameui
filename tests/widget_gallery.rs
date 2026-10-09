@@ -40,9 +40,16 @@ use wgpu_gameui::{
     MINI_METER_WARN, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT, STATUS_BAR_HEIGHT,
     STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status, StatusIcon, StatusPart,
     StatusToggle, StatusZone, TextSize, WELL_CHIP_HEIGHT, Waffle, WaffleCategory, WaffleFill,
-    WellChip, WellChipPart, ZonedStatusBar, chip, dots, draw_combo_trigger, draw_curve_editor,
+    WellChip, WellChipPart, ZonedStatusBar, dots, draw_combo_trigger, draw_curve_editor,
     draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar, draw_tag_input,
     inline_meter, keycap, mini_meter, place_popover, skeleton, spinner, stacked_bar, toolbar_band,
+};
+use wgpu_gameui::{
+    BarOverlay, LineChart, LineSeries, SCATTER_HEIGHT, ScatterPlot, ScatterPoint, nice_max,
+};
+use wgpu_gameui::{
+    Clock, FILTER_CHIP_HEIGHT, FavouriteFolder, FileDialog, FileDialogMode, FileDialogState,
+    FileEntry, FilePlace, FileSource, FileView, FilterChip, Listing,
 };
 use wgpu_gameui::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListState};
 use wgpu_gameui::{
@@ -192,7 +199,78 @@ fn inspector_body(mixed: bool) -> impl Fn(&mut PropertyStack, &mut DrawContext) 
     }
 }
 
+/// A small disk for the FileDialog gallery cells.
+struct GalleryDisk {
+    folders: Vec<(Vec<String>, Vec<FileEntry>)>,
+}
+
+impl FileSource for GalleryDisk {
+    fn list(&mut self, path: &[String]) -> Listing<'_> {
+        match self.folders.iter().find(|(p, _)| p == path) {
+            Some((_, entries)) => Listing::Entries {
+                entries,
+                generation: 0,
+            },
+            None => Listing::Failed("No such folder"),
+        }
+    }
+}
+
+fn gallery_disk() -> GalleryDisk {
+    const DAY: i64 = 86_400;
+    let now = 1_791_468_120;
+    let folder = |name: &str, age: i64, count: u64| FileEntry {
+        modified: Some(now - age),
+        count: Some(count),
+        ..FileEntry::folder(name)
+    };
+    let file = |name: &str, age: i64, size: u64| FileEntry {
+        modified: Some(now - age),
+        size: Some(size),
+        hidden: name.starts_with('.'),
+        ..FileEntry::file(name)
+    };
+    let projects = vec![
+        folder("assets", 2 * 3_600, 14),
+        folder("city-builder", 3 * DAY, 9),
+        folder("forge-editor", 3_600, 22),
+        folder("level-tools", 40 * DAY, 6),
+        folder("shaders", 400 * DAY, 31),
+        file("notes.md", 5 * DAY, 2_310),
+        file(".DS_Store", DAY, 6_148),
+    ];
+    let assets = vec![
+        folder("audio", 6 * DAY, 18),
+        folder("textures", 2 * DAY, 64),
+        file("city_block_07.lvl", 3_600, 482_113),
+        file("city_block_08.lvl", 2 * DAY, 391_870),
+        file("lamp_post.prefab", 9 * DAY, 12_004),
+        file("terrain.png", 4 * 3_600, 2_402_331),
+        file("water_normal.png", 12 * DAY, 1_048_576),
+        file("ambience.ogg", 30 * DAY, 3_811_002),
+        file("readme.txt", 90 * DAY, 812),
+    ];
+    GalleryDisk {
+        folders: vec![
+            (
+                Vec::new(),
+                vec![folder("Projects", DAY, 5), folder("Downloads", DAY, 40)],
+            ),
+            (vec!["Projects".into()], projects),
+            (vec!["Projects".into(), "assets".into()], assets),
+        ],
+    }
+}
+
 const W: u32 = 800;
+/// The whole gallery page, for the tooltips drawn over it to stay inside:
+/// across its width, and as far down as it goes.
+const PAGE: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: W as f32,
+    height: f32::MAX,
+};
 const LABEL_H: f32 = 16.0;
 const LABEL_SIZE: f32 = 11.0;
 /// Rough advance width per character at `LABEL_SIZE`, used so a long label
@@ -293,8 +371,10 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
             "CountBubble",
             "DragList",
             "DropZone",
+            "LineChart",
             "ListView",
             "MiniMeter",
+            "ScatterPlot",
             "Table",
             "Thumb",
             "Tree",
@@ -303,7 +383,7 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
     ),
     (
         Category::Dialogs,
-        &["AlertDialog", "ConfirmDialog", "PromptDialog"],
+        &["AlertDialog", "ConfirmDialog", "FileDialog", "PromptDialog"],
     ),
     (
         Category::Editors,
@@ -4370,6 +4450,102 @@ fn render_widget_gallery() {
 
         flow.section(
             list,
+            Category::Dialogs,
+            "FileDialog",
+            "open · save · choose folder, over the caller's disk",
+        );
+        {
+            let mut disk = gallery_disk();
+            let clock = Clock {
+                now: 1_791_468_120,
+                utc_offset: 0,
+            };
+            let places = [
+                FilePlace::new("Projects", vec!["Projects".into()]),
+                FilePlace::new("Home", Vec::new()).icon(PhosphorIcon::House),
+            ];
+            let mut recent = FileEntry::folder("forge-editor");
+            recent.dir = Some(vec!["Projects".into()]);
+            recent.modified = Some(clock.now - 3_600);
+            let recent = [recent];
+            let favourites = vec![FavouriteFolder {
+                path: vec!["Projects".into(), "assets".into()],
+                label: None,
+            }];
+
+            let r = flow.cell(
+                list,
+                "Choose folder · list, a folder selected",
+                780.0,
+                540.0,
+            );
+            dialog_stage(list, &s, r, "FileDialog · folder");
+            let mut state = FileDialogState::new();
+            state.set_favourites(favourites.clone());
+            state.open(vec!["Projects".into()]);
+            state.select("city-builder");
+            let mut dialog_focus = FocusState::new();
+            FileDialog::new(FileDialogMode::Folder)
+                .title("Choose project")
+                .places(&places)
+                .recent(&recent)
+                .clock(clock)
+                .draw(
+                    940,
+                    r,
+                    &mut state,
+                    &mut disk,
+                    &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+
+            let r = flow.cell(list, "Open · grid, type chips", 780.0, 540.0);
+            dialog_stage(list, &s, r, "FileDialog · open");
+            let mut state = FileDialogState::new();
+            state.set_favourites(favourites.clone());
+            state.set_view(FileView::Grid);
+            state.open(vec!["Projects".into(), "assets".into()]);
+            state.select("terrain.png");
+            let mut dialog_focus = FocusState::new();
+            FileDialog::new(FileDialogMode::Open)
+                .title("Open asset")
+                .places(&places)
+                .recent(&recent)
+                .accept(&["png", "lvl", "prefab", "ogg"])
+                .clock(clock)
+                .draw(
+                    940,
+                    r,
+                    &mut state,
+                    &mut disk,
+                    &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+
+            let r = flow.cell(list, "Save · a name that exists", 780.0, 540.0);
+            dialog_stage(list, &s, r, "FileDialog · save");
+            let mut state = FileDialogState::new();
+            state.set_favourites(favourites);
+            state.open_with_name(
+                vec!["Projects".into(), "assets".into()],
+                "city_block_07.lvl",
+            );
+            let mut dialog_focus = FocusState::new();
+            FileDialog::new(FileDialogMode::Save)
+                .title("Save level as")
+                .places(&places)
+                .accept(&["lvl"])
+                .save_ext("lvl")
+                .clock(clock)
+                .draw(
+                    940,
+                    r,
+                    &mut state,
+                    &mut disk,
+                    &mut ctx(list, &mut dialog_focus, &theme, &input),
+                );
+        }
+
+        flow.section(
+            list,
             Category::Inspector,
             "PropertyRow",
             "scrub the label · step ▴▾ · mixed",
@@ -4589,21 +4765,35 @@ fn render_widget_gallery() {
             }
         }
 
-        flow.section(list, Category::Keys, "FilterChip", "chip");
+        flow.section(
+            list,
+            Category::Keys,
+            "FilterChip",
+            "latching pill · optional count",
+        );
         {
             // A filter row: first on, rest off.
-            let r = flow.cell(list, "On · off · off", 200.0, 20.0);
+            let r = flow.cell(list, "On · off · off", 200.0, FILTER_CHIP_HEIGHT);
             let mut cx = r.x;
             for (j, label) in ["info", "warn", "verbose"].iter().enumerate() {
-                let _ = chip(
-                    list,
-                    &s,
-                    Rect::new(cx, r.y, 70.0, 20.0),
-                    label,
-                    j == 0,
-                    &input,
+                let chip = FilterChip::new(label).on(j == 0);
+                let w = chip.width(list, &s);
+                chip.draw(
+                    Rect::new(cx, r.y, w, FILTER_CHIP_HEIGHT),
+                    &mut ctx(list, &mut focus, &theme, &input),
                 );
-                cx += 62.0;
+                cx += w + 4.0;
+            }
+            let r = flow.cell(list, "With counts", 200.0, FILTER_CHIP_HEIGHT);
+            let mut cx = r.x;
+            for (j, (label, n)) in [(".png", 12), (".lvl", 3), (".ogg", 7)].iter().enumerate() {
+                let chip = FilterChip::new(label).count(*n).on(j != 1);
+                let w = chip.width(list, &s);
+                chip.draw(
+                    Rect::new(cx, r.y, w, FILTER_CHIP_HEIGHT),
+                    &mut ctx(list, &mut focus, &theme, &input),
+                );
+                cx += w + 4.0;
             }
         }
 
@@ -4812,7 +5002,7 @@ fn render_widget_gallery() {
             list,
             Category::Data,
             "BarChart",
-            "stacked, estimated series, cap, current, outlier",
+            "stacked, estimated series, cap, current, outlier, overlay",
         );
         {
             let hue = |h: f32| wgpu_gameui::color::oklch(0.68, 0.1, h, 1.0);
@@ -4881,7 +5071,7 @@ fn render_widget_gallery() {
                 right_of_bar: true,
                 top: r.y,
             };
-            chart.draw_tooltip(&tip, Rect::new(0.0, 0.0, W as f32, 4_000.0), list, &s);
+            chart.draw_tooltip(&tip, PAGE, list, &s);
 
             let mut outlier = days;
             outlier[5] = [9_000.0, 600.0, 300.0, 200.0];
@@ -4900,6 +5090,323 @@ fn render_widget_gallery() {
             BarChart::new(&bars, &series, &format).draw(r.x, r.y, r.width, list, &s, &input);
             let r = flow.cell(list, "Nothing in range", 300.0, 250.0);
             BarChart::new(&[], &series, &format).draw(r.x, r.y, r.width, list, &s, &input);
+
+            // An overlay on its own right axis: thinking's share of each day
+            // (the usage card), hovered.
+            let usage = usage_card();
+            let think_series = [
+                BarSeries {
+                    name: "Visible output",
+                    color: hue(160.0),
+                    estimated: false,
+                },
+                BarSeries {
+                    name: "Thinking",
+                    color: hue(300.0),
+                    estimated: true,
+                },
+            ];
+            let think_bars: Vec<Bar<'_>> = usage
+                .think
+                .iter()
+                .map(|day| Bar {
+                    label: &day.label,
+                    long_label: &day.long_label,
+                    segments: &day.segments,
+                    reference: None,
+                    current: day.current,
+                })
+                .collect();
+            let shares: Vec<Option<f64>> = usage.think.iter().map(|day| day.share).collect();
+            let share_overlay = |values| BarOverlay {
+                label: "Thinking share",
+                color: wgpu_gameui::color::oklch(0.86, 0.08, 300.0, 1.0),
+                values,
+                max: Some(1.0),
+                format: &percent,
+            };
+            let chart = BarChart::new(&think_bars, &think_series, &tokens)
+                .overlay(share_overlay(&shares))
+                .height(130.0)
+                .max_bar_width(18.0);
+            let h = chart.measure_height(420.0, list, &s);
+            let r = flow.cell(list, "Thinking share, right axis, hovered", 420.0, h);
+            let over = InputState {
+                mouse_x: r.x + r.width * 0.42,
+                mouse_y: r.y + 60.0,
+                ..Default::default()
+            };
+            let out = chart.draw(r.x, r.y, r.width, list, &s, &over);
+            if let Some(tip) = out.tooltip {
+                chart.draw_tooltip(&tip, PAGE, list, &s);
+            }
+
+            // Under an outlier the left axis breaks and the right doesn't;
+            // D9 has no share (the states card).
+            let states = states_card();
+            let names: Vec<String> = (1..=12).map(|i| format!("D{i}")).collect();
+            let bars: Vec<Bar<'_>> = states
+                .bars
+                .iter()
+                .zip(&names)
+                .map(|(segments, name)| Bar {
+                    label: name,
+                    long_label: name,
+                    segments,
+                    reference: None,
+                    current: false,
+                })
+                .collect();
+            let chart = BarChart::new(&bars, &think_series, &tokens)
+                .overlay(share_overlay(&states.share))
+                .height(120.0)
+                .max_bar_width(28.0);
+            let h = chart.measure_height(740.0, list, &s);
+            let r = flow.cell(list, "Overlay over an outlier, a day missing", 740.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+        }
+
+        flow.section(
+            list,
+            Category::Data,
+            "LineChart",
+            "time axis, running point, gaps, 100k points, empty",
+        );
+        {
+            let hue = |h: f32| wgpu_gameui::color::oklch(0.68, 0.1, h, 1.0);
+            let whole = |v: f64| format!("{}", v.round());
+            let line = |name, color, values| LineSeries {
+                name,
+                color,
+                values,
+                dots: false,
+                area: false,
+                estimated: false,
+            };
+            let usage = usage_card();
+            let series = [
+                LineSeries {
+                    area: true,
+                    ..line("Weekly window", hue(230.0), &usage.weekly)
+                },
+                LineSeries {
+                    dots: true,
+                    ..line("5-hour peak", hue(160.0), &usage.five)
+                },
+                LineSeries {
+                    estimated: true,
+                    ..line("Weekly · projected", hue(230.0), &usage.projected)
+                },
+            ];
+            let chart = LineChart::new(&series, &percent)
+                .x(&usage.x)
+                .time(0)
+                .current(29)
+                .reference(1.0)
+                .reference_label("limit")
+                .height(170.0);
+            let h = chart.measure_height(740.0, list, &s);
+            let r = flow.cell(list, "Share of limit per day, hovered", 740.0, h);
+            // The pointer over a day brings up its guide and tooltip.
+            let over = InputState {
+                mouse_x: r.x + r.width * 0.62,
+                mouse_y: r.y + 60.0,
+                ..Default::default()
+            };
+            let out = chart.draw(r.x, r.y, r.width, list, &s, &over);
+            if let Some(tip) = out.tooltip {
+                chart.draw_tooltip(&tip, PAGE, list, &s);
+            }
+
+            let names: Vec<String> = (1..=120).map(|i| format!("#{i}")).collect();
+            let turns: Vec<String> = (1..=120).map(|i| format!("Turn {i}")).collect();
+            let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+            let long: Vec<&str> = turns.iter().map(String::as_str).collect();
+            let series = [LineSeries {
+                area: true,
+                ..line("Context", hue(200.0), &usage.context)
+            }];
+            let chart = LineChart::new(&series, &tokens)
+                .labels(&labels)
+                .long_labels(&long)
+                .current(119)
+                .reference(160e3)
+                .reference_label("compacts at")
+                .height(130.0)
+                .legend(false);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "Context per turn, compactions", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let states = states_card();
+            let series = [LineSeries {
+                dots: true,
+                ..line("Requests / h", hue(230.0), &states.irregular)
+            }];
+            let chart = LineChart::new(&series, &whole)
+                .x(&states.irregular_x)
+                .time(0)
+                .current(states.irregular.len() - 1)
+                .height(110.0);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "Irregular samples, 12 h ticks", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let series = [LineSeries {
+                area: true,
+                ..line("Daily cost", hue(160.0), &states.long)
+            }];
+            let chart = LineChart::new(&series, &whole)
+                .x(&states.long_x)
+                .time(0)
+                .height(110.0);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "181 days, month ticks", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let some = |v: &[i32]| -> Vec<Option<f64>> {
+                v.iter()
+                    .map(|&v| (v >= 0).then_some(f64::from(v)))
+                    .collect()
+            };
+            // -1 is a gap.
+            let sampled = some(&[
+                4, 6, 5, 8, 9, -1, -1, 7, 6, 8, -1, 11, -1, 9, 10, 12, 11, 13, 12, 14,
+            ]);
+            let sparse = some(&[
+                2, 3, 3, 4, 3, -1, -1, -1, 5, 4, 5, 6, 6, 5, -1, 7, 6, 7, 8, 8,
+            ]);
+            let gap_names: Vec<String> = (1..=20).map(|i| format!("#{i}")).collect();
+            let gap_labels: Vec<&str> = gap_names.iter().map(String::as_str).collect();
+            let series = [
+                LineSeries {
+                    area: true,
+                    ..line("Sampled", hue(230.0), &sampled)
+                },
+                LineSeries {
+                    dots: true,
+                    ..line("Sparse", hue(160.0), &sparse)
+                },
+            ];
+            let chart = LineChart::new(&series, &whole)
+                .labels(&gap_labels)
+                .height(120.0);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "Gaps break it, a lone point is a dot", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let thousands = |i: f64| format!("{}k", (i / 1_000.0).round());
+            let series = [LineSeries {
+                area: true,
+                ..line("Latency (ms)", hue(160.0), &states.dense)
+            }];
+            let chart = LineChart::new(&series, &whole)
+                .x_format(&thousands)
+                .height(120.0);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "100,000 points, min and max a column", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let series = [line("Weekly", hue(230.0), &[])];
+            let chart = LineChart::new(&series, &whole).height(90.0).legend(false);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "Nothing in range", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let zeros = [Some(0.0); 7];
+            let week = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+            let series = [line("Errors", hue(230.0), &zeros)];
+            let chart = LineChart::new(&series, &whole)
+                .labels(&week)
+                .height(90.0)
+                .legend(false);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "All zero", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+        }
+
+        flow.section(
+            list,
+            Category::Data,
+            "ScatterPlot",
+            "calibration in a well, flagged readings, median",
+        );
+        {
+            let mut rnd = seeded(7);
+            let times = [
+                "Sep 25 09:12",
+                "Sep 26 14:40",
+                "Sep 27 11:05",
+                "Sep 28 16:22",
+                "Sep 29 10:48",
+                "Sep 30 13:31",
+                "Oct 1 15:02",
+                "Oct 2 09:55",
+                "Oct 3 17:16",
+                "Oct 4 12:09",
+                "Oct 5 10:33",
+                "Oct 6 14:57",
+                "Oct 7 11:44",
+                "Oct 8 14:02",
+            ];
+            let readings: Vec<ScatterPoint<'_>> = times
+                .iter()
+                .enumerate()
+                .map(|(i, tip)| {
+                    let flagged = i == 3 || i == 10;
+                    let y = if flagged {
+                        70.0 + rnd() * 30.0
+                    } else {
+                        34.0 + rnd() * 14.0
+                    };
+                    ScatterPoint {
+                        x: i as f64 / (times.len() - 1) as f64,
+                        y,
+                        flagged,
+                        tip: Some(tip),
+                    }
+                })
+                .collect();
+            let mut fit: Vec<f64> = readings
+                .iter()
+                .filter(|p| !p.flagged)
+                .map(|p| p.y)
+                .collect();
+            fit.sort_by(f64::total_cmp);
+            let median = fit[fit.len() / 2];
+            let per_point = |v: f64| format!("{v:.0} tok/pt");
+            let ends = ["14 d ago", "now"];
+            let plot = ScatterPlot::new(&readings, &per_point)
+                .reference(median)
+                .x_labels(&ends);
+            let r = flow.cell(list, "Median, two flagged", 360.0, plot.measure_height());
+            plot.draw(r.x, r.y, r.width, list, &s, &input);
+
+            let r = flow.cell(
+                list,
+                "A flagged reading hovered",
+                360.0,
+                plot.measure_height(),
+            );
+            // The pointer on reading 10, placed the way the plot places it:
+            // inside the 1px border, 8px in and a 14px label column each side.
+            let highest = readings.iter().map(|p| p.y).fold(median, f64::max);
+            let max = nice_max(highest * 1.08) as f32;
+            let inner = Rect::new(r.x + 1.0, r.y + 1.0, r.width - 2.0, SCATTER_HEIGHT - 2.0);
+            let p = &readings[10];
+            let over = InputState {
+                mouse_x: inner.x + 22.0 + p.x as f32 * (inner.width - 44.0),
+                mouse_y: inner.bottom() - 8.0 - p.y as f32 / max * (inner.height - 16.0),
+                ..Default::default()
+            };
+            let out = plot.draw(r.x, r.y, r.width, list, &s, &over);
+            if let Some(tip) = out.tooltip {
+                plot.draw_tooltip(&tip, PAGE, list, &s);
+            }
+
+            let plot = ScatterPlot::new(&readings[..2], &per_point).x_labels(&ends);
+            let r = flow.cell(list, "Too few to fit", 360.0, plot.measure_height());
+            plot.draw(r.x, r.y, r.width, list, &s, &input);
         }
 
         flow.section(list, Category::Data, "MiniMeter", "row-scale, amber at 80%");
@@ -6103,4 +6610,204 @@ fn render_widget_gallery() {
         drew,
         "no widget pixels rendered — pipeline produced an empty frame"
     );
+}
+
+/// Forge's chart cards' seeded generator (Park–Miller), so the gallery draws
+/// the cards' own data.
+fn seeded(seed: u64) -> impl FnMut() -> f64 {
+    let mut state = seed;
+    move || {
+        state = state * 16_807 % 2_147_483_647;
+        state as f64 / 2_147_483_647.0
+    }
+}
+
+const DAY_MS: f64 = 86_400_000.0;
+
+/// A share, as a whole percentage.
+fn percent(v: f64) -> String {
+    format!("{}%", (v * 100.0).round())
+}
+
+/// A count of tokens: `1.2M`, `40k`, `900`.
+fn tokens(v: f64) -> String {
+    if v >= 1e6 {
+        format!("{:.1}M", v / 1e6).replace(".0M", "M")
+    } else if v >= 1e3 {
+        format!("{}k", (v / 1e3).round())
+    } else {
+        format!("{}", v.round())
+    }
+}
+
+/// A day of Forge's thinking-share bars.
+struct ThinkDay {
+    label: String,
+    long_label: String,
+    current: bool,
+    segments: [f64; 2],
+    share: Option<f64>,
+}
+
+/// The data of Forge's `linechart.card.html`, drawn from its stream in its
+/// order: a month of usage against a limit, a context sawtooth, and three
+/// weeks of thinking share. Its days are local midnights; here they are
+/// UTC ones.
+struct UsageCard {
+    x: Vec<f64>,
+    weekly: Vec<Option<f64>>,
+    five: Vec<Option<f64>>,
+    projected: Vec<Option<f64>>,
+    context: Vec<Option<f64>>,
+    think: Vec<ThinkDay>,
+}
+
+fn usage_card() -> UsageCard {
+    // 2026-09-08, a Tuesday.
+    let day = |i: usize| 1_788_825_600_000.0 + i as f64 * DAY_MS;
+    let mut rnd = seeded(11);
+    let n = 30;
+    let (mut weekly, mut five, mut week) = (Vec::new(), Vec::new(), 0.0);
+    for i in 0..n {
+        if i % 7 == 0 {
+            week = 0.0;
+        }
+        week += 0.06 + rnd() * 0.1;
+        weekly.push(Some(if i < n - 1 {
+            f64::min(week, 1.04)
+        } else {
+            week
+        }));
+        let peak = if i == 18 { 0.25 } else { 0.0 };
+        five.push((i != 12 && i != 13).then(|| 0.2 + rnd() * 0.7 + peak));
+    }
+    let last = weekly[n - 1].unwrap_or(0.0);
+    let projected = (0..n + 5)
+        .map(|i| match i {
+            i if i < n - 1 => None,
+            i if i == n - 1 => Some(last),
+            i => Some(last + (i - n + 1) as f64 * 0.11),
+        })
+        .collect();
+    weekly.extend([None; 5]);
+    five.extend([None; 5]);
+    let x = (0..n + 5)
+        .map(|i| day(i) + if i == n - 1 { 0.55 * DAY_MS } else { 0.0 })
+        .collect();
+
+    let mut context = Vec::new();
+    let mut c = 18e3;
+    for _ in 0..120 {
+        c += 1_500.0 + rnd() * 3_200.0 + if rnd() < 0.06 { 14e3 } else { 0.0 };
+        if c > 160e3 {
+            c = 26e3 + rnd() * 8e3;
+        }
+        context.push(Some(c));
+    }
+
+    const WEEKDAYS: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    let think = (0..21)
+        .map(|i| {
+            // From Thursday 17 September.
+            let (month, date) = if i < 14 {
+                ("Sep", 17 + i)
+            } else {
+                ("Oct", i - 13)
+            };
+            let weekday = (4 + i) % 7;
+            let out = 40e3 + rnd() * 90e3;
+            let thinking = if i == 6 {
+                0.0
+            } else {
+                out * (0.3 + rnd() * 1.6)
+            };
+            let k = if weekday % 6 == 0 { 0.25 } else { 1.0 };
+            ThinkDay {
+                label: format!("{month} {date}"),
+                long_label: format!("{}, {month} {date}", WEEKDAYS[weekday]),
+                current: i == 20,
+                segments: [out * k, thinking * k],
+                share: (i != 6).then(|| thinking / (out + thinking)),
+            }
+        })
+        .collect();
+    UsageCard {
+        x,
+        weekly,
+        five,
+        projected,
+        context,
+        think,
+    }
+}
+
+/// The data of Forge's `linechart-states.card.html`, drawn from its stream
+/// in its order: 100,000 noisy points, irregular samples over 2.6 days, 181
+/// days, and a dozen bars with an outlier and a share over them.
+struct StatesCard {
+    dense: Vec<Option<f64>>,
+    irregular_x: Vec<f64>,
+    irregular: Vec<Option<f64>>,
+    long_x: Vec<f64>,
+    long: Vec<Option<f64>>,
+    bars: Vec<[f64; 2]>,
+    share: Vec<Option<f64>>,
+}
+
+fn states_card() -> StatesCard {
+    let mut rnd = seeded(5);
+    let mut a = 50.0;
+    let dense = (0..100_000)
+        .map(|_| {
+            a += (rnd() - 0.5) * 3.0 + (50.0 - a) * 0.002;
+            let spike = if rnd() < 0.0004 { 40.0 } else { 0.0 };
+            Some(f64::max(0.0, a + spike))
+        })
+        .collect();
+    // From 2026-10-05 07:00, every 0.3–1.5 hours, now and then 5.
+    let start = 1_791_183_600_000.0;
+    let (mut irregular_x, mut irregular) = (Vec::new(), Vec::new());
+    let mut t = start;
+    while t < start + 2.6 * DAY_MS {
+        irregular_x.push(t);
+        irregular.push(Some(20.0 + rnd() * 60.0));
+        t += if rnd() < 0.15 { 5.0 } else { 0.3 + rnd() * 1.2 } * 3_600_000.0;
+    }
+    // 181 days from 2026-04-09.
+    let long_x = (0..181)
+        .map(|i| 1_775_692_800_000.0 + f64::from(i) * DAY_MS)
+        .collect();
+    let mut a = 30.0;
+    let long = (0..181)
+        .map(|_| {
+            a = f64::max(2.0, a + (rnd() - 0.48) * 6.0);
+            Some(a)
+        })
+        .collect();
+    let bars = (0..12)
+        .map(|i| {
+            let t = if i == 4 { 2.2e4 } else { 2e3 + rnd() * 3e3 };
+            [t * 0.6, t * 0.4]
+        })
+        .collect();
+    let share = (0..12)
+        .map(|i| (i != 8).then(|| 0.2 + rnd() * 0.6))
+        .collect();
+    StatesCard {
+        dense,
+        irregular_x,
+        irregular,
+        long_x,
+        long,
+        bars,
+        share,
+    }
 }

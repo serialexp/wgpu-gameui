@@ -30,10 +30,11 @@
 //!   layer, draw, composite) at 1080p and 4K, **waiting for the GPU**. The gap
 //!   between the two is the offscreen cost; the budget is ≤ 1 ms per render
 //!   call at 4K.
-//! - `charts_build` / `charts_render` — the bar chart (30 to 10k bars, idle
-//!   and hovered) and the waffle (100 to 10k cells) drawn and rendered, to
-//!   find how much data a chart can take a frame. Each case's shape counts
-//!   are printed once.
+//! - `charts_build` / `charts_render` — the bar chart (30 to 10k bars, idle,
+//!   hovered and with a line overlay), the line chart (30 to 100k points,
+//!   idle and hovered), the scatter (14 to 10k readings) and the waffle (100
+//!   to 10k cells) drawn and rendered, to find how much data a chart can
+//!   take a frame. Each case's shape counts are printed once.
 //! - `strokes_build` / `strokes_render` — a chart line of 1k and 10k points
 //!   as one polyline (solid, dashed, and a wide translucent halo): cutting it
 //!   into segment records, and its frame **waiting for the GPU**, so the
@@ -50,7 +51,10 @@ use wgpu_gameui::{
     NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn,
     TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
 };
-use wgpu_gameui::{Bar, BarChart, BarSeries, Stroke, Waffle, WaffleCategory, WaffleFill};
+use wgpu_gameui::{
+    Bar, BarChart, BarOverlay, BarSeries, LineChart, LineSeries, ScatterPlot, ScatterPoint, Stroke,
+    Waffle, WaffleCategory, WaffleFill,
+};
 use wgpu_gameui::{
     DragItem, DragList, DragListState, INSPECTOR_WIDTH, Inspector, InspectorSelection,
     InspectorState, PropertyGroup, PropertyRow, PropertyScrub,
@@ -1478,6 +1482,19 @@ fn bench_animation(c: &mut Criterion) {
 const CHART_BARS: &[usize] = &[30, 90, 365, 2_000, 10_000];
 /// Waffle cell counts: Forge's 10×10, then denser grids.
 const WAFFLE_CELLS: &[usize] = &[100, 400, 2_500, 10_000];
+/// Line chart point counts: a month and a year of days, then past two points
+/// a pixel, where each column keeps only its lowest and highest.
+const LINE_POINTS: &[usize] = &[30, 365, 2_000, 10_000, 100_000];
+/// Scatter reading counts: Forge's fortnight, then many more (a scatter
+/// draws every reading).
+const SCATTER_POINTS: &[usize] = &[14, 100, 1_000, 10_000];
+/// The usage card's lines: the window filled, the peaks with dots, and the
+/// projection dashed.
+const LINE_COLORS: [[f32; 4]; 3] = [
+    [0.35, 0.62, 0.85, 1.0],
+    [0.45, 0.75, 0.50, 1.0],
+    [0.35, 0.62, 0.85, 1.0],
+];
 /// A wide dialog's chart.
 const CHART_W: f32 = 900.0;
 const CHART_SERIES: [BarSeries<'static>; 4] = [
@@ -1504,15 +1521,45 @@ const CHART_SERIES: [BarSeries<'static>; 4] = [
 ];
 
 /// `bars` days of [`CHART_SERIES`], each with a cap and the newest running,
-/// as the usage window draws them: every part of a bar is exercised.
+/// as the usage window draws them: every part of a bar is exercised. With
+/// them, as many points of three lines (one filled, one with dots and gaps,
+/// one an estimated tail), a share a bar for an overlay, and readings for a
+/// scatter, every tenth flagged.
 struct ChartData {
     labels: Vec<String>,
     segments: Vec<[f64; 4]>,
+    lines: [Vec<Option<f64>>; 3],
+    shares: Vec<Option<f64>>,
+    readings: Vec<ScatterPoint<'static>>,
 }
 
 impl ChartData {
     fn new(bars: usize) -> Self {
+        let wave = |i: usize, period: f64| (i as f64 / period).sin();
+        let tail = bars - bars / 10;
         Self {
+            lines: [
+                (0..bars)
+                    .map(|i| Some(0.5 + 0.3 * wave(i, 11.0) + 0.02 * (i % 7) as f64))
+                    .collect(),
+                (0..bars)
+                    .map(|i| (i % 97 != 0).then(|| 0.4 + 0.25 * wave(i, 5.0)))
+                    .collect(),
+                (0..bars)
+                    .map(|i| (i >= tail).then(|| 0.6 + 0.001 * (i - tail) as f64))
+                    .collect(),
+            ],
+            shares: (0..bars)
+                .map(|i| (i % 23 != 0).then_some(0.2 + 0.05 * (i % 13) as f64))
+                .collect(),
+            readings: (0..bars)
+                .map(|i| ScatterPoint {
+                    x: i as f64 / bars.max(2).saturating_sub(1) as f64,
+                    y: 40.0 + 8.0 * wave(i, 3.0) + if i % 10 == 0 { 30.0 } else { 0.0 },
+                    flagged: i % 10 == 0,
+                    tip: None,
+                })
+                .collect(),
             labels: (0..bars)
                 .map(|i| format!("{:02}-{:02}", 1 + i / 28 % 12, 1 + i % 28))
                 .collect(),
@@ -1545,6 +1592,22 @@ impl ChartData {
             })
             .collect()
     }
+
+    fn line_series(&self) -> [LineSeries<'_>; 3] {
+        let names = ["Weekly window", "5-hour peak", "Weekly · projected"];
+        std::array::from_fn(|k| LineSeries {
+            name: names[k],
+            color: LINE_COLORS[k],
+            values: &self.lines[k],
+            dots: k == 1,
+            area: k == 0,
+            estimated: k == 2,
+        })
+    }
+}
+
+fn percent(value: f64) -> String {
+    format!("{:.0}%", value * 100.0)
 }
 
 fn chart_format(value: f64) -> String {
@@ -1614,12 +1677,20 @@ fn waffle_cells(count: usize, solid: f32) -> Vec<u8> {
         .collect()
 }
 
-/// The chart cases: name, then how many bars or cells.
+/// The chart cases: name, then how many bars, points, readings or cells.
 fn chart_cases() -> Vec<(&'static str, usize)> {
     let mut cases = Vec::new();
     for &bars in CHART_BARS {
         cases.push(("bar_chart", bars));
         cases.push(("bar_chart_hovered", bars));
+        cases.push(("bar_chart_overlay", bars));
+    }
+    for &points in LINE_POINTS {
+        cases.push(("line_chart", points));
+        cases.push(("line_chart_hovered", points));
+    }
+    for &readings in SCATTER_POINTS {
+        cases.push(("scatter", readings));
     }
     for &cells in WAFFLE_CELLS {
         cases.push(("waffle_solid", cells));
@@ -1643,6 +1714,42 @@ fn build_chart(list: &mut DrawList, s: &StyleResolver, kind: &str, data: &ChartD
             };
             build_bar_chart(list, &chart, s, &input);
         }
+        "bar_chart_overlay" => {
+            let bars = data.bars();
+            let format = chart_format;
+            let overlay = BarOverlay {
+                label: "Thinking share",
+                color: [0.80, 0.72, 0.95, 1.0],
+                values: &data.shares,
+                max: Some(1.0),
+                format: &percent,
+            };
+            let chart = BarChart::new(&bars, &CHART_SERIES, &format).overlay(overlay);
+            build_bar_chart(list, &chart, s, &InputState::default());
+        }
+        "line_chart" | "line_chart_hovered" => {
+            let series = data.line_series();
+            let format = percent;
+            let chart = LineChart::new(&series, &format)
+                .current(data.labels.len() - 1)
+                .reference(1.0)
+                .reference_label("limit");
+            let input = if kind == "line_chart" {
+                InputState::default()
+            } else {
+                chart_hover()
+            };
+            let out = chart.draw(20.0, 20.0, CHART_W, list, s, &input);
+            if let Some(tip) = out.tooltip {
+                chart.draw_tooltip(&tip, Rect::new(0.0, 0.0, W as f32, H as f32), list, s);
+            }
+        }
+        "scatter" => {
+            let format = chart_format;
+            ScatterPlot::new(&data.readings, &format)
+                .reference(40.0)
+                .draw(20.0, 20.0, CHART_W, list, s, &InputState::default());
+        }
         _ => {
             let categories = waffle_categories();
             let columns = (cells.len() as f64).sqrt().ceil() as usize;
@@ -1660,9 +1767,11 @@ fn build_chart(list: &mut DrawList, s: &StyleResolver, kind: &str, data: &ChartD
 
 /// CPU cost of drawing the charts into a `DrawList` each frame, as the
 /// immediate-mode caller does: the bar chart at a month to 10k bars (idle,
-/// and hovered with its tooltip), the waffle at 100 to 10k cells (all solid,
-/// and 40% hatched free space). Each case's shape and text counts are printed
-/// once, so the timings can be read against what was drawn.
+/// hovered with its tooltip, and with an overlay line), the line chart at a
+/// month to 100k points (idle, and hovered with its guide and tooltip), the
+/// scatter at 14 to 10k readings, and the waffle at 100 to 10k cells (all
+/// solid, and 40% hatched free space). Each case's shape and text counts are
+/// printed once, so the timings can be read against what was drawn.
 fn bench_charts_build(c: &mut Criterion) {
     let harness = Harness::new();
     let theme = Theme::default();

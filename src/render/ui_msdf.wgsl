@@ -16,6 +16,10 @@
 //
 // Per-vertex scissor clipping matches the other UI pipelines (ui.wgsl).
 //
+// Crisp edges (softness 0) are corrected for their colour so light text on a
+// dark background looks as heavy as dark text on a light one; see
+// `corrected_coverage` and `render/text_contrast.rs`.
+//
 // NOTE: effect reach is bounded by the field's valid range — about
 // `(px_range / 2) * (font_size / ref_px)` screen px around the edge. Past that the
 // field saturates, so very thick outlines / wide blur at tiny font sizes clip.
@@ -23,6 +27,9 @@
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
+    // `TextContrast`: the gamma ratios, and the enhanced contrast in `x`.
+    gamma_ratios: vec4<f32>,
+    contrast: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -75,6 +82,21 @@ fn median(r: f32, g: f32, b: f32) -> f32 {
     return max(min(r, g), min(max(r, g), b));
 }
 
+// Contrast and gamma correction adapted from Windows Terminal's dwrite.hlsl
+// (Copyright (c) Microsoft Corporation, MIT licence), by way of gpui.
+// The CPU twin is `corrected_coverage` in render/text_contrast.rs; keep them
+// equal. `rgb` is the sRGB-encoded text colour.
+fn corrected_coverage(coverage: f32, rgb: vec3<f32>) -> f32 {
+    let g = uniforms.gamma_ratios;
+    let b = dot(rgb, vec3<f32>(0.30, 0.59, 0.11));
+    // Enhanced contrast thickens text darker than 75% brightness.
+    let k = uniforms.contrast.x * saturate(4.0 * (0.75 - b));
+    let a = coverage * (k + 1.0) / (coverage * k + 1.0);
+    // Gamma moves partial coverage by a·(1-a)·correction.
+    let correction = (g.x * b + g.y) * a + (g.z * b + g.w);
+    return saturate(a + a * (1.0 - a) * correction);
+}
+
 @fragment
 fn fs_msdf(in: VsOut) -> @location(0) vec4<f32> {
     if (in.clip_enabled > 0.5) {
@@ -98,8 +120,14 @@ fn fs_msdf(in: VsOut) -> @location(0) vec4<f32> {
 
     // AA half-width in screen px; `softness` widens it for shadows / glow.
     let aa = 0.5 + in.softness;
-    let fill_cov = clamp(dist / (2.0 * aa) + 0.5, 0.0, 1.0);
-    let outline_cov = clamp((dist + in.outline_width) / (2.0 * aa) + 0.5, 0.0, 1.0);
+    var fill_cov = clamp(dist / (2.0 * aa) + 0.5, 0.0, 1.0);
+    var outline_cov = clamp((dist + in.outline_width) / (2.0 * aa) + 0.5, 0.0, 1.0);
+    // Only crisp edges are anti-aliasing; a soft edge is a shadow or glow's
+    // falloff and keeps its shape.
+    if (in.softness <= 0.0) {
+        fill_cov = corrected_coverage(fill_cov, in.fill.rgb);
+        outline_cov = corrected_coverage(outline_cov, in.outline.rgb);
+    }
 
     let fill_a = in.fill.a * fill_cov;
     let outline_a = in.outline.a * outline_cov;

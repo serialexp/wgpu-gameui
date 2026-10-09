@@ -94,37 +94,20 @@ pub fn draw(
     let accent = s.color(StyleKey::Accent);
     if keys.len() >= 2 {
         // Fill: the design closes the curve polygon at the bottom corners and
-        // fades its alpha down. One strip per segment: the under-chord
-        // trapezoid `(a, b, b↓bottom, a↓bottom)` split on the diagonal
-        // `b → a↓bottom`, corner colors fading from ~0.30 alpha at the curve
-        // to ~0.05 at the bottom (interpolated per-vertex by the GPU).
+        // fades its alpha down. One strip under the keys, each key and the
+        // bottom under it, so each under-chord trapezoid `(a, b, b↓bottom,
+        // a↓bottom)` splits on the diagonal `b → a↓bottom`, corner colors
+        // fading from ~0.30 alpha at the curve to ~0.05 at the bottom
+        // (interpolated per-vertex by the GPU).
         let bottom = plot.y + plot.height - 1.0;
         let mut fill_a = accent;
         fill_a[3] = 0.30;
         let mut fill_b = accent;
         fill_b[3] = 0.05;
-        for w in keys.windows(2) {
-            let (a, b) = (
-                to_screen(plot, w[0][0], w[0][1]),
-                to_screen(plot, w[1][0], w[1][1]),
-            );
-            list.triangle_gradient(
-                (a[0], a[1]),
-                (b[0], b[1]),
-                (a[0], bottom),
-                fill_a,
-                fill_a,
-                fill_b,
-            );
-            list.triangle_gradient(
-                (b[0], b[1]),
-                (b[0], bottom),
-                (a[0], bottom),
-                fill_a,
-                fill_b,
-                fill_b,
-            );
-        }
+        list.triangle_strip(keys.iter().flat_map(|k| {
+            let [x, y] = to_screen(plot, k[0], k[1]);
+            [((x, y), fill_a), ((x, bottom), fill_b)]
+        }));
         // Line: chords between keys, joined.
         let line: Vec<[f32; 2]> = keys.iter().map(|k| to_screen(plot, k[0], k[1])).collect();
         list.stroke_polyline(&line, &Stroke::new(1.6), accent);

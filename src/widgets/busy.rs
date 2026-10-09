@@ -5,6 +5,9 @@
 //! - [`spinner`]: a ring with an accent arc (app rotates it per frame).
 //! - [`dots`]: three pulsing accent dots (app supplies the pulse phase).
 //!
+//! Each moves every frame, so each asks its list for the next
+//! ([`DrawList::animating`]).
+//!
 //! The empty-state message is [`EmptyState`](super::EmptyState).
 
 use crate::layout::Rect;
@@ -15,6 +18,7 @@ use super::{DrawList, Stroke};
 /// Draw one frame of a skeleton bar: a rounded bar with a moving highlight.
 /// `phase` is the app-owned shimmer position in `[0, 1)` (wrap it each frame).
 pub fn skeleton(list: &mut DrawList, s: &StyleResolver, rect: Rect, phase: f32) {
+    list.animating();
     let radius = rect.height * 0.5;
     let base = s.color(StyleKey::Button);
     let base = [base[0], base[1], base[2], 0.55];
@@ -44,6 +48,7 @@ pub fn spinner(
     phase: f32,
     sweep: f32,
 ) {
+    list.animating();
     let track = s.color(StyleKey::ButtonHover);
     list.circle_outline(center, radius, 2.0, track);
     let accent = s.color(StyleKey::Accent);
@@ -60,6 +65,7 @@ pub fn spinner(
 /// Draw three accent dots pulsing at `phase` (app-owned clock; stagger by
 /// passing phases offset ~0.15s apart or use [`dots`] to lay all three).
 pub fn dots(list: &mut DrawList, s: &StyleResolver, center: (f32, f32), phase: f32) {
+    list.animating();
     let accent = s.color(StyleKey::Accent);
     let spacing = 9.0;
     for i in 0..3usize {
@@ -83,6 +89,22 @@ mod tests {
 
     fn theme() -> Theme {
         Theme::default()
+    }
+
+    #[test]
+    fn each_asks_for_the_next_frame() {
+        let theme = theme();
+        let s = StyleResolver::new(&theme);
+        let draws: [&dyn Fn(&mut DrawList); 3] = [
+            &|list| skeleton(list, &s, Rect::new(0.0, 0.0, 120.0, 9.0), 0.3),
+            &|list| spinner(list, &s, (10.0, 10.0), 8.0, 0.3, 1.5),
+            &|list| dots(list, &s, (10.0, 10.0), 0.3),
+        ];
+        for draw in draws {
+            let mut list = DrawList::new();
+            draw(&mut list);
+            assert_eq!(list.next_repaint(), Some(0.0));
+        }
     }
 
     #[test]

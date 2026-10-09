@@ -4,6 +4,7 @@
 //! series, and the reference line.
 use super::*;
 use crate::Theme;
+use crate::widgets::chart::{HALO_WIDTH, HOVER_DOT, LINE_WIDTH};
 
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -76,18 +77,6 @@ fn shows(list: &DrawList, text: &str) -> bool {
 }
 
 #[test]
-fn the_axis_tops_out_at_a_nice_value_in_thirds() {
-    assert_eq!(nice_max(0.0), 1.0);
-    assert_eq!(nice_max(f64::NAN), 1.0);
-    assert_eq!(nice_max(1.0), 1.2);
-    assert_eq!(nice_max(100.0), 120.0);
-    assert_eq!(nice_max(130.0), 150.0);
-    assert_eq!(nice_max(250.0), 300.0);
-    assert_eq!(nice_max(9.5), 12.0);
-    assert_eq!(nice_max(1_200.0), 1_200.0);
-}
-
-#[test]
 fn segments_stack_bottom_up_on_whole_pixels() {
     let theme = Theme::default();
     let s = StyleResolver::new(&theme);
@@ -97,7 +86,7 @@ fn segments_stack_bottom_up_on_whole_pixels() {
     let chart = BarChart::new(&bars, &series, &format).legend(false);
     let (list, out) = paint(&chart, 300.0, &s, &away());
     // The axis is 30 (nice already): 10 of it is 63px of 190, 20 the rest.
-    let base = PAD + BAR_CHART_HEIGHT;
+    let base = PAD + CHART_HEIGHT;
     let red = rects_of(&list, RED);
     let blue = rects_of(&list, BLUE);
     assert_eq!(red.len(), 1);
@@ -107,7 +96,7 @@ fn segments_stack_bottom_up_on_whole_pixels() {
     assert_eq!(blue[0][1] + blue[0][3], red[0][1], "the next on top of it");
     assert_eq!(blue[0][3], 127.0);
     assert_eq!(red[0][2], MAX_BAR_WIDTH, "a lone bar is capped in width");
-    assert_eq!(out.height, PAD + BAR_CHART_HEIGHT + X_LABELS);
+    assert_eq!(out.height, PAD + CHART_HEIGHT + X_LABELS);
     for tick in ["0", "10", "20", "30"] {
         assert!(shows(&list, tick), "{tick}");
     }
@@ -139,7 +128,7 @@ fn a_lone_outlier_is_broken_and_labelled_rather_than_flattening_the_rest() {
     // The axis is set by the usual bars: 10 × 1.15 → 12.
     assert!(shows(&list, "12"));
     assert!(shows(&list, "▲ 100"));
-    let usual_height = (10.0 * BAR_CHART_HEIGHT as f64 / 12.0).round() as f32;
+    let usual_height = (10.0 * CHART_HEIGHT as f64 / 12.0).round() as f32;
     let red = rects_of(&list, RED);
     assert_eq!(
         red.iter().filter(|r| r[3] == usual_height).count(),
@@ -583,4 +572,189 @@ fn a_grouped_chart_with_no_room_draws_without_panicking() {
     let (list, out) = paint(&chart, 300.0, &s, &inside);
     assert_eq!(out.hovered, None);
     assert!(rects_of(&list, RED).is_empty());
+}
+
+const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+
+fn percent(value: f64) -> String {
+    format!("{value}%")
+}
+
+fn overlay<'a>(values: &'a [Option<f64>], format: &'a dyn Fn(f64) -> String) -> BarOverlay<'a> {
+    BarOverlay {
+        label: "Cache hits",
+        color: GREEN,
+        values,
+        max: None,
+        format,
+    }
+}
+
+/// The segments stroked in `color`, `[ax, ay, bx, by]`, of `half` width.
+fn strokes_of(list: &DrawList, color: [f32; 4], half: f32) -> Vec<[f32; 4]> {
+    list.segment_instances()
+        .filter(|g| g.color == color && (g.translation[3] - half).abs() < 0.01)
+        .map(|g| g.ends)
+        .collect()
+}
+
+/// The circles painted in `color`: `[x, y, radius, thickness]`.
+fn circles_of(list: &DrawList, color: [f32; 4]) -> Vec<[f32; 4]> {
+    list.circle_instances
+        .iter()
+        .filter(|c| c.color == color)
+        .map(|c| c.center)
+        .collect()
+}
+
+#[test]
+fn an_overlay_runs_through_the_bar_centres_on_its_own_right_axis() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [10.0, 20.0];
+    let bars = [bar(&segments); 4];
+    let values = [Some(10.0), Some(20.0), None, Some(30.0)];
+    let chart = BarChart::new(&bars, &series, &format)
+        .overlay(overlay(&values, &percent))
+        .legend(false);
+    let layout = chart.layout(400.0, &mut DrawList::new(), &s);
+    assert!(layout.right_gutter > 0.0);
+    let (list, _) = paint(&chart, 400.0, &s, &away());
+    for text in ["0%", "10%", "20%", "30%"] {
+        assert!(shows(&list, text), "{text} on the right axis");
+    }
+    let right = list.texts.iter().find(|t| t.content == "30%").unwrap();
+    assert!(right.x >= 400.0 - layout.right_gutter, "right of the plot");
+    // The bars keep out of the right gutter.
+    let red = rects_of(&list, RED);
+    assert!(
+        red.iter()
+            .all(|r| r[0] + r[2] <= 400.0 - layout.right_gutter)
+    );
+
+    // The gap breaks it: a line from the first bar to the second, the last
+    // alone. A dot on each.
+    let lines = strokes_of(&list, GREEN, LINE_WIDTH * 0.5);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(strokes_of(&list, OVERLAY_HALO, HALO_WIDTH * 0.5).len(), 1);
+    let (base, height) = (PAD + CHART_HEIGHT, CHART_HEIGHT);
+    let center = |k: usize| layout.gutter + layout.center(k);
+    let [ax, ay, bx, by] = lines[0];
+    assert!((ax - center(0)).abs() < 0.01 && (bx - center(1)).abs() < 0.01);
+    assert!((ay - (base - height / 3.0)).abs() < 0.01, "10 of 30");
+    assert!((by - (base - height * 2.0 / 3.0)).abs() < 0.01, "20 of 30");
+    let dots: Vec<_> = circles_of(&list, GREEN)
+        .into_iter()
+        .filter(|c| c[2] == DOT && c[3] <= 0.0)
+        .collect();
+    assert_eq!(dots.len(), 3);
+    assert!((dots[2][1] - PAD).abs() < 0.01, "30 at the top");
+}
+
+#[test]
+fn hovering_a_bar_lights_its_overlay_point_and_tells_its_value() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [10.0, 20.0];
+    let bars = [bar(&segments); 3];
+    let values = [Some(10.0), None, Some(300.0)];
+    let chart = BarChart::new(&bars, &series, &format)
+        .overlay(BarOverlay {
+            max: Some(60.0),
+            ..overlay(&values, &percent)
+        })
+        .legend(false);
+    let layout = chart.layout(400.0, &mut DrawList::new(), &s);
+    let over = |k: usize| InputState {
+        mouse_x: layout.gutter + layout.center(k),
+        mouse_y: PAD + 5.0,
+        ..Default::default()
+    };
+    let (list, out) = paint(&chart, 400.0, &s, &over(2));
+    assert_eq!(out.hovered, Some(2));
+    // Past the axis' maximum it stays at the top.
+    let lit: Vec<_> = circles_of(&list, GREEN)
+        .into_iter()
+        .filter(|c| c[2] == HOVER_DOT)
+        .collect();
+    assert_eq!(lit.len(), 1);
+    assert!((lit[0][1] - PAD).abs() < 0.01);
+    assert!(shows(&list, "60%"), "the maximum the caller gave");
+
+    let mut tips = DrawList::new();
+    chart.draw_tooltip(&out.tooltip.unwrap(), VIEWPORT, &mut tips, &s);
+    assert!(shows(&tips, "Cache hits") && shows(&tips, "300%"));
+    let (_, out) = paint(&chart, 400.0, &s, &over(1));
+    let mut tips = DrawList::new();
+    chart.draw_tooltip(&out.tooltip.unwrap(), VIEWPORT, &mut tips, &s);
+    assert!(shows(&tips, "—"), "no value");
+}
+
+#[test]
+fn the_overlay_has_a_legend_entry_and_fades_against_the_bars() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [10.0, 20.0];
+    let bars = [bar(&segments); 3];
+    let values = [Some(10.0), Some(20.0), Some(30.0)];
+    let chart = BarChart::new(&bars, &series, &format).overlay(overlay(&values, &percent));
+    let (list, out) = paint(&chart, 400.0, &s, &away());
+    assert!(shows(&list, "Cache hits") && shows(&list, "RIGHT AXIS"));
+    assert_eq!(
+        out.height,
+        chart.measure_height(400.0, &mut DrawList::new(), &s)
+    );
+
+    let entry = list
+        .texts
+        .iter()
+        .find(|t| t.content == "Cache hits")
+        .unwrap();
+    let over = InputState {
+        mouse_x: entry.x + 2.0,
+        mouse_y: entry.y + 4.0,
+        ..Default::default()
+    };
+    let (_, out) = paint(&chart, 400.0, &s, &over);
+    assert!(out.hovered_overlay);
+    assert_eq!(out.hovered_series, None);
+
+    // The overlay lit: every bar fades (the legend's swatches don't).
+    let chart = chart.legend(false);
+    let (list, _) = paint(&chart.hovered_overlay(true), 400.0, &s, &away());
+    let faded = |c: [f32; 4]| [c[0], c[1], c[2], SERIES_FADED];
+    assert!(rects_of(&list, RED).is_empty() && rects_of(&list, BLUE).is_empty());
+    assert_eq!(rects_of(&list, faded(RED)).len(), 3);
+    assert!(!strokes_of(&list, GREEN, LINE_WIDTH * 0.5).is_empty());
+    // A series lit: the overlay fades.
+    let (list, _) = paint(&chart.hovered_series(Some(0)), 400.0, &s, &away());
+    assert!(strokes_of(&list, GREEN, LINE_WIDTH * 0.5).is_empty());
+    assert!(!strokes_of(&list, faded(GREEN), LINE_WIDTH * 0.5).is_empty());
+}
+
+#[test]
+fn a_dense_overlay_drops_its_dots_and_stops_growing() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0, 2.0];
+    let cost = |n: usize| {
+        let bars = vec![bar(&segments); n];
+        let values: Vec<_> = (0..n).map(|i| Some((i % 17) as f64)).collect();
+        let chart = BarChart::new(&bars, &series, &format)
+            .overlay(overlay(&values, &percent))
+            .legend(false);
+        let (list, _) = paint(&chart, 900.0, &s, &away());
+        (list.prim_counts(), circles_of(&list, GREEN).len())
+    };
+    let ((many, many_dots), (most, most_dots)) = (cost(2_000), cost(10_000));
+    assert_eq!(many, most);
+    assert_eq!(
+        (many_dots, most_dots),
+        (0, 0),
+        "slots under 4px have no dots"
+    );
 }

@@ -221,13 +221,6 @@ harden those foundations rather than create parallel replacements.
 
 ## Theming / Styling
 
-- [ ] **P2 — Stem darkening / coverage gamma.** Vello lists its absence beside
-      hinting and subpixel AA as the reason its text looks weak on low-DPI
-      displays, and DirectWrite exposes the same thing as "text contrast".
-      Light-on-dark text optically thins; a gamma applied to coverage in
-      `ui_msdf.wgsl` compensates. Cheap to try. Note it makes text *denser*, not
-      sharper — it cannot merge a stem that spans two pixels, so it is a
-      complement to grid fitting rather than a substitute.
 
 ---
 

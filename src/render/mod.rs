@@ -30,6 +30,7 @@ mod image_cache;
 mod msdf_atlas;
 #[cfg(feature = "phosphor-icons")]
 mod phosphor;
+mod text_contrast;
 pub(crate) mod textures;
 mod ui_renderer;
 mod uniform_arena;
@@ -54,6 +55,7 @@ pub use blur::{Backdrop, BlurParams, ColorEncoding};
 pub use capture::HeadlessGpu;
 pub use capture::{CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, write_png};
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
+pub use text_contrast::TextContrast;
 pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId};
 pub(crate) use ui_renderer::ortho_matrix;
 pub use ui_renderer::{NineSliceMeta, RenderStats, SMALL_TEXTURE_BATCHES_WARN, UiRenderer};

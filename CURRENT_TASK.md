@@ -1,3 +1,13 @@
+# Done, not committed: the rest of Forge's charts (2026-10-09)
+
+Bart asked: "Lets try building the other forge charts, then we can add those
+to the benchmark after too." `LineChart`, `ScatterPlot` and `BarChart`'s
+overlay are built, tested, in the gallery and in `benches/ui_stress.rs`;
+`DrawList::triangle_strip` came along. What changed is in TODO_DONE.md "The
+rest of Forge's charts". Left: commit when Bart asks, and rerun the chart
+benches on a quiet machine (timings on 2026-10-09 were taken under heavy
+load).
+
 # Current task: SDF lines (anti-aliased strokes)
 
 Bart asked (2026-10-08) to implement `docs/design/sdf-lines.md`. That doc's

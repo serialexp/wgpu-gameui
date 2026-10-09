@@ -148,8 +148,8 @@ pub use projection::{world_to_screen, world_to_screen_na};
 pub use render::HeadlessGpu;
 pub use render::{
     AtlasId, Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta,
-    Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, UiRenderer, capture_draw_list,
-    capture_layers, write_png,
+    Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, TextContrast, UiRenderer,
+    capture_draw_list, capture_layers, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{

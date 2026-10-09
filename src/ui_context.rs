@@ -20,17 +20,17 @@ use crate::text::{FontHandle, TextBlock};
 use crate::theme::Theme;
 use crate::widgets::DrawList;
 use crate::widgets::{
-    AssetGrid, AssetGridOutput, Badge, Banner, Breadcrumb, Button, Checkbox, ChipOutput,
-    ColorPicker, ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId,
-    DrawContext, Dropdown, DropdownId, DropdownState, EmptyState, FocusId, FocusState,
-    GradientStop, Group, HitZone, HitZoneOutput, List, ListItem, ListOutput, ListState,
+    AssetGrid, AssetGridOutput, Badge, Banner, Breadcrumb, Button, Checkbox, ColorPicker,
+    ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId, DrawContext,
+    Dropdown, DropdownId, DropdownState, EmptyState, FILTER_CHIP_HEIGHT, FilterChip, FocusId,
+    FocusState, GradientStop, Group, HitZone, HitZoneOutput, List, ListItem, ListOutput, ListState,
     NumberInput, Pager, PagerOutput, Panel, PressState, Pressable, ProgressBar, RadioGroup,
     RampOutput, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Table,
     TableCell, TableOutput, Tabs, TagOutput, TextInput, ToastStack, Toggle, TooltipLayer, TreeId,
     TreeNode, TreeNodeOutput, TreeState, VectorField, VectorFieldOutput, VectorScrub,
 };
 use crate::widgets::{
-    chip, dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton, spinner,
+    dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton, spinner,
 };
 #[cfg(feature = "phosphor-icons")]
 use crate::{IconKey, PhosphorIcon, Tone};
@@ -322,8 +322,7 @@ impl UiState {
         // [`InputState::frame_dt`]).
         input.frame_dt = dt;
         self.anim.tick(dt);
-        self.toasts.tick(dt);
-        self.tooltips.tick(dt, input);
+        self.advance_clocks(input, dt);
         self.frame_timings.reset(dt);
         self.text_selection.handle_input(input);
         // A focused field copies its own selection.
@@ -337,6 +336,28 @@ impl UiState {
         {
             (set.borrow_mut())(text);
         }
+    }
+
+    /// Advance the timed sources by `dt` seconds without building a frame:
+    /// the toasts' ages and the tooltip hover delay, against last frame's
+    /// tooltip regions and `input`'s pointer. Hover/press transitions are not
+    /// among them: one in flight asks for every frame, and the animation
+    /// store reaps what a built frame didn't draw.
+    ///
+    /// For a host that ticks at the display's rate but only builds a frame
+    /// when something changed (an event, or [`end_frame`](Self::end_frame)'s
+    /// `next_deadline`): it calls this on the ticks it skips, and hands the
+    /// next [`begin_frame`](Self::begin_frame) only the time since the last
+    /// tick. Without it the skipped time is lost to `begin_frame`'s clamp
+    /// ([`MAX_DT`](crate::MAX_DT)), and a toast or tooltip waits several
+    /// times its delay. `dt` is clamped the same way.
+    pub fn tick_clocks(&mut self, input: &InputState, dt: f32) {
+        self.advance_clocks(input, crate::frame_result::sanitize_dt(dt));
+    }
+
+    fn advance_clocks(&mut self, input: &InputState, dt: f32) {
+        self.toasts.tick(dt);
+        self.tooltips.tick(dt, input);
     }
 
     /// Per-frame teardown: resolve tree arrow-navigation (gated on the tree
@@ -359,9 +380,10 @@ impl UiState {
         // Aggregate every timed source into the host-facing result: an
         // in-flight transition, a visible toast, a pending tooltip hover, a
         // gliding scroll, or an app-registered deadline each keep the frame loop
-        // awake until the earliest next change.
-        if let Some(delay) = self.anim.pending_deadline() {
-            self.frame_timings.mark_after(delay);
+        // awake until the earliest next change. A transition changes what is
+        // drawn every frame until it lands, so it asks for the next one.
+        if self.anim.pending_deadline().is_some() {
+            self.frame_timings.mark_after(0.0);
         }
         if let Some(delay) = self.toasts.pending() {
             self.frame_timings.mark_after(delay);
@@ -2976,44 +2998,45 @@ impl<'a> UiContext<'a> {
         badge.draw(self.backend.list_mut(), &style, rect.x, rect.y, text)
     }
 
-    /// Draw a toggleable chip (pill button). Returns [`ChipOutput`] with a
-    /// `clicked` flag; the caller flips `on` accordingly. Auto-advances by
-    /// the chip's height.
-    pub fn chip_button(&mut self, label: &str, on: bool) -> ChipOutput {
+    /// Draw a [`FilterChip`] (a latching pill key); return its new `on`
+    /// state (flipped on click or, while focused, Space / Enter). A
+    /// [`FocusId`] is auto-assigned so it joins the Tab ring. Auto-advances
+    /// by the chip's height.
+    pub fn filter_chip(&mut self, label: &str, on: bool) -> bool {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
-            None => {
-                return ChipOutput {
-                    clicked: false,
-                    rect: Rect::default(),
-                };
-            }
+            None => return on,
         };
-        // Measure inside a scoped borrow so `self` is free for `place_rect`.
-        let (w, h) = {
-            let styles = StyleResolver::with_overlay(
-                theme,
-                self.style_stack.last().expect("style stack is never empty"),
-            );
-            let w = crate::widgets::chip_width(self.backend.list_mut(), &styles, label);
-            (w, crate::widgets::CHIP_HEIGHT)
-        };
-        let world = self.place_rect(w, h);
+        let chip = FilterChip::new(label).on(on);
+        let styles = StyleResolver::with_overlay(
+            theme,
+            self.style_stack.last().expect("style stack is never empty"),
+        );
+        let width = chip.width(self.backend.list_mut(), &styles);
+        let world = self.place_rect(width, FILTER_CHIP_HEIGHT);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
-        let out = {
-            let styles = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
-            chip(
-                self.backend.list_mut(),
-                &styles,
-                local,
-                label,
-                on,
-                &local_input,
-            )
+        let fid = self
+            .state
+            .as_mut()
+            .map(|s| s.auto_id())
+            .expect("filter_chip requires interactive state");
+        let flipped = {
+            let list = self.backend.list_mut();
+            let state = self
+                .state
+                .as_mut()
+                .expect("filter_chip requires interactive state");
+            let UiState { focus, anim, .. } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+                .with_enabled(!self.input_disabled)
+                .with_active_layer(self.drawing_layers.last().copied())
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_animations(anim);
+            chip.focusable(fid).draw(local, &mut ctx)
         };
-        self.advance(h);
-        out
+        self.advance(FILTER_CHIP_HEIGHT);
+        on != flipped
     }
 
     /// Draw a keycap decoration (a physical-key label). Does **not**

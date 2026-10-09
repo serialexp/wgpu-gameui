@@ -135,6 +135,16 @@ impl LayerStack {
         self.active.clear();
     }
 
+    /// The earliest [`DrawList::repaint_after`] any layer was asked for this
+    /// frame, in seconds from when it was drawn: when the host has to build
+    /// the next frame though nothing else happens.
+    pub fn next_repaint(&self) -> Option<f32> {
+        std::iter::once(&self.base)
+            .chain(self.layers.iter().map(|layer| &layer.list))
+            .filter_map(DrawList::next_repaint)
+            .reduce(f32::min)
+    }
+
     /// Borrow the base draw list (lowest layer).
     pub fn base(&self) -> &DrawList {
         &self.base
@@ -315,6 +325,23 @@ mod tests {
             scroll_delta: 1.0,
             ..InputState::default()
         }
+    }
+
+    #[test]
+    fn the_next_repaint_is_the_earliest_any_layer_asked_for() {
+        let mut s = LayerStack::new();
+        assert_eq!(s.next_repaint(), None);
+        s.base_mut().repaint_after(0.5);
+        s.push_tooltip(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.current_mut().repaint_after(0.2);
+        s.pop_layer();
+        assert_eq!(s.next_repaint(), Some(0.2));
+        s.clear();
+        assert_eq!(
+            s.next_repaint(),
+            None,
+            "a request lasts the frame that drew it"
+        );
     }
 
     #[test]

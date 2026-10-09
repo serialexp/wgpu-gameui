@@ -659,6 +659,9 @@ pub struct DrawList {
     /// The text selection to paint behind selectable blocks as they are drawn.
     /// Kept by [`clear`](Self::clear): the host sets it each frame.
     text_highlight: Option<crate::TextHighlight>,
+    /// The earliest time, in seconds from when it was drawn, that something
+    /// drawn here changes on its own (see [`repaint_after`](Self::repaint_after)).
+    next_repaint: Option<f32>,
     /// Unique identity (see [`next_draw_list_id`]). Stable for this list's whole
     /// lifetime and never reused; lets the renderer tell a reused list from a
     /// per-frame-fresh one. `clear()` keeps it (the list is the same object).
@@ -695,6 +698,7 @@ impl Default for DrawList {
             text_rotation_warned: false,
             selectable: Vec::new(),
             text_highlight: None,
+            next_repaint: None,
             id: next_draw_list_id(),
         }
     }
@@ -750,6 +754,7 @@ impl DrawList {
             text_rotation_warned: false,
             selectable: Vec::new(),
             text_highlight: None,
+            next_repaint: None,
             id: next_draw_list_id(),
         }
     }
@@ -792,6 +797,33 @@ impl DrawList {
         self.transform_stack.push(Affine2::IDENTITY);
         self.tint_stack.clear();
         self.tint_stack.push([1.0, 1.0, 1.0, 1.0]);
+        self.next_repaint = None;
+    }
+
+    /// What was just drawn changes on its own `seconds` from now (a spinner's
+    /// next step, a clock's next second, a scroll still gliding): a host that
+    /// only builds frames when something changed builds one by then. The
+    /// earliest request wins, and [`clear`](Self::clear) drops them, so a
+    /// request lasts the frame that drew it: something no longer drawn stops
+    /// asking. Non-finite or negative times count as now.
+    pub fn repaint_after(&mut self, seconds: f32) {
+        let seconds = if seconds.is_finite() {
+            seconds.max(0.0)
+        } else {
+            0.0
+        };
+        self.next_repaint = Some(self.next_repaint.map_or(seconds, |at| at.min(seconds)));
+    }
+
+    /// What was just drawn moves every frame (an animation): build the next.
+    pub fn animating(&mut self) {
+        self.repaint_after(0.0);
+    }
+
+    /// The earliest [`repaint_after`](Self::repaint_after) this list was asked
+    /// for since it was cleared, in seconds from when it was drawn.
+    pub fn next_repaint(&self) -> Option<f32> {
+        self.next_repaint
     }
 
     /// Measure text using glyphon's shaping/layout path.
@@ -1371,6 +1403,31 @@ impl DrawList {
         self.vertices.push(self.vertex(p1.0, p1.1, c1));
         self.vertices.push(self.vertex(p2.0, p2.1, c2));
         self.indices.extend_from_slice(&[base, base + 1, base + 2]);
+    }
+
+    /// Add a triangle strip through `corners` (each a position and its
+    /// colour): every corner after the first two makes a triangle with the
+    /// two before it, so neighbouring triangles share their corners — an
+    /// area under a line, or a ribbon, at two corners a step rather than six.
+    /// Like [`Self::triangle_gradient`], each face reproduces a linear colour
+    /// ramp exactly. Fewer than three corners draw nothing. Always soup
+    /// geometry.
+    pub fn triangle_strip(&mut self, corners: impl IntoIterator<Item = ((f32, f32), [f32; 4])>) {
+        let base = self.vertices.len();
+        for ((x, y), color) in corners {
+            let vertex = self.vertex(x, y, color);
+            self.vertices.push(vertex);
+        }
+        let count = self.vertices.len() - base;
+        if count < 3 {
+            self.vertices.truncate(base);
+            return;
+        }
+        let base = base as u32;
+        for i in 0..count as u32 - 2 {
+            self.indices
+                .extend_from_slice(&[base + i, base + i + 1, base + i + 2]);
+        }
     }
 
     /// Add a filled rectangle.
@@ -3746,6 +3803,51 @@ mod tests {
         assert_eq!(list.vertices[2].position, [5.0, 8.0]);
         assert_eq!(list.vertices[2].color, c2);
         assert_eq!(list.indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn the_earliest_repaint_wins_until_the_list_is_cleared() {
+        let mut list = DrawList::new();
+        assert_eq!(list.next_repaint(), None);
+        list.repaint_after(1.0);
+        list.repaint_after(0.25);
+        list.repaint_after(3.0);
+        assert_eq!(list.next_repaint(), Some(0.25));
+        list.animating();
+        assert_eq!(list.next_repaint(), Some(0.0));
+        list.clear();
+        assert_eq!(list.next_repaint(), None);
+        // Nonsense asks for a frame now rather than none.
+        list.repaint_after(f32::NAN);
+        assert_eq!(list.next_repaint(), Some(0.0));
+        list.clear();
+        list.repaint_after(-2.0);
+        assert_eq!(list.next_repaint(), Some(0.0));
+    }
+
+    #[test]
+    fn a_triangle_strip_shares_each_corner_between_its_triangles() {
+        let mut list = DrawList::new();
+        let (top, clear) = ([1.0, 0.0, 0.0, 0.3], [1.0, 0.0, 0.0, 0.0]);
+        // An area under three points: each point and the baseline under it.
+        let corners = [(0.0, 2.0), (10.0, 5.0), (20.0, 1.0)]
+            .into_iter()
+            .flat_map(|(x, y)| [((x, y), top), ((x, 8.0), clear)]);
+        list.triangle_strip(corners);
+        assert_eq!(
+            list.vertices.len(),
+            6,
+            "two corners a point, not six a segment"
+        );
+        assert_eq!(list.vertices[1].position, [0.0, 8.0]);
+        assert_eq!(list.vertices[1].color, clear);
+        assert_eq!(list.vertices[2].color, top);
+        assert_eq!(list.indices, vec![0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5]);
+
+        // Under two corners there is nothing to draw.
+        let mut list = DrawList::new();
+        list.triangle_strip([((0.0, 0.0), top), ((1.0, 1.0), top)]);
+        assert!(list.vertices.is_empty() && list.indices.is_empty());
     }
 
     #[test]

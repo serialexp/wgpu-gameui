@@ -145,6 +145,16 @@ impl ClickTracker {
         self.hold_latched = false;
     }
 
+    /// Seconds after `time_secs` until a press still held latches
+    /// [`InputState::mouse_held`]; `None` with the button up or the hold
+    /// already latched. A host that only builds frames when something
+    /// changes builds one then, since nothing else happens while the
+    /// pointer rests.
+    pub fn hold_due_in(&self, time_secs: f64) -> Option<f64> {
+        let since = self.down_since.filter(|_| !self.hold_latched)?;
+        Some((since + self.hold_threshold - time_secs).max(0.0))
+    }
+
     /// Advance the tracker by one frame and write the result into `input`.
     ///
     /// `time_secs` is the current wall-clock time in seconds (monotonically
@@ -227,6 +237,20 @@ mod tests {
     }
 
     // ---- Double-click ----
+
+    #[test]
+    fn a_press_says_when_its_hold_latches() {
+        let mut ct = ClickTracker::new();
+        assert_eq!(ct.hold_due_in(0.0), None);
+        let (mut i, t) = click_at(1.0);
+        advance(&mut ct, &mut i, t);
+        let due = ct.hold_due_in(1.1).expect("held down");
+        assert!((due - (DEFAULT_HOLD_THRESHOLD - 0.1)).abs() < 1e-9, "{due}");
+        i.mouse_clicked = false;
+        advance(&mut ct, &mut i, 1.0 + DEFAULT_HOLD_THRESHOLD);
+        assert!(i.mouse_held);
+        assert_eq!(ct.hold_due_in(2.0), None, "latched");
+    }
 
     #[test]
     fn single_click_is_not_a_double() {

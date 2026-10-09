@@ -11,6 +11,8 @@ mod binding;
 mod breadcrumb;
 mod busy;
 mod button;
+mod chart;
+mod chart_time;
 mod checkbox;
 mod choice_card;
 mod color_picker;
@@ -31,7 +33,9 @@ mod drop_zone;
 mod dropdown;
 mod empty_state;
 mod field_label;
+mod file_dialog;
 mod file_field;
+mod filter_chip;
 mod focus;
 mod glyphs;
 mod gradient_ramp;
@@ -44,6 +48,7 @@ mod icon;
 mod icon_key;
 mod image;
 mod inspector;
+mod line_chart;
 mod list;
 #[cfg(feature = "phosphor-icons")]
 mod list_view;
@@ -62,6 +67,7 @@ mod prompt_dialog;
 mod property_group;
 mod property_row;
 mod radio;
+mod scatter_plot;
 mod scroll_view;
 #[cfg(feature = "phosphor-icons")]
 mod search_field;
@@ -102,19 +108,15 @@ pub use app_shell::{
 #[cfg(feature = "phosphor-icons")]
 pub use app_shell::{SHELL_DRAG_TOOLBAR_GRIP, SHELL_TOOLBAR_ID};
 pub use asset_grid::{AssetGrid, AssetGridOutput};
-pub use badge::{
-    BADGE_COMPACT_HEIGHT, BADGE_HEIGHT, Badge, BadgeTone, CHIP_HEIGHT, ChipOutput, chip,
-    chip_width, keycap,
-};
+pub use badge::{BADGE_COMPACT_HEIGHT, BADGE_HEIGHT, Badge, BadgeTone, keycap};
 pub use band::toolbar_band;
 pub use banner::{Banner, Severity};
-pub use bar_chart::{
-    BAR_CHART_HEIGHT, Bar, BarChart, BarChartOutput, BarSeries, BarTooltip, nice_max,
-};
+pub use bar_chart::{Bar, BarChart, BarChartOutput, BarOverlay, BarSeries, BarTooltip};
 pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
 pub use busy::{dots, skeleton, spinner};
 pub use button::Button;
+pub use chart::{CHART_HEIGHT, nice_max};
 pub use checkbox::{CHECKBOX_CHECKED_ICON, CHECKBOX_ICON, Checkbox};
 pub use choice_card::{ChoiceCard, ChoiceMark, ChoiceResponse};
 pub use color_picker::{ColorPicker, ColorPickerOutput};
@@ -145,7 +147,13 @@ pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use empty_state::{EmptyGlyph, EmptyState};
 pub use field_label::FieldLabel;
+pub use file_dialog::{
+    Clock, EntryThumb, FavouriteFolder, FileDialog, FileDialogEvent, FileDialogMode,
+    FileDialogOutput, FileDialogState, FileEntry, FileKind, FilePlace, FileSource, FileView,
+    Listing, SortBy, format_date, format_size,
+};
 pub use file_field::{FileField, FileFieldOutput, FileRef};
+pub use filter_chip::{FILTER_CHIP_HEIGHT, FilterChip};
 pub use focus::{FocusId, FocusState};
 pub use gradient_ramp::{
     GradientStop, RampOutput, draw as draw_gradient_ramp, readout as gradient_ramp_readout,
@@ -167,9 +175,13 @@ pub use inspector::{
     INSPECTOR_MAX_BODY_HEIGHT, INSPECTOR_WIDTH, Inspector, InspectorOutput, InspectorSelection,
     InspectorState,
 };
+pub use line_chart::{LineChart, LineChartOutput, LineSeries, LineTooltip};
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
 #[cfg(feature = "phosphor-icons")]
 pub use list_view::{ListRow, ListView, ListViewOutput};
+pub use scatter_plot::{
+    SCATTER_HEIGHT, ScatterPlot, ScatterPlotOutput, ScatterPoint, ScatterTooltip,
+};
 // Used by `Thumb` and by tests outside `widgets`.
 #[cfg(any(test, feature = "phosphor-icons"))]
 pub(crate) use material::sheen_over;
@@ -196,7 +208,9 @@ pub use popover::{
     PopoverSide, draw_frame as draw_popover_frame, measure_sheet_height, place_popover,
 };
 pub use pressable::{PressState, Pressable};
-pub use progress_bar::{INDETERMINATE_STEP, ProgressBar, ProgressFill, indeterminate_step};
+pub use progress_bar::{
+    INDETERMINATE_STEP, ProgressBar, ProgressFill, indeterminate_next_step, indeterminate_step,
+};
 pub use prompt_dialog::{PROMPT_DIALOG_WIDTH, PromptDialog, PromptDialogState, PromptOutcome};
 pub use property_group::{
     PROPERTY_GROUP_HEADER_HEIGHT, PROPERTY_ROW_GAP, PropertyGroup, PropertyStack,

@@ -1196,6 +1196,25 @@ impl UiRenderer {
         self.text_renderer.glyph_hinting()
     }
 
+    /// How text and icon edges are corrected for their colour, so light text
+    /// on a dark background looks as heavy as dark text on a light one.
+    ///
+    /// Anti-aliased edges blend in sRGB space, where a half-covered pixel of
+    /// light text looks fainter than half, so light-on-dark text otherwise
+    /// comes out thinner. Defaults to [`TextContrast::GPUI`], the correction
+    /// gpui (Zed) and DirectWrite apply; [`TextContrast::OFF`] turns it off.
+    /// Only anti-aliased edges change: glyph interiors, shadows and glows
+    /// draw as before. Applies from the next [`render`](Self::render).
+    pub fn set_text_contrast(&mut self, contrast: crate::TextContrast) {
+        self.text_renderer.set_text_contrast(contrast);
+    }
+
+    /// The current text contrast (see
+    /// [`set_text_contrast`](Self::set_text_contrast)).
+    pub fn text_contrast(&self) -> crate::TextContrast {
+        self.text_renderer.text_contrast()
+    }
+
     /// The logical canvas point drawn at the target's top-left corner (see
     /// [`set_view_origin`](Self::set_view_origin)).
     pub fn view_origin(&self) -> (f32, f32) {

@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_animation_reports_a_deadline_at_its_remaining_time() {
+    fn in_flight_animation_asks_for_every_frame_until_it_lands() {
         let theme = Theme::default();
         let mut input = InputState::default();
         let mut state = UiState::new();
@@ -338,12 +338,10 @@ mod tests {
             frame.needs_repaint,
             "an in-flight transition must request repaint, got {frame:?}"
         );
-        let remaining = frame
-            .next_deadline
-            .expect("in-flight transition has a deadline");
-        assert!(
-            (0.0..0.05).contains(&remaining),
-            "deadline should be the transition remainder, got {remaining}"
+        assert_eq!(
+            frame.next_deadline,
+            Some(0.0),
+            "a transition changes what is drawn on the next frame"
         );
         // Fast-forward past the deadline: the settled transition releases the
         // frame loop again.
@@ -530,6 +528,34 @@ mod tests {
         assert!(
             (deadline - 1.9).abs() < 1e-4,
             "expected the unexpired expiry after the clamp, got {deadline}"
+        );
+    }
+
+    #[test]
+    fn ticks_that_build_nothing_still_age_the_timers() {
+        let theme = Theme::default();
+        let mut input = InputState::default();
+        let mut state = UiState::new();
+        state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
+        state.toasts.push(crate::Toast::info("hi").with_ttl(1.0));
+        let first = state.end_frame().next_deadline.unwrap();
+        // A host that only builds at the deadline ticks the clocks on the
+        // 60 Hz ticks in between, and hands the frame only the last tick's
+        // time; the toast is a second old there, not a clamped 0.1s.
+        let ticks = (first / 0.016).floor() as u32;
+        for _ in 0..ticks {
+            state.tick_clocks(&input, 0.016);
+        }
+        state.begin_frame(
+            &mut input,
+            &theme,
+            first - 0.016 * ticks as f32,
+            &KeyboardNav,
+        );
+        let frame = state.end_frame();
+        assert!(
+            frame.next_deadline.is_none_or(|d| d < first * 0.1),
+            "the toast ran its course: {frame:?}"
         );
     }
 }

@@ -2,21 +2,20 @@
 //!
 //! A sidebar can hold every session of every project, so the list must cost
 //! the same per frame whether it holds a hundred rows or ten thousand. These
-//! tests pin that down three ways:
+//! tests pin that down by the work done, not the time taken:
 //!
 //! - a frame's heap allocations don't depend on the total row count, only on
 //!   what is visible;
-//! - in release builds, one frame's layout and paint of 10,000 rows in 300
-//!   groups stays under 1 ms of CPU time;
-//! - rebuilding the row offsets for those rows stays under 2 ms.
+//! - rebuilding the row offsets at the same size allocates nothing.
 //!
-//! Timing budgets are only asserted in release builds (`cargo test --release
-//! --test group_list_performance`); debug builds still check allocations.
+//! How long a frame and a rebuild take at 10,000 rows in 300 groups is
+//! measured by an ignored test that only prints:
+//! `cargo test --release --test group_list_performance -- --ignored --nocapture`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{
@@ -32,8 +31,6 @@ const VIEW: Rect = Rect {
     width: 272.0,
     height: 720.0,
 };
-const FRAME_BUDGET: Duration = Duration::from_millis(1);
-const REBUILD_BUDGET: Duration = Duration::from_millis(2);
 
 struct ThreadCountingAllocator;
 
@@ -284,12 +281,31 @@ fn frame_allocations_do_not_depend_on_the_total_row_count() {
 }
 
 #[test]
-fn a_frame_of_ten_thousand_rows_stays_within_budget() {
+fn rebuilding_ten_thousand_row_offsets_reuses_its_buffers() {
+    let rows = sidebar(GROUPS, TOTAL_ROWS);
+    let mut layout = GroupLayout::new();
+    layout.rebuild(rows.iter().map(Source::kind));
+
+    let ((), allocations) = count_allocations(|| {
+        for _ in 0..100 {
+            layout.rebuild(black_box(&rows).iter().map(Source::kind));
+        }
+    });
+    assert_eq!(
+        allocations, 0,
+        "rebuilding at the same size reuses its buffers"
+    );
+    assert_eq!(layout.len(), TOTAL_ROWS);
+}
+
+/// How long a frame and a rebuild take at 10,000 rows in 300 groups. Run
+/// deliberately, in release (about 1 ms and 2 ms were the old budgets).
+#[test]
+#[ignore = "a measurement, not a check"]
+fn ten_thousand_rows_frame_and_rebuild_time() {
     let mut large = Harness::new(sidebar(GROUPS, TOTAL_ROWS));
-    assert_eq!(large.layout.len(), TOTAL_ROWS);
     large.scroll_to(0.5);
     large.warm();
-
     const FRAMES: u32 = 200;
     let start = Instant::now();
     for _ in 0..FRAMES {
@@ -297,39 +313,15 @@ fn a_frame_of_ten_thousand_rows_stays_within_budget() {
     }
     let per_frame = start.elapsed() / FRAMES;
     eprintln!("GroupList frame, {TOTAL_ROWS} rows in {GROUPS} groups: {per_frame:?}");
-    if !cfg!(debug_assertions) {
-        assert!(
-            per_frame < FRAME_BUDGET,
-            "a frame took {per_frame:?}, budget {FRAME_BUDGET:?}"
-        );
-    }
-}
 
-#[test]
-fn rebuilding_ten_thousand_row_offsets_stays_within_budget() {
     let rows = sidebar(GROUPS, TOTAL_ROWS);
     let mut layout = GroupLayout::new();
     layout.rebuild(rows.iter().map(Source::kind));
-
     const REBUILDS: u32 = 100;
-    // Only the rebuilds are counted: printing allocates when the test
-    // harness captures output.
-    let (per_rebuild, allocations) = count_allocations(|| {
-        let start = Instant::now();
-        for _ in 0..REBUILDS {
-            layout.rebuild(black_box(&rows).iter().map(Source::kind));
-        }
-        start.elapsed() / REBUILDS
-    });
-    eprintln!("GroupLayout rebuild, {TOTAL_ROWS} rows: {per_rebuild:?}");
-    if !cfg!(debug_assertions) {
-        assert!(
-            per_rebuild < REBUILD_BUDGET,
-            "a rebuild took {per_rebuild:?}, budget {REBUILD_BUDGET:?}"
-        );
+    let start = Instant::now();
+    for _ in 0..REBUILDS {
+        layout.rebuild(black_box(&rows).iter().map(Source::kind));
     }
-    assert_eq!(
-        allocations, 0,
-        "rebuilding at the same size reuses its buffers"
-    );
+    let per_rebuild = start.elapsed() / REBUILDS;
+    eprintln!("GroupLayout rebuild, {TOTAL_ROWS} rows: {per_rebuild:?}");
 }

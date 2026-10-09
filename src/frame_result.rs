@@ -15,16 +15,13 @@
 //!
 //! # Contract
 //!
-//! - `needs_repaint` is `true` whenever **any** source is unsettled or any
-//!   deadline was registered this frame — including sources that were not
-//!   ticked (the host may tick toasts/tooltips itself via
-//!   `begin_manual`; the flag stays conservative so it can never tell a host
-//!   to stop while something is visibly in flight).
-//! - `next_deadline` is the *earliest* instant any source becomes visible to
-//!   the user: an in-flight transition finishing, a toast entering its fade
-//!   (or expiring), a tooltip's delay elapsing, the next frame a gliding scroll
-//!   needs, or a registered app deadline. It is `None` when nothing is pending.
-//! - `changed` mirrors `!needs_repaint` for bandwidth-style frame accounting.
+//! - `next_deadline` is the *earliest* instant what is drawn changes: `0.0`
+//!   (the next frame) while a hover/press transition is in flight, a toast
+//!   entering its fade (or expiring), a tooltip's delay elapsing, the next
+//!   frame a gliding scroll needs, or a registered app deadline. It is `None`
+//!   when nothing is pending, so a host can schedule on it alone.
+//! - `needs_repaint` is `next_deadline.is_some()`: some source is unsettled,
+//!   whether it changes on the next frame or later.
 
 /// Aggregated per-frame timing outcome, returned by [`UiState::end_frame`]
 /// (`crate::UiState::end_frame`) and [`Frame::run`]/[`Frame::run_layers`].
@@ -32,11 +29,12 @@
 pub struct UiFrameResult {
     /// At least one timing source is unsettled (an in-flight hover/press
     /// transition, a visible toast, a pending tooltip hover, a registered
-    /// deadline). An event-driven host should schedule another frame.
+    /// deadline). An event-driven host should schedule another frame, at
+    /// [`next_deadline`](Self::next_deadline).
     pub needs_repaint: bool,
-    /// Earliest future instant at which the UI's appearance changes, in
-    /// seconds from *now* (the moment `end_frame` ran). `None` = nothing
-    /// pending; the host may idle indefinitely.
+    /// Earliest instant at which the UI's appearance changes, in seconds from
+    /// *now* (the moment `end_frame` ran); `0.0` means the next frame. `None`
+    /// = nothing pending; the host may idle indefinitely.
     pub next_deadline: Option<f32>,
 }
 
@@ -67,10 +65,9 @@ impl UiFrameResult {
 /// converts the accumulation into the frame's [`UiFrameResult`].
 #[derive(Debug, Default)]
 pub struct FrameTimings {
-    /// Earliest registered future transition, in seconds from frame start.
+    /// Earliest registered change, in seconds from frame start; `0.0` for
+    /// the next frame.
     next_deadline: Option<f32>,
-    /// Set when any source reported unfinished visible work.
-    active: bool,
     /// Seconds of delta-time this frame's ticks consumed (diagnostics/tests).
     pub dt_seconds: f32,
 }
@@ -79,31 +76,25 @@ impl FrameTimings {
     /// Reset for a new frame.
     pub fn reset(&mut self, dt: f32) {
         self.next_deadline = None;
-        self.active = false;
         self.dt_seconds = dt;
     }
 
-    /// Record an in-flight (unsettled) source whose next visible change is
-    /// already due, or whose transition completes `delay_s` seconds from now.
-    /// Non-positive values record activity only (already-due changes can't
-    /// contribute a *future* deadline, but they do require a repaint).
+    /// Record an unsettled source whose next visible change comes `delay_s`
+    /// seconds from now. Non-positive (or NaN) values mean the next frame.
     pub fn mark_after(&mut self, delay_s: f32) {
-        if delay_s <= 0.0 {
-            self.active = true;
-            return;
-        }
+        let delay_s = delay_s.max(0.0);
         self.next_deadline = Some(match self.next_deadline {
             Some(d) => d.min(delay_s),
             None => delay_s,
         });
     }
 
-    /// Convert the accumulation into the frame's result. Conservative: any
-    /// registered deadline implies `needs_repaint`, because a scheduled
-    /// transition means the host must draw again at (or before) that instant.
+    /// Convert the accumulation into the frame's result: any registered
+    /// deadline implies `needs_repaint`, because the host must draw again at
+    /// that instant.
     pub fn finish(&self) -> UiFrameResult {
         UiFrameResult {
-            needs_repaint: self.active || self.next_deadline.is_some(),
+            needs_repaint: self.next_deadline.is_some(),
             next_deadline: self.next_deadline,
         }
     }
@@ -163,11 +154,14 @@ mod tests {
     }
 
     #[test]
-    fn after_records_overdue_as_activity_only() {
+    fn overdue_means_the_next_frame() {
         let mut t = FrameTimings::default();
         t.mark_after(-1.0);
         assert!(t.finish().needs_repaint);
-        assert_eq!(t.finish().next_deadline, None);
+        assert_eq!(t.finish().next_deadline, Some(0.0));
+        t.mark_after(f32::NAN);
+        assert_eq!(t.finish().next_deadline, Some(0.0));
+        t.reset(0.016);
         t.mark_after(0.25);
         assert_eq!(t.finish().next_deadline, Some(0.25));
     }
@@ -178,9 +172,12 @@ mod tests {
         assert_eq!(t.finish(), UiFrameResult::IDLE);
         t.reset(0.016);
         t.mark_after(0.4);
-        t.mark_after(0.0); // an already-due source
+        assert_eq!(t.finish().next_deadline, Some(0.4));
+        // A source that changes on the next frame wins, so a host scheduling
+        // on the deadline alone doesn't wait for the later one.
+        t.mark_after(0.0);
         let r = t.finish();
         assert!(r.needs_repaint);
-        assert_eq!(r.next_deadline, Some(0.4));
+        assert_eq!(r.next_deadline, Some(0.0));
     }
 }

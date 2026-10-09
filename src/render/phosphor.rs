@@ -172,6 +172,20 @@ icons! {
     Question = '\u{e3e8}', "question";
     /// Square speech bubble (a reply).
     Chat = '\u{e15c}', "chat";
+    /// Left-pointing caret (back).
+    CaretLeft = '\u{e138}', "caret-left";
+    /// Upward arrow (the enclosing folder).
+    ArrowUp = '\u{e08e}', "arrow-up";
+    /// Star outline (a favourite).
+    Star = '\u{e46a}', "star";
+    /// Three lines (a list view).
+    List = '\u{e2f0}', "list";
+    /// Four squares (a grid view).
+    SquaresFour = '\u{e464}', "squares-four";
+    /// Clock with a backward arrow (recent items).
+    ClockCounterClockwise = '\u{e1a0}', "clock-counter-clockwise";
+    /// Folder with a plus (new folder).
+    FolderPlus = '\u{e258}', "folder-plus";
 }
 
 impl PhosphorIcon {

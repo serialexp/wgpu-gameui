@@ -79,6 +79,22 @@ impl ModalState {
         }
     }
 
+    /// Draw-time bookkeeping for a surface drawn as this modal: mark it open
+    /// and, on its first drawn frame, remember what held focus and move it to
+    /// `target`. Returns whether Escape dismissed it this frame. [`Modal`]
+    /// calls this; so does a widget that paints its own modal surface.
+    pub(crate) fn present(&mut self, focus: &mut FocusState, target: Option<FocusId>) -> bool {
+        self.open = true;
+        if !self.seeded {
+            self.seeded = true;
+            self.restore = focus.focused();
+            if let Some(id) = target {
+                focus.focus(id);
+            }
+        }
+        self.cancel
+    }
+
     /// Close the modal and give focus back to what held it before.
     pub fn close(&mut self, focus: &mut FocusState) {
         if self.seeded {
@@ -253,17 +269,10 @@ impl<'a> Modal<'a> {
         ctx: &mut DrawContext,
         fill: impl FnMut(SheetSlot, Rect, &mut DrawContext),
     ) -> ModalOutput {
-        state.open = true;
-        if !state.seeded {
-            state.seeded = true;
-            state.restore = ctx.focus.focused();
-            let target = self
-                .autofocus
-                .unwrap_or_else(|| self.sheet.action_focus_id(0));
-            if let Some(id) = target {
-                ctx.focus.focus(id);
-            }
-        }
+        let target = self
+            .autofocus
+            .unwrap_or_else(|| self.sheet.action_focus_id(0));
+        let cancelled = state.present(ctx.focus, target);
 
         let s = ctx.styles();
         ctx.push_debug_scope_rect("Modal", bounds);
@@ -292,7 +301,7 @@ impl<'a> Modal<'a> {
             && !rect.contains(input.mouse_x, input.mouse_y);
         ModalOutput {
             sheet,
-            dismissed: state.cancel || backdrop_click,
+            dismissed: cancelled || backdrop_click,
         }
     }
 }
