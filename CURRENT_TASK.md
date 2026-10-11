@@ -8,7 +8,56 @@ rest of Forge's charts". Left: commit when Bart asks, and rerun the chart
 benches on a quiet machine (timings on 2026-10-09 were taken under heavy
 load).
 
-# Current task: SDF lines (anti-aliased strokes)
+# Current task: Timeline and viewport gizmos from Forge (2026-10-11)
+
+Bart: "we recently added a timeline component and a bunch of editor gizmos to
+the gameui forge design in claude, and we need that for an editor now, so do
+you think you could actually build those components into gameui?" Source:
+Claude Design project `1f8b3bfd-a399-4bc7-b8e8-210da4ff4326`,
+`components/timeline/*` and `components/viewport/*` (fetch with DesignSync
+`get_file`).
+
+Bart's decisions (2026-10-11):
+- Gizmos take a **3×3 view rotation** (world→view), with a `from_yaw_pitch`
+  helper for Forge's convention.
+- Timeline shortcuts need letter keys: **add the generic key list**, i.e.
+  `KeyState` / `InputState::keys` as designed in `docs/design/menubar.md`
+  §4 (Phase 4).
+- HUD glass: **no backdrop blur for now**; note a draw-list backdrop
+  primitive in TODO.md.
+- Timeline track data: **`&mut` edited in place**, the output says what
+  changed (for undo).
+
+Plan:
+- [x] 1 — foundations: `KeyState` + `InputState::keys` (+
+      `Accelerator::matches`); theme tokens for axis tints, accent ring /
+      glow, warn soft / banner ink, HUD glass chrome; `Tone::Latch`.
+      Also `ContextMenu::with_min_width` / `ContextMenuState::open_above`
+      (for HudSelect) and seven Phosphor icons (transport, readout glyphs).
+- [x] 2 — viewport: `src/widgets/hud.rs` (`HudBar`/`HudKey`/`HudItem::
+      Separator`/`HudSelect` + `HudState`, `hud_glass`), `view_gizmo.rs`
+      (`ViewRotation`, `AxisDir`, `ViewGizmo`), `transform_gizmo.rs`
+      (`TransformGizmo`, events Start/Drag/End/Cancel, totals since start),
+      `viewport_overlays.rs` (`TransformReadout`, `SelectionMarquee`,
+      `MeasureLine`, `ViewportStats`). Unit tests in each; gallery has new
+      `Viewport` and `Timeline` categories, all ten viewport sections
+      rendered and looked at.
+- [x] 3 — `Timeline` (`src/widgets/timeline/{mod,model,tests}.rs`, 36
+      tests), `TimelineChrome` + `StyleKey::WarnRule`; gallery section with
+      seven cells, rendered and looked at (also under aldermoor-hearth).
+- [x] 4 — TODO.md follow-ups section (backdrop blur, rename-field font,
+      overlapping marker labels, Forge graph category), TODO_DONE.md section
+      "2026-10-11 — Timeline and viewport gizmos". `cargo build
+      --all-targets` warning-free, `cargo test --lib` 1741 passed,
+      designer 14 passed, gallery 85 of 91. Remaining fmt diffs and the
+      clippy warning are in the parallel agent's `src/render/textures.rs`,
+      `src/render/ui_renderer.rs`, `tests/external_sprite.rs` — left alone.
+- [x] Commit — 85e741f, rebased onto upstream's focus and chart work
+      (2026-10-14).
+
+---
+
+# Also open: SDF lines (anti-aliased strokes)
 
 Bart asked (2026-10-08) to implement `docs/design/sdf-lines.md`. That doc's
 "Implementation status" is the checklist; this section is how to resume.
@@ -176,3 +225,22 @@ Batches, smallest first; one commit per batch:
   the shadow's room (`sheet_cell`) so it doesn't fall on neighbours.
   Bart (2026-09-26): keep that empty room — accurate warnings are worth
   the extra space. Don't pack shadowed cells tight.
+
+## UTF-8 retained editor crash fix (agent-ui follow-up)
+
+External buffer replacement previously kept any cursor byte offset below the new
+length, even inside a multibyte character. Subsequent typing panicked in
+`String::insert_str`. Added `TextInput::set_value`, which reuses the value buffer,
+clamps/snaps the caret backward to a UTF-8 boundary (at most three bytes), and
+clears old selection, drag anchor/unit, and sticky navigation column. The shared
+UiContext retained-field path now uses it. Replacement remains O(new text bytes),
+with no added full-text scan or per-character allocation.
+
+Regression tests cover 2/3/4-byte characters, valid boundaries, shortening, empty
+replacement, stale drag state, and subsequent editing in text/password/textarea
+fields. Added a Unicode replacement-and-typing gallery cell. Gameui lib tests
+(1671 passed, 14 ignored), strict all-target Clippy, gallery render, desktop lib
+(188 passed, 5 ignored), and touched-file formatting passed. Workspace formatting
+reported concurrent unrelated view_gizmo/gallery edits; those were not reformatted.
+No service actions or commits. Vulkan's secondary unwind panic remains outside
+this gameui editor fix.

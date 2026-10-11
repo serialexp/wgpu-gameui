@@ -209,6 +209,18 @@ pub struct Theme {
     pub danger_face_bottom_pressed: [f32; 4],
     /// Text/icon color drawn on top of danger faces.
     pub on_danger: [f32; 4],
+    /// Latched-face gradient top: a [`Tone::Latch`](crate::Tone::Latch) key
+    /// that is on (`--accent-latch-top`).
+    pub latch_face_top: [f32; 4],
+    /// Latched-face gradient bottom (`--accent-latch-bottom`).
+    pub latch_face_bottom: [f32; 4],
+    /// The shadow a latched face sits in (`--accent-latch-shade`).
+    pub latch_shade: [f32; 4],
+    /// The 1px light line under a latched face's top edge
+    /// (`--accent-latch-hi`).
+    pub latch_highlight: [f32; 4],
+    /// Text/icon color drawn on a latched face (`--ink-on-latch`).
+    pub on_latch: [f32; 4],
 
     // --- Forge roles -------------------------------------------------------
     /// The ink ladder, indexed by [`Ink`](crate::Ink) (`Ink::ALL` order).
@@ -240,6 +252,27 @@ pub struct Theme {
     pub accent_glyph: [f32; 4],
     /// Text of a destructive action (danger menu rows).
     pub danger_text: [f32; 4],
+    /// The X axis: vector-field tags, gizmo handles (`--axis-x`). Axis tints
+    /// encode direction only; never use them for anything else.
+    pub axis_x: [f32; 4],
+    /// The Y axis (`--axis-y`).
+    pub axis_y: [f32; 4],
+    /// The Z axis (`--axis-z`).
+    pub axis_z: [f32; 4],
+    /// A faint accent wash: a focus ring, a marquee's fill, the timeline's
+    /// current-frame column (`--accent-ring`).
+    pub accent_ring: [f32; 4],
+    /// An accent glow: a selected key's halo, the edges of a lit column
+    /// (`--accent-glow`).
+    pub accent_glow: [f32; 4],
+    /// A soft amber wash: a selected marker's label, its guide line
+    /// (`--warn-soft`).
+    pub warn_soft: [f32; 4],
+    /// Light ink on an amber wash (`--warn-banner-ink`).
+    pub warn_banner_ink: [f32; 4],
+    /// A selected amber mark: a selected marker's flag and guide line
+    /// (`--warn-rule`).
+    pub warn_rule: [f32; 4],
     /// Type scale in pixels, indexed by [`TextSize`](crate::TextSize).
     pub text_sizes: [f32; crate::TextSize::ALL.len()],
     /// Letter spacing in em, indexed by [`Tracking`](crate::Tracking).
@@ -393,6 +426,11 @@ impl Default for Theme {
             danger_face_bottom_hover: oklch(0.52, 0.18, 25.0, 1.0),
             danger_face_bottom_pressed: oklch(0.44, 0.14, 25.0, 1.0),
             on_danger: hex(0xfdeaea),
+            latch_face_top: oklch(0.62, 0.1, 200.0, 1.0),
+            latch_face_bottom: oklch(0.7, 0.11, 200.0, 1.0),
+            latch_shade: oklch(0.32, 0.07, 200.0, 1.0),
+            latch_highlight: oklch(0.55, 0.09, 200.0, 1.0),
+            on_latch: hex(0xeafaff),
 
             // Forge `colors.css` ink ladder, in `Ink::ALL` order.
             ink: [
@@ -437,6 +475,14 @@ impl Default for Theme {
             accent_grip: oklch(0.82, 0.1, 200.0, 1.0),
             accent_glyph: oklch(0.72, 0.09, 200.0, 1.0),
             danger_text: oklch(0.72, 0.15, 25.0, 1.0),
+            axis_x: oklch(0.62, 0.13, 25.0, 1.0),
+            axis_y: oklch(0.64, 0.11, 145.0, 1.0),
+            axis_z: oklch(0.62, 0.11, 255.0, 1.0),
+            accent_ring: oklch(0.74, 0.11, 200.0, 0.16),
+            accent_glow: oklch(0.74, 0.11, 200.0, 0.65),
+            warn_soft: oklch(0.78, 0.14, 75.0, 0.2),
+            warn_banner_ink: hex(0xe0d6c4),
+            warn_rule: oklch(0.78, 0.14, 75.0, 1.0),
             // `typography.css`: caption, meta, dense, row, menu.
             text_sizes: [9.0, 10.0, 10.5, 11.0, 11.5],
             // Badge, prop, caption, section, brand.
@@ -700,6 +746,11 @@ impl Theme {
             DangerFaceBottomHover => StyleValue::Color(self.danger_face_bottom_hover),
             DangerFaceBottomPressed => StyleValue::Color(self.danger_face_bottom_pressed),
             OnDanger => StyleValue::Color(self.on_danger),
+            LatchFaceTop => StyleValue::Color(self.latch_face_top),
+            LatchFaceBottom => StyleValue::Color(self.latch_face_bottom),
+            LatchShade => StyleValue::Color(self.latch_shade),
+            LatchHighlight => StyleValue::Color(self.latch_highlight),
+            OnLatch => StyleValue::Color(self.on_latch),
             // Scalars
             Padding => StyleValue::Scalar(self.padding),
             Spacing => StyleValue::Scalar(self.spacing),
@@ -737,6 +788,14 @@ impl Theme {
             AccentGrip => StyleValue::Color(self.accent_grip),
             AccentGlyph => StyleValue::Color(self.accent_glyph),
             DangerText => StyleValue::Color(self.danger_text),
+            AxisX => StyleValue::Color(self.axis_x),
+            AxisY => StyleValue::Color(self.axis_y),
+            AxisZ => StyleValue::Color(self.axis_z),
+            AccentRing => StyleValue::Color(self.accent_ring),
+            AccentGlow => StyleValue::Color(self.accent_glow),
+            WarnSoft => StyleValue::Color(self.warn_soft),
+            WarnBannerInk => StyleValue::Color(self.warn_banner_ink),
+            WarnRule => StyleValue::Color(self.warn_rule),
             TextSize(step) => StyleValue::Scalar(self.text_sizes[step as usize]),
             Tracking(role) => StyleValue::Scalar(self.tracking[role as usize]),
             ListRowHeight => StyleValue::Scalar(self.list_row_height),
@@ -814,6 +873,11 @@ impl Theme {
             (DangerFaceBottomHover, StyleValue::Color(c)) => self.danger_face_bottom_hover = c,
             (DangerFaceBottomPressed, StyleValue::Color(c)) => self.danger_face_bottom_pressed = c,
             (OnDanger, StyleValue::Color(c)) => self.on_danger = c,
+            (LatchFaceTop, StyleValue::Color(c)) => self.latch_face_top = c,
+            (LatchFaceBottom, StyleValue::Color(c)) => self.latch_face_bottom = c,
+            (LatchShade, StyleValue::Color(c)) => self.latch_shade = c,
+            (LatchHighlight, StyleValue::Color(c)) => self.latch_highlight = c,
+            (OnLatch, StyleValue::Color(c)) => self.on_latch = c,
             (Padding, StyleValue::Scalar(s)) => self.padding = s,
             (Spacing, StyleValue::Scalar(s)) => self.spacing = s,
             (BorderRadius, StyleValue::Scalar(s)) => self.border_radius = s,
@@ -849,6 +913,14 @@ impl Theme {
             (AccentGrip, StyleValue::Color(c)) => self.accent_grip = c,
             (AccentGlyph, StyleValue::Color(c)) => self.accent_glyph = c,
             (DangerText, StyleValue::Color(c)) => self.danger_text = c,
+            (AxisX, StyleValue::Color(c)) => self.axis_x = c,
+            (AxisY, StyleValue::Color(c)) => self.axis_y = c,
+            (AxisZ, StyleValue::Color(c)) => self.axis_z = c,
+            (AccentRing, StyleValue::Color(c)) => self.accent_ring = c,
+            (AccentGlow, StyleValue::Color(c)) => self.accent_glow = c,
+            (WarnSoft, StyleValue::Color(c)) => self.warn_soft = c,
+            (WarnBannerInk, StyleValue::Color(c)) => self.warn_banner_ink = c,
+            (WarnRule, StyleValue::Color(c)) => self.warn_rule = c,
             (TextSize(step), StyleValue::Scalar(s)) => self.text_sizes[step as usize] = s,
             (Tracking(role), StyleValue::Scalar(s)) => self.tracking[role as usize] = s,
             (ListRowHeight, StyleValue::Scalar(s)) => self.list_row_height = s,

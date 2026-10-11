@@ -271,6 +271,16 @@ style_keys! {
     DangerFaceBottomPressed("danger_face_bottom_pressed", Color),
     /// Text/icon color on danger faces.
     OnDanger("on_danger", Color),
+    /// Latched-face gradient top (`--accent-latch-top`).
+    LatchFaceTop("latch_face_top", Color),
+    /// Latched-face gradient bottom (`--accent-latch-bottom`).
+    LatchFaceBottom("latch_face_bottom", Color),
+    /// The inset shadow of a latched face (`--accent-latch-shade`).
+    LatchShade("latch_shade", Color),
+    /// The light line under a latched face's top edge (`--accent-latch-hi`).
+    LatchHighlight("latch_highlight", Color),
+    /// Text/icon color on a latched face (`--ink-on-latch`).
+    OnLatch("on_latch", Color),
     // --- 4a material keys (scalars) ---
     /// Press travel: how far a face drops when pressed, in pixels.
     Travel("travel", Scalar),
@@ -319,6 +329,23 @@ style_keys! {
     /// Text of a destructive action, such as a danger menu row
     /// (`--danger-text`).
     DangerText("danger_text", Color),
+    /// The X axis (`--axis-x`). Axis tints encode direction only.
+    AxisX("axis_x", Color),
+    /// The Y axis (`--axis-y`).
+    AxisY("axis_y", Color),
+    /// The Z axis (`--axis-z`).
+    AxisZ("axis_z", Color),
+    /// A faint accent wash: focus ring, marquee fill (`--accent-ring`).
+    AccentRing("accent_ring", Color),
+    /// An accent glow: a selected key's halo (`--accent-glow`).
+    AccentGlow("accent_glow", Color),
+    /// A soft amber wash: a selected marker (`--warn-soft`).
+    WarnSoft("warn_soft", Color),
+    /// Light ink on an amber wash (`--warn-banner-ink`).
+    WarnBannerInk("warn_banner_ink", Color),
+    /// A selected amber mark: a selected marker's flag and guide
+    /// (`--warn-rule`).
+    WarnRule("warn_rule", Color),
     // --- Forge roles (scalars) ---
     /// Height of one list, tree or dock-section header row, in pixels
     /// (`--h-list-row`).
@@ -326,6 +353,9 @@ style_keys! {
 }
 
 impl StyleKey {
+    /// The axis tints in X, Y, Z order, for indexing by axis.
+    pub const AXES: [StyleKey; 3] = [StyleKey::AxisX, StyleKey::AxisY, StyleKey::AxisZ];
+
     /// A custom key addressed by `name`. Equal names always produce the same
     /// key; distinct names (barring an astronomically unlikely 64-bit collision)
     /// produce distinct keys. No registration or global interner required.
@@ -616,6 +646,7 @@ pub struct StyleOverlay {
     dock: Option<crate::DockChrome>,
     dock_section: Option<crate::DockSectionChrome>,
     group_list: Option<crate::GroupListChrome>,
+    timeline: Option<crate::TimelineChrome>,
     scrollbar: Option<crate::ScrollbarChrome>,
     splitter: Option<crate::SplitterChrome>,
     status_bar: Option<crate::StatusBarChrome>,
@@ -624,6 +655,7 @@ pub struct StyleOverlay {
     tooltip: Option<crate::FloatingSurfaceChrome>,
     toast: Option<crate::FloatingSurfaceChrome>,
     curve_key: Option<crate::FloatingSurfaceChrome>,
+    hud: Option<crate::FloatingSurfaceChrome>,
     sheet: Option<crate::SheetChrome>,
     inspector: Option<crate::InspectorChrome>,
     window: Option<crate::WindowChrome>,
@@ -718,6 +750,15 @@ impl StyleOverlay {
     pub fn group_list(&self) -> Option<crate::GroupListChrome> {
         self.group_list
     }
+    /// Override timeline chrome.
+    pub fn set_timeline(&mut self, value: crate::TimelineChrome) -> &mut Self {
+        self.timeline = Some(value);
+        self
+    }
+    /// Return the timeline override.
+    pub fn timeline(&self) -> Option<crate::TimelineChrome> {
+        self.timeline
+    }
     /// Override scrollbar chrome.
     pub fn set_scrollbar(&mut self, value: crate::ScrollbarChrome) -> &mut Self {
         self.scrollbar = Some(value);
@@ -786,6 +827,15 @@ impl StyleOverlay {
         self.curve_key = Some(value);
         self
     }
+    /// Override HUD glass chrome.
+    pub fn set_hud(&mut self, value: crate::FloatingSurfaceChrome) -> &mut Self {
+        self.hud = Some(value);
+        self
+    }
+    /// Return the HUD glass override.
+    pub fn hud(&self) -> Option<crate::FloatingSurfaceChrome> {
+        self.hud
+    }
     /// Return the curve-editor key override.
     pub fn curve_key(&self) -> Option<crate::FloatingSurfaceChrome> {
         self.curve_key
@@ -827,6 +877,7 @@ impl StyleOverlay {
             && self.dock.is_none()
             && self.dock_section.is_none()
             && self.group_list.is_none()
+            && self.timeline.is_none()
             && self.scrollbar.is_none()
             && self.splitter.is_none()
             && self.status_bar.is_none()
@@ -835,6 +886,7 @@ impl StyleOverlay {
             && self.tooltip.is_none()
             && self.toast.is_none()
             && self.curve_key.is_none()
+            && self.hud.is_none()
             && self.sheet.is_none()
             && self.inspector.is_none()
             && self.window.is_none()
@@ -850,6 +902,7 @@ impl StyleOverlay {
         self.dock = None;
         self.dock_section = None;
         self.group_list = None;
+        self.timeline = None;
         self.scrollbar = None;
         self.splitter = None;
         self.status_bar = None;
@@ -858,6 +911,7 @@ impl StyleOverlay {
         self.tooltip = None;
         self.toast = None;
         self.curve_key = None;
+        self.hud = None;
         self.sheet = None;
         self.inspector = None;
         self.window = None;
@@ -978,6 +1032,12 @@ impl<'a> StyleResolver<'a> {
             .and_then(StyleOverlay::group_list)
             .unwrap_or(self.theme.chrome.group_list)
     }
+    /// Resolve timeline chrome in O(1).
+    pub fn timeline(&self) -> crate::TimelineChrome {
+        self.overlay
+            .and_then(StyleOverlay::timeline)
+            .unwrap_or(self.theme.chrome.timeline)
+    }
     /// Resolve scrollbar chrome in O(1).
     pub fn scrollbar(&self) -> crate::ScrollbarChrome {
         self.overlay
@@ -1025,6 +1085,12 @@ impl<'a> StyleResolver<'a> {
         self.overlay
             .and_then(StyleOverlay::curve_key)
             .unwrap_or(self.theme.chrome.curve_key)
+    }
+    /// Resolve HUD glass chrome in O(1).
+    pub fn hud(&self) -> crate::FloatingSurfaceChrome {
+        self.overlay
+            .and_then(StyleOverlay::hud)
+            .unwrap_or(self.theme.chrome.hud)
     }
     /// Resolve dialog-sheet chrome in O(1).
     pub fn sheet(&self) -> crate::SheetChrome {

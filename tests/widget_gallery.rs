@@ -42,6 +42,12 @@ use wgpu_gameui::{
     PromptDialog, PromptDialogState, Sheet, SheetAction,
 };
 use wgpu_gameui::{
+    AxisDir, GizmoHandle, GizmoMode, GizmoValue, HudBar, HudItem, HudKey, HudOption, HudSelect,
+    HudState, MarqueeMode, MeasureLine, SelectionMarquee, StatRow, TransformGizmo,
+    TransformGizmoState, TransformReadout, TransformSnap, ViewGizmo, ViewGizmoState, ViewRotation,
+    ViewportStats,
+};
+use wgpu_gameui::{
     BADGE_HEIGHT, Badge, BadgeTone, Bar, BarChart, BarSegment, BarSeries, BarTooltip,
     COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE, DropZone, EmptyState, FieldLabel, Ink,
     MINI_METER_WARN, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT, STATUS_BAR_HEIGHT,
@@ -66,6 +72,8 @@ use wgpu_gameui::{
 };
 #[cfg(feature = "phosphor-icons")]
 use wgpu_gameui::{Icon, PhosphorIcon};
+#[cfg(feature = "phosphor-icons")]
+use wgpu_gameui::{Interp, KeyRef, Keyframe, Marker, Timeline, TimelineState, Track};
 
 /// Convenience: build a DrawContext for a single draw call in the gallery.
 fn ctx<'a>(
@@ -103,6 +111,820 @@ fn dialog_stage(list: &mut DrawList, s: &StyleResolver, r: Rect, name: &str) {
     let card = Rect::new(r.x + 12.0, r.y + 26.0, (r.width * 0.45).round(), 70.0);
     let body = Panel::new().padding(10.0).draw(card, list, s);
     Placeholder::text(3).draw(body, list, s);
+}
+
+/// A stand-in 3D scene for viewport overlays to float over, like the Forge
+/// viewport card: a sky-to-floor gradient with a faint ground grid, so the
+/// HUD glass reads against unknown pixels.
+fn viewport_stage(list: &mut DrawList, r: Rect) {
+    list.paint_quad_background(
+        r,
+        wgpu_gameui::Background::LinearGradient {
+            start: [0.2, 0.27, 0.32, 1.0],
+            end: [0.07, 0.09, 0.1, 1.0],
+            axis: wgpu_gameui::GradientAxis::Vertical,
+        },
+        wgpu_gameui::CornerRadii::uniform(2.0),
+    );
+    let horizon = r.y + r.height * 0.45;
+    let grid = [1.0, 1.0, 1.0, 0.05];
+    let mut y = horizon;
+    let mut step = 4.0;
+    while y < r.bottom() {
+        list.quad(r.x, y, r.width, 1.0, grid);
+        y += step;
+        step *= 1.45;
+    }
+    let cx = r.x + r.width * 0.5;
+    list.push_clip(r);
+    for i in -3..=3 {
+        let x = cx + i as f32 * r.width * 0.16;
+        list.line(
+            [cx + i as f32 * r.width * 0.03, horizon],
+            [x, r.bottom()],
+            1.0,
+            grid,
+        );
+    }
+    list.pop_clip();
+}
+
+/// Shading modes for the HUD select previews.
+const HUD_SHADING: &[HudOption<'static>] = &[
+    HudOption::new("Lit").shortcut("Alt 1"),
+    HudOption::new("Unlit").shortcut("Alt 2"),
+    HudOption::new("Wireframe").shortcut("Alt 3"),
+    HudOption::new("Lightmap density").short("Density"),
+    HudOption::new("Path traced").disabled("Needs a ray-tracing GPU"),
+];
+/// Grid sizes for the HUD select previews.
+const HUD_GRID: &[HudOption<'static>] = &[
+    HudOption::new("0.25 m"),
+    HudOption::new("1 m"),
+    HudOption::new("4 m"),
+];
+
+/// The viewport HUD sections: bars over a stand-in scene, then the key,
+/// separator and select on their own. Seeds one select's sheet open in
+/// `hud`; the caller draws it on its layer after the base content.
+fn hud_sections(
+    flow: &mut Flow,
+    list: &mut DrawList,
+    focus: &mut FocusState,
+    theme: &Theme,
+    input: &InputState,
+    hud: &mut HudState,
+) {
+    let s = StyleResolver::new(theme);
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "HudBar",
+        "over a scene, top + left rail",
+    );
+    {
+        let r = flow.cell(list, "Viewport corner bars", 420.0, 200.0);
+        viewport_stage(list, r);
+        let top = [
+            HudItem::Select(HudSelect::new(HUD_SHADING, 0).caption("View")),
+            HudItem::Separator,
+            HudItem::Key(HudKey::new("#").on(true)),
+            HudItem::Select(HudSelect::new(HUD_GRID, 1).caption("Grid")),
+            HudItem::Separator,
+            HudItem::Key(HudKey::new("Snap")),
+        ];
+        let rail = [
+            HudItem::Key(HudKey::new("Q").on(true)),
+            HudItem::Key(HudKey::new("W")),
+            HudItem::Key(HudKey::new("E")),
+            HudItem::Key(HudKey::new("R")),
+            HudItem::Separator,
+            HudItem::Key(HudKey::new("F")),
+        ];
+        let mut dctx = DrawContext::new(list, focus, theme, input, W as f32, 600.0);
+        HudBar::new(1, &top).draw([r.x + 8.0, r.y + 8.0], hud, &mut dctx);
+        let fps = [HudItem::Key(HudKey::new("62 fps").mono())];
+        let bar = HudBar::new(3, &fps);
+        let [w, _] = bar.size(dctx.draw_list, &s);
+        bar.draw([r.right() - 8.0 - w, r.y + 8.0], hud, &mut dctx);
+        HudBar::new(2, &rail)
+            .vertical()
+            .draw([r.x + 8.0, r.y + 44.0], hud, &mut dctx);
+    }
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "HudKey",
+        "off / on / mono / disabled",
+    );
+    for (index, (label, key)) in [
+        ("Off", HudKey::new("#")),
+        ("On (latched)", HudKey::new("#").on(true)),
+        ("Text", HudKey::new("Snap")),
+        ("Text, on", HudKey::new("Snap").on(true)),
+        ("Mono", HudKey::new("1.0 m").mono()),
+        ("Disabled", HudKey::new("Bake").enabled(false)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let items = [HudItem::Key(key)];
+        let bar = HudBar::new(10 + index as u64, &items);
+        let [w, h] = bar.size(list, &s);
+        let r = flow.cell(list, label, w + 16.0, h + 16.0);
+        viewport_stage(list, r);
+        bar.draw(
+            [r.x + 8.0, r.y + 8.0],
+            hud,
+            &mut DrawContext::new(list, focus, theme, input, W as f32, 600.0),
+        );
+    }
+
+    flow.section(list, Category::Viewport, "HudSep", "horizontal / vertical");
+    {
+        let keys = [
+            HudItem::Key(HudKey::new("A")),
+            HudItem::Separator,
+            HudItem::Key(HudKey::new("B")),
+            HudItem::Separator,
+            HudItem::Key(HudKey::new("C")),
+        ];
+        for (index, vertical) in [false, true].into_iter().enumerate() {
+            let mut bar = HudBar::new(20 + index as u64, &keys);
+            if vertical {
+                bar = bar.vertical();
+            }
+            let [w, h] = bar.size(list, &s);
+            let label = if vertical { "Vertical" } else { "Horizontal" };
+            let r = flow.cell(list, label, w + 16.0, h + 16.0);
+            viewport_stage(list, r);
+            bar.draw(
+                [r.x + 8.0, r.y + 8.0],
+                hud,
+                &mut DrawContext::new(list, focus, theme, input, W as f32, 600.0),
+            );
+        }
+    }
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "HudSelect",
+        "closed / caption / short / open",
+    );
+    for (index, (label, select)) in [
+        ("Closed", HudSelect::new(HUD_SHADING, 0)),
+        ("Caption", HudSelect::new(HUD_GRID, 1).caption("Grid")),
+        ("Short label", HudSelect::new(HUD_SHADING, 3)),
+        ("Open", HudSelect::new(HUD_SHADING, 2).caption("View")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let items = [HudItem::Select(select)];
+        let id = 30 + index as u64;
+        let bar = HudBar::new(id, &items);
+        let [w, h] = bar.size(list, &s);
+        let open = label == "Open";
+        let r = flow.cell(list, label, w.max(160.0) + 16.0, h + 16.0);
+        viewport_stage(list, r);
+        let origin = [r.x + 8.0, r.y + 8.0];
+        if open {
+            let key = Rect::new(origin[0] + 2.0, origin[1] + 2.0, w - 4.0, h - 4.0);
+            hud.open_for_test(id, 0, &select, key);
+            // The sheet floats on a layer drawn later; keep its footprint
+            // inside the section.
+            flow.reserve(h + 16.0 + 150.0);
+        }
+        bar.draw(
+            origin,
+            hud,
+            &mut DrawContext::new(list, focus, theme, input, W as f32, 600.0),
+        );
+    }
+}
+
+/// The ViewGizmo section: orbit and axis views over a stand-in scene, and the
+/// two hover states (a positive knob, a negative knob showing its name).
+fn view_gizmo_section(flow: &mut Flow, list: &mut DrawList, focus: &mut FocusState, theme: &Theme) {
+    let s = StyleResolver::new(theme);
+    flow.section(
+        list,
+        Category::Viewport,
+        "ViewGizmo",
+        "orbit / axis views / hover",
+    );
+    let orbit = ViewRotation::from_yaw_pitch(35.0, 25.0);
+    let below = ViewRotation::from_yaw_pitch(200.0, -30.0);
+    let top = AxisDir::PosY.rotation();
+    let cells: [(&str, ViewGizmo, Option<[f32; 2]>); 6] = [
+        ("Orbit 35° / 25°", ViewGizmo::new(1, orbit), None),
+        (
+            "Top · Ortho",
+            ViewGizmo::new(2, top)
+                .ortho(true)
+                .view(top.aligned_axis(0.01).map(AxisDir::view_name)),
+            None,
+        ),
+        (
+            "Front",
+            ViewGizmo::new(3, ViewRotation::IDENTITY).view(Some("Front")),
+            None,
+        ),
+        ("From below", ViewGizmo::new(4, below), None),
+        // Pointer offsets from the disc centre: onto the +X knob, and onto
+        // the −X knob, of the front view.
+        (
+            "Hover +X",
+            ViewGizmo::new(5, ViewRotation::IDENTITY),
+            Some([31.0, 0.0]),
+        ),
+        (
+            "Hover −X",
+            ViewGizmo::new(6, ViewRotation::IDENTITY),
+            Some([-31.0, 0.0]),
+        ),
+    ];
+    for (label, gizmo, hover) in cells {
+        let [w, h] = gizmo.outer_size(list, &s);
+        let r = flow.cell(list, label, w + 24.0, h + 20.0);
+        viewport_stage(list, r);
+        let at = Rect::new(r.x + 12.0, r.y + 10.0, w, h);
+        let centre = [at.x + w * 0.5, at.y + 42.0];
+        let input = match hover {
+            Some([dx, dy]) => InputState {
+                mouse_x: centre[0] + dx,
+                mouse_y: centre[1] + dy,
+                ..InputState::default()
+            },
+            None => InputState::default(),
+        };
+        gizmo.draw(
+            at,
+            &mut ViewGizmoState::new(),
+            &mut DragCapture::new(),
+            &mut DrawContext::new(list, focus, theme, &input, W as f32, 600.0),
+        );
+    }
+}
+
+/// The TransformGizmo section: each mode at rest, hovered, and mid-drag
+/// (the move ghost, the rotate wedge), over a stand-in scene. A drag is set
+/// up by replaying its gesture into a scratch list first.
+fn transform_gizmo_section(
+    flow: &mut Flow,
+    list: &mut DrawList,
+    focus: &mut FocusState,
+    theme: &Theme,
+) {
+    flow.section(
+        list,
+        Category::Viewport,
+        "TransformGizmo",
+        "move / rotate / scale, hover, mid-drag",
+    );
+    const ARM: f32 = 60.0;
+    let orbit = ViewRotation::from_yaw_pitch(35.0, 25.0);
+    let tilted = {
+        // A local gizmo on an object turned 30° about Y.
+        let (s, c) = 30.0f32.to_radians().sin_cos();
+        [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]]
+    };
+    let gizmo = |mode| {
+        TransformGizmo::new(1, orbit)
+            .mode(mode)
+            .size(ARM)
+            .snap(TransformSnap {
+                rotate: Some(15.0),
+                ..TransformSnap::default()
+            })
+    };
+    // (label, gizmo, gesture as offsets from the pivot: press, then moves;
+    // the last point is where the pointer rests).
+    let cells: [(&str, TransformGizmo, &[[f32; 2]]); 7] = [
+        ("Move", gizmo(GizmoMode::Move), &[]),
+        ("Move · hover X", gizmo(GizmoMode::Move), &[[30.0, 9.0]]),
+        (
+            "Move · dragging X",
+            gizmo(GizmoMode::Move),
+            &[[30.0, 9.0], [55.0, 16.0]],
+        ),
+        (
+            "Move · local basis",
+            gizmo(GizmoMode::Move).basis(tilted),
+            &[],
+        ),
+        ("Rotate", gizmo(GizmoMode::Rotate), &[]),
+        (
+            "Rotate · dragging view",
+            gizmo(GizmoMode::Rotate),
+            &[[ARM + 14.0, 0.0], [0.0, -(ARM + 14.0)], [-52.0, -52.0]],
+        ),
+        (
+            "Scale · hover centre",
+            gizmo(GizmoMode::Scale),
+            &[[0.0, 0.0]],
+        ),
+    ];
+    for (label, gizmo, gesture) in cells {
+        let half = ARM + 26.0;
+        let r = flow.cell(list, label, half * 2.0, half * 2.0);
+        viewport_stage(list, r);
+        let pivot = [r.x + half, r.y + half];
+        let point = |o: [f32; 2]| InputState {
+            mouse_x: pivot[0] + o[0],
+            mouse_y: pivot[1] + o[1],
+            ..InputState::default()
+        };
+        let mut state = TransformGizmoState::new();
+        let mut drag = DragCapture::new();
+        // Every frame but the last goes to a scratch list.
+        let mut frames: Vec<InputState> = Vec::new();
+        match gesture {
+            [] => frames.push(InputState::default()),
+            [only] => frames.push(point(*only)),
+            [press, moves @ ..] => {
+                frames.push(InputState {
+                    mouse_down: true,
+                    mouse_clicked: true,
+                    ..point(*press)
+                });
+                for m in moves {
+                    frames.push(InputState {
+                        mouse_down: true,
+                        ..point(*m)
+                    });
+                }
+            }
+        }
+        let (last, earlier) = frames.split_last().expect("one frame");
+        for input in earlier {
+            let mut scratch = DrawList::new();
+            gizmo.draw(
+                pivot,
+                &mut state,
+                &mut drag,
+                &mut DrawContext::new(&mut scratch, focus, theme, input, W as f32, 600.0),
+            );
+        }
+        gizmo.draw(
+            pivot,
+            &mut state,
+            &mut drag,
+            &mut DrawContext::new(list, focus, theme, last, W as f32, 600.0),
+        );
+    }
+}
+
+/// The passive viewport overlays, each over a stand-in scene: the transform
+/// readout, the selection marquee, the measure line and the stats panel.
+/// A cutscene's tracks: a door (summed up), its lights, a camera.
+#[cfg(feature = "phosphor-icons")]
+fn timeline_tracks(theme: &Theme) -> Vec<Track> {
+    let ease = Keyframe::new;
+    let linear = |t| Keyframe::new(t).interp(Interp::Linear);
+    let hold = |t| Keyframe::new(t).interp(Interp::Hold);
+    vec![
+        Track::group(1, "Door").color(theme.accent),
+        Track::new(2, "Position")
+            .depth(1)
+            .color(theme.axis_x)
+            .keys([ease(0), linear(12), hold(24), ease(48), ease(72)]),
+        Track::new(3, "Rotation")
+            .depth(1)
+            .color(theme.axis_y)
+            .keys([ease(12), ease(36), ease(60), ease(84)]),
+        Track::new(4, "Creak")
+            .depth(1)
+            .muted(true)
+            .keys([ease(30), ease(62)]),
+        Track::group(5, "Lights"),
+        Track::new(6, "Lamp A · intensity")
+            .depth(1)
+            .locked(true)
+            .keys([ease(0), ease(40), ease(80)]),
+        Track::new(7, "Lamp B · colour")
+            .depth(1)
+            .keys([hold(20), ease(50), ease(90)]),
+        Track::new(8, "Camera").keys([linear(0), linear(96)]),
+    ]
+}
+
+/// The Forge Timeline: a dock-sized dope sheet in its states, each cell
+/// replaying its pointer frames into a scratch list and drawing the last.
+#[cfg(feature = "phosphor-icons")]
+fn timeline_section(flow: &mut Flow, list: &mut DrawList, focus: &mut FocusState, theme: &Theme) {
+    flow.section(
+        list,
+        Category::Timeline,
+        "Timeline",
+        "range, markers, selection, playback, drag, marquee",
+    );
+    let s = StyleResolver::new(theme);
+    let strip = 4.0 + 19.0 + Pressable::new().travel_px(&s) + 4.0;
+    // The narrow cells' label column.
+    const NARROW: f32 = 120.0;
+    // Where frame `t` of row `row` sits, at `ppf` px a frame, no scroll.
+    let key = |r: Rect, header: f32, row: usize, t: u32, ppf: f32| {
+        (
+            r.x + header + 10.0 + (t as f32 + 0.5) * ppf,
+            r.y + strip + 24.0 + row as f32 * 20.0 + 10.0,
+        )
+    };
+    let pointer = |(x, y): (f32, f32)| InputState {
+        mouse_x: x,
+        mouse_y: y,
+        ..InputState::default()
+    };
+    let pressed = |at| InputState {
+        mouse_down: true,
+        mouse_clicked: true,
+        ..pointer(at)
+    };
+    let held = |at| InputState {
+        mouse_down: true,
+        ..pointer(at)
+    };
+    let dock = |list: &mut DrawList, r: Rect| {
+        list.paint_quad_background(
+            r,
+            s.dock().body.background,
+            wgpu_gameui::CornerRadii::uniform(0.0),
+        );
+    };
+    let draw = |list: &mut DrawList,
+                focus: &mut FocusState,
+                r: Rect,
+                timeline: Timeline,
+                tracks: &mut Vec<Track>,
+                markers: &mut Vec<Marker>,
+                state: &mut TimelineState,
+                frames: &[InputState]| {
+        dock(list, r);
+        let mut drag = DragCapture::new();
+        let (last, earlier) = frames.split_last().expect("one frame");
+        for input in earlier {
+            let mut scratch = DrawList::new();
+            focus.begin_frame(input);
+            timeline.draw(
+                r,
+                tracks,
+                markers,
+                state,
+                &mut drag,
+                &mut DrawContext::new(&mut scratch, focus, theme, input, W as f32, 600.0),
+            );
+            focus.end_frame(None);
+        }
+        focus.begin_frame(last);
+        timeline.draw(
+            r,
+            tracks,
+            markers,
+            state,
+            &mut drag,
+            &mut DrawContext::new(list, focus, theme, last, W as f32, 600.0),
+        );
+        focus.end_frame(None);
+        focus.blur();
+    };
+    let markers = || vec![Marker::new(40, "door opens"), Marker::new(72, "lights up")];
+
+    {
+        let r = flow.cell(
+            list,
+            "Range, markers, selection, hovered track",
+            760.0,
+            236.0,
+        );
+        let mut tracks = timeline_tracks(theme);
+        let mut marks = markers();
+        let mut state = TimelineState::new();
+        state.range = Some([12, 96]);
+        state.frame = 52;
+        state.marker_selected = Some(1);
+        state.selection = [KeyRef::new(2, 48), KeyRef::new(3, 36)]
+            .into_iter()
+            .collect();
+        let hover = pointer((r.x + 60.0, key(r, 176.0, 2, 0, 6.0).1));
+        let timeline = Timeline::new(1).length(120);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut tracks,
+            &mut marks,
+            &mut state,
+            &[hover],
+        );
+    }
+    {
+        let r = flow.cell(
+            list,
+            "Playing · 1.5 px/frame · Lights collapsed · loop off",
+            760.0,
+            176.0,
+        );
+        let mut tracks = timeline_tracks(theme);
+        let mut marks = markers();
+        let mut state = TimelineState::new();
+        state.zoom = 1.5;
+        state.frame = 130;
+        state.playing = true;
+        state.looping = false;
+        state.collapsed.insert(5);
+        let timeline = Timeline::new(2).length(240);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut tracks,
+            &mut marks,
+            &mut state,
+            &[InputState::default()],
+        );
+    }
+    {
+        let r = flow.cell(list, "Dragging two keys +6 frames", 368.0, 150.0);
+        let mut tracks = timeline_tracks(theme);
+        let mut marks = Vec::new();
+        let mut state = TimelineState::new();
+        state.zoom = 9.0;
+        state.frame = 8;
+        state.selection = [KeyRef::new(3, 12)].into_iter().collect();
+        let from = key(r, NARROW, 1, 12, 9.0);
+        let mut shift = pressed(from);
+        shift.shift_pressed = true;
+        let to = (from.0 + 6.0 * 9.0, from.1);
+        let timeline = Timeline::new(3).length(120).header_width(NARROW);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut tracks,
+            &mut marks,
+            &mut state,
+            &[shift, held(to)],
+        );
+    }
+    {
+        let r = flow.cell(list, "Marquee across the door's tracks", 368.0, 150.0);
+        let mut tracks = timeline_tracks(theme);
+        let mut marks = Vec::new();
+        let mut state = TimelineState::new();
+        state.zoom = 9.0;
+        let from = key(r, NARROW, 1, 9, 9.0);
+        let to = key(r, NARROW, 3, 27, 9.0);
+        let timeline = Timeline::new(4).length(120).header_width(NARROW);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut tracks,
+            &mut marks,
+            &mut state,
+            &[pressed((from.0, from.1 - 6.0)), held((to.0, to.1 + 6.0))],
+        );
+    }
+    {
+        let r = flow.cell(list, "Renaming a new marker (M)", 368.0, 110.0);
+        let mut tracks = vec![Track::new(8, "Camera").keys([Keyframe::new(0), Keyframe::new(30)])];
+        let mut marks = markers();
+        let mut state = TimelineState::new();
+        state.zoom = 9.0;
+        state.frame = 8;
+        let corner = (r.x + 20.0, r.y + strip + 8.0);
+        let mut m = InputState::default();
+        m.keys.key_event(Key::Char('M'), true);
+        let timeline = Timeline::new(5).length(120).header_width(NARROW);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut tracks,
+            &mut marks,
+            &mut state,
+            &[pressed(corner), pointer(corner), m, InputState::default()],
+        );
+    }
+    {
+        let r = flow.cell(list, "Read-only · 24 px/frame", 368.0, 110.0);
+        let mut tracks = vec![
+            Track::new(8, "Camera").keys([
+                Keyframe::new(2).interp(Interp::Linear),
+                Keyframe::new(5).interp(Interp::Hold),
+                Keyframe::new(9),
+            ]),
+            Track::new(9, "Focus")
+                .locked(true)
+                .keys([Keyframe::new(4), Keyframe::new(7)]),
+        ];
+        let mut marks = vec![Marker::new(6, "cut")];
+        let mut state = TimelineState::new();
+        state.zoom = 24.0;
+        state.frame = 3;
+        state.range = Some([1, 8]);
+        let timeline = Timeline::new(6)
+            .length(24)
+            .header_width(NARROW)
+            .editable(false)
+            .markers_editable(false)
+            .range_editable(false);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut tracks,
+            &mut marks,
+            &mut state,
+            &[InputState::default()],
+        );
+    }
+    {
+        let r = flow.cell(list, "No tracks", 368.0, 140.0);
+        let mut state = TimelineState::new();
+        let timeline = Timeline::new(7).length(120).header_width(NARROW);
+        draw(
+            list,
+            focus,
+            r,
+            timeline,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut state,
+            &[InputState::default()],
+        );
+    }
+}
+
+fn viewport_overlay_sections(flow: &mut Flow, list: &mut DrawList, theme: &Theme) {
+    let s = StyleResolver::new(theme);
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "TransformReadout",
+        "axis / plane / rotate / scale / typed",
+    );
+    let readouts: [(&str, TransformReadout); 5] = [
+        (
+            "Move on X, snapped",
+            TransformReadout::new(GizmoHandle::X, GizmoValue::Translate([1.5, 0.0, 0.0]))
+                .snap(Some("0.5 m")),
+        ),
+        (
+            "Move on the XZ plane",
+            TransformReadout::new(GizmoHandle::XZ, GizmoValue::Translate([0.84, 0.0, -2.1])),
+        ),
+        (
+            "Rotate about Y",
+            TransformReadout::new(GizmoHandle::Y, GizmoValue::Rotate(-45.0)).precision(1),
+        ),
+        (
+            "Uniform scale",
+            TransformReadout::new(GizmoHandle::Uniform, GizmoValue::Scale([1.25; 3])),
+        ),
+        (
+            "Typing a value",
+            TransformReadout::new(GizmoHandle::Z, GizmoValue::Translate([0.0, 0.0, 0.4]))
+                .typed(Some("2.5")),
+        ),
+    ];
+    for (label, readout) in readouts {
+        let [w, h] = readout.size(list, &s);
+        let r = flow.cell(list, label, w + 30.0, h + 28.0);
+        viewport_stage(list, r);
+        // The pointer the readout trails, with a crosshair to show it.
+        let pointer = [r.x + 6.0, r.y + 6.0];
+        list.line(
+            [pointer[0] - 4.0, pointer[1]],
+            [pointer[0] + 4.0, pointer[1]],
+            1.0,
+            [1.0; 4],
+        );
+        list.line(
+            [pointer[0], pointer[1] - 4.0],
+            [pointer[0], pointer[1] + 4.0],
+            1.0,
+            [1.0; 4],
+        );
+        readout.draw(list, &s, pointer, r);
+    }
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "SelectionMarquee",
+        "replace / add / subtract",
+    );
+    // (label, drag start, pointer, mode, objects inside), in cell coordinates.
+    for (label, from, to, mode, count) in [
+        (
+            "Replace, 4 objects",
+            [20.0, 16.0],
+            [150.0, 86.0],
+            MarqueeMode::Replace,
+            4,
+        ),
+        (
+            "Add (⇧), dragged up-left",
+            [210.0, 104.0],
+            [86.0, 34.0],
+            MarqueeMode::Add,
+            1,
+        ),
+        (
+            "Subtract (Ctrl)",
+            [20.0, 16.0],
+            [150.0, 86.0],
+            MarqueeMode::Subtract,
+            2,
+        ),
+    ] {
+        let r = flow.cell(list, label, 240.0, 120.0);
+        viewport_stage(list, r);
+        let at = |p: [f32; 2]| [p[0] + r.x, p[1] + r.y];
+        SelectionMarquee::new(at(from), at(to))
+            .mode(mode)
+            .count(count)
+            .draw(list, &s);
+    }
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "MeasureLine",
+        "free / snapped ends",
+    );
+    for (label, a, b, text, snapped) in [
+        (
+            "Free ends",
+            [20.0, 90.0],
+            [220.0, 30.0],
+            "6.32 m",
+            [false, false],
+        ),
+        (
+            "Snapped ends",
+            [30.0, 30.0],
+            [210.0, 100.0],
+            "4.25 m",
+            [true, true],
+        ),
+        (
+            "One end snapped",
+            [24.0, 60.0],
+            [216.0, 60.0],
+            "12.00 m",
+            [true, false],
+        ),
+    ] {
+        let r = flow.cell(list, label, 240.0, 120.0);
+        viewport_stage(list, r);
+        MeasureLine::new([r.x + a[0], r.y + a[1]], [r.x + b[0], r.y + b[1]])
+            .label(text)
+            .snapped(snapped[0], snapped[1])
+            .draw(list, &s);
+    }
+
+    flow.section(
+        list,
+        Category::Viewport,
+        "ViewportStats",
+        "in budget / over budget",
+    );
+    let calm = [
+        StatRow::text("Frame", "8.4 ms"),
+        StatRow::number("Draw calls", 1840.0).budget(4000.0),
+        StatRow::number("Tris", 642_118.0).budget(1_000_000.0),
+        StatRow::text("Selected", "3 objects"),
+    ];
+    let busy = [
+        StatRow::text("Frame", "21.7 ms").warn(true),
+        StatRow::number("Draw calls", 5212.0).budget(4000.0),
+        StatRow::number("Tris", 1_204_330.0).budget(1_000_000.0),
+        StatRow::number("Lights", 6.0).budget(8.0),
+    ];
+    for (label, stats) in [
+        ("In budget", ViewportStats::new(&calm)),
+        (
+            "Over budget, titled",
+            ViewportStats::new(&busy).title("Scene"),
+        ),
+    ] {
+        let [w, h] = stats.size(list, &s);
+        let r = flow.cell(list, label, w + 24.0, h + 24.0);
+        viewport_stage(list, r);
+        stats.draw(list, &s, [r.x + 12.0, r.y + 12.0]);
+    }
 }
 
 /// Reserve a cell for a free-standing `w`×`h` sheet that takes in its drop
@@ -304,13 +1126,15 @@ enum Category {
     Palette,
     Settings,
     Sidebar,
+    Timeline,
+    Viewport,
     Windows,
     Engine,
 }
 
 impl Category {
     /// Every category, in index-page order.
-    const ALL: [Category; 16] = [
+    const ALL: [Category; 18] = [
         Category::Foundations,
         Category::Chrome,
         Category::Data,
@@ -325,6 +1149,8 @@ impl Category {
         Category::Palette,
         Category::Settings,
         Category::Sidebar,
+        Category::Timeline,
+        Category::Viewport,
         Category::Windows,
         Category::Engine,
     ];
@@ -348,6 +1174,8 @@ impl Category {
             Category::Palette => "palette",
             Category::Settings => "settings",
             Category::Sidebar => "sidebar",
+            Category::Timeline => "timeline",
+            Category::Viewport => "viewport",
             Category::Windows => "windows",
             Category::Engine => "engine",
         }
@@ -469,6 +1297,22 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
     (Category::Palette, &["CommandPalette"]),
     (Category::Settings, &["SettingRow", "SettingsPanel"]),
     (Category::Sidebar, &["DockSection", "DockStack"]),
+    (Category::Timeline, &["Timeline"]),
+    (
+        Category::Viewport,
+        &[
+            "HudBar",
+            "HudSep",
+            "HudKey",
+            "HudSelect",
+            "TransformGizmo",
+            "TransformReadout",
+            "SelectionMarquee",
+            "MeasureLine",
+            "ViewportStats",
+            "ViewGizmo",
+        ],
+    ),
     (Category::Windows, &["FloatingWindow"]),
 ];
 
@@ -1456,6 +2300,9 @@ fn render_widget_gallery() {
     const DROPDOWN_ID: u64 = 100;
     const DROPDOWN_ITEMS: [&str; 4] = ["Red", "Green", "Blue", "Alpha"];
     let mut dropdowns = DropdownState::new();
+
+    // HUD select owner; `hud_sections` seeds one sheet open.
+    let mut hud = HudState::new();
 
     // Menubar owner. Seeded OPEN through the real input path (an Alt tap arms the
     // bar, Down opens the highlighted menu) so the PNG shows the strip with its
@@ -2686,6 +3533,17 @@ fn render_widget_gallery() {
         TextInput::new(r.x, r.y, r.width, r.height)
             .with_value("Hello, wgpu-gameui!")
             .draw(0, &mut ctx(list, &mut focus, &theme, &input));
+
+        let r = flow.cell(list, "Unicode replacement + typing", 200.0, 28.0);
+        {
+            let mut field = TextInput::new(r.x, r.y, r.width, r.height).with_value("a");
+            field.set_value("é · 界 · 🦀");
+            field.process_keyboard(&InputState {
+                text_input: "x".into(),
+                ..Default::default()
+            });
+            field.draw(202, &mut ctx(list, &mut focus, &theme, &input));
+        }
 
         let r = flow.cell(list, "Text input (empty)", 200.0, 28.0);
         TextInput::new(r.x, r.y, r.width, r.height)
@@ -6417,6 +7275,14 @@ fn render_widget_gallery() {
             Button::new(&label).draw(r, &mut rctx);
         }
 
+        // --- Viewport HUD (HudBar / HudKey / HudSep / HudSelect) ----------
+        hud_sections(&mut flow, list, &mut focus, &theme, &input, &mut hud);
+        view_gizmo_section(&mut flow, list, &mut focus, &theme);
+        transform_gizmo_section(&mut flow, list, &mut focus, &theme);
+        viewport_overlay_sections(&mut flow, list, &theme);
+        #[cfg(feature = "phosphor-icons")]
+        timeline_section(&mut flow, list, &mut focus, &theme);
+
         // Tooltip target last: its popup floats down-and-right into the empty
         // headroom below, overlapping no other widget. The reserve keeps the
         // popup inside the section's image.
@@ -6469,6 +7335,21 @@ fn render_widget_gallery() {
             popup,
             &StyleResolver::new(&theme),
             &InputState::default(),
+        );
+    }
+
+    // The HUD select's radio sheet (modal layer, like the context menu).
+    {
+        let styles = StyleResolver::new(&theme);
+        let viewport = Rect::new(0.0, 0.0, W as f32, h as f32);
+        let sheet = hud.push_open_layer(&mut layers, &styles, viewport);
+        hud.draw_open_layer(
+            &mut layers,
+            sheet,
+            &styles,
+            &InputState::default(),
+            &mut focus,
+            viewport,
         );
     }
 

@@ -2292,3 +2292,76 @@ when something could have changed. gameui gained what a host like that needs.
   `ui.push()`, so the shift leaked into every later draw and pushed the
   rotated badge, drag box and double-click box off-screen. The translate now
   sits inside the push/pop.
+
+## 2026-10-11 — Timeline and viewport gizmos (Forge `components/timeline`, `components/viewport`)
+
+Built from Forge's `timeline.card.html` and the viewport cards, for the
+editor. Coverage 85 of 91.
+
+- [x] **Key list** — `KeyState` (`src/keys.rs`, `Key::Char('M')` letters are
+  upper-case) on `InputState::keys`: `key_event(key, down)`, `is_down`,
+  `was_pressed`, `was_released`, `pressed()`, `end_frame()`,
+  `without_edges()`. `Accelerator::matches(&InputState)` checks a shortcut
+  against it. Tracked in `docs/design/menubar.md` Phase 4.
+- [x] **Tokens** — `StyleKey::AxisX/Y/Z`, `AccentRing`, `AccentGlow`,
+  `WarnSoft`, `WarnBannerInk`, `WarnRule`, and the latch face
+  (`LatchFaceTop/Bottom`, `LatchShade`, `LatchHighlight`, `OnLatch`) behind
+  the new `Tone::Latch` and `latch_ink`. `ChromeTheme::hud`
+  (`FloatingSurfaceChrome`) and `ChromeTheme::timeline` (`TimelineChrome`:
+  ruler, label column, grid, ticks, key spans, hold bars), so presets re-skin
+  both. `ContextMenu::with_min_width(..)` and `ContextMenuState::open_above(x,
+  bottom)`.
+- [x] **HudBar / HudKey / HudSep / HudSelect** (`viewport`) — `HudBar::new(id,
+  &[HudItem])` with `.vertical()`, `size(..)`, `draw(origin, &mut HudState,
+  ctx) -> HudBarOutput { rect, hovered, clicked }`. Items are
+  `HudItem::Key(HudKey::new(label).on(..).mono().enabled(..).width(..))`,
+  `HudItem::Separator`, and `HudItem::Select(HudSelect::new(&[HudOption],
+  selected).caption(..).up())`; `HudOption` has `.short(..)`, `.shortcut(..)`,
+  `.disabled(reason)`. `HudState` owns the open radio sheet:
+  `begin_frame`, `push_open_layer`, `draw_open_layer -> Option<HudChoice {
+  bar, item, option }>`, `is_open`, `close`. `hud_glass(list, s, rect)` paints
+  the panel. No backdrop blur (open in TODO.md).
+- [x] **ViewGizmo** (`viewport`) — `ViewGizmo::new(drag_id,
+  ViewRotation).size(..).ortho(..).view(Some(name)).ortho_toggle()`,
+  `outer_size(..)`, `draw(rect, &mut ViewGizmoState, &mut DragCapture, ctx)
+  -> ViewGizmoOutput { disc, hovered, snap: Option<AxisDir>, orbit: [yaw,
+  pitch], toggle_ortho, dragging }`. `ViewRotation` is the camera's 3×3
+  rotation: `from_rows`, `from_yaw_pitch`, `project`, `aligned_axis`.
+  `AxisDir` (six directions) gives `rotation()`, `yaw_pitch()`, `view_name()`.
+- [x] **TransformGizmo** (`viewport`) — `TransformGizmo::new(drag_id,
+  ViewRotation).mode(GizmoMode::{Move, Rotate, Scale}).basis(..).size(..)
+  .units_per_px(..).snap(TransformSnap { translate, rotate, scale })
+  .active(..)`, `bounds(pivot)`, `draw(pivot, &mut TransformGizmoState, &mut
+  DragCapture, ctx) -> TransformGizmoOutput { hovered, dragging, event }`.
+  A `TransformEvent { phase: Start/Drag/End/Cancel, mode, handle, value }`
+  carries the whole-drag `GizmoValue` (translate, rotate degrees, or scale);
+  `GizmoHandle` covers the axes, the plane squares, the centre square (free
+  move or uniform scale) and the view ring in rotate mode.
+  Escape cancels.
+- [x] **TransformReadout / SelectionMarquee / MeasureLine / ViewportStats**
+  (`viewport`) — `TransformReadout::new(handle, value)` or `::from_event(..)`
+  with `.unit`, `.precision`, `.snap`, `.typed`, `.hints`, then `size`,
+  `rect`, `draw`. `SelectionMarquee::new(from, to).mode(MarqueeMode)
+  .count(n)` with `rect()`, `badge_rect(..)`, `draw(list, s)`.
+  `MeasureLine::new(a, b).label(..).snapped(a, b)` with `label_rect`, `draw`.
+  `ViewportStats::new(&[StatRow]).title(..)`, `size`, `draw(list, s, origin)
+  -> Rect`; `StatRow::number(label, v).budget(..)` turns warn-coloured over
+  budget, `StatRow::text(..)`, `.warn(..)`.
+- [x] **Timeline** (`timeline`) — `Timeline::new(id).length(..).fps(..)
+  .header_width(..).editable().markers_editable().range_editable()`,
+  `draw(rect, &mut [Track], &mut Vec<Marker>, &mut TimelineState, &mut
+  DragCapture, ctx) -> TimelineOutput { edits, frame_changed, hovered }`.
+  Track data is edited in place and every change comes back as a
+  `TimelineEdit` (keys moved/deleted/added, mute, lock, marker
+  add/move/rename/delete, range) for the caller's undo stack. `Track::new(id,
+  label).group().depth(..).color(..).muted(..).locked(..).keys(..)` with
+  `Keyframe::new(t).interp(Interp::{Ease, Linear, Hold})`. `TimelineState`
+  holds the frame, playback (`playing`, `looping`), `range`, `zoom`
+  (`TIMELINE_DEFAULT_ZOOM`), `scroll`, `selection: Vec<KeyRef>`, collapsed
+  groups and the selected marker; it advances playback itself. Pointer: click
+  and Shift/Ctrl-toggle keys, marquee, drag (Escape cancels), double-click to
+  add, scrub the ruler, drag markers and range brackets, Ctrl+wheel zoom
+  about the pointer. Keyboard: ←/→, `,`/`.`, Home/End, Space, Delete, M
+  (marker, then rename), Ctrl+A, `+`/`-` zoom (Fit is a transport button),
+  Escape clears the selection. Rows and keys outside the view
+  are culled. `timecode(frame, fps)` formats the readout.

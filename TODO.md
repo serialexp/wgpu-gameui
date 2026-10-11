@@ -475,3 +475,29 @@ sharp at any size, list selection and gamepad navigation.
       — a behaviour change for Bart to decide on, so they were left as
       they are. The outside-click-closes behaviour would still need its own
       check, since the blocker is disabled and reports no click.
+
+## Timeline and viewport gizmos follow-ups (found 2026-10-11)
+
+- [ ] **P2 — HUD glass has no backdrop blur.** Forge's `hudGlass` blurs the
+      scene behind every HUD bar, readout and stats panel. Bart (2026-10-11):
+      no blur for now. It needs a draw-list backdrop primitive, which would
+      sample the frame behind a rect at its place in the draw order. That is
+      the same gap as "Dialog backdrop blur is up to the app" above, and one
+      primitive would close both. Until then `hud_glass` is a darker, more
+      opaque fill (`ChromeTheme::hud`).
+- [ ] **P2 — The timeline's marker rename field uses the theme's field
+      font.** Forge edits a marker's name in place at the flag's 8.5 px mono
+      size. `TextInput` takes its font and size from the theme
+      (`StyleKey::FontSize`), so the field is a normal 19 px field. Giving
+      `TextInput` a font and size override would fix it; the same override
+      would suit other compact in-place editors.
+- [ ] **P3 — Nearby marker labels overlap.** When the timeline is zoomed out,
+      marker flags a few frames apart draw their labels over each other.
+      Forge does the same. They could be staggered onto a second line, or
+      shortened to the flag with a tooltip.
+- [ ] **P2 — Forge's `graph` components are neither built nor counted.**
+      `components/graph` has GraphNode, GraphPort, GraphWire, NodeCanvas
+      and NodeSearch (the node-editor kit). The gallery's
+      `FORGE_COMPONENTS` doesn't list them, so the index's "85 of 91"
+      doesn't count them as missing. Add a `Graph` category with the five
+      names, and build them when an editor needs them.

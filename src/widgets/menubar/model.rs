@@ -79,50 +79,13 @@ pub enum MenuTrigger {
     #[default]
     AltTap,
     // `KeyTap(Key)` — a tap of a plain key, `F10` being the other classic menu
-    // key — arrives with the generic per-frame key edges (design doc phase 4).
-    // The crate models no generic key list yet, so the variant is not declared:
-    // an enum arm that can never fire is worse than a missing one.
+    // key — is the rest of design doc phase 4. `InputState::keys` now carries
+    // the key edges it needs, but `MenuBarState` does not read them yet, so the
+    // variant is not declared: an enum arm that can never fire is worse than a
+    // missing one.
 }
 
-/// A key on its own, independent of modifiers. Used by [`Accelerator`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Key {
-    /// An ASCII character. Case is folded by the host before mapping, so `'A'`
-    /// and `'a'` are the same key.
-    Char(char),
-    /// A function key, `F(1)`..=`F(24)`.
-    F(u8),
-    /// Left arrow.
-    Left,
-    /// Right arrow.
-    Right,
-    /// Up arrow.
-    Up,
-    /// Down arrow.
-    Down,
-    /// Home.
-    Home,
-    /// End.
-    End,
-    /// Page up.
-    PageUp,
-    /// Page down.
-    PageDown,
-    /// Enter/Return.
-    Enter,
-    /// Escape.
-    Escape,
-    /// Tab.
-    Tab,
-    /// Backspace.
-    Backspace,
-    /// Forward delete.
-    Delete,
-    /// Insert.
-    Insert,
-    /// Space.
-    Space,
-}
+pub use crate::keys::Key;
 
 /// Modifier state for an [`Accelerator`].
 ///
@@ -183,6 +146,17 @@ impl Accelerator {
             },
             key,
         }
+    }
+
+    /// The key went down this frame with exactly these modifiers held (an
+    /// extra modifier does not match). Reads
+    /// [`InputState::keys`](crate::InputState::keys) and the held modifier
+    /// flags.
+    pub fn matches(&self, input: &crate::InputState) -> bool {
+        input.keys.was_pressed(self.key)
+            && input.ctrl_pressed == self.mods.primary
+            && input.shift_pressed == self.mods.shift
+            && input.alt_down == self.mods.alt
     }
 
     /// Write the canonical hint for this accelerator into `out` (which is

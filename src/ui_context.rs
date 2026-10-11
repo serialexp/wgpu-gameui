@@ -2220,11 +2220,7 @@ impl<'a> UiContext<'a> {
             ti.placeholder.push_str(placeholder);
             // External changes to the caller's buffer win over the cached value.
             if ti.value != *buffer {
-                ti.value = buffer.clone();
-                if ti.cursor_pos > ti.value.len() {
-                    ti.cursor_pos = ti.value.len();
-                }
-                ti.selection_start = None;
+                ti.set_value(buffer);
             }
             let before = ti.value.clone();
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
@@ -5361,6 +5357,45 @@ mod tests {
         };
         assert!(approx(v, 0.42));
         assert!(!state.drag.is_active(7));
+    }
+
+    #[test]
+    fn external_unicode_replacement_can_be_edited_in_every_retained_field() {
+        let theme = Theme::default();
+        for kind in 0..3 {
+            let mut state = UiState::new();
+            let mut buffer = String::from("a");
+            let frame = |input: &mut InputState, state: &mut UiState, buffer: &mut String| {
+                state.begin_frame(input, &theme, 0.0, &crate::KeyboardNav);
+                let mut list = DrawList::new();
+                let changed = {
+                    let mut ui = UiContext::interactive(&mut list, input, state, &theme);
+                    match kind {
+                        0 => ui.text_input(1, buffer, "", Some(150.0)),
+                        1 => ui.password_input(1, buffer, "", Some(150.0)),
+                        _ => ui.text_area(1, buffer, "", Some(150.0), 3),
+                    }
+                };
+                state.end_frame();
+                changed
+            };
+            frame(&mut InputState::default(), &mut state, &mut buffer);
+            state.focus.focus(1);
+            assert_eq!(state.text_inputs[&1].cursor_pos, 1);
+            buffer = "é".into();
+            assert!(!frame(&mut InputState::default(), &mut state, &mut buffer));
+            assert_eq!(state.text_inputs[&1].cursor_pos, 0);
+            assert_eq!(buffer, "é");
+            assert!(frame(
+                &mut InputState {
+                    text_input: "x".into(),
+                    ..Default::default()
+                },
+                &mut state,
+                &mut buffer,
+            ));
+            assert_eq!(buffer, "xé");
+        }
     }
 
     #[test]

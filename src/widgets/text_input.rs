@@ -351,6 +351,19 @@ impl TextInput {
         self
     }
 
+    /// Replace the text from outside the editor, preserving the caret's byte
+    /// offset where possible and snapping it backward to a UTF-8 boundary.
+    /// Selection and drag/navigation state belong to the old text and are reset.
+    pub fn set_value(&mut self, value: &str) {
+        self.value.clear();
+        self.value.push_str(value);
+        self.cursor_pos = floor_char_boundary(&self.value, self.cursor_pos);
+        self.selection_start = None;
+        self.drag_selection_anchor = None;
+        self.drag_unit = None;
+        self.desired_caret_x = None;
+    }
+
     /// Paint the field's own well (`true`, the default) or leave the frame to
     /// the caller. See [`well`](Self::well).
     pub fn with_well(mut self, well: bool) -> Self {
@@ -1513,6 +1526,38 @@ mod tests {
 
     fn fake_input() -> InputState {
         InputState::default()
+    }
+
+    #[test]
+    fn external_value_replacement_preserves_only_valid_caret_state() {
+        for (replacement, old_cursor, expected_cursor) in [
+            ("é", 1, 0),
+            ("a界z", 2, 1),
+            ("a🦀z", 4, 1),
+            ("a界z", 4, 4),
+            ("é", 99, 2),
+            ("", 1, 0),
+        ] {
+            let mut ti = TextInput::default().with_value("original");
+            ti.cursor_pos = old_cursor;
+            ti.selection_start = Some(3);
+            ti.drag_selection_anchor = Some(3);
+            ti.drag_unit = Some((TextUnit::Word, 0..3));
+            ti.desired_caret_x = Some(50.0);
+            ti.set_value(replacement);
+            assert_eq!(ti.cursor_pos, expected_cursor);
+            assert_eq!(ti.selection_start, None);
+            assert_eq!(ti.drag_selection_anchor, None);
+            assert_eq!(ti.drag_unit, None);
+            assert_eq!(ti.desired_caret_x, None);
+            ti.process_keyboard(&InputState {
+                text_input: "x".into(),
+                ..Default::default()
+            });
+            let mut expected = replacement.to_owned();
+            expected.insert(expected_cursor, 'x');
+            assert_eq!(ti.value, expected);
+        }
     }
 
     #[test]

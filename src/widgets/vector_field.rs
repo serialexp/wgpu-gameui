@@ -13,13 +13,6 @@ use super::DrawContext;
 use super::drag::{DragCapture, DragId};
 use super::material;
 
-/// Default axis tag tints (the design's axis colors, sRGB-encoded).
-pub const AXIS_TINTS: [[f32; 4]; 3] = [
-    [0.7862, 0.3895, 0.3661, 1.0], // X — red
-    [0.3722, 0.6185, 0.3817, 1.0], // Y — green
-    [0.3398, 0.5344, 0.7811, 1.0], // Z — blue
-];
-
 /// A drag in progress on one component. Caller-owned (like [`DragCapture`]);
 /// `[row, component]` identify the active cell.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -134,7 +127,7 @@ impl<'a> VectorField<'a> {
                 // a scrub (if no other capture owns the pointer).
                 let tag = Rect::new(cell.x, cell.y, tag_w, cell_h);
                 let tag_hover = tag.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
-                let tint = AXIS_TINTS[ci.min(2)];
+                let tint = s.color(StyleKey::AXES[ci.min(2)]);
                 let tag_fill = if active {
                     tint
                 } else {

@@ -26,12 +26,14 @@ use super::material::Tone;
 use super::{DrawContext, DrawList, FocusId, Pressable};
 
 /// A button label's color on a face in `tone`: tones with a saturated face
-/// (accent / danger) use `OnAccent` / `OnDanger`, the rest `Text`. A disabled
-/// button needs no color of its own; its [`Pressable`] fades the label.
-fn label_color(s: &StyleResolver, tone: Tone) -> [f32; 4] {
+/// (accent / danger) use `OnAccent` / `OnDanger`, a latch its latch ink, the
+/// rest `Text`. A disabled button needs no color of its own; its
+/// [`Pressable`] fades the label.
+fn label_color(s: &StyleResolver, tone: Tone, hovered: bool, down: bool) -> [f32; 4] {
     match tone {
         Tone::Accent => s.color(StyleKey::OnAccent),
         Tone::Danger => s.color(StyleKey::OnDanger),
+        Tone::Latch => super::material::latch_ink(s, hovered, down),
         _ => s.color(StyleKey::Text),
     }
 }
@@ -287,7 +289,7 @@ impl Button {
                 return;
             }
             let s = ctx.styles();
-            let target = label_color(&s, tone);
+            let target = label_color(&s, tone, state.hovered, state.down);
             let text_color = match self.anim_id {
                 Some(id) => ctx.animate_color(id, AnimSlot::Text, target),
                 None => target,
@@ -322,7 +324,7 @@ impl Button {
                 let face = state.face;
                 ctx.draw_list
                     .nine_slice(face.x, face.y, face.width, face.height, texture_key);
-                let color = label_color(&s, Tone::default());
+                let color = label_color(&s, Tone::default(), state.hovered, state.down);
                 draw_label_colored(ctx.draw_list, &s, face, label, color);
             })
             .clicked

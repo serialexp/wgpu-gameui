@@ -172,7 +172,7 @@ icons! {
     Question = '\u{e3e8}', "question";
     /// Square speech bubble (a reply).
     Chat = '\u{e15c}', "chat";
-    /// Left-pointing caret (back).
+    /// Left-pointing caret (back, previous).
     CaretLeft = '\u{e138}', "caret-left";
     /// Upward arrow (the enclosing folder).
     ArrowUp = '\u{e08e}', "arrow-up";
@@ -186,6 +186,18 @@ icons! {
     ClockCounterClockwise = '\u{e1a0}', "clock-counter-clockwise";
     /// Folder with a plus (new folder).
     FolderPlus = '\u{e258}', "folder-plus";
+    /// Two bars (pause playback).
+    Pause = '\u{e39e}', "pause";
+    /// Bar then left triangle (jump to the start).
+    SkipBack = '\u{e5a4}', "skip-back";
+    /// Right triangle then bar (jump to the end).
+    SkipForward = '\u{e5a6}', "skip-forward";
+    /// Two arrows chasing round a loop (repeat / loop playback).
+    Repeat = '\u{e3f6}', "repeat";
+    /// Four arrows out from a centre (move in any direction).
+    ArrowsOutCardinal = '\u{e0a4}', "arrows-out-cardinal";
+    /// Four arrows out to the corners (scale).
+    ArrowsOut = '\u{e0a2}', "arrows-out";
 }
 
 impl PhosphorIcon {

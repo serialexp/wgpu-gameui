@@ -43,6 +43,7 @@ mod group;
 #[cfg(feature = "phosphor-icons")]
 mod group_list;
 mod hit_zone;
+mod hud;
 #[cfg(feature = "phosphor-icons")]
 mod icon;
 mod icon_key;
@@ -90,13 +91,18 @@ mod tag_input;
 mod text_input;
 #[cfg(feature = "phosphor-icons")]
 mod thumb;
+#[cfg(feature = "phosphor-icons")]
+mod timeline;
 mod toast;
 mod toggle;
 #[cfg(feature = "phosphor-icons")]
 mod toolbar;
 mod tooltip;
+mod transform_gizmo;
 mod tree;
 mod vector_field;
+mod view_gizmo;
+mod viewport_overlays;
 mod waffle;
 mod well_chip;
 mod window;
@@ -168,6 +174,10 @@ pub use group_list::{
     GroupMore, GroupRow, GroupRowKind,
 };
 pub use hit_zone::{HitZone, HitZoneOutput};
+pub use hud::{
+    HudBar, HudBarId, HudBarOutput, HudChoice, HudItem, HudKey, HudOption, HudSelect, HudState,
+    hud_glass,
+};
 #[cfg(feature = "phosphor-icons")]
 pub use icon::Icon;
 pub use icon_key::IconKey;
@@ -248,6 +258,11 @@ pub use tag_input::{TagOutput, draw as draw_tag_input};
 pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
 #[cfg(feature = "phosphor-icons")]
 pub use thumb::{Thumb, hue_of, initials};
+#[cfg(feature = "phosphor-icons")]
+pub use timeline::{
+    Interp, KeyRef, Keyframe, Marker, TIMELINE_DEFAULT_ZOOM, Timeline, TimelineEdit,
+    TimelineOutput, TimelineState, Track, TrackId, timecode,
+};
 pub use toast::{Corner, DEFAULT_TTL, Toast, ToastStack};
 pub use toggle::Toggle;
 #[cfg(feature = "phosphor-icons")]
@@ -256,8 +271,16 @@ pub use toolbar::{
     ToolbarState,
 };
 pub use tooltip::{TooltipContent, TooltipHint, TooltipLayer, TooltipSide};
+pub use transform_gizmo::{
+    GizmoHandle, GizmoMode, GizmoValue, TransformEvent, TransformGizmo, TransformGizmoOutput,
+    TransformGizmoState, TransformPhase, TransformSnap,
+};
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
-pub use vector_field::{AXIS_TINTS, VectorField, VectorFieldOutput, VectorScrub};
+pub use vector_field::{VectorField, VectorFieldOutput, VectorScrub};
+pub use view_gizmo::{AxisDir, ViewGizmo, ViewGizmoOutput, ViewGizmoState, ViewRotation};
+pub use viewport_overlays::{
+    MarqueeMode, MeasureLine, SelectionMarquee, StatRow, StatValue, TransformReadout, ViewportStats,
+};
 pub use waffle::{
     WAFFLE_CELL, WAFFLE_LEGEND_ROW, Waffle, WaffleCategory, WaffleFill, WaffleOutput,
 };

@@ -268,6 +268,46 @@ pub struct GroupListChrome {
     pub toolbar_highlight: EdgeStyle,
 }
 
+/// Chrome of a [`Timeline`](crate::Timeline): its opaque ruler and label
+/// column (lanes scroll under both), the rules between rows, the grid and the
+/// lines drawn between keys.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TimelineChrome {
+    /// Ruler fill, the corner above the labels included
+    /// (`--surface-dock-header-opaque`).
+    pub ruler: Background,
+    /// Rule under the ruler.
+    pub ruler_rule: EdgeStyle,
+    /// Rule under the transport strip.
+    pub transport_rule: EdgeStyle,
+    /// Light line just below the transport rule (`--rule-hi`).
+    pub transport_highlight: EdgeStyle,
+    /// Label column fill: a track's, a group's.
+    pub label: [Background; 2],
+    /// Rule right of the label column.
+    pub label_rule: EdgeStyle,
+    /// Rule under every row.
+    pub row_rule: EdgeStyle,
+    /// Wash over a group row's lane.
+    pub group_lane: [f32; 4],
+    /// Shade over the frames outside the play range.
+    pub out_of_range: [f32; 4],
+    /// Grid lines on frame edges: at labelled frames, at every step.
+    pub grid: [[f32; 4]; 2],
+    /// Ruler ticks: labelled, unlabelled.
+    pub ticks: [[f32; 4]; 2],
+    /// Line from a row's first key to its last: a track's, a summary's, a
+    /// muted or locked track's.
+    pub key_span: [[f32; 4]; 3],
+    /// Bar from a held key to the next: a track's, a muted or locked
+    /// track's.
+    pub hold_bar: [[f32; 4]; 2],
+    /// Outline of an unselected key.
+    pub key_edge: [f32; 4],
+    /// Highlight along the top of an unselected key.
+    pub key_highlight: [f32; 4],
+}
+
 /// Chrome of the collapsible sections stacked inside a dock (see
 /// [`DockStack`](crate::DockStack)): a raised header bar per section and an
 /// optional recessed toolbar strip under it. The washes are translucent, laid
@@ -423,6 +463,8 @@ pub struct ChromeTheme {
     pub dock_section: DockSectionChrome,
     /// Chrome of a grouped list (headers, row rules, toolbar strip).
     pub group_list: GroupListChrome,
+    /// Timeline chrome (ruler, label column, grid, key lines).
+    pub timeline: TimelineChrome,
     /// Scrollbar thumb chrome.
     pub scrollbar: ScrollbarChrome,
     /// Splitter chrome.
@@ -439,6 +481,10 @@ pub struct ChromeTheme {
     pub toast: FloatingSurfaceChrome,
     /// Curve-editor key chrome.
     pub curve_key: FloatingSurfaceChrome,
+    /// HUD glass: the surface of everything floating over a 3D viewport
+    /// ([`HudBar`](crate::HudBar), the transform readout, viewport stats).
+    /// Dark and hard-edged, because the pixels behind are unknown.
+    pub hud: FloatingSurfaceChrome,
     /// Dialog sheet and modal backdrop chrome.
     pub sheet: SheetChrome,
     /// Property inspector chrome.
@@ -788,6 +834,33 @@ impl Default for ChromeTheme {
                     toolbar_highlight: edge([1.0, 1.0, 1.0, 0.06]),
                 }
             },
+            timeline: {
+                let edge = |color| EdgeStyle {
+                    thickness: 1.0,
+                    color,
+                };
+                let white = |a: f32| [1.0, 1.0, 1.0, a];
+                TimelineChrome {
+                    ruler: gradient([0x23, 0x27, 0x2b], [0x18, 0x1c, 0x20]),
+                    ruler_rule: edge([0.0, 0.0, 0.0, 0.6]),
+                    transport_rule: edge([0.0, 0.0, 0.0, 0.5]),
+                    transport_highlight: edge(white(0.06)),
+                    label: [
+                        Background::Solid(rgb8([0x13, 0x17, 0x1a])),
+                        Background::Solid(rgb8([0x17, 0x1b, 0x1f])),
+                    ],
+                    label_rule: edge([0.0, 0.0, 0.0, 0.6]),
+                    row_rule: edge([0.0, 0.0, 0.0, 0.32]),
+                    group_lane: white(0.025),
+                    out_of_range: [0.0, 0.0, 0.0, 0.32],
+                    grid: [white(0.085), white(0.035)],
+                    ticks: [white(0.24), white(0.11)],
+                    key_span: [white(0.28), white(0.16), white(0.08)],
+                    hold_bar: [white(0.36), white(0.12)],
+                    key_edge: [0.0, 0.0, 0.0, 0.8],
+                    key_highlight: white(0.35),
+                }
+            },
             scrollbar: {
                 let face = |top: f32, bottom: f32| QuadStyle {
                     background: Background::LinearGradient {
@@ -885,6 +958,19 @@ impl Default for ChromeTheme {
                 0.6,
             ),
             curve_key: floating(panel, 1.0, 3.0, 0.6),
+            // Forge `hudGlass` without its backdrop blur (the draw list has
+            // no backdrop primitive yet).
+            hud: FloatingSurfaceChrome {
+                surface: QuadStyle {
+                    corner_radii: CornerRadii::uniform(2.0),
+                    ..bordered(
+                        Background::Solid(crate::color::rgba8([16, 20, 24], 0.74)),
+                        [0.0, 0.0, 0.0, 0.65],
+                    )
+                },
+                shadow: shadow(4.0, 14.0, [0.0, 0.0, 0.0, 0.45], false),
+                lines: [line(Edge::Top, 1.0, [1.0, 1.0, 1.0, 0.09]), no_lines[1]],
+            },
             sheet: SheetChrome {
                 surface: QuadStyle {
                     background: Background::LinearGradient {
@@ -1179,6 +1265,43 @@ impl Visit for GroupListChrome {
     }
 }
 
+impl Visit for TimelineChrome {
+    fn visit(&mut self, v: &mut ChromeVisitor) {
+        let TimelineChrome {
+            ruler,
+            ruler_rule,
+            transport_rule,
+            transport_highlight,
+            label,
+            label_rule,
+            row_rule,
+            group_lane,
+            out_of_range,
+            grid,
+            ticks,
+            key_span,
+            hold_bar,
+            key_edge,
+            key_highlight,
+        } = self;
+        ruler.visit(v);
+        ruler_rule.visit(v);
+        transport_rule.visit(v);
+        transport_highlight.visit(v);
+        label.visit(v);
+        label_rule.visit(v);
+        row_rule.visit(v);
+        group_lane.visit(v);
+        out_of_range.visit(v);
+        grid.visit(v);
+        ticks.visit(v);
+        key_span.visit(v);
+        hold_bar.visit(v);
+        key_edge.visit(v);
+        key_highlight.visit(v);
+    }
+}
+
 impl Visit for DockSectionChrome {
     fn visit(&mut self, v: &mut ChromeVisitor) {
         let DockSectionChrome {
@@ -1330,6 +1453,7 @@ impl Visit for ChromeTheme {
             dock,
             dock_section,
             group_list,
+            timeline,
             scrollbar,
             splitter,
             status_bar,
@@ -1338,6 +1462,7 @@ impl Visit for ChromeTheme {
             tooltip,
             toast,
             curve_key,
+            hud,
             sheet,
             inspector,
             window,
@@ -1348,6 +1473,7 @@ impl Visit for ChromeTheme {
         dock.visit(v);
         dock_section.visit(v);
         group_list.visit(v);
+        timeline.visit(v);
         scrollbar.visit(v);
         splitter.visit(v);
         status_bar.visit(v);
@@ -1356,6 +1482,7 @@ impl Visit for ChromeTheme {
         tooltip.visit(v);
         toast.visit(v);
         curve_key.visit(v);
+        hud.visit(v);
         sheet.visit(v);
         inspector.visit(v);
         window.visit(v);

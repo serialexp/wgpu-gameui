@@ -44,6 +44,11 @@ pub enum Tone {
     /// Sunken: dark fill with an inset shadow (checkbox troughs, toggled-off
     /// chips, pressed-in strips).
     Sunken,
+    /// A toggle: the neutral raised face while off, and while pressed or held
+    /// on, a dropped face in the latched accent gradient (HUD toggles, a
+    /// timeline's play and loop keys). Text resolves to
+    /// [`StyleKey::OnLatch`] while on.
+    Latch,
 }
 
 /// One control's resolved material state.
@@ -121,6 +126,11 @@ const BAND_H: f32 = 1.0;
 const PRESS_SHADOW: ([f32; 2], f32) = ([0.0, 2.0], 3.0);
 /// Face border alpha (the design's `1px solid rgba(0,0,0,0.5)`).
 const FACE_EDGE_ALPHA: f32 = 0.5;
+/// A latched face's border alpha (`1px solid rgba(0,0,0,0.55)`).
+const LATCH_EDGE_ALPHA: f32 = 0.55;
+/// Offset and blur of a latched face's shade (`--key-inset-latched`
+/// `inset 0 2px 4px`).
+const LATCH_SHADOW: ([f32; 2], f32) = ([0.0, 2.0], 4.0);
 /// Ghost-tone border alphas: fainter idle, near-face-edge when active.
 const GHOST_EDGE_IDLE: f32 = 0.25;
 const GHOST_EDGE_ACTIVE: f32 = 0.4;
@@ -307,7 +317,13 @@ fn draw_raised(
             s.color(StyleKey::DangerFaceBottom),
             s.color(StyleKey::EdgeHighlight),
         ),
-        // Neutral: state base under the sheen gradient.
+        Tone::Latch if pressed => (
+            s.color(StyleKey::LatchFaceTop),
+            s.color(StyleKey::LatchFaceBottom),
+            s.color(StyleKey::LatchHighlight),
+        ),
+        // Neutral (and an unlatched latch): state base under the sheen
+        // gradient.
         _ => {
             let base = if pressed {
                 s.color(StyleKey::ButtonPressed)
@@ -345,12 +361,33 @@ fn draw_raised(
         }
     };
 
-    let border = [0.0, 0.0, 0.0, FACE_EDGE_ALPHA];
+    let latched = pressed && tone == Tone::Latch;
+    let border = [
+        0.0,
+        0.0,
+        0.0,
+        if latched {
+            LATCH_EDGE_ALPHA
+        } else {
+            FACE_EDGE_ALPHA
+        },
+    ];
     list.chrome_rect_gradient(face, radius, 1.0, dim(top), dim(bottom), dim(border));
 
     // Top edge decoration: at rest a 1px white highlight; pressed, the short
     // shadow of the face sitting in the plinth (plus its own faint highlight).
-    if pressed {
+    // A latched face sits deeper, in its own accent shade.
+    if latched {
+        let (offset, blur) = LATCH_SHADOW;
+        face_inset(
+            list,
+            face,
+            radius,
+            offset,
+            blur,
+            dim(s.color(StyleKey::LatchShade)),
+        );
+    } else if pressed {
         let (offset, blur) = PRESS_SHADOW;
         face_inset(
             list,
@@ -387,6 +424,19 @@ fn face_inset(
             ..BoxShadow::default()
         },
     );
+}
+
+/// The ink on a [`Tone::Latch`] face: light on the latched gradient while on
+/// (`down`: pressed or held), brighter while hovered, else the idle key-icon
+/// ink.
+pub(crate) fn latch_ink(s: &StyleResolver, hovered: bool, down: bool) -> [f32; 4] {
+    if down {
+        s.color(StyleKey::OnLatch)
+    } else if hovered {
+        s.ink(crate::Ink::Value)
+    } else {
+        s.ink(crate::Ink::Icon)
+    }
 }
 
 /// Composite a translucent `sheen` color over an opaque-ish `base`
@@ -947,6 +997,51 @@ mod tests {
             (face[3] - full[3] * DISABLED_ALPHA).abs() < 1e-4,
             "disabled alpha fades the face"
         );
+    }
+
+    #[test]
+    fn latch_is_a_neutral_face_until_it_latches_into_the_accent_gradient() {
+        let s = styles();
+        let rect = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let mut off = DrawList::new();
+        let mut neutral = DrawList::new();
+        draw(&mut off, s, rect, &Material::new(Tone::Latch).hovered(true));
+        draw(
+            &mut neutral,
+            s,
+            rect,
+            &Material::new(Tone::Default).hovered(true),
+        );
+        assert_eq!(
+            off.chrome_instance(1).unwrap().bg,
+            neutral.chrome_instance(1).unwrap().bg,
+            "off, a latch is the neutral key"
+        );
+
+        let mut on = DrawList::new();
+        let face = draw(&mut on, s, rect, &Material::new(Tone::Latch).pressed(true));
+        assert_eq!(face.y, 2.0, "latched, the face drops");
+        let latched = on.chrome_instance(1).unwrap();
+        assert_eq!(latched.bg, s.color(StyleKey::LatchFaceTop));
+        assert_eq!(latched.bg2, s.color(StyleKey::LatchFaceBottom));
+        assert_eq!(latched.border, [0.0, 0.0, 0.0, LATCH_EDGE_ALPHA]);
+        let shades: Vec<_> = on.shadow_instances().map(|sh| sh.color).collect();
+        assert_eq!(
+            shades,
+            [
+                s.color(StyleKey::LatchShade),
+                s.color(StyleKey::LatchHighlight)
+            ],
+            "the accent shade, then the lit line (`--key-inset-latched`)"
+        );
+    }
+
+    #[test]
+    fn latch_ink_lights_up_when_latched() {
+        let s = styles();
+        assert_eq!(latch_ink(s, false, true), s.color(StyleKey::OnLatch));
+        assert_eq!(latch_ink(s, true, false), s.ink(crate::Ink::Value));
+        assert_eq!(latch_ink(s, false, false), s.ink(crate::Ink::Icon));
     }
 
     #[test]

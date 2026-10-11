@@ -565,6 +565,28 @@ fn accelerator_hints_are_written_for_both_platforms() {
 }
 
 #[test]
+fn accelerator_matches_its_key_edge_with_exact_modifiers() {
+    let save = Accelerator::primary(Key::Char('S'));
+    let mut input = InputState {
+        ctrl_pressed: true,
+        ..InputState::default()
+    };
+    assert!(!save.matches(&input), "no key went down");
+    input.keys.key_event(Key::Char('s'), true);
+    assert!(save.matches(&input), "case folds");
+    input.shift_pressed = true;
+    assert!(!save.matches(&input), "an extra modifier does not match");
+    assert!(Accelerator::primary_shift(Key::Char('S')).matches(&input));
+    input.shift_pressed = false;
+    assert!(
+        !save.matches(&input.consumed()),
+        "a layer under a popup sees no edge"
+    );
+    input.end_frame();
+    assert!(!save.matches(&input), "held is not pressed");
+}
+
+#[test]
 fn write_hint_appends_and_prefers_the_accelerator() {
     let mut out = String::from("> ");
     MenuItem::new("Quit")

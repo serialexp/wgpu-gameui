@@ -117,6 +117,10 @@ note) — there is no "implemented but not in the gallery" state.
       `Accelerator::matches`, `MenuTrigger::KeyTap` (F10-style arming), the host
       key-mapping recipe, and tests proving the rendered hint and the matching
       value cannot diverge.
+      Done 2026-10-11 (for the timeline's shortcuts): `KeyState` in
+      `src/keys.rs` (with the winit recipe in its module doc; `Key` moved
+      there), `InputState::keys`, `Accelerator::matches`. Still open:
+      `MenuTrigger::KeyTap` and the hint/match divergence tests.
 - [ ] **Phase 5 — mnemonics.** `Menu::mnemonic`/`MenuItem::mnemonic`, the
       trigger modifier + char activation, and underlined mnemonic glyphs via a
       `TextSpan` range.

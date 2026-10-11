@@ -102,6 +102,7 @@ mod drag_tracker;
 mod frame;
 mod frame_result;
 mod interaction;
+mod keys;
 pub mod layer;
 pub mod layout;
 mod measure;
@@ -121,7 +122,7 @@ pub use chrome::{
     Background, ChromeTheme, DockChrome, DockSectionChrome, Edge, EdgeStyle, EdgeWidths,
     FloatingSurfaceChrome, GradientAxis, GroupListChrome, InspectorChrome, MenuBarChrome,
     MenuSheetChrome, QuadStyle, ScrollbarChrome, SheetChrome, SplitterChrome, StatusBarChrome,
-    StructuralLine, SurfacePainter, ToolbarChrome, WindowChrome,
+    StructuralLine, SurfacePainter, TimelineChrome, ToolbarChrome, WindowChrome,
 };
 pub use click_tracker::{
     CLICK_SLOP, ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD,
@@ -136,6 +137,7 @@ pub use frame_result::{MAX_DT, NOMINAL_FRAME_DT, UiFrameResult};
 pub use interaction::{
     HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
 };
+pub use keys::KeyState;
 pub use layer::{Layer, LayerKind, LayerStack};
 pub use measure::{
     ArrangeError, MeasureBuffer, MeasureConstraints, MeasureContext, MeasuredChild, MeasuredText,
@@ -317,6 +319,13 @@ pub struct InputState {
     pub key_up: bool,
     /// Arrow Down was pressed this frame.
     pub key_down: bool,
+    /// Every key the host maps, held and with this frame's edges — for
+    /// shortcuts on keys that have no named flag above (letters, punctuation,
+    /// function keys). The host fills it through [`KeyState::key_event`]
+    /// alongside the named flags; see [`KeyState`] for the mapping. Its edges
+    /// are cleared by [`end_frame`](Self::end_frame), and a layer under a
+    /// modal or popup sees no edges.
+    pub keys: KeyState,
     /// Shift key is currently held.
     pub shift_pressed: bool,
     /// Ctrl (or Cmd on macOS) key is currently held.
@@ -402,6 +411,7 @@ impl Default for InputState {
             key_space: false,
             key_up: false,
             key_down: false,
+            keys: KeyState::default(),
             shift_pressed: false,
             ctrl_pressed: false,
             alt_down: false,
@@ -463,6 +473,7 @@ impl InputState {
         self.key_space = false;
         self.key_up = false;
         self.key_down = false;
+        self.keys.end_frame();
         // Alt's edges are per-frame events; `alt_down` is held state owned by the
         // windowing layer, so it is deliberately not cleared here.
         self.alt_pressed = false;
@@ -524,6 +535,7 @@ impl InputState {
             key_space: false,
             key_up: false,
             key_down: false,
+            keys: self.keys.without_edges(),
             // A layer under a modal/popup must not navigate either.
             nav: NavInput::default(),
             // Alt's edges are events, not modifier state; `alt_down` is

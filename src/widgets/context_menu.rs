@@ -28,6 +28,7 @@ const HINT_FONT_SIZE: f32 = 10.0;
 pub struct ContextMenu<'a> {
     items: &'a [MenuItem<'a>],
     platform: AccelPlatform,
+    min_width: Option<f32>,
 }
 
 impl<'a> ContextMenu<'a> {
@@ -36,12 +37,21 @@ impl<'a> ContextMenu<'a> {
         Self {
             items,
             platform: AccelPlatform::Pc,
+            min_width: None,
         }
     }
 
     /// Select how accelerator hints are formatted.
     pub const fn with_platform(mut self, platform: AccelPlatform) -> Self {
         self.platform = platform;
+        self
+    }
+
+    /// The root sheet's minimum width, in px, in place of
+    /// [`StyleKey::MenuItemMinWidth`] (a radio list of short values on a HUD
+    /// key needs much less than a context menu).
+    pub const fn with_min_width(mut self, width: f32) -> Self {
+        self.min_width = Some(width);
         self
     }
 
@@ -55,6 +65,8 @@ impl<'a> ContextMenu<'a> {
 #[derive(Debug, Default, Clone)]
 pub struct ContextMenuState {
     anchor: [f32; 2],
+    /// `anchor` is the sheet's bottom-left corner rather than its top-left.
+    above: bool,
     open: bool,
     highlighted: Option<usize>,
     rect: Option<Rect>,
@@ -83,7 +95,19 @@ impl ContextMenuState {
 
     /// Open (or reposition) the menu at a screen-space pointer position.
     pub fn open_at(&mut self, x: f32, y: f32) {
+        self.open_anchored(x, y, false);
+    }
+
+    /// Open the menu upward: its bottom-left corner at the screen-space point
+    /// (`x`, `bottom`). For a sheet that drops from a key on a bar along the
+    /// bottom edge.
+    pub fn open_above(&mut self, x: f32, bottom: f32) {
+        self.open_anchored(x, bottom, true);
+    }
+
+    fn open_anchored(&mut self, x: f32, y: f32, above: bool) {
         self.anchor = [x, y];
+        self.above = above;
         self.open = true;
         self.highlighted = None;
         self.rect = None;
@@ -248,21 +272,38 @@ impl ContextMenuState {
         if !self.open {
             return None;
         }
+        self.place_root(layers, menu, styles, viewport);
+        let index = layers.push_modal(viewport);
+        layers.pop_layer();
+        Some(index)
+    }
+
+    /// Measure the root sheet and place it at the anchor, inside `viewport`.
+    fn place_root(
+        &mut self,
+        layers: &mut LayerStack,
+        menu: &ContextMenu<'_>,
+        styles: &StyleResolver<'_>,
+        viewport: Rect,
+    ) {
         let size = measure_items(
             layers.base_mut(),
             menu.items,
             menu.platform,
             styles,
             viewport.width,
+            menu.min_width
+                .unwrap_or_else(|| styles.scalar(StyleKey::MenuItemMinWidth)),
             &mut self.hint_scratch,
         );
-        let rect = place_context_menu(self.anchor, size, viewport);
+        let mut anchor = self.anchor;
+        if self.above {
+            anchor[1] -= size[1];
+        }
+        let rect = place_context_menu(anchor, size, viewport);
         self.rect = Some(rect);
         self.rects.clear();
         self.rects.push(rect);
-        let index = layers.push_modal(viewport);
-        layers.pop_layer();
-        Some(index)
     }
 
     /// Paint and interact with the open menu. Returns exactly one activation and
@@ -284,18 +325,7 @@ impl ContextMenuState {
         let index = match layer {
             Some(index) => index,
             None => {
-                let size = measure_items(
-                    layers.base_mut(),
-                    menu.items,
-                    menu.platform,
-                    styles,
-                    viewport.width,
-                    &mut self.hint_scratch,
-                );
-                let rect = place_context_menu(self.anchor, size, viewport);
-                self.rect = Some(rect);
-                self.rects.clear();
-                self.rects.push(rect);
+                self.place_root(layers, menu, styles, viewport);
                 let index = layers.push_modal(viewport);
                 layers.pop_layer();
                 index
@@ -469,6 +499,7 @@ fn layout_context_chain(
             menu.platform,
             styles,
             viewport.width,
+            styles.scalar(StyleKey::MenuItemMinWidth),
             &mut state.hint_scratch,
         );
         state
@@ -593,6 +624,7 @@ fn measure_items(
     platform: AccelPlatform,
     styles: &StyleResolver<'_>,
     viewport_width: f32,
+    min_width: f32,
     hint: &mut String,
 ) -> [f32; 2] {
     let mut label_width: f32 = 0.0;
@@ -619,7 +651,7 @@ fn measure_items(
         + gap
         + hint_width
         + CHEVRON_WIDTH)
-        .max(218.0)
+        .max(min_width)
         .min(viewport_width.max(0.0));
     [width, height]
 }
@@ -914,6 +946,27 @@ mod tests {
             place_context_menu([-5.0, 2.0], [100.0, 80.0], viewport),
             Rect::new(10.0, 20.0, 100.0, 80.0)
         );
+    }
+
+    #[test]
+    fn a_sheet_opened_above_ends_at_its_anchor_and_honours_min_width() {
+        const ITEMS: &[MenuItem<'static>] = &[MenuItem::new("A"), MenuItem::new("B")];
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let viewport = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let menu = ContextMenu::new(ITEMS).with_min_width(140.0);
+        let mut layers = LayerStack::new();
+        let mut state = ContextMenuState::new();
+        state.open_above(30.0, 500.0);
+        state.push_open_layer(&mut layers, &menu, &styles, viewport);
+        let rect = state.rect().expect("placed");
+        assert_eq!(rect.bottom(), 500.0, "the sheet ends at the anchor");
+        assert_eq!(rect.x, 30.0);
+        assert_eq!(rect.width, 140.0, "two short labels, widened");
+
+        state.open_at(30.0, 500.0);
+        state.push_open_layer(&mut layers, &menu, &styles, viewport);
+        assert_eq!(state.rect().unwrap().y, 500.0, "open_at drops below again");
     }
 
     #[test]

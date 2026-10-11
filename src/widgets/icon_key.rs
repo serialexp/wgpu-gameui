@@ -213,6 +213,7 @@ impl IconKey {
             Tone::Accent => s.color(StyleKey::OnAccent),
             Tone::Danger => s.color(StyleKey::OnDanger),
             Tone::Sunken => s.ink(Ink::Muted),
+            Tone::Latch => super::material::latch_ink(s, hovered, down),
             Tone::Ghost if down => s.ink(Ink::Glyph),
             Tone::Ghost => s.ink(Ink::Cell),
             Tone::Default if self.held => s.ink(Ink::Max),
