@@ -173,10 +173,14 @@ fn a_new_width_makes_every_height_an_estimate_and_forgets_the_remembered() {
     rows.push(Row::estimated(10.0).keyed(1));
     rows.push(Row::estimated(10.0));
     rows.set_measured(0, 12.0);
-    rows.reestimate(|index| 100.0 + index as f32);
+    rows.reestimate(|index| match index {
+        0 => Row::estimated(100.0).keyed(1),
+        _ => Row::measured(0.0),
+    });
     assert!(!rows.is_measured(0));
     assert_eq!(rows.height_of(0), 100.0);
-    assert_eq!(rows.total(), 201.0);
+    assert!(rows.is_measured(1), "a row known regardless stays measured");
+    assert_eq!(rows.total(), 100.0);
     rows.clear();
     rows.push(Row::estimated(10.0).keyed(1));
     assert!(!rows.is_measured(0), "the old width's height is gone");
@@ -411,7 +415,7 @@ fn a_height_measured_for_another_width_or_fonts_is_dropped() {
     rows.push(Row::estimated(10.0).keyed(1));
     assert!(!rows.is_measured(3), "nor remembered");
     let before_fonts = rows.ticket(2);
-    rows.reestimate(|_| 10.0);
+    rows.reestimate(|index| Row::estimated(10.0).keyed(index as u64));
     rows.apply_measured(before_fonts, 99.0);
     assert!(!rows.is_measured(2));
     let now = rows.ticket(2);

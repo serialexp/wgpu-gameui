@@ -22,7 +22,7 @@ Tracking the gap between this design and what's on the main branch.
 ### Outstanding
 
 - [ ] Rows placed in `f64` all the way to the screen (deferred: `ScrollView` offsets are `f32`, so past about 4M px of content rows land on half pixels, past 16M on whole ones; fine for now, revisit if a transcript gets that long)
-- [ ] agent-ui: `TranscriptLayout` keeps its heights in a `RowHeights`
+- [ ] agent-ui: `TranscriptLayout` keeps its heights in a `RowHeights` (built, uncommitted; the pane still scrolls by pixels, and a page put in front still clears the layout until phase 5)
 - [ ] agent-ui: `TranscriptPane` scrolls by the anchored `ListState`; `Held` / `hold` / `reading` go
 - [ ] gameui `GroupList` (its own running total of row heights in `GroupLayout`) onto `RowHeights` (deferred: after the transcript move)
 - [ ] Gallery entry: a list of rows of different heights (deferred: after the agent-ui move shows the API works)
@@ -118,6 +118,8 @@ impl RowHeights {
     // `apply_measured(id, key, height)`; see the note below.
     /// The width or fonts changed: every row is an estimate again and remembered heights go.
     pub fn reestimate(&mut self, estimate: impl FnMut(usize) -> f32);
+    // 2026-10-13: `estimate` gives a whole `Row`, so a row known regardless
+    // (agent-ui's hidden rows, of no height) stays measured.
     pub fn offset_of(&self, row: usize) -> f32;
     pub fn height_of(&self, row: usize) -> f32;
     pub fn is_measured(&self, row: usize) -> bool;
@@ -224,6 +226,16 @@ call (`content_scroll`, `scroll_at`).
   `hold`, `top_row_even_following`, `content_scroll` and `scroll_at` go.
 - Behaviour the existing tests pin keeps passing: `transcript_pane_tests.rs`,
   `transcript_updates_tests.rs` and the layout tests about the view staying put.
+
+> **2026-10-13 update (phase 4 built):** `TranscriptLayout` keeps a `RowHeights` and its own
+> `dirty`, `unmeasured` and plan cache; the rest listed above is gone. A hidden row is
+> `Row::measured(0.0)` with no key, and `reestimate` now takes a whole `Row` per index so such rows
+> stay measured across a resize. The height worker carries each row's `Ticket` instead of its key,
+> and `HeightJob` / `Heights` lost their `metrics` counter: the ticket's layout stamp drops a
+> height measured for another width or fonts. A height for content no longer shown stays
+> remembered (the old layout forgot it), which is harmless: its key never comes back changed. The
+> pane still reads offsets as `f32`, so `row_at` steps onto the next row when a `y` rounded from
+> its top lands a hair above it; phase 5 moves the pane onto the `f64` positions.
 
 ## Phasing
 

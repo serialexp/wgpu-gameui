@@ -250,15 +250,21 @@ impl RowHeights {
     }
 
     /// The width or the fonts changed, so no measurement holds: every row
-    /// takes the height `estimate` gives it, unmeasured, and remembered
-    /// heights are forgotten. O(n). Rows keep their [`RowId`]s.
-    pub fn reestimate(&mut self, mut estimate: impl FnMut(usize) -> f32) {
+    /// is the [`Row`] `row` gives for its index (an estimate, mostly; a row
+    /// whose height is known regardless, such as one of no height, can say
+    /// so), and remembered heights are forgotten. O(n). Rows keep their
+    /// [`RowId`]s.
+    pub fn reestimate(&mut self, mut row: impl FnMut(usize) -> Row) {
         self.layout += 1;
         self.remembered.clear();
-        self.measured
-            .iter_mut()
-            .for_each(|measured| *measured = false);
-        let heights = (0..self.len()).map(|i| estimate(i).max(0.0)).collect();
+        let mut heights = Vec::with_capacity(self.len());
+        for index in 0..self.len() {
+            let row = row(index);
+            heights.push(row.height);
+            self.measured[index] = row.measured;
+            self.keys[index] = row.key;
+            self.remember(&row);
+        }
         // The ids count from row 0, wherever the index's halves meet.
         self.index = Deque::from_heights(heights);
     }
