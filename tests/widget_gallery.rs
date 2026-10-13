@@ -3232,7 +3232,7 @@ fn render_widget_gallery() {
             let r = flow.cell(list, "Virtualized (1000)", 150.0, 110.0);
             list.rounded_rect(r, 4.0, [0.06, 0.07, 0.10, 1.0]);
             let mut state = ListState::new();
-            state.scroll.snap_to(1, 420.0); // scrolled partway
+            state.scroll_to_row(21, 0.0); // scrolled partway, 420 px down
             let mut idle_in = InputState {
                 mouse_x: -1.0,
                 mouse_y: -1.0,

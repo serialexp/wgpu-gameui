@@ -17,7 +17,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use unicode_segmentation::UnicodeSegmentation;
@@ -69,17 +70,68 @@ pub type FontSystemHandle = Arc<Mutex<SharedFontSystem>>;
 
 /// Create a new shared `FontSystem` handle.
 ///
-/// `FontSystem::new()` loads the host's system fonts (used for broad script /
-/// emoji fallback). With the default `bundled-font` feature on, IBM Plex Sans
-/// is embedded and registered as the default sans-serif; IBM Plex Mono is
-/// registered as the companion technical face (see [`register_bundled_fonts`]
-/// and [`bundled_mono_font`]). Thus unstyled text renders identically on every
+/// It knows the host's system fonts (used for broad script / emoji fallback).
+/// With the default `bundled-font` feature on, IBM Plex Sans is embedded and
+/// registered as the default sans-serif; IBM Plex Mono is registered as the
+/// companion technical face (see [`register_bundled_fonts`] and
+/// [`bundled_mono_font`]). Thus unstyled text renders identically on every
 /// machine rather than depending on which system font happens to be installed.
+///
+/// Each call returns a font system of its own (fonts loaded into one, and its
+/// shaping cache, are not seen by another), but the host's font folders are
+/// read once per process: see [`system_font_db`].
 pub fn shared_font_system() -> FontSystemHandle {
-    let handle = Arc::new(Mutex::new(SharedFontSystem::new(FontSystem::new())));
+    let (locale, db) = system_font_db();
+    let fs = FontSystem::new_with_locale_and_db(locale.clone(), db.clone());
+    let handle = Arc::new(Mutex::new(SharedFontSystem::new(fs)));
     register_bundled_fonts(&handle);
     handle
 }
+
+/// The host's locale and system fonts, read on first use and kept for the
+/// process.
+///
+/// Reading the font folders is what made `FontSystem::new()` slow (most of a
+/// second in a release build, several in a debug one), and every
+/// `DrawList::new()` / `TextMeasurer::new()` used to pay it. Copying the
+/// database is cheap: each face's data is mapped once, here, and the copies
+/// share the mapping. Without that, choosing a font for a new text style
+/// opened every system font file whose weight differed from the style's (to
+/// read its weight axis), once per font system and style.
+/// Fonts installed while the process runs are not seen, as before for any
+/// font system already made.
+fn system_font_db() -> &'static (String, fontdb::Database) {
+    static DB: OnceLock<(String, fontdb::Database)> = OnceLock::new();
+    DB.get_or_init(|| {
+        SYSTEM_FONT_SCANS.fetch_add(1, Ordering::Relaxed);
+        // The same as `FontSystem::new()`, kept rather than rebuilt.
+        let (locale, mut db) = FontSystem::new().into_locale_and_db();
+        // One call per file: it shares the mapping with the file's other faces.
+        let mut seen = std::collections::HashSet::new();
+        let firsts: Vec<fontdb::ID> = db
+            .faces()
+            .filter(|face| match &face.source {
+                fontdb::Source::File(path) => seen.insert(path.clone()),
+                _ => false,
+            })
+            .map(|face| face.id)
+            .collect();
+        for id in firsts {
+            // SAFETY: a font file changed on disk while mapped can show the
+            // change, or fault. cosmic-text maps every font it shapes with in
+            // the same way (`FontSystem::get_font`), so this takes no risk the
+            // shaping didn't already take.
+            unsafe {
+                db.make_shared_face_data(id);
+            }
+        }
+        (locale, db)
+    })
+}
+
+/// How many times this process has read the host's font folders: at most
+/// once. Read by the tests.
+static SYSTEM_FONT_SCANS: AtomicUsize = AtomicUsize::new(0);
 
 /// Embed IBM Plex Sans (regular/bold/italic/bold-italic) into `fs` and register
 /// it as the default sans-serif, so `Family::SansSerif` — and any [`TextBlock`]
@@ -4537,6 +4589,39 @@ mod tests {
         let fs = shared_font_system();
         let handle = super::register_bundled_fonts(&fs).expect("register bundled fonts");
         assert_eq!(handle.family(), "IBM Plex Sans");
+    }
+
+    #[test]
+    fn font_systems_share_one_read_of_the_system_fonts() {
+        let a = shared_font_system();
+        let b = shared_font_system();
+        let _measurer = TextMeasurer::new();
+        assert_eq!(
+            super::SYSTEM_FONT_SCANS.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        let faces = |fs: &super::FontSystemHandle| fs.lock().unwrap().db().len();
+        // Both know every system face (plus the bundled ones).
+        assert_eq!(faces(&a), faces(&b));
+        assert!(faces(&a) >= super::system_font_db().1.len());
+        // And none of them reopens its file to be read.
+        assert!(
+            super::system_font_db()
+                .1
+                .faces()
+                .all(|face| !matches!(face.source, cosmic_text::fontdb::Source::File(_)))
+        );
+    }
+
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn a_font_loaded_into_one_font_system_is_not_seen_by_another() {
+        let a = shared_font_system();
+        let b = shared_font_system();
+        let before = b.lock().unwrap().db().len();
+        load_font_bytes(&a, super::IBM_PLEX_SANS_REGULAR_TTF).unwrap();
+        assert_eq!(a.lock().unwrap().db().len(), before + 1);
+        assert_eq!(b.lock().unwrap().db().len(), before);
     }
 
     #[test]

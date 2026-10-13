@@ -67,6 +67,7 @@ mod prompt_dialog;
 mod property_group;
 mod property_row;
 mod radio;
+mod row_heights;
 mod scatter_plot;
 mod scroll_view;
 #[cfg(feature = "phosphor-icons")]
@@ -220,6 +221,7 @@ pub use property_row::{
     PROPERTY_LABEL_WIDTH, PROPERTY_ROW_HEIGHT, PropertyRow, PropertyRowOutput, PropertyScrub,
 };
 pub use radio::RadioGroup;
+pub use row_heights::{Row, RowHeights, RowId, Ticket};
 pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};
 #[cfg(feature = "phosphor-icons")]
 pub use search_field::SearchField;

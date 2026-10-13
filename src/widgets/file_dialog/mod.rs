@@ -374,32 +374,8 @@ pub struct FileDialogState {
     list: ListState,
     type_ahead: TypeAhead,
     cache: ShownCache,
-    /// The listing's last drawn geometry, for scrolling a type-ahead match
-    /// into view before this frame's list is drawn.
-    geometry: ListingGeometry,
     /// Move focus to this next frame.
     focus_next: Option<Target>,
-}
-
-/// Where the listing's rows were last drawn.
-#[derive(Clone, Copy, Debug, Default)]
-struct ListingGeometry {
-    columns: usize,
-    /// One row of items, gap included.
-    pitch: f32,
-    /// The visible height.
-    height: f32,
-}
-
-impl ListingGeometry {
-    /// Scroll `scroll` so item `index` shows.
-    fn reveal(self, scroll: &mut super::ScrollState, index: usize) {
-        if self.columns == 0 || self.height <= 0.0 {
-            return;
-        }
-        let top = (index / self.columns) as f32 * self.pitch;
-        scroll.scroll_range_into_view(1, top, top + self.pitch, self.height);
-    }
 }
 
 /// A field focus moves to next frame.
@@ -1851,15 +1827,6 @@ impl<'f, 'a, 'c> Frame<'f, 'a, 'c> {
         } else {
             ((grid_rect.width + GRID_GAP) / GRID_CELL).floor().max(1.0) as usize
         };
-        self.state.geometry = ListingGeometry {
-            columns,
-            pitch: if list_view {
-                ROW
-            } else {
-                GRID_CELL_H + GRID_GAP
-            },
-            height: grid_rect.height,
-        };
         let mut widget = List::new()
             .with_item_height(if list_view { ROW } else { GRID_CELL_H })
             .with_zebra(list_view)
@@ -1992,7 +1959,7 @@ impl<'f, 'a, 'c> Frame<'f, 'a, 'c> {
                 let entry = entry.clone();
                 self.choose(&entry);
                 self.state.list.sync_selection(Some(row));
-                self.state.geometry.reveal(&mut self.state.list.scroll, row);
+                self.state.list.reveal_item(row);
             }
         }
     }

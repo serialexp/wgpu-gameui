@@ -395,17 +395,6 @@ harden those foundations rather than create parallel replacements.
       `fragmentation_ratio` in the `ui_stress` bench whether this explains
       part of the `frame_render` slowdown above; only then decide whether
       overlap-based reordering is worth it.
-- [ ] **P2 — A bare `DrawList::new()` scans every system font.** Its
-      `TextMeasurer::default()` calls `shared_font_system()`, which runs
-      `FontSystem::new()` and reads the host's font folders. Documented, and
-      apps share one font system via `with_font_system`, but hundreds of unit
-      tests build lists the bare way: `scroll_view`'s
-      `a_glide_converges_and_snaps_onto_the_target` (121 frames) takes ~34 s
-      alone and over 150 s inside the full lib run, almost all of it in
-      `fontdb::load_system_fonts`. Options: a process-wide lazily scanned
-      font system that `new()` shares, or a test helper that does, or a
-      `DrawList` that needs no measurer until text is measured.
-
 - [ ] **P1 — `List` with measured row heights and an item-anchored scroll
       position.** `List` only handles fixed row heights. gpui's list keeps
       its position as "item N, this far into it" instead of a pixel offset,
@@ -414,6 +403,10 @@ harden those foundations rather than create parallel replacements.
       keeps a pixel offset and corrects it on every change (`hold` /
       `reading` in `crates/desktop/src/transcript_pane.rs`). Moving that
       measuring into `List`, with gpui's anchor, would serve both.
+- [ ] **P3 — `GroupList` onto `RowHeights`.** `GroupLayout` keeps its own
+      running total of row heights (headers and rows differ). Once `List`
+      draws from a `RowHeights` (`docs/design/measured-row-heights.md`),
+      `GroupList` could share it and its item-anchored scrolling.
 - [ ] **P2 — One text layout for drawing, caret and hit testing.** gpui
       shapes a string once and uses that layout to draw it, place the caret
       and map a click to a character. gameui's text widgets shape separately

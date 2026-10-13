@@ -20,8 +20,15 @@
 //! caller marks [`disabled`](List::disabled) never hover, select or activate,
 //! and the arrow keys step over them.
 //!
-//! Persistent state — scroll offset, the selected set, and the keyboard cursor —
-//! lives in a caller-owned [`ListState`], matching the immediate-mode,
+//! The scroll position is kept as the row at the top of the view and how far
+//! into it the view starts, not as a pixel offset: rows changing above the
+//! view never move what is on screen, and nothing is corrected per frame.
+//! [`ListState::follow_end`] keeps the last row in view as rows arrive, until
+//! the reader scrolls up ([`List::stick_to_end`] picks it up again when they
+//! scroll back down).
+//!
+//! Persistent state — scroll position, the selected set, and the keyboard
+//! cursor — lives in a caller-owned [`ListState`], matching the immediate-mode,
 //! caller-owns-state style of the rest of the crate
 //! ([`ScrollState`](super::ScrollState), [`TreeState`](super::TreeState)).
 //!
@@ -52,6 +59,7 @@ use crate::layout::Rect;
 use crate::{InputState, StyleKey, StyleResolver};
 
 use super::DrawList;
+use super::row_heights::{RowHeights, RowId};
 use super::scroll_view::{ScrollState, ScrollView};
 
 /// How a [`List`] responds to clicks / keyboard selection.
@@ -100,8 +108,17 @@ impl NavKeys {
 /// cursor. Build once and thread the same `&mut ListState` every frame.
 #[derive(Debug, Clone, Default)]
 pub struct ListState {
-    /// Scroll offset / content extent. Reused by the embedded [`ScrollView`].
-    pub scroll: ScrollState,
+    /// The pixel offset the embedded [`ScrollView`] glides and drags, worked
+    /// out from `top` and `target` at the start of each draw.
+    scroll: ScrollState,
+    /// Where the view starts.
+    top: RowAnchor,
+    /// Where a glide is heading; `top` when there is none.
+    target: RowAnchor,
+    /// Keep the last row in view as rows arrive.
+    following: bool,
+    /// An item to scroll into view at the next draw.
+    reveal: Option<usize>,
     /// The selected item indices (ordered, so the caller can iterate cheaply).
     selected: BTreeSet<usize>,
     /// Origin of a `Shift`-range selection (the last plainly-clicked item).
@@ -115,6 +132,151 @@ pub struct ListState {
     /// Last frame's raw key state, for edge detection.
     prev_keys: NavKeys,
 }
+
+/// A place in a list: row `row`, `into` pixels below its top. A row is a
+/// line of the list: one item, or in a grid one line of items. In a measured
+/// list the row's [`RowId`] is kept too, and the row found by it again at the
+/// next draw, so rows put in front of it don't move the view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RowAnchor {
+    row: usize,
+    into: f32,
+    id: Option<RowId>,
+}
+
+impl Default for RowAnchor {
+    /// The very top, top padding included: as far above row 0 as the view
+    /// can go, which the first draw places at the top of the content.
+    fn default() -> Self {
+        Self {
+            row: 0,
+            into: f32::NEG_INFINITY,
+            id: None,
+        }
+    }
+}
+
+/// Where a list's rows are, for turning a [`RowAnchor`] into pixels and back.
+/// Pixels count from the top of the content, padding included; rows count
+/// from below the top padding.
+#[derive(Clone, Copy)]
+struct Rows<'h> {
+    kind: RowKind<'h>,
+    /// Space kept free above the first row.
+    pad_top: f32,
+}
+
+#[derive(Clone, Copy)]
+enum RowKind<'h> {
+    /// Rows `height` tall, `pitch` apart (the height and the gap after it).
+    Fixed {
+        height: f32,
+        pitch: f32,
+        count: usize,
+    },
+    Measured(&'h RowHeights),
+}
+
+impl Rows<'_> {
+    fn count(&self) -> usize {
+        match self.kind {
+            RowKind::Fixed { count, .. } => count,
+            RowKind::Measured(heights) => heights.len(),
+        }
+    }
+
+    /// Where row `row` starts, below the top padding; the end of the rows
+    /// past the last.
+    fn offset_of(&self, row: usize) -> f64 {
+        match self.kind {
+            RowKind::Fixed { pitch, count, .. } => row.min(count) as f64 * f64::from(pitch),
+            RowKind::Measured(heights) => heights.offset_of(row.min(heights.len())),
+        }
+    }
+
+    fn height_of(&self, row: usize) -> f32 {
+        match self.kind {
+            RowKind::Fixed { height, .. } => height,
+            RowKind::Measured(heights) => heights.height_of(row),
+        }
+    }
+
+    /// The rows' own extent, padding not included.
+    fn extent(&self) -> f32 {
+        match self.kind {
+            RowKind::Fixed {
+                height,
+                pitch,
+                count,
+            } => {
+                if count == 0 {
+                    0.0
+                } else {
+                    (count - 1) as f32 * pitch + height
+                }
+            }
+            RowKind::Measured(heights) => heights.total() as f32,
+        }
+    }
+
+    /// The row covering `y` (counted below the top padding), or the count
+    /// past the last.
+    fn row_at(&self, y: f64) -> usize {
+        match self.kind {
+            RowKind::Fixed { pitch, count, .. } => {
+                ((y / f64::from(pitch)).floor().max(0.0) as usize).min(count)
+            }
+            RowKind::Measured(heights) => heights.row_at(y).unwrap_or(heights.len()),
+        }
+    }
+
+    /// The place at pixel `y`: the row covering it and how far into it `y`
+    /// is. In the top padding that is row 0, a negative distance into it.
+    fn locate(&self, y: f32) -> RowAnchor {
+        let y = f64::from(y.max(0.0)) - f64::from(self.pad_top);
+        let row = if y < 0.0 { 0 } else { self.row_at(y) };
+        RowAnchor {
+            row,
+            into: (y - self.offset_of(row)) as f32,
+            id: self.id_of(row),
+        }
+    }
+
+    fn id_of(&self, row: usize) -> Option<RowId> {
+        match self.kind {
+            RowKind::Measured(heights) if row < heights.len() => Some(heights.id_of(row)),
+            _ => None,
+        }
+    }
+
+    /// Find `at`'s row again by its id, wherever rows put in front moved it,
+    /// and note the id of a row given by index.
+    fn resolve(&self, at: &mut RowAnchor) {
+        if let RowKind::Measured(heights) = self.kind
+            && let Some(row) = at.id.and_then(|id| heights.index_of(id))
+        {
+            at.row = row;
+        }
+        at.id = self.id_of(at.row);
+    }
+
+    fn pixels(&self, at: RowAnchor) -> f32 {
+        (f64::from(self.pad_top) + self.offset_of(at.row) + f64::from(at.into)) as f32
+    }
+
+    /// Where row `row` starts, in pixels.
+    fn top_of(&self, row: usize) -> f32 {
+        self.pixels(RowAnchor {
+            row,
+            into: 0.0,
+            id: None,
+        })
+    }
+}
+
+/// How close to the end the reader has to scroll for a list that sticks to
+/// its end to follow it again.
+const END_SLACK: f32 = 0.5;
 
 // ---- selection primitives (single source of truth) ----------------------
 //
@@ -167,6 +329,134 @@ impl ListState {
     /// A fresh state: nothing selected, scrolled to the top.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How far down the content the view started at the last draw, in
+    /// pixels.
+    pub fn offset(&self) -> f32 {
+        self.scroll.offset[1]
+    }
+
+    /// The row at the top of the view and how many of its pixels are above
+    /// the view's top edge; negative in the top padding. Before the first
+    /// draw it is row 0 at minus infinity: the very top, padding included.
+    pub fn top_row(&self) -> (usize, f32) {
+        (self.top.row, self.top.into)
+    }
+
+    /// Put row `row` at the top of the view, `into` pixels into it, at the
+    /// next draw. Stops following the end.
+    pub fn scroll_to_row(&mut self, row: usize, into: f32) {
+        self.top = RowAnchor {
+            row,
+            into,
+            id: None,
+        };
+        self.target = self.top;
+        self.following = false;
+    }
+
+    /// Glide to row `row`, `into` pixels into it, over the next draws. Stops
+    /// following the end.
+    pub fn glide_to_row(&mut self, row: usize, into: f32) {
+        self.target = RowAnchor {
+            row,
+            into,
+            id: None,
+        };
+        self.following = false;
+    }
+
+    /// Show the last row, and keep it in view as rows arrive, until the
+    /// reader scrolls up. Jumps there, ending any glide.
+    pub fn follow_end(&mut self) {
+        self.following = true;
+        self.top = self.target;
+    }
+
+    /// Scroll item `index` into view at the next draw, gliding no further
+    /// than it takes.
+    pub fn reveal_item(&mut self, index: usize) {
+        self.reveal = Some(index);
+    }
+
+    /// Whether the view keeps to the end as rows arrive.
+    pub fn is_following_end(&self) -> bool {
+        self.following
+    }
+
+    /// Whether a glide is still under way, so the next frame is wanted.
+    pub fn is_gliding(&self) -> bool {
+        self.top != self.target || self.scroll.is_gliding()
+    }
+
+    /// The scroll view's state, for asking when the next frame of a glide is
+    /// due.
+    pub(crate) fn scroll_state(&self) -> &ScrollState {
+        &self.scroll
+    }
+
+    /// Aim the glide so row `row` is in a view `view` tall, and the padding
+    /// with it for the first and last rows.
+    fn bring_into_view(&mut self, rows: &Rows, row: usize, view: f32) {
+        let top = if row == 0 { 0.0 } else { rows.top_of(row) };
+        let bottom = if row + 1 >= rows.count() {
+            self.scroll.content_size[1]
+        } else {
+            rows.top_of(row) + rows.height_of(row)
+        };
+        self.scroll.scroll_range_into_view(1, top, bottom, view);
+        let max = self.scroll.max_offset(1, view);
+        self.scroll.target[1] = self.scroll.target[1].clamp(0.0, max);
+    }
+
+    /// Set the pixel offset and target from the anchors, for this draw's
+    /// rows and a view `view` tall: the end when following, and inside the
+    /// content either way (an anchor the content no longer reaches is moved to
+    /// where the view ends up, so the content growing back doesn't throw the
+    /// view there). Returns the offset and target set.
+    fn place(&mut self, rows: &Rows, view: f32) -> (f32, f32) {
+        let max = self.scroll.max_offset(1, view);
+        rows.resolve(&mut self.top);
+        rows.resolve(&mut self.target);
+        if self.following {
+            // A glide under way (the wheel's last notch reached the end)
+            // finishes on its own; a view already there moves with the end.
+            let end = rows.locate(max);
+            if self.top == self.target {
+                self.top = end;
+            }
+            self.target = end;
+        }
+        let place = |anchor: &mut RowAnchor| {
+            let wanted = rows.pixels(*anchor);
+            let placed = wanted.clamp(0.0, max);
+            if placed != wanted {
+                *anchor = rows.locate(placed);
+            }
+            placed
+        };
+        let offset = place(&mut self.top);
+        let target = place(&mut self.target);
+        // Two anchors can name one pixel (the end of a row and the start of
+        // the next); there is no glide left then.
+        if offset == target {
+            self.target = self.top;
+        }
+        self.scroll.offset[1] = offset;
+        self.scroll.target[1] = target;
+        (offset, target)
+    }
+
+    /// Take the anchors back from the pixel offset and target after the
+    /// scroll view moved them (the wheel, the bar, a glide), for a view
+    /// `view` tall: following the end again if the view reached it and
+    /// `stick` says to.
+    fn take_pixels(&mut self, rows: &Rows, view: f32, stick: bool) {
+        self.top = rows.locate(self.scroll.offset[1]);
+        self.target = rows.locate(self.scroll.target[1]);
+        let at_end = self.scroll.target[1] >= self.scroll.max_offset(1, view) - END_SLACK;
+        self.following = at_end && (self.following || stick);
     }
 
     /// True when item `i` is currently selected.
@@ -321,6 +611,10 @@ pub struct List<'a> {
     zebra: bool,
     disabled: Option<&'a dyn Fn(usize) -> bool>,
     overlay_bar: bool,
+    stick_to_end: bool,
+    /// Space kept free above the first row and below the last, inside the
+    /// scroll.
+    padding: [f32; 2],
 }
 
 impl Default for List<'_> {
@@ -335,6 +629,8 @@ impl Default for List<'_> {
             zebra: false,
             disabled: None,
             overlay_bar: false,
+            stick_to_end: false,
+            padding: [0.0, 0.0],
         }
     }
 }
@@ -394,6 +690,20 @@ impl<'a> List<'a> {
         self
     }
 
+    /// Keep `top` pixels free above the first row and `bottom` below the
+    /// last, inside the scroll: they scroll with the rows.
+    pub fn with_padding(mut self, top: f32, bottom: f32) -> Self {
+        self.padding = [top.max(0.0), bottom.max(0.0)];
+        self
+    }
+
+    /// Follow the end again whenever the reader scrolls back down to it (see
+    /// [`ListState::follow_end`]), the way a chat or a log does.
+    pub fn stick_to_end(mut self, stick: bool) -> Self {
+        self.stick_to_end = stick;
+        self
+    }
+
     /// Float the scrollbar over the rows instead of docking it beside them
     /// (see [`ScrollView::overlay`]): the rows keep the full width, and the
     /// thin thumb takes the pointer from the row under it.
@@ -431,6 +741,75 @@ impl<'a> List<'a> {
         list: &mut DrawList,
         style: &StyleResolver,
         input: &mut InputState,
+        item: F,
+    ) -> ListOutput
+    where
+        F: FnMut(&mut DrawList, Rect, ListItem),
+    {
+        self.draw_rows(rect, count, Sizing::Fixed, state, list, style, input, item)
+    }
+
+    /// Draw a list whose rows are not all one height: one row for each in
+    /// `heights`, one column. Rows in view (and a couple either side) that
+    /// are still estimated are measured with `measure(index, width, list)`,
+    /// which returns the row's height laid out `width` wide; rows out of view
+    /// keep their estimates until the app measures them (see
+    /// [`RowHeights::apply_measured`]). Rows are measured, and drawn, at the
+    /// width left beside a docked scrollbar whether or not it shows, so the
+    /// bar appearing doesn't change any height; the width is in whole
+    /// pixels, so a layout wobbling by a fraction doesn't re-measure every
+    /// row. A row of no height is not drawn. `measure` may be called inside
+    /// the scroll view's clip and offset, so it should only measure, not
+    /// draw.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_measured<M, F>(
+        &self,
+        rect: Rect,
+        heights: &mut RowHeights,
+        mut measure: M,
+        state: &mut ListState,
+        list: &mut DrawList,
+        style: &StyleResolver,
+        input: &mut InputState,
+        item: F,
+    ) -> ListOutput
+    where
+        M: FnMut(usize, f32, &mut DrawList) -> f32,
+        F: FnMut(&mut DrawList, Rect, ListItem),
+    {
+        debug_assert!(self.columns <= 1, "a measured list has one column");
+        let count = heights.len();
+        let sizing = Sizing::Measured {
+            heights,
+            measure: &mut measure,
+        };
+        self.draw_rows(rect, count, sizing, state, list, style, input, item)
+    }
+
+    /// The rows in view at `offset` in a view `view` tall, and `OVERSCAN`
+    /// either side, that are still estimated; none for fixed rows.
+    fn unmeasured_in_view(rows: &Rows, offset: f32, view: f32) -> Vec<usize> {
+        const OVERSCAN: usize = 2;
+        let RowKind::Measured(heights) = rows.kind else {
+            return Vec::new();
+        };
+        let first = rows.locate(offset).row.saturating_sub(OVERSCAN);
+        let last = rows.locate(offset + view).row.saturating_add(OVERSCAN + 1);
+        (first..last.min(heights.len()))
+            .filter(|&row| !heights.is_measured(row))
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_rows<F>(
+        &self,
+        rect: Rect,
+        count: usize,
+        mut sizing: Sizing,
+        state: &mut ListState,
+        list: &mut DrawList,
+        style: &StyleResolver,
+        input: &mut InputState,
         mut item: F,
     ) -> ListOutput
     where
@@ -441,17 +820,80 @@ impl<'a> List<'a> {
             .item_height
             .unwrap_or(style.scalar(StyleKey::FontSize) + 10.0)
             .max(1.0);
-        let cols = self.columns.max(1);
-        let row_pitch = item_h + self.row_gap;
-
-        // --- Geometry / content extent -----------------------------------
-        let rows_total = count.div_ceil(cols);
-        let content_h = if rows_total == 0 {
-            0.0
-        } else {
-            rows_total as f32 * item_h + (rows_total - 1) as f32 * self.row_gap
+        let cols = match sizing {
+            Sizing::Fixed => self.columns.max(1),
+            Sizing::Measured { .. } => 1,
         };
-        state.scroll.content_size = [rect.width, content_h];
+        let [pad_top, pad_bottom] = self.padding;
+        let view_h = rect.height;
+        // `begin` eases the drawn offset toward the target and clamps it, so
+        // culling and hit-testing must read the offset after it, not before.
+        let mut view = ScrollView::new(rect).vertical_only();
+        if self.overlay_bar {
+            view = view.overlay();
+        }
+        let measure_w = (rect.width - view.reserve()).floor().max(1.0);
+
+        // A new width keeps the reader's place as the same share of the row
+        // at the top: its pixels into it no longer mean the same text. The
+        // share belongs to that row, found by id first in case pages went in
+        // front since the last draw.
+        let mut shares = None;
+        if let Sizing::Measured { heights, .. } = &mut sizing
+            && heights.set_width(measure_w)
+        {
+            let share = |at: &mut RowAnchor| {
+                if let Some(row) = at.id.and_then(|id| heights.index_of(id)) {
+                    at.row = row;
+                }
+                let id = (at.row < heights.len()).then(|| heights.id_of(at.row))?;
+                at.id = Some(id);
+                let height = heights.height_of(at.row);
+                (height > 0.0 && at.into > 0.0).then(|| (id, at.into / height))
+            };
+            shares = Some((share(&mut state.top), share(&mut state.target)));
+        }
+
+        // --- Geometry: measure the rows in view, then place the view ------
+        // Pixels from the anchors. Anything below that moves them (the
+        // cursor scrolling into view, the wheel, the bar, a glide) is turned
+        // back into anchors once the scroll view has had its say. Measuring
+        // rows changes the offsets of the rows below them, and so what is in
+        // view; a few rounds settle it.
+        // Each round places from the anchors asked for: one clamped to rows
+        // still estimated would otherwise stay clamped once they are measured.
+        let wanted = (state.top, state.target);
+        let mut placed;
+        let mut rounds = 0;
+        loop {
+            let rows = sizing.rows(count, cols, item_h, self.row_gap, pad_top);
+            state.scroll.content_size = [rect.width, pad_top + rows.extent() + pad_bottom];
+            (state.top, state.target) = wanted;
+            if let Some((top, target)) = shares {
+                let reshare = |anchor: &mut RowAnchor, share: Option<(RowId, f32)>| {
+                    if let Some((id, share)) = share
+                        && anchor.id == Some(id)
+                    {
+                        anchor.into = share * rows.height_of(anchor.row);
+                    }
+                };
+                reshare(&mut state.top, top);
+                reshare(&mut state.target, target);
+            }
+            placed = state.place(&rows, view_h);
+            rounds += 1;
+            let missing = Self::unmeasured_in_view(&rows, placed.0, view_h);
+            if missing.is_empty() || rounds > 4 {
+                break;
+            }
+            sizing.measure(missing, measure_w, list);
+        }
+        let rows = sizing.rows(count, cols, item_h, self.row_gap, pad_top);
+        if let Some(index) = state.reveal.take()
+            && index < count
+        {
+            state.bring_into_view(&rows, index / cols, view_h);
+        }
 
         // --- Keyboard nav (edge detection runs every frame; we only *act*
         //     on edges when focused so prev_keys never goes stale) ----------
@@ -525,17 +967,8 @@ impl<'a> List<'a> {
                 } else {
                     state.cursor = Some(next);
                 }
-                // Auto-scroll the cursor into view. Routed through the scroll
-                // state's target API rather than poking `offset`: the drawn
-                // offset eases toward the target, so writing `offset` directly
-                // here would just be undone by the next eased step.
-                let cursor_row = next / cols;
-                let cell_top = cursor_row as f32 * row_pitch;
-                let cell_bottom = cell_top + item_h;
-                state
-                    .scroll
-                    .scroll_range_into_view(1, cell_top, cell_bottom, rect.height);
-                state.scroll.clamp([rect.width, rect.height]);
+                // Glide the cursor into view.
+                state.bring_into_view(&rows, next / cols, view_h);
             }
 
             if k.activate {
@@ -552,10 +985,28 @@ impl<'a> List<'a> {
         let shift = input.shift_pressed;
         let mouse_over_content = rect.contains(mouse_x, mouse_y) && !input.mouse_consumed;
 
-        // Disjoint field borrows so the content closure can mutate selection
-        // while ScrollView holds `&mut state.scroll`.
+        let begun = view.begin(&mut state.scroll, list, input);
+        if (state.scroll.offset[1], state.scroll.target[1]) != placed {
+            state.take_pixels(&rows, view_h, self.stick_to_end);
+            // The view moved onto rows not measured yet. Measure them, and
+            // place the view on its row again: the content is already
+            // translated by the offset `begin` read, so move it by as much
+            // again for this frame to show it in place.
+            let missing = Self::unmeasured_in_view(&rows, state.scroll.offset[1], view_h);
+            if !missing.is_empty() {
+                sizing.measure(missing, measure_w, list);
+                let rows = sizing.rows(count, cols, item_h, self.row_gap, pad_top);
+                state.scroll.content_size = [rect.width, pad_top + rows.extent() + pad_bottom];
+                let before = state.scroll.offset[1];
+                state.place(&rows, view_h);
+                list.translate(0.0, before - state.scroll.offset[1]);
+            }
+        }
+        let rows = sizing.rows(count, cols, item_h, self.row_gap, pad_top);
+        let scroll_y = state.scroll.offset[1];
+
+        // Disjoint field borrows so the content closure can mutate selection.
         let ListState {
-            scroll,
             selected,
             anchor,
             cursor,
@@ -570,36 +1021,28 @@ impl<'a> List<'a> {
         let col_gap = self.col_gap;
         let focused = self.focused;
 
-        // `begin` eases the drawn offset toward the target and clamps it, so
-        // culling and hit-testing must read the offset after it, not before.
-        let mut view = ScrollView::new(rect).vertical_only();
-        if self.overlay_bar {
-            view = view.overlay();
-        }
-        let begun = view.begin(scroll, list, input);
-        let scroll_y = scroll.offset[1];
         // An overlay thumb under the pointer has taken it from the rows.
         let rows_hot = mouse_over_content && !input.mouse_consumed;
         {
             let vp = begun.inner;
-            let cell_w = if cols == 1 {
-                vp.width
-            } else {
-                ((vp.width - (cols - 1) as f32 * col_gap) / cols as f32).max(1.0)
+            let cell_w = match sizing {
+                Sizing::Measured { .. } => measure_w,
+                Sizing::Fixed if cols == 1 => vp.width,
+                Sizing::Fixed => ((vp.width - (cols - 1) as f32 * col_gap) / cols as f32).max(1.0),
             };
-            let first_row = (scroll_y / row_pitch).floor().max(0.0) as usize;
-            let visible_rows = (vp.height / row_pitch).ceil() as usize + 1;
-
-            for row in first_row..(first_row + visible_rows) {
-                let world_y = vp.y + row as f32 * row_pitch;
+            let bottom = scroll_y + vp.height;
+            let mut row = rows.locate(scroll_y).row;
+            while row < rows.count() && rows.top_of(row) < bottom {
+                let world_y = vp.y + rows.top_of(row);
                 let screen_y = world_y - scroll_y;
+                let row_h = rows.height_of(row);
                 for col in 0..cols {
                     let idx = row * cols + col;
-                    if idx >= count {
+                    if idx >= count || row_h <= 0.0 {
                         break;
                     }
                     let cell_x = vp.x + col as f32 * (cell_w + col_gap);
-                    let cell = Rect::new(cell_x, world_y, cell_w, item_h);
+                    let cell = Rect::new(cell_x, world_y, cell_w, row_h);
 
                     let disabled = self.is_disabled(idx);
                     // Hit-test in screen space; gaps are dead zones.
@@ -608,7 +1051,7 @@ impl<'a> List<'a> {
                         && mouse_x >= cell_x
                         && mouse_x < cell_x + cell_w
                         && mouse_y >= screen_y
-                        && mouse_y < screen_y + item_h
+                        && mouse_y < screen_y + row_h
                         && mouse_y >= vp.y
                         && mouse_y < vp.y + vp.height;
 
@@ -665,9 +1108,15 @@ impl<'a> List<'a> {
                         },
                     );
                 }
+                row += 1;
             }
         }
-        view.end(scroll, list, style, input, begun);
+        // The bar's step buttons move the target in `end`.
+        let before_end = (state.scroll.offset[1], state.scroll.target[1]);
+        view.end(&mut state.scroll, list, style, input, begun);
+        if (state.scroll.offset[1], state.scroll.target[1]) != before_end {
+            state.take_pixels(&rows, view_h, self.stick_to_end);
+        }
 
         list.pop_debug_scope();
         ListOutput {
@@ -675,6 +1124,42 @@ impl<'a> List<'a> {
             activated,
             hovered,
             mouse_over_content,
+        }
+    }
+}
+
+/// How a list's rows get their heights for one draw.
+enum Sizing<'s> {
+    /// All the item height (see [`List::with_item_height`]).
+    Fixed,
+    /// From `heights`, measuring the rows in view with `measure`.
+    Measured {
+        heights: &'s mut RowHeights,
+        measure: &'s mut dyn FnMut(usize, f32, &mut DrawList) -> f32,
+    },
+}
+
+impl Sizing<'_> {
+    /// The rows of `count` items in `cols` columns.
+    fn rows(&self, count: usize, cols: usize, item_h: f32, row_gap: f32, pad_top: f32) -> Rows<'_> {
+        let kind = match self {
+            Sizing::Fixed => RowKind::Fixed {
+                height: item_h,
+                pitch: item_h + row_gap,
+                count: count.div_ceil(cols),
+            },
+            Sizing::Measured { heights, .. } => RowKind::Measured(heights),
+        };
+        Rows { kind, pad_top }
+    }
+
+    /// Measure `rows` with the callback and record their heights.
+    fn measure(&mut self, rows: Vec<usize>, width: f32, list: &mut DrawList) {
+        if let Sizing::Measured { heights, measure } = self {
+            for row in rows {
+                let height = measure(row, width, list);
+                heights.set_measured(row, height);
+            }
         }
     }
 }
@@ -728,6 +1213,233 @@ mod tests {
             input,
             |_, _, _| {},
         )
+    }
+
+    /// A frame of a 100 px tall list of 20 px rows, with `wheel` notches.
+    fn wheel(w: &List, st: &mut ListState, count: usize, notches: f32) {
+        let mut input = InputState {
+            mouse_x: 10.0,
+            mouse_y: 10.0,
+            scroll_delta: notches,
+            ..InputState::default()
+        };
+        frame(w, Rect::new(0.0, 0.0, 100.0, 100.0), count, st, &mut input);
+    }
+
+    fn still(w: &List, st: &mut ListState, count: usize) {
+        frame(w, Rect::new(0.0, 0.0, 100.0, 100.0), count, st, &mut idle());
+    }
+
+    #[test]
+    fn the_view_is_kept_as_the_row_at_its_top_and_how_far_into_it() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        st.scroll_to_row(7, 5.0);
+        still(&w, &mut st, 100);
+        assert_eq!(st.offset(), 145.0);
+        assert_eq!(st.top_row(), (7, 5.0));
+        // The wheel moves the pixels; the row and distance follow.
+        wheel(&w, &mut st, 100, -1.0);
+        for _ in 0..60 {
+            still(&w, &mut st, 100);
+        }
+        let (row, into) = st.top_row();
+        assert_eq!(row as f32 * 20.0 + into, st.offset());
+        assert!(st.offset() > 145.0);
+    }
+
+    #[test]
+    fn a_glide_to_a_row_gets_there_over_frames() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        st.glide_to_row(30, 0.0);
+        assert!(st.is_gliding());
+        still(&w, &mut st, 100);
+        assert!(st.offset() > 0.0 && st.offset() < 600.0, "{}", st.offset());
+        for _ in 0..120 {
+            still(&w, &mut st, 100);
+        }
+        assert_eq!(st.offset(), 600.0);
+        assert_eq!(st.top_row(), (30, 0.0));
+        assert!(!st.is_gliding());
+    }
+
+    #[test]
+    fn rows_added_below_leave_the_view_where_it_is() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        st.scroll_to_row(10, 0.0);
+        still(&w, &mut st, 50);
+        still(&w, &mut st, 500);
+        assert_eq!(st.top_row(), (10, 0.0));
+        assert_eq!(st.offset(), 200.0);
+    }
+
+    #[test]
+    fn following_the_end_keeps_the_last_row_in_view_as_rows_arrive() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        st.follow_end();
+        for count in [3, 10, 11, 40] {
+            still(&w, &mut st, count);
+            let end = (count as f32 * 20.0 - 100.0).max(0.0);
+            assert_eq!(st.offset(), end, "{count} rows");
+            assert!(st.is_following_end());
+        }
+    }
+
+    #[test]
+    fn scrolling_up_stops_following_and_back_down_starts_again_when_it_sticks() {
+        for stick in [false, true] {
+            let w = List::new().with_item_height(20.0).stick_to_end(stick);
+            let mut st = ListState::new();
+            st.follow_end();
+            still(&w, &mut st, 40);
+            wheel(&w, &mut st, 40, 2.0);
+            assert!(!st.is_following_end(), "stick {stick}");
+            for _ in 0..60 {
+                still(&w, &mut st, 40);
+            }
+            let up = st.offset();
+            still(&w, &mut st, 41);
+            assert_eq!(
+                st.offset(),
+                up,
+                "a row arriving doesn't pull the reader down"
+            );
+            wheel(&w, &mut st, 41, -20.0);
+            for _ in 0..60 {
+                still(&w, &mut st, 41);
+            }
+            assert_eq!(st.is_following_end(), stick, "stick {stick}");
+            still(&w, &mut st, 45);
+            let end = 45.0 * 20.0 - 100.0;
+            assert_eq!(st.offset() == end, stick, "stick {stick}: {}", st.offset());
+        }
+    }
+
+    #[test]
+    fn the_bars_step_keys_move_the_view() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        still(&w, &mut st, 40);
+        // The bottom step key fills the docked gutter's last 13 px.
+        frame(
+            &w,
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            40,
+            &mut st,
+            &mut click_at(94.0, 94.0),
+        );
+        for _ in 0..120 {
+            still(&w, &mut st, 40);
+        }
+        assert_eq!(st.offset(), ScrollView::STEP_SCROLL);
+        assert_eq!(st.top_row(), (1, ScrollView::STEP_SCROLL - 20.0));
+    }
+
+    #[test]
+    fn a_glide_that_reaches_the_end_finishes_gliding_while_it_follows() {
+        let w = List::new().with_item_height(20.0).stick_to_end(true);
+        let mut st = ListState::new();
+        still(&w, &mut st, 40);
+        let max = 40.0 * 20.0 - 100.0;
+        let glide = |notches| InputState {
+            mouse_x: 10.0,
+            mouse_y: 10.0,
+            scroll_delta: notches,
+            frame_dt: 0.016,
+            ..InputState::default()
+        };
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        frame(&w, rect, 40, &mut st, &mut glide(-100.0));
+        assert!(st.is_following_end());
+        let mut last = st.offset();
+        assert!(last < max);
+        for _ in 0..5 {
+            frame(&w, rect, 40, &mut st, &mut glide(0.0));
+            assert!(st.offset() > last && st.offset() < max, "{}", st.offset());
+            last = st.offset();
+        }
+        // A row arriving mid-glide moves where it ends, not where it is.
+        frame(&w, rect, 41, &mut st, &mut glide(0.0));
+        assert!(st.offset() < max);
+        for _ in 0..200 {
+            frame(&w, rect, 41, &mut st, &mut glide(0.0));
+        }
+        assert_eq!(st.offset(), max + 20.0);
+        assert!(st.is_following_end());
+    }
+
+    #[test]
+    fn a_glide_to_the_pixel_the_view_is_at_is_no_glide() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        st.scroll_to_row(5, 0.0);
+        still(&w, &mut st, 40);
+        // The end of row 4 is the start of row 5.
+        st.glide_to_row(4, 20.0);
+        still(&w, &mut st, 40);
+        assert!(!st.is_gliding());
+        assert_eq!(st.offset(), 100.0);
+    }
+
+    #[test]
+    fn home_and_end_show_the_padding_with_the_first_and_last_rows() {
+        let w = List::new()
+            .with_item_height(20.0)
+            .with_padding(10.0, 30.0)
+            .focused(true);
+        let mut st = ListState::new();
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let key = |st: &mut ListState, end: bool| {
+            let mut input = InputState {
+                key_end: end,
+                key_home: !end,
+                ..idle()
+            };
+            frame(&w, rect, 40, st, &mut input);
+            for _ in 0..120 {
+                still(&w, st, 40);
+            }
+        };
+        key(&mut st, true);
+        assert_eq!(st.cursor(), Some(39));
+        assert_eq!(st.offset(), 10.0 + 800.0 + 30.0 - 100.0);
+        key(&mut st, false);
+        assert_eq!(st.cursor(), Some(0));
+        assert_eq!(st.offset(), 0.0);
+    }
+
+    #[test]
+    fn a_list_that_shrank_under_its_view_shows_its_end_and_stays_there() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        st.scroll_to_row(80, 0.0);
+        still(&w, &mut st, 100);
+        still(&w, &mut st, 20);
+        assert_eq!(st.offset(), 300.0);
+        assert_eq!(st.top_row(), (15, 0.0));
+        // Growing again doesn't throw the view back to where it was.
+        still(&w, &mut st, 100);
+        assert_eq!(st.offset(), 300.0);
+    }
+
+    #[test]
+    fn an_item_asked_for_glides_into_view_and_no_further() {
+        // A 4-column grid of 20 px rows in a 100 px view: item 41 is on row 10.
+        let w = List::new().with_item_height(20.0).columns(4);
+        let mut st = ListState::new();
+        st.reveal_item(41);
+        for _ in 0..120 {
+            still(&w, &mut st, 200);
+        }
+        assert_eq!(st.offset(), 11.0 * 20.0 - 100.0, "row 10 at the bottom");
+        st.reveal_item(1);
+        for _ in 0..120 {
+            still(&w, &mut st, 200);
+        }
+        assert_eq!(st.offset(), 0.0);
     }
 
     #[test]
@@ -906,7 +1618,7 @@ mod tests {
             frame(&w, rect, 20, &mut st, &mut idle());
         }
         assert!(st.cursor().unwrap() >= 4);
-        assert!(st.scroll.offset[1] > 0.0, "cursor scrolled into view");
+        assert!(st.offset() > 0.0, "cursor scrolled into view");
     }
 
     #[test]
@@ -1138,7 +1850,7 @@ mod tests {
         let th = theme();
         for frame_dt in [0.0, 1.0 / 60.0] {
             let mut st = ListState::new();
-            st.scroll.scroll_to(1, 1000.0);
+            st.glide_to_row(50, 0.0);
             let mut input = InputState {
                 frame_dt,
                 ..click_at(10.0, 30.0)
@@ -1222,3 +1934,7 @@ mod tests {
         assert_eq!(st.selected_count(), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "list_measured_tests.rs"]
+mod measured_tests;

@@ -2960,7 +2960,7 @@ impl<'a> UiContext<'a> {
             let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
             list_widget.draw(local, count, state, list, &style, &mut local_input, item)
         };
-        self.report_scroll_glide(&state.scroll);
+        self.report_scroll_glide(state.scroll_state());
         self.advance(h);
         out
     }
@@ -3021,7 +3021,7 @@ impl<'a> UiContext<'a> {
                 row,
             )
         };
-        self.report_scroll_glide(&state.scroll);
+        self.report_scroll_glide(state.scroll_state());
         self.advance(h);
         out
     }
@@ -5752,7 +5752,7 @@ mod tests {
         }
         let frame = state.end_frame();
 
-        assert!(list_state.scroll.is_gliding(), "the notch aimed a target");
+        assert!(list_state.is_gliding(), "the notch aimed a target");
         assert!(frame.needs_repaint, "glide must request repaint: {frame:?}");
         let deadline = frame
             .next_deadline

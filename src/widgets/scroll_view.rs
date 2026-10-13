@@ -460,7 +460,7 @@ impl ScrollView {
 
     /// Space a visible bar takes from the content: its thickness when
     /// docked, none as an overlay.
-    fn reserve(&self) -> f32 {
+    pub(crate) fn reserve(&self) -> f32 {
         if self.overlay {
             0.0
         } else {

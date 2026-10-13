@@ -2255,3 +2255,13 @@ when something could have changed. gameui gained what a host like that needs.
   `UiState::set_screen(width, height)` gives widgets drawn through
   `UiContext` the screen size (it was 0×0, so toolbars, menubars and
   dropdowns there couldn't keep popups on screen).
+- [x] **P2 — A bare `DrawList::new()` scans every system font.** Every
+  `shared_font_system()` (so every `DrawList::new()` and
+  `TextMeasurer::new()`) ran `FontSystem::new()`, reading the host's font
+  folders; and a fresh font system's first text in a new style opened every
+  system font file whose weight differed, to read its weight axis. Now
+  `system_font_db` reads the folders once per process and maps each font file
+  once; each font system gets its own copy of that database (its own loaded
+  fonts and caches, as before) sharing the mappings. The lib tests went from
+  ~156 s to under 10 s; in an app, a new text style no longer reopens the
+  font files.
