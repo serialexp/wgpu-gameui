@@ -9,19 +9,18 @@ Tracking the gap between this design and what's on the main branch.
 
 ### Done
 
-(nothing yet)
+- [x] `RowHeights`: per-row heights, estimated or measured, with O(log n) offsets and lookups (739f9bf)
+- [x] `RowHeights`: index layouts compared at scale; keep the faster (739f9bf: the double-ended Fenwick won)
+- [x] `RowHeights`: heights remembered by row key across rebuilds, forgotten when the width or fonts change (739f9bf)
+- [x] `RowHeights`: rows still estimated, nearest a given row first (for an app's background measuring) (739f9bf)
+- [x] `ListState`: scroll position kept as (row, distance into it), with the pixel offset derived each frame (739f9bf: fixed heights; `scroll` is private, with `offset`, `top_row`, `scroll_to_row`, `glide_to_row`, `reveal_item`, `is_gliding`)
+- [x] `ListState`: follow the end (stay at the bottom as rows arrive, until the reader scrolls up) (739f9bf: `follow_end`, and `List::stick_to_end` to pick it up again at the bottom)
+- [x] `List`: draw from a `RowHeights` (one column), measuring rows in view through a callback (739f9bf: `List::draw_measured`)
+- [x] `List`: space kept free above the first row and below the last (padding inside the scroll) (739f9bf: `List::with_padding`, fixed and measured)
+- [x] `List`: keyboard cursor, click and hover on rows of different heights (739f9bf)
 
 ### Outstanding
 
-- [ ] `RowHeights`: per-row heights, estimated or measured, with O(log n) offsets and lookups (built, uncommitted)
-- [ ] `RowHeights`: index layouts compared at scale; keep the faster (built, uncommitted: the double-ended Fenwick won)
-- [ ] `RowHeights`: heights remembered by row key across rebuilds, forgotten when the width or fonts change (built, uncommitted)
-- [ ] `RowHeights`: rows still estimated, nearest a given row first (for an app's background measuring) (built, uncommitted)
-- [ ] `ListState`: scroll position kept as (row, distance into it), with the pixel offset derived each frame (built, uncommitted: fixed heights; `scroll` is private, with `offset`, `top_row`, `scroll_to_row`, `glide_to_row`, `reveal_item`, `is_gliding`)
-- [ ] `ListState`: follow the end (stay at the bottom as rows arrive, until the reader scrolls up) (built, uncommitted: `follow_end`, and `List::stick_to_end` to pick it up again at the bottom)
-- [ ] `List`: draw from a `RowHeights` (one column), measuring rows in view through a callback (built, uncommitted: `List::draw_measured`)
-- [ ] `List`: space kept free above the first row and below the last (padding inside the scroll) (built, uncommitted: `List::with_padding`, fixed and measured)
-- [ ] `List`: keyboard cursor, click and hover on rows of different heights (built, uncommitted)
 - [ ] Rows placed in `f64` all the way to the screen (deferred: `ScrollView` offsets are `f32`, so past about 4M px of content rows land on half pixels, past 16M on whole ones; fine for now, revisit if a transcript gets that long)
 - [ ] agent-ui: `TranscriptLayout` keeps its heights in a `RowHeights`
 - [ ] agent-ui: `TranscriptPane` scrolls by the anchored `ListState`; `Held` / `hold` / `reading` go
