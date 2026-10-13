@@ -632,9 +632,10 @@ mod tests {
             slider.draw(50.0, 0, &mut cap, rect(), &mut ctx);
         }
         let unfocused_chrome = list.chrome_instance_count();
-        // Focused.
+        // Focused from the keyboard.
         let mut focus = FocusState::new();
         focus.focus(42);
+        focus.set_focus_visible(true);
         let mut list = DrawList::new();
         {
             let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
@@ -644,5 +645,13 @@ mod tests {
             list.chrome_instance_count() > unfocused_chrome,
             "focus ring adds outline geometry"
         );
+        // Focused by a click: no ring.
+        focus.set_focus_visible(false);
+        let mut list = DrawList::new();
+        {
+            let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
+            slider.draw(50.0, 0, &mut cap, rect(), &mut ctx);
+        }
+        assert_eq!(list.chrome_instance_count(), unfocused_chrome);
     }
 }

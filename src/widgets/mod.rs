@@ -205,7 +205,8 @@ pub use panel::{
 pub use placeholder::Placeholder;
 pub use popover::{
     POPOVER_CONTENT_TOP, POPOVER_PAD, POPOVER_TITLE_H, Popover, PopoverFrame, PopoverOutput,
-    PopoverSide, draw_frame as draw_popover_frame, measure_sheet_height, place_popover,
+    PopoverPlacement, PopoverSide, draw_frame as draw_popover_frame, measure_sheet_height,
+    place_popover,
 };
 pub use pressable::{PressState, Pressable};
 pub use progress_bar::{
@@ -547,8 +548,13 @@ impl<'a> DrawContext<'a> {
 
     /// Draw the keyboard-focus ring around `rect`: a 2px rounded outline in
     /// [`Theme::focus_ring`]. Focusable widgets call this when they hold focus so
-    /// every widget gets a consistent focus indicator from one place.
+    /// every widget gets a consistent focus indicator from one place. Draws
+    /// nothing unless focus is being moved from the keyboard
+    /// ([`FocusState::focus_visible`]): a clicked widget shows no ring.
     pub fn draw_focus_ring(&mut self, rect: crate::layout::Rect) {
+        if !self.focus.focus_visible() {
+            return;
+        }
         let radius = self.scalar(StyleKey::BorderRadius);
         let color = self.color(StyleKey::FocusRing);
         self.draw_list

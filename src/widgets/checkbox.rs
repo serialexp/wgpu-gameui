@@ -560,10 +560,18 @@ mod tests {
         let (unfocused, _) = draw_focused(&cb, &mut focus, &idle);
         let mut focus = FocusState::new();
         focus.focus(1);
+        focus.set_focus_visible(true);
         let (focused, _) = draw_focused(&cb, &mut focus, &idle);
         assert!(
             focused.chrome_instance_count() > unfocused.chrome_instance_count(),
             "focus ring should add outline geometry when focused"
+        );
+        focus.set_focus_visible(false);
+        let (clicked, _) = draw_focused(&cb, &mut focus, &idle);
+        assert_eq!(
+            clicked.chrome_instance_count(),
+            unfocused.chrome_instance_count(),
+            "focused by a click: no ring"
         );
     }
 

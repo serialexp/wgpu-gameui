@@ -395,20 +395,16 @@ harden those foundations rather than create parallel replacements.
       `fragmentation_ratio` in the `ui_stress` bench whether this explains
       part of the `frame_render` slowdown above; only then decide whether
       overlap-based reordering is worth it.
-- [ ] **P2 — Focus can stay on a widget that is no longer drawn.**
-      `FocusState::focused` survives frames in which its widget never
-      registers (a dialog closed, a row scrolled out of a list), so Tab
-      starts from a ghost and keys can go to nothing. gpui notices when the
-      focused element is gone and moves focus to its nearest focusable
-      parent. A cheaper first step for gameui: in `end_frame`, drop focus
-      whose id was not registered this frame (text fields the app keeps
-      focused off-screen need checking before doing so).
-- [ ] **P2 — Show the focus ring only after keyboard navigation.** Today a
-      click focuses a widget and its ring is drawn, as CSS `:focus` would.
-      gpui (like CSS `:focus-visible`) shows it only when focus arrived by
-      keyboard. A `FocusState` flag set by Tab/arrow navigation and cleared
-      by a pointer press, read where the rings are drawn (`pressable.rs`,
-      `toggle.rs`, `checkbox.rs`, `radio.rs`, `slider.rs` and friends).
+- [ ] **P2 — A bare `DrawList::new()` scans every system font.** Its
+      `TextMeasurer::default()` calls `shared_font_system()`, which runs
+      `FontSystem::new()` and reads the host's font folders. Documented, and
+      apps share one font system via `with_font_system`, but hundreds of unit
+      tests build lists the bare way: `scroll_view`'s
+      `a_glide_converges_and_snaps_onto_the_target` (121 frames) takes ~34 s
+      alone and over 150 s inside the full lib run, almost all of it in
+      `fontdb::load_system_fonts`. Options: a process-wide lazily scanned
+      font system that `new()` shares, or a test helper that does, or a
+      `DrawList` that needs no measurer until text is measured.
 
 - [ ] **P1 — `List` with measured row heights and an item-anchored scroll
       position.** `List` only handles fixed row heights. gpui's list keeps
@@ -431,11 +427,6 @@ harden those foundations rather than create parallel replacements.
       (`build_pixel_buffer`) and writes the full texture whenever any glyph
       was added. gpui writes just the new glyph's rectangle. Track a dirty
       rectangle (or per-glyph rects) in `MsdfGlyphAtlas` instead of a flag.
-- [ ] **P2 — Popovers don't flip when there is no room.** `place_popover`
-      takes a caller-chosen `PopoverSide` and only nudges horizontally, so
-      a popover near the bottom runs off the window. Tooltips and menubar
-      submenus already flip; gpui's anchored element flips to the other side when
-      it doesn't fit. (agent-ui's TODO has the same request for `dropdown`.)
 - [ ] **P3 — Sideways scrolling, locked to one axis per gesture.**
       `InputState::scroll_delta_x` is filled in, but no gameui widget reads
       it: `ScrollView` and `List` scroll only vertically by wheel (agent-ui

@@ -2985,7 +2985,8 @@ fn render_widget_gallery() {
         // The open list is an overlay (drawn later into a popup layer), so the
         // cell only nominally reserves the 28px button. Reserve its full open
         // footprint too, so the floating list doesn't paint over the rows below.
-        let menu = dropdown.open_list_rect(r);
+        // The gallery is one tall page: room below, whatever the cell's y.
+        let menu = dropdown.open_list_rect(r, Rect::new(0.0, 0.0, W as f32, f32::INFINITY));
         flow.reserve(menu.y + menu.height - r.y);
         dropdown.draw(
             DROPDOWN_ID,
@@ -5591,13 +5592,13 @@ fn render_widget_gallery() {
                     .with_size(11.0)
                     .with_color(190, 200, 220),
             );
-            let body = place_popover(
-                [anchor.x + anchor.width * 0.5, anchor.y],
+            let placed = place_popover(
+                anchor,
                 [popover_width, popover_height],
                 Rect::new(0.0, 0.0, W as f32, 600.0),
                 PopoverSide::Above,
             );
-            Popover.draw(body, PopoverSide::Above, "Rename", &popover_lines, &mut {
+            Popover.draw(placed.body, placed.side, "Rename", &popover_lines, &mut {
                 DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0)
             });
 

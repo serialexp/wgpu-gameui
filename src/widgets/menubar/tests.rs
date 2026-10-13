@@ -242,6 +242,10 @@ fn bar_frame(
 }
 
 /// One full frame through the real call order, over persistent state.
+/// The text field the rig draws every frame under the menus: what a menu
+/// row acts on, so a press on the menu must leave it focused.
+const FIELD: crate::FocusId = 7;
+
 struct Rig {
     state: MenuBarState,
     scene: InteractionScene,
@@ -281,6 +285,7 @@ impl Rig {
         // menu claims the intents it handles first, so Escape with menu mode active
         // does not also blur a focused widget.
         self.focus.begin_frame(&self.input);
+        self.focus.register(FIELD);
         let slots = self.state.push_open_layers(&mut self.layers);
         let base = self.layers.input_for_base(&self.input);
         let output = {
@@ -1442,7 +1447,7 @@ fn hovering_a_label_while_open_switches_menus() {
 #[test]
 fn a_press_on_the_column_but_not_a_row_is_claimed_for_focus() {
     let mut rig = Rig::new();
-    rig.focus.focus(7);
+    rig.focus.focus(FIELD);
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
     let rect = rig.column_rect();
@@ -1454,7 +1459,7 @@ fn a_press_on_the_column_but_not_a_row_is_claimed_for_focus() {
     rig.step();
     assert_eq!(rig.state.open_levels(), 1, "the menu stays open");
     assert!(
-        rig.focus.is_focused(7),
+        rig.focus.is_focused(FIELD),
         "and the focused widget keeps focus: the press was the menu's"
     );
 }
@@ -1462,7 +1467,7 @@ fn a_press_on_the_column_but_not_a_row_is_claimed_for_focus() {
 #[test]
 fn choosing_a_row_does_not_blur_the_focused_widget() {
     let mut rig = Rig::new();
-    rig.focus.focus(7);
+    rig.focus.focus(FIELD);
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
     let rect = rig.column_rect();
@@ -1472,7 +1477,7 @@ fn choosing_a_row_does_not_blur_the_focused_widget() {
     let (_, activated) = rig.step();
     assert_eq!(activated, Some(NEW_ID));
     assert!(
-        rig.focus.is_focused(7),
+        rig.focus.is_focused(FIELD),
         "the item acts on the focused widget, so it must not blur"
     );
 }
@@ -1480,7 +1485,7 @@ fn choosing_a_row_does_not_blur_the_focused_widget() {
 #[test]
 fn a_press_outside_closes_the_chain_and_is_swallowed() {
     let mut rig = Rig::new();
-    rig.focus.focus(7);
+    rig.focus.focus(FIELD);
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
 
@@ -1489,7 +1494,7 @@ fn a_press_outside_closes_the_chain_and_is_swallowed() {
     assert_eq!(rig.state.open_levels(), 0, "an outside press dismisses");
     assert!(!rig.state.armed(), "and leaves menu mode");
     assert!(
-        rig.focus.is_focused(7),
+        rig.focus.is_focused(FIELD),
         "the swallowed press must not also read as click-elsewhere"
     );
 }
@@ -1497,11 +1502,11 @@ fn a_press_outside_closes_the_chain_and_is_swallowed() {
 #[test]
 fn an_idle_bar_leaves_clicks_elsewhere_to_focus() {
     let mut rig = Rig::new();
-    rig.focus.focus(7);
+    rig.focus.focus(FIELD);
     rig.click(600.0, 400.0);
     rig.step();
     assert!(
-        !rig.focus.is_focused(7),
+        !rig.focus.is_focused(FIELD),
         "with nothing armed or open, a click is an ordinary click elsewhere"
     );
 }

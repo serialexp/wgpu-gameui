@@ -21,23 +21,93 @@ pub enum PopoverSide {
     Below,
 }
 
-/// Compute the popover body rect for an anchor point (pure).
+impl PopoverSide {
+    /// The other side.
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Above => Self::Below,
+            Self::Below => Self::Above,
+        }
+    }
+}
+
+/// Space between the anchor and the popover body (the arrow's length).
+const ANCHOR_GAP: f32 = 6.0;
+/// Space the body keeps from the edges of its bounds.
+const EDGE: f32 = 4.0;
+
+/// Which side of `anchor` a `height`-tall box `gap` away from it goes on:
+/// `preferred` when it fits inside `bounds`, the other side when only that
+/// one fits, and whichever has more room when neither does.
+pub(crate) fn choose_side(
+    anchor: Rect,
+    height: f32,
+    gap: f32,
+    bounds: Rect,
+    preferred: PopoverSide,
+) -> PopoverSide {
+    let room = |side| room(anchor, gap, bounds, side);
+    let other = preferred.opposite();
+    if height <= room(preferred) {
+        preferred
+    } else if height <= room(other) || room(other) > room(preferred) {
+        other
+    } else {
+        preferred
+    }
+}
+
+/// The height free on `side` of `anchor` for a box `gap` away from it,
+/// inside `bounds` less their edge margin.
+pub(crate) fn room(anchor: Rect, gap: f32, bounds: Rect, side: PopoverSide) -> f32 {
+    match side {
+        PopoverSide::Above => anchor.y - gap - EDGE - bounds.y,
+        PopoverSide::Below => bounds.bottom() - EDGE - anchor.bottom() - gap,
+    }
+}
+
+/// Where a popover went: its body, and the side of the anchor it ended up
+/// on (draw its arrow with that side).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopoverPlacement {
+    /// The popover body's rect.
+    pub body: Rect,
+    /// The side it is on, which is not the one asked for when that had no
+    /// room.
+    pub side: PopoverSide,
+}
+
+/// Compute where a popover goes for its anchor (pure).
 ///
-/// * `anchor` — the point the arrow tip points at (e.g. the top-center of the
-///   trigger button, in the same space as `bounds`).
+/// * `anchor` — the trigger's rect (in the same space as `bounds`); the arrow
+///   points at the middle of its top or bottom edge.
 /// * `size` — the popover body's `[w, h]`.
-/// * `bounds` — the screen/viewport the popover must stay inside: the body is
-///   nudged horizontally to fit.
-pub fn place_popover(anchor: [f32; 2], size: [f32; 2], bounds: Rect, side: PopoverSide) -> Rect {
-    let w = size[0];
-    let h = size[1];
-    let mut x = anchor[0] - w * 0.5;
-    x = x.max(bounds.x + 4.0).min(bounds.right() - w - 4.0);
+/// * `bounds` — the screen/viewport the popover must stay inside. The body
+///   is nudged horizontally to fit, and goes on the other side of the anchor
+///   when `side` has no room for it but the other has (as tooltips and
+///   submenus do). With room on neither, it takes the roomier side and is
+///   kept inside `bounds`, over the anchor if need be.
+pub fn place_popover(
+    anchor: Rect,
+    size: [f32; 2],
+    bounds: Rect,
+    side: PopoverSide,
+) -> PopoverPlacement {
+    let [w, h] = size;
+    let x = (anchor.x + anchor.width * 0.5 - w * 0.5)
+        .max(bounds.x + EDGE)
+        .min(bounds.right() - w - EDGE);
+    let side = choose_side(anchor, h, ANCHOR_GAP, bounds, side);
     let y = match side {
-        PopoverSide::Above => anchor[1] - h - 6.0,
-        PopoverSide::Below => anchor[1] + 6.0,
+        PopoverSide::Above => anchor.y - h - ANCHOR_GAP,
+        PopoverSide::Below => anchor.bottom() + ANCHOR_GAP,
     };
-    Rect::new(x, y, w, h)
+    // Kept inside: when taller than the bounds, the top edge wins.
+    let y = y.min(bounds.bottom() - h - EDGE).max(bounds.y + EDGE);
+    PopoverPlacement {
+        body: Rect::new(x, y, w, h),
+        side,
+    }
 }
 
 /// Measure the minimum body height that keeps `title` and wrapped `lines` inside
@@ -296,12 +366,51 @@ mod tests {
     #[test]
     fn place_keeps_the_body_inside_bounds_and_on_the_right_side() {
         let bounds = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let anchor = Rect::new(0.0, 100.0, 10.0, 20.0);
         // Anchor at the very left edge: the body must be nudged right to fit.
-        let above = place_popover([5.0, 100.0], [120.0, 60.0], bounds, PopoverSide::Above);
-        assert!(above.x >= bounds.x + 4.0, "nudged inside the left edge");
-        assert!(above.bottom() < 100.0, "above the anchor");
-        let below = place_popover([5.0, 100.0], [120.0, 60.0], bounds, PopoverSide::Below);
-        assert!(below.y > 100.0, "below the anchor");
+        let above = place_popover(anchor, [120.0, 60.0], bounds, PopoverSide::Above);
+        assert_eq!(above.side, PopoverSide::Above);
+        assert!(
+            above.body.x >= bounds.x + 4.0,
+            "nudged inside the left edge"
+        );
+        assert_eq!(above.body.bottom(), 100.0 - 6.0, "above the anchor");
+        let below = place_popover(anchor, [120.0, 60.0], bounds, PopoverSide::Below);
+        assert_eq!(below.side, PopoverSide::Below);
+        assert_eq!(below.body.y, 120.0 + 6.0, "below the anchor's bottom");
+    }
+
+    #[test]
+    fn a_popover_with_no_room_on_its_side_flips() {
+        let bounds = Rect::new(0.0, 0.0, 400.0, 300.0);
+        // Near the bottom: a popover asked for below opens above.
+        let low = Rect::new(100.0, 260.0, 40.0, 20.0);
+        let placed = place_popover(low, [120.0, 80.0], bounds, PopoverSide::Below);
+        assert_eq!(placed.side, PopoverSide::Above);
+        assert_eq!(
+            placed.body.bottom(),
+            260.0 - 6.0,
+            "arrow on the anchor's top"
+        );
+        // Near the top: one asked for above opens below.
+        let high = Rect::new(100.0, 10.0, 40.0, 20.0);
+        let placed = place_popover(high, [120.0, 80.0], bounds, PopoverSide::Above);
+        assert_eq!(placed.side, PopoverSide::Below);
+        assert_eq!(placed.body.y, 30.0 + 6.0);
+    }
+
+    #[test]
+    fn with_room_on_neither_side_the_roomier_wins_and_it_stays_inside() {
+        let bounds = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let anchor = Rect::new(100.0, 180.0, 40.0, 20.0);
+        // 200 tall: 170 above the anchor, 90 below. Above has more room.
+        let placed = place_popover(anchor, [120.0, 200.0], bounds, PopoverSide::Below);
+        assert_eq!(placed.side, PopoverSide::Above);
+        assert!(placed.body.y >= 4.0, "kept inside: {:?}", placed.body);
+        assert!(placed.body.bottom() <= 296.0);
+        // Taller than the bounds: the top edge wins.
+        let placed = place_popover(anchor, [120.0, 400.0], bounds, PopoverSide::Below);
+        assert_eq!(placed.body.y, 4.0);
     }
 
     #[test]

@@ -233,6 +233,12 @@ pub struct UiState {
     /// frame with `dt`, and [`draw`](TooltipLayer::draw) at the end of the
     /// frame. Caller-owned; no `UiContext` verb wraps it.
     pub tooltips: TooltipLayer,
+    /// The window's size in logical pixels, `[width, height]`, set by the
+    /// host with [`set_screen`](Self::set_screen). `UiContext` hands it to
+    /// every widget it draws (`DrawContext::screen_width`/`screen_height`),
+    /// so a dropdown's list can open upward near the bottom of the window.
+    /// `[0, 0]` until set: unknown, and widgets then assume room everywhere.
+    screen: [f32; 2],
 }
 
 impl UiState {
@@ -240,6 +246,20 @@ impl UiState {
     /// [`begin_frame`](Self::begin_frame) seeds it from the theme.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Tell the widgets the window's size, in logical pixels. Call it each
+    /// frame (or on resize) before drawing: a dropdown opens its list upward
+    /// when there's no room below, and toolbars and menu bars keep their
+    /// overflow inside it.
+    pub fn set_screen(&mut self, width: f32, height: f32) {
+        self.screen = [width, height];
+    }
+
+    /// The window's size as last [`set_screen`](Self::set_screen), or
+    /// `[0, 0]` when never set.
+    pub fn screen(&self) -> [f32; 2] {
+        self.screen
     }
 
     /// Install platform clipboard callbacks used by all text and textarea fields.
@@ -1757,9 +1777,10 @@ impl<'a> UiContext<'a> {
                 focus,
                 anim,
                 interactions,
+                screen,
                 ..
             } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -1835,9 +1856,10 @@ impl<'a> UiContext<'a> {
                 focus,
                 anim,
                 interactions,
+                screen,
                 ..
             } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -1922,10 +1944,17 @@ impl<'a> UiContext<'a> {
                     return value;
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             // Reuse the DragId value as the FocusId so the slider is also
             // keyboard-adjustable (arrow keys) through the façade.
             Slider::new(min, max)
@@ -1965,8 +1994,13 @@ impl<'a> UiContext<'a> {
                 .state
                 .as_mut()
                 .expect("checkbox requires interactive state");
-            let UiState { focus, anim, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                focus,
+                anim,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -2014,10 +2048,17 @@ impl<'a> UiContext<'a> {
                 .state
                 .as_mut()
                 .expect("radio_group requires interactive state");
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             RadioGroup::new(options)
                 .focusable(fid)
                 .draw(selected, local, &mut ctx)
@@ -2156,6 +2197,7 @@ impl<'a> UiContext<'a> {
                 interactions,
                 clipboard_get,
                 clipboard_set,
+                screen,
                 ..
             } = &mut **state;
             let ti = text_inputs.entry(id).or_insert_with(|| {
@@ -2185,7 +2227,7 @@ impl<'a> UiContext<'a> {
                 ti.selection_start = None;
             }
             let before = ti.value.clone();
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -2314,12 +2356,15 @@ impl<'a> UiContext<'a> {
                 }
             };
             let UiState {
-                text_inputs, focus, ..
+                text_inputs,
+                focus,
+                screen,
+                ..
             } = &mut **state;
             let ti = text_inputs
                 .entry(id)
                 .or_insert_with(|| TextInput::new(local.x, local.y, local.width, local.height));
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -2390,8 +2435,13 @@ impl<'a> UiContext<'a> {
                     return TreeNodeOutput::default();
                 }
             };
-            let UiState { tree, focus, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                tree,
+                focus,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -2516,9 +2566,10 @@ impl<'a> UiContext<'a> {
                 focus,
                 anim,
                 interactions,
+                screen,
                 ..
             } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -2571,8 +2622,13 @@ impl<'a> UiContext<'a> {
                     };
                 }
             };
-            let UiState { drag, focus, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                drag,
+                focus,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -2606,8 +2662,13 @@ impl<'a> UiContext<'a> {
                     return DragHandleOutput::idle();
                 }
             };
-            let UiState { drag, focus, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                drag,
+                focus,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -2763,9 +2824,12 @@ impl<'a> UiContext<'a> {
                 }
             };
             let UiState {
-                dropdowns, focus, ..
+                dropdowns,
+                focus,
+                screen,
+                ..
             } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -2804,10 +2868,17 @@ impl<'a> UiContext<'a> {
                 .state
                 .as_mut()
                 .expect("toggle requires interactive state");
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             toggle.focusable(fid).draw(on, local, &mut ctx)
         };
         self.advance(height);
@@ -2842,10 +2913,17 @@ impl<'a> UiContext<'a> {
                     return TagOutput::default();
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_tag_input(local, tags, draft, focused, &mut ctx)
         };
         self.advance(height);
@@ -3027,8 +3105,13 @@ impl<'a> UiContext<'a> {
                 .state
                 .as_mut()
                 .expect("filter_chip requires interactive state");
-            let UiState { focus, anim, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                focus,
+                anim,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -3144,9 +3227,10 @@ impl<'a> UiContext<'a> {
                 focus,
                 anim,
                 interactions,
+                screen,
                 ..
             } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
@@ -3181,10 +3265,17 @@ impl<'a> UiContext<'a> {
                     return None;
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             bc.draw(local, &mut ctx)
         };
         self.advance(height);
@@ -3221,10 +3312,17 @@ impl<'a> UiContext<'a> {
                     };
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             Pager::new().draw(page, total, local, &mut ctx)
         };
         self.advance(height);
@@ -3257,10 +3355,17 @@ impl<'a> UiContext<'a> {
                     return AssetGridOutput::default();
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             AssetGrid::new(items, glyph).draw(local, selected, &mut ctx)
         };
         self.advance(h);
@@ -3302,8 +3407,13 @@ impl<'a> UiContext<'a> {
                     };
                 }
             };
-            let UiState { drag, focus, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                drag,
+                focus,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -3353,8 +3463,13 @@ impl<'a> UiContext<'a> {
                     };
                 }
             };
-            let UiState { drag, focus, .. } = &mut **state;
-            let mut ctx = DrawContext::new(list, focus, theme, &local_input, 0.0, 0.0)
+            let UiState {
+                drag,
+                focus,
+                screen,
+                ..
+            } = &mut **state;
+            let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"));
@@ -3393,10 +3508,17 @@ impl<'a> UiContext<'a> {
                     return ComboOutput::default();
                 }
             };
-            let mut ctx = DrawContext::new(list, &mut state.focus, theme, &local_input, 0.0, 0.0)
-                .with_enabled(!self.input_disabled)
-                .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+            let mut ctx = DrawContext::new(
+                list,
+                &mut state.focus,
+                theme,
+                &local_input,
+                state.screen[0],
+                state.screen[1],
+            )
+            .with_enabled(!self.input_disabled)
+            .with_active_layer(self.drawing_layers.last().copied())
+            .with_style(self.style_stack.last().expect("style stack is never empty"));
             draw_combo_trigger(local, label, open, focused, &mut ctx)
         };
         self.advance(height);
@@ -4966,6 +5088,34 @@ mod tests {
         assert!(
             rect.y > 100.0,
             "the list sits below the button, not at the origin: {rect:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropdown_near_the_bottom_of_the_screen_opens_upward() {
+        let theme = Theme::default();
+        let input = click_at(210.0, 570.0);
+        let mut state = UiState::new();
+        state.set_screen(800.0, 600.0);
+        let mut list = DrawList::new();
+        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+        ui.push();
+        ui.translate(200.0, 560.0);
+        ui.dropdown(1, &["Red", "Green"], 0, Some(120.0));
+        ui.pop();
+        drop(ui);
+        assert!(state.dropdowns.is_open(1), "the click opened it");
+
+        state.dropdowns.begin_frame(&mut InputState::default());
+        let mut layers = LayerStack::new();
+        let popup = state
+            .dropdowns
+            .push_open_layer(&mut layers)
+            .expect("an open list has a layer");
+        let rect = layers.layers()[popup].rect;
+        assert!(
+            rect.bottom() <= 560.0,
+            "no room below the button: the list sits above it: {rect:?}"
         );
     }
 

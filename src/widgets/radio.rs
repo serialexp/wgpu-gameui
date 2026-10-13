@@ -263,8 +263,11 @@ impl<'a> RadioGroup<'a> {
                         result = Some(base + 1);
                     }
                 }
-                // Focus ring hugs the selected option's dot.
-                if let Some((cx, cy)) = focus_circle {
+                // Focus ring hugs the selected option's dot, while focus is
+                // moved from the keyboard.
+                if let Some((cx, cy)) = focus_circle
+                    && ctx.focus.focus_visible()
+                {
                     ctx.draw_list.circle_outline(
                         (cx, cy),
                         radius + 3.0,
@@ -623,10 +626,18 @@ mod tests {
         let (unfocused, _) = draw_group_focus(&g, 0, rect(), &idle, &mut FocusState::new());
         let mut focus = FocusState::new();
         focus.focus(1);
+        focus.set_focus_visible(true);
         let (focused, _) = draw_group_focus(&g, 0, rect(), &idle, &mut focus);
         assert!(
             focused.circle_instances.len() > unfocused.circle_instances.len(),
             "focus ring should add a circle outline when focused"
+        );
+        focus.set_focus_visible(false);
+        let (clicked, _) = draw_group_focus(&g, 0, rect(), &idle, &mut focus);
+        assert_eq!(
+            clicked.circle_instances.len(),
+            unfocused.circle_instances.len(),
+            "focused by a click: no ring"
         );
     }
 }

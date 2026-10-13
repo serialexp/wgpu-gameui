@@ -14,6 +14,19 @@
 //! - **Escape** blurs.
 //! - A click that no focusable claimed (empty space, a button, a slider) blurs —
 //!   "click elsewhere to dismiss".
+//! - Focus on a widget that was not drawn this frame (a dialog closed, a row
+//!   scrolled away, a disabled control) is dropped, so Tab never starts from
+//!   a widget that isn't there and keys never go to one. Focus given this
+//!   frame is kept for one frame regardless, for a widget first drawn on the
+//!   next one (a dialog's field, focused as the dialog opens).
+//!
+//! ## Focus rings
+//! Rings show only once focus is being moved from the keyboard (or a
+//! gamepad): Tab, Shift+Tab or an arrow sets
+//! [`focus_visible`](FocusState::focus_visible), and a pointer press clears
+//! it, as CSS `:focus-visible` and gpui do. A clicked button takes focus
+//! without a ring. Text fields mark their focus with their own border and
+//! caret, whatever the modality.
 //!
 //! `FocusState` is caller-owned and persists across frames — construct one per UI
 //! surface and thread `&mut` into every focusable you draw, the same way the
@@ -98,6 +111,13 @@ pub struct FocusState {
     /// (e.g. WASD) while the user isn't editing text. Drained each frame via
     /// [`take_ime_request`](FocusState::take_ime_request).
     ime_request: Option<Rect>,
+    /// Focus was given this frame (by [`focus`](FocusState::focus) or
+    /// [`request`](FocusState::request)): kept at `end_frame` even if its
+    /// widget wasn't drawn, since that widget may first draw next frame.
+    given: bool,
+    /// Focus is being moved from the keyboard or a gamepad, so focus rings
+    /// show. See [`focus_visible`](FocusState::focus_visible).
+    visible: bool,
 }
 
 impl FocusState {
@@ -129,6 +149,13 @@ impl FocusState {
         self.mouse_clicked = input.mouse_clicked;
         self.ime_request = None;
         self.click_claimed = false;
+        let nav = &input.nav;
+        if nav.next || nav.prev || nav.up || nav.down || nav.left || nav.right {
+            self.visible = true;
+        }
+        if input.mouse_clicked || input.mouse_right_clicked {
+            self.visible = false;
+        }
     }
 
     /// Register `id` as focusable in the base layer (no layer scope).
@@ -169,11 +196,29 @@ impl FocusState {
         self.focused
     }
 
+    /// Whether focus rings should show: focus is being moved from the
+    /// keyboard or a gamepad (Tab, Shift+Tab or an arrow since the last
+    /// pointer press). Widgets draw their ring only when this and
+    /// [`is_focused`](Self::is_focused) are both true;
+    /// [`DrawContext::draw_focus_ring`](crate::DrawContext::draw_focus_ring)
+    /// checks it for them.
+    pub fn focus_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Show or hide focus rings until the next Tab, arrow or pointer press:
+    /// a gamepad-driven game that seeds focus on a menu wants its ring from
+    /// the start.
+    pub fn set_focus_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
     /// Request focus for `id` (e.g. when the widget is clicked). Takes effect
     /// immediately and marks this frame's click as claimed, so it won't also
     /// trigger a click-elsewhere blur.
     pub fn request(&mut self, id: FocusId) {
         self.focused = Some(id);
+        self.given = true;
         self.click_claimed = true;
     }
 
@@ -181,6 +226,7 @@ impl FocusState {
     /// initial focus, or focus a field after a validation error).
     pub fn focus(&mut self, id: FocusId) {
         self.focused = Some(id);
+        self.given = true;
     }
 
     /// Mark this frame's click as claimed without changing which widget is
@@ -225,7 +271,8 @@ impl FocusState {
         self.ime_request.take()
     }
 
-    /// End a frame: resolve Escape, click-elsewhere blur, and Tab navigation.
+    /// End a frame: resolve Escape, click-elsewhere blur, focus on a widget
+    /// that wasn't drawn, and Tab navigation.
     ///
     /// `active_layer` is the modal on top, if any: Tab then cycles through
     /// that layer's focusables (registered via
@@ -241,6 +288,15 @@ impl FocusState {
         }
         // A click that no focusable claimed blurs the current focus.
         if self.mouse_clicked && !self.click_claimed {
+            self.focused = None;
+        }
+        // Focus on a widget that wasn't drawn this frame goes, unless it was
+        // given this frame (its widget may first draw next frame).
+        if !std::mem::take(&mut self.given)
+            && let Some(focused) = self.focused
+            && !self.order.contains(&focused)
+            && !self.layer_orders.iter().flatten().any(|&id| id == focused)
+        {
             self.focused = None;
         }
         // Tab / Shift+Tab cycle through the modal's focusables only, or
@@ -622,5 +678,120 @@ mod tests {
             None,
             "unclaimed click blurs even with active layer"
         );
+    }
+
+    // ---- Focus on a widget that is no longer drawn ----
+
+    /// One frame that draws `drawn` (base layer), with no input.
+    fn frame(f: &mut FocusState, drawn: &[FocusId]) {
+        f.begin_frame(&input(false, false, false, false));
+        for &id in drawn {
+            f.register(id);
+        }
+        f.end_frame(None);
+    }
+
+    #[test]
+    fn focus_on_a_widget_that_was_not_drawn_is_dropped() {
+        let mut f = FocusState::new();
+        f.focus(4);
+        frame(&mut f, &[4, 5]);
+        assert!(f.is_focused(4), "drawn: kept");
+        frame(&mut f, &[5]);
+        assert_eq!(f.focused(), None, "gone from the frame: dropped");
+    }
+
+    #[test]
+    fn focus_given_this_frame_waits_a_frame_for_its_widget() {
+        // A dialog opens and focuses its field; the field draws next frame.
+        let mut f = FocusState::new();
+        f.begin_frame(&input(false, false, false, false));
+        f.register(1);
+        f.focus(9);
+        f.end_frame(None);
+        assert!(f.is_focused(9), "given this frame: kept");
+        frame(&mut f, &[1, 9]);
+        assert!(f.is_focused(9), "then drawn: kept");
+        // Focus given between frames waits the same way.
+        f.focus(12);
+        frame(&mut f, &[1]);
+        assert!(f.is_focused(12));
+        frame(&mut f, &[1]);
+        assert_eq!(f.focused(), None, "and goes if it never draws");
+    }
+
+    #[test]
+    fn focus_drawn_on_a_layer_is_kept() {
+        let mut f = FocusState::new();
+        f.focus(30);
+        f.begin_frame(&input(false, false, false, false));
+        f.register(10);
+        f.register_layer(30, 2);
+        f.end_frame(Some(2));
+        f.begin_frame(&input(false, false, false, false));
+        f.register(10);
+        f.register_layer(30, 2);
+        f.end_frame(Some(2));
+        assert!(f.is_focused(30));
+    }
+
+    #[test]
+    fn tab_after_the_focused_widget_went_starts_from_the_first() {
+        let mut f = FocusState::new();
+        f.focus(99);
+        frame(&mut f, &[99]);
+        f.begin_frame(&input(true, false, false, false));
+        f.register(1);
+        f.register(2);
+        f.end_frame(None);
+        assert!(f.is_focused(1), "not from a widget that isn't there");
+    }
+
+    // ---- Focus rings: keyboard only ----
+
+    #[test]
+    fn rings_show_after_tab_and_arrows_and_hide_on_a_press() {
+        let mut f = FocusState::new();
+        assert!(!f.focus_visible(), "no ring before the keyboard is used");
+        f.begin_frame(&input(true, false, false, false));
+        f.register(1);
+        f.end_frame(None);
+        assert!(f.is_focused(1) && f.focus_visible(), "Tab: ring");
+
+        f.begin_frame(&input(false, false, false, true));
+        f.register(1);
+        f.request(1);
+        f.end_frame(None);
+        assert!(f.is_focused(1), "clicked: focused");
+        assert!(!f.focus_visible(), "but no ring");
+
+        let mut arrow = input(false, false, false, false);
+        arrow.nav.down = true;
+        f.begin_frame(&arrow);
+        f.register(1);
+        f.end_frame(None);
+        assert!(f.focus_visible(), "an arrow: ring");
+
+        let mut right = input(false, false, false, false);
+        right.mouse_right_clicked = true;
+        f.begin_frame(&right);
+        f.register(1);
+        f.end_frame(None);
+        assert!(!f.focus_visible(), "a right press hides it too");
+    }
+
+    #[test]
+    fn programmatic_focus_keeps_the_modality() {
+        // A dialog opened from the keyboard rings its first key; one opened
+        // by a click doesn't.
+        let mut f = FocusState::new();
+        f.begin_frame(&input(true, false, false, false));
+        f.register(1);
+        f.end_frame(None);
+        f.focus(2);
+        assert!(f.focus_visible());
+        f.set_focus_visible(false);
+        f.focus(3);
+        assert!(!f.focus_visible());
     }
 }

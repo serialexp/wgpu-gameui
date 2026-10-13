@@ -2232,3 +2232,26 @@ when something could have changed. gameui gained what a host like that needs.
   end drew a jump, not a fade); `needs_repaint` is `next_deadline.is_some()`.
 - [x] **`ClickTracker::hold_due_in(time)`** — when a press still held latches
   `mouse_held`, so the frame that sees it is built.
+
+## 2026-10-13 — Focus and popover fixes (from the gpui comparison)
+
+- [x] **P2 — Focus can stay on a widget that is no longer drawn.**
+  `FocusState::end_frame` drops focus whose id was not registered this frame,
+  in the base order or any layer's. Focus given by `focus()` / `request()`
+  gets one frame of grace, so a dialog can focus its field before the field
+  is first drawn. Tab after the focused widget went starts from the first.
+- [x] **P2 — Show the focus ring only after keyboard navigation.**
+  `FocusState::focus_visible()`: set by any nav direction (Tab and arrows,
+  so gamepads show rings too), cleared by a mouse press; programmatic focus
+  keeps the current mode, and `set_focus_visible` lets an app seed it.
+  `DrawContext::draw_focus_ring` and radio's own ring read it; text wells
+  still show focus by their border.
+- [x] **P2 — Popovers don't flip when there is no room.**
+  `place_popover(anchor: Rect, size, bounds, side) -> PopoverPlacement
+  { body, side }` flips to the other side when the preferred one doesn't
+  fit, takes the roomier side when neither does, and keeps the body inside
+  `bounds`. `Dropdown` flips its list up the same way and shows only the rows
+  that fit; `DropdownState::open_list_rect` takes the bounds.
+  `UiState::set_screen(width, height)` gives widgets drawn through
+  `UiContext` the screen size (it was 0×0, so toolbars, menubars and
+  dropdowns there couldn't keep popups on screen).

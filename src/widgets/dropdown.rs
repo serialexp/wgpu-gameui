@@ -58,6 +58,7 @@ use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{InputState, LayerStack, StyleKey, StyleResolver};
 
+use super::popover::{PopoverSide, choose_side, room};
 use super::{DrawContext, DrawList};
 
 /// Stable identity for a dropdown within one UI surface. Any scheme that is
@@ -71,6 +72,13 @@ const ITEM_HEIGHT: f32 = 28.0;
 const DEFAULT_MAX_VISIBLE: usize = 8;
 /// Vertical gap between the button and the floating list.
 const GAP_BELOW_BUTTON: f32 = 2.0;
+/// Bounds with room on every side, for a screen nobody gave a size.
+const UNBOUNDED: Rect = Rect {
+    x: -1e9,
+    y: -1e9,
+    width: 2e9,
+    height: 2e9,
+};
 /// Half-width / half-height of the chevron glyph drawn in the trigger.
 const CHEVRON: f32 = 4.0;
 /// Extra gap between the chevron's stroke and the field border, in addition to
@@ -89,6 +97,9 @@ struct OpenGeom {
     width: f32,
     item_h: f32,
     max_visible: usize,
+    /// The screen the list must stay inside (screen space, like
+    /// `button_rect`).
+    bounds: Rect,
 }
 
 /// Arbitrates which dropdown (if any) is open, and carries the geometry needed
@@ -189,15 +200,14 @@ impl DropdownState {
         self.highlighted = 0;
     }
 
-    /// The floating list rect for `geom` — directly below the button, as wide
-    /// as the button, tall enough for up to `max_visible` rows.
+    /// The floating list rect for `geom` (see [`list_rect`]).
     fn list_rect(geom: &OpenGeom) -> Rect {
-        let visible = geom.items.len().min(geom.max_visible).max(1);
-        Rect::new(
-            geom.button_rect.x,
-            geom.button_rect.y + geom.button_rect.height + GAP_BELOW_BUTTON,
+        list_rect(
+            geom.button_rect,
             geom.width,
-            visible as f32 * geom.item_h,
+            geom.items.len().min(geom.max_visible),
+            geom.item_h,
+            geom.bounds,
         )
     }
 
@@ -444,11 +454,36 @@ impl DropdownState {
             width: button_rect.width,
             item_h: ITEM_HEIGHT,
             max_visible: DEFAULT_MAX_VISIBLE,
+            // Room everywhere: the list opens below.
+            bounds: UNBOUNDED,
         };
         self.open = Some(id);
         self.geom = Some(geom.clone());
         self.next_geom = Some(geom);
     }
+}
+
+/// Where the list of `rows` rows (`item_h` each, `width` wide) floats for a
+/// button at `button`: below it, or above when only above has room for the
+/// whole list, as wide as `width`. With room for the whole list on neither
+/// side it takes the roomier one and shows as many rows as fit there (at
+/// least one); the rest scroll.
+fn list_rect(button: Rect, width: f32, rows: usize, item_h: f32, bounds: Rect) -> Rect {
+    let rows = rows.max(1);
+    let full = rows as f32 * item_h;
+    let side = choose_side(button, full, GAP_BELOW_BUTTON, bounds, PopoverSide::Below);
+    let free = room(button, GAP_BELOW_BUTTON, bounds, side);
+    let shown = if full <= free {
+        rows
+    } else {
+        ((free / item_h).floor() as usize).clamp(1, rows)
+    };
+    let height = shown as f32 * item_h;
+    let y = match side {
+        PopoverSide::Below => button.bottom() + GAP_BELOW_BUTTON,
+        PopoverSide::Above => button.y - GAP_BELOW_BUTTON - height,
+    };
+    Rect::new(button.x, y, width, height)
 }
 
 /// Per-frame configuration for one dropdown. Lightweight, like
@@ -506,15 +541,13 @@ impl<'a> Dropdown<'a> {
     /// reserves), but this lets a caller that *does* need the footprint reason
     /// about it: reserve layout space beneath the button, or decide whether to
     /// flip the list upward when it would run off-screen.
-    pub fn open_list_rect(&self, button_rect: Rect) -> Rect {
-        // Mirror the private `list_rect` geometry (same GAP_BELOW_BUTTON /
-        // ITEM_HEIGHT / max_visible clamp) from this frame's config.
-        let visible = self.items.len().min(self.max_visible).max(1);
-        Rect::new(
-            button_rect.x,
-            button_rect.y + button_rect.height + GAP_BELOW_BUTTON,
+    pub fn open_list_rect(&self, button_rect: Rect, bounds: Rect) -> Rect {
+        list_rect(
+            button_rect,
             button_rect.width,
-            visible as f32 * ITEM_HEIGHT,
+            self.items.len().min(self.max_visible),
+            ITEM_HEIGHT,
+            bounds,
         )
     }
 
@@ -548,6 +581,12 @@ impl<'a> Dropdown<'a> {
         // own popup layer, which has no transform: it needs the button where
         // it lands on screen.
         let screen_rect = list.current_transform().transform_rect_aabb(rect);
+        // A context that doesn't know the screen (0x0) leaves room everywhere.
+        let bounds = if ctx.screen_width > 0.0 && ctx.screen_height > 0.0 {
+            Rect::new(0.0, 0.0, ctx.screen_width, ctx.screen_height)
+        } else {
+            UNBOUNDED
+        };
 
         let hovered = input.is_hovered(rect.x, rect.y, rect.width, rect.height);
         let clicked = hovered && input.mouse_clicked;
@@ -583,6 +622,7 @@ impl<'a> Dropdown<'a> {
                     width: screen_rect.width,
                     item_h: ITEM_HEIGHT,
                     max_visible: self.max_visible,
+                    bounds,
                 };
                 state.geom = Some(geom.clone());
                 state.next_geom = Some(geom);
@@ -637,6 +677,7 @@ impl<'a> Dropdown<'a> {
                 width: screen_rect.width,
                 item_h: ITEM_HEIGHT,
                 max_visible: self.max_visible,
+                bounds,
             });
         }
 
@@ -703,6 +744,10 @@ mod tests {
     fn rect_b() -> Rect {
         Rect::new(10.0, 80.0, 120.0, 28.0)
     }
+    /// The screen the tests' frames draw into.
+    fn screen() -> Rect {
+        Rect::new(0.0, 0.0, 800.0, 600.0)
+    }
 
     /// Drive one full frame: begin (the open list claims its nav edges before
     /// `focus` reads them, matching the host contract), draw both buttons, end.
@@ -723,9 +768,59 @@ mod tests {
     }
 
     #[test]
+    fn near_the_bottom_the_list_opens_above_the_button() {
+        let low = Rect::new(10.0, 560.0, 120.0, 28.0);
+        let menu = Dropdown::new(&ITEMS, 0).open_list_rect(low, screen());
+        assert_eq!(
+            menu.bottom(),
+            low.y - GAP_BELOW_BUTTON,
+            "above, the gap kept"
+        );
+        assert_eq!(menu.height, ITEMS.len() as f32 * ITEM_HEIGHT, "every row");
+    }
+
+    #[test]
+    fn with_room_for_the_whole_list_on_neither_side_it_shows_what_fits() {
+        // 30 rows want 840 px; a 200 px screen has 4 rows of room below a
+        // button at its top.
+        let long: Vec<String> = (0..30).map(|i| format!("Option {i}")).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        let short = Rect::new(0.0, 0.0, 800.0, 200.0);
+        let top = Rect::new(10.0, 10.0, 120.0, 28.0);
+        let menu = Dropdown::new(&long, 0)
+            .with_max_visible(30)
+            .open_list_rect(top, short);
+        assert_eq!(menu.y, top.bottom() + GAP_BELOW_BUTTON, "the roomier side");
+        assert_eq!(menu.height, 5.0 * ITEM_HEIGHT, "whole rows that fit");
+        assert!(menu.bottom() <= short.bottom());
+    }
+
+    #[test]
+    fn an_open_dropdown_drawn_near_the_bottom_floats_its_list_above() {
+        // The screen comes from the draw context: a button 20 px from the
+        // bottom of an 800x600 frame opens upward.
+        let theme = Theme::default();
+        let mut state = DropdownState::new();
+        let mut focus = FocusState::new();
+        let low = Rect::new(10.0, 552.0, 120.0, 28.0);
+        state.open_for_test(1, low, &ITEMS, 0);
+        let mut input = InputState::default();
+        state.begin_frame(&mut input);
+        let mut list = DrawList::new();
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
+        Dropdown::new(&ITEMS, 0).draw(1, low, &mut state, &mut ctx);
+        drop(ctx);
+        state.end_frame(&mut focus);
+        state.begin_frame(&mut input);
+        let geom = state.geom.as_ref().expect("still open");
+        let menu = DropdownState::list_rect(geom);
+        assert_eq!(menu.bottom(), low.y - GAP_BELOW_BUTTON);
+    }
+
+    #[test]
     fn open_list_rect_floats_below_button_sized_to_rows() {
         let btn = rect_a();
-        let menu = Dropdown::new(&ITEMS, 0).open_list_rect(btn);
+        let menu = Dropdown::new(&ITEMS, 0).open_list_rect(btn, screen());
         // Floats just below the button, same x/width.
         assert_eq!(menu.x, btn.x);
         assert_eq!(menu.width, btn.width);
@@ -739,7 +834,7 @@ mod tests {
         let btn = rect_a();
         let menu = Dropdown::new(&ITEMS, 0)
             .with_max_visible(2)
-            .open_list_rect(btn);
+            .open_list_rect(btn, screen());
         assert_eq!(
             menu.height,
             2.0 * ITEM_HEIGHT,
@@ -838,7 +933,7 @@ mod tests {
         state.draw_open_layer(&mut layers, Some(popup), &styles, &input);
 
         let list = &layers.layers_mut()[popup].list;
-        let panel = Dropdown::new(&ITEMS, 0).open_list_rect(button);
+        let panel = Dropdown::new(&ITEMS, 0).open_list_rect(button, screen());
         assert!(
             list.viewport_clips()
                 .iter()
@@ -1120,6 +1215,7 @@ mod tests {
         let mut idle = input(false, false, (20.0, 20.0));
         s.begin_frame(&mut idle);
         focus.begin_frame(&idle);
+        focus.register(9); // the field the list acts on, drawn as usual
         let popup = s.push_open_layer(&mut layers);
         let mut list = DrawList::new();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &idle, 800.0, 600.0);
@@ -1137,6 +1233,7 @@ mod tests {
         let mut click = input(true, false, (20.0, 50.0));
         s.begin_frame(&mut click);
         focus.begin_frame(&click);
+        focus.register(9); // the field the list acts on, drawn as usual
         let popup = s.push_open_layer(&mut layers);
         let picked = s.draw_open_layer(&mut layers, popup, &StyleResolver::new(&theme), &click);
         assert_eq!(picked, Some((1, 0)));
@@ -1166,6 +1263,7 @@ mod tests {
         s.begin_frame(&mut esc);
         assert!(!esc.nav.cancel, "the open list claimed the cancel edge");
         focus.begin_frame(&esc);
+        focus.register(9); // the field the list acts on, drawn as usual
         let popup = s.push_open_layer(&mut layers);
         let _ = s.draw_open_layer(&mut layers, popup, &StyleResolver::new(&theme), &esc);
         s.end_frame(&mut focus);

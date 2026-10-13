@@ -652,10 +652,11 @@ mod tests {
             rect(),
             &mut with_ctx(&mut unfocused, &mut focus, &theme, &idle),
         );
-        // Focused: ring adds outline geometry.
+        // Focused from the keyboard: ring adds outline geometry.
         let mut focused = DrawList::new();
         let mut focus = FocusState::new();
         focus.focus(1);
+        focus.set_focus_visible(true);
         Button::new("Go").focusable(1).draw(
             rect(),
             &mut with_ctx(&mut focused, &mut focus, &theme, &idle),
@@ -663,6 +664,17 @@ mod tests {
         assert!(
             focused.chrome_instance_count() > unfocused.chrome_instance_count(),
             "focus ring should add outline geometry when focused"
+        );
+        // Focused by a click: no ring.
+        let mut clicked = DrawList::new();
+        focus.set_focus_visible(false);
+        Button::new("Go").focusable(1).draw(
+            rect(),
+            &mut with_ctx(&mut clicked, &mut focus, &theme, &idle),
+        );
+        assert_eq!(
+            clicked.chrome_instance_count(),
+            unfocused.chrome_instance_count()
         );
     }
 
