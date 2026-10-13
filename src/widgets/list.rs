@@ -119,6 +119,12 @@ pub struct ListState {
     following: bool,
     /// An item to scroll into view at the next draw.
     reveal: Option<usize>,
+    /// Pixels to move the view by at the next draw.
+    nudge: f32,
+    /// How far into their rows `top` and `target` were, as shares of the
+    /// rows' heights, taken by [`keep_share`](Self::keep_share) for the next
+    /// draw.
+    shares: Option<(Share, Share)>,
     /// The selected item indices (ordered, so the caller can iterate cheaply).
     selected: BTreeSet<usize>,
     /// Origin of a `Shift`-range selection (the last plainly-clicked item).
@@ -155,6 +161,10 @@ impl Default for RowAnchor {
         }
     }
 }
+
+/// How far into a row an anchor was, as a share of the row's height, and
+/// the row's id; none at the very top of a row or above it.
+type Share = Option<(RowId, f32)>;
 
 /// Where a list's rows are, for turning a [`RowAnchor`] into pixels and back.
 /// Pixels count from the top of the content, padding included; rows count
@@ -275,8 +285,10 @@ impl Rows<'_> {
 }
 
 /// How close to the end the reader has to scroll for a list that sticks to
-/// its end to follow it again.
-const END_SLACK: f32 = 0.5;
+/// its end to follow it again. Pixels on screen are f32: a few million
+/// pixels down a long list they come a whole pixel apart, so the end can
+/// only be reached to within one.
+const END_SLACK: f32 = 2.0;
 
 // ---- selection primitives (single source of truth) ----------------------
 //
@@ -354,6 +366,8 @@ impl ListState {
         };
         self.target = self.top;
         self.following = false;
+        self.nudge = 0.0;
+        self.shares = None;
     }
 
     /// Glide to row `row`, `into` pixels into it, over the next draws. Stops
@@ -365,6 +379,8 @@ impl ListState {
             id: None,
         };
         self.following = false;
+        self.nudge = 0.0;
+        self.shares = None;
     }
 
     /// Show the last row, and keep it in view as rows arrive, until the
@@ -372,12 +388,44 @@ impl ListState {
     pub fn follow_end(&mut self) {
         self.following = true;
         self.top = self.target;
+        self.nudge = 0.0;
+    }
+
+    /// `heights` are about to change under the view: rows estimated again
+    /// for another width or other fonts. The next draw keeps the reader as
+    /// far into the row at the top as the same share of its new height, as
+    /// it does when it sees the width change itself. Call it before
+    /// changing them.
+    pub fn keep_share(&mut self, heights: &RowHeights) {
+        self.shares = Some(self.take_shares(heights));
+    }
+
+    /// The shares of their rows `top` and `target` are into, with the rows
+    /// found by id first, in case rows went in front since the last draw.
+    fn take_shares(&mut self, heights: &RowHeights) -> (Share, Share) {
+        let share = |at: &mut RowAnchor| {
+            if let Some(row) = at.id.and_then(|id| heights.index_of(id)) {
+                at.row = row;
+            }
+            let id = (at.row < heights.len()).then(|| heights.id_of(at.row))?;
+            at.id = Some(id);
+            let height = heights.height_of(at.row);
+            (height > 0.0 && at.into > 0.0).then(|| (id, at.into / height))
+        };
+        (share(&mut self.top), share(&mut self.target))
     }
 
     /// Scroll item `index` into view at the next draw, gliding no further
     /// than it takes.
     pub fn reveal_item(&mut self, index: usize) {
         self.reveal = Some(index);
+    }
+
+    /// Move the view `dy` pixels down (up when negative) at the next draw,
+    /// straight there: for a drag past the edge that scrolls with the clock.
+    /// Following the end afterwards as if the reader had scrolled.
+    pub fn scroll_by(&mut self, dy: f32) {
+        self.nudge += dy;
     }
 
     /// Whether the view keeps to the end as rows arrive.
@@ -612,6 +660,10 @@ pub struct List<'a> {
     disabled: Option<&'a dyn Fn(usize) -> bool>,
     overlay_bar: bool,
     stick_to_end: bool,
+    /// Tint the row under the pointer.
+    hover: bool,
+    /// How far a wheel notch scrolls, when not the scroll view's own.
+    wheel_speed: Option<f32>,
     /// Space kept free above the first row and below the last, inside the
     /// scroll.
     padding: [f32; 2],
@@ -630,6 +682,8 @@ impl Default for List<'_> {
             disabled: None,
             overlay_bar: false,
             stick_to_end: false,
+            hover: true,
+            wheel_speed: None,
             padding: [0.0, 0.0],
         }
     }
@@ -702,6 +756,32 @@ impl<'a> List<'a> {
     pub fn stick_to_end(mut self, stick: bool) -> Self {
         self.stick_to_end = stick;
         self
+    }
+
+    /// Whether the row under the pointer is tinted (the default). A list
+    /// whose rows show their own hover turns it off.
+    pub fn with_hover(mut self, hover: bool) -> Self {
+        self.hover = hover;
+        self
+    }
+
+    /// How many pixels a wheel notch scrolls (see
+    /// [`ScrollView::with_wheel_speed`]).
+    pub fn with_wheel_speed(mut self, speed: f32) -> Self {
+        self.wheel_speed = Some(speed);
+        self
+    }
+
+    /// The width rows are measured and drawn at in `rect`: what is left
+    /// beside a docked scrollbar, in whole pixels (see
+    /// [`draw_measured`](Self::draw_measured)).
+    pub fn measure_width(&self, rect: Rect) -> f32 {
+        let reserve = if self.overlay_bar {
+            0.0
+        } else {
+            ScrollView::new(rect).vertical_only().reserve()
+        };
+        (rect.width - reserve).floor().max(1.0)
     }
 
     /// Float the scrollbar over the rows instead of docking it beside them
@@ -832,26 +912,22 @@ impl<'a> List<'a> {
         if self.overlay_bar {
             view = view.overlay();
         }
-        let measure_w = (rect.width - view.reserve()).floor().max(1.0);
+        if let Some(speed) = self.wheel_speed {
+            view = view.with_wheel_speed(speed);
+        }
+        let measure_w = self.measure_width(rect);
 
         // A new width keeps the reader's place as the same share of the row
-        // at the top: its pixels into it no longer mean the same text. The
-        // share belongs to that row, found by id first in case pages went in
-        // front since the last draw.
-        let mut shares = None;
-        if let Sizing::Measured { heights, .. } = &mut sizing
-            && heights.set_width(measure_w)
-        {
-            let share = |at: &mut RowAnchor| {
-                if let Some(row) = at.id.and_then(|id| heights.index_of(id)) {
-                    at.row = row;
-                }
-                let id = (at.row < heights.len()).then(|| heights.id_of(at.row))?;
-                at.id = Some(id);
-                let height = heights.height_of(at.row);
-                (height > 0.0 && at.into > 0.0).then(|| (id, at.into / height))
-            };
-            shares = Some((share(&mut state.top), share(&mut state.target)));
+        // at the top: its pixels into it no longer mean the same text.
+        // Shares the caller took (see `keep_share`) were taken before it
+        // changed the heights, so they win over any taken here.
+        let mut shares = state.shares.take();
+        if let Sizing::Measured { heights, .. } = &mut sizing {
+            // As `set_width` sees a change: not the first width.
+            if shares.is_none() && heights.width() != 0.0 && heights.width() != measure_w {
+                shares = Some(state.take_shares(heights));
+            }
+            heights.set_width(measure_w);
         }
 
         // --- Geometry: measure the rows in view, then place the view ------
@@ -985,6 +1061,13 @@ impl<'a> List<'a> {
         let shift = input.shift_pressed;
         let mouse_over_content = rect.contains(mouse_x, mouse_y) && !input.mouse_consumed;
 
+        // A move by pixels asked for since the last draw: straight there.
+        if state.nudge != 0.0 {
+            let max = state.scroll.max_offset(1, view_h);
+            let to = (state.scroll.offset[1] + std::mem::take(&mut state.nudge)).clamp(0.0, max);
+            state.scroll.offset[1] = to;
+            state.scroll.target[1] = to;
+        }
         let begun = view.begin(&mut state.scroll, list, input);
         if (state.scroll.offset[1], state.scroll.target[1]) != placed {
             state.take_pixels(&rows, view_h, self.stick_to_end);
@@ -1083,7 +1166,7 @@ impl<'a> List<'a> {
                     if is_selected {
                         paint_selected_row(list, style, cell, focused);
                     } else {
-                        let bg = if over_cell {
+                        let bg = if over_cell && self.hover {
                             style.color(StyleKey::RowHover)
                         } else if zebra && cols == 1 && idx % 2 == 1 {
                             style.color(StyleKey::RowZebra)
@@ -1369,6 +1452,69 @@ mod tests {
         }
         assert_eq!(st.offset(), max + 20.0);
         assert!(st.is_following_end());
+    }
+
+    #[test]
+    fn a_move_by_pixels_jumps_and_follows_the_end_when_it_gets_there() {
+        let w = List::new().with_item_height(20.0).stick_to_end(true);
+        let mut st = ListState::new();
+        still(&w, &mut st, 40);
+        st.scroll_by(45.0);
+        still(&w, &mut st, 40);
+        assert_eq!(st.top_row(), (2, 5.0));
+        assert!(!st.is_following_end());
+        st.scroll_by(10_000.0);
+        still(&w, &mut st, 40);
+        assert_eq!(st.offset(), 40.0 * 20.0 - 100.0);
+        assert!(st.is_following_end());
+    }
+
+    #[test]
+    fn a_move_to_a_row_drops_a_move_by_pixels_not_drawn_yet() {
+        let w = List::new().with_item_height(20.0);
+        let mut st = ListState::new();
+        still(&w, &mut st, 40);
+        st.scroll_by(45.0);
+        st.scroll_to_row(10, 0.0);
+        still(&w, &mut st, 40);
+        assert_eq!(st.top_row(), (10, 0.0));
+        st.scroll_by(45.0);
+        st.glide_to_row(5, 0.0);
+        for _ in 0..120 {
+            still(&w, &mut st, 40);
+        }
+        assert_eq!(st.top_row(), (5, 0.0));
+        st.scroll_by(-45.0);
+        st.follow_end();
+        still(&w, &mut st, 40);
+        assert_eq!(st.offset(), 40.0 * 20.0 - 100.0);
+    }
+
+    #[test]
+    fn rows_need_not_tint_under_the_pointer() {
+        let theme = theme();
+        let hover = StyleResolver::new(&theme).color(StyleKey::RowHover);
+        let quads = |w: &List| {
+            let mut dl = DrawList::new();
+            let mut st = ListState::new();
+            w.draw(
+                Rect::new(0.0, 0.0, 100.0, 100.0),
+                10,
+                &mut st,
+                &mut dl,
+                &StyleResolver::new(&theme),
+                &mut InputState {
+                    mouse_x: 10.0,
+                    mouse_y: 10.0,
+                    ..InputState::default()
+                },
+                |_, _, _| {},
+            );
+            dl.chrome_instances().filter(|c| c.bg == hover).count()
+        };
+        let w = List::new().with_item_height(20.0);
+        assert!(quads(&w) > 0);
+        assert_eq!(quads(&w.with_hover(false)), 0);
     }
 
     #[test]

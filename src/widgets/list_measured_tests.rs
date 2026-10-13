@@ -327,3 +327,21 @@ fn a_new_width_and_a_page_in_front_in_one_frame_keep_the_share_of_the_right_row(
     rig.frame();
     assert_eq!(rig.state.top_row(), (52, 20.0));
 }
+
+#[test]
+fn rows_estimated_again_by_their_owner_keep_the_share_of_the_top_row() {
+    let mut rig = Rig::new(100);
+    rig.state.scroll_to_row(12, 10.0); // row 12 measures 40: a quarter in
+    rig.frame();
+    // New fonts, say: the owner estimates every row again, and they will
+    // measure twice as tall. The width is the same, so only the owner knows.
+    rig.state.keep_share(&rig.heights);
+    rig.heights
+        .reestimate(|i| Row::estimated(15.0).keyed(i as u64));
+    for height in &mut rig.real {
+        *height *= 2.0;
+    }
+    let drawn = rig.frame();
+    assert_eq!(rig.state.top_row(), (12, 20.0));
+    assert_eq!(drawn[0].y, VIEW.y - 20.0);
+}

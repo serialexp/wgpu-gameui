@@ -1,6 +1,6 @@
 # Measured row heights for `List`
 
-**Status:** In progress
+**Status:** Done
 **Last updated:** 2026-10-13
 
 ## Implementation status
@@ -18,12 +18,12 @@ Tracking the gap between this design and what's on the main branch.
 - [x] `List`: draw from a `RowHeights` (one column), measuring rows in view through a callback (739f9bf: `List::draw_measured`)
 - [x] `List`: space kept free above the first row and below the last (padding inside the scroll) (739f9bf: `List::with_padding`, fixed and measured)
 - [x] `List`: keyboard cursor, click and hover on rows of different heights (739f9bf)
+- [x] agent-ui: `TranscriptLayout` keeps its heights in a `RowHeights` (agent-ui 07d4e69, gameui 2b9021e)
+- [x] agent-ui: `TranscriptPane` scrolls by the anchored `ListState`; `Held` / `hold` / `reading` go (agent-ui ed19404, with gameui's `ListState::keep_share` / `scroll_by` and `List` options in the commit that ticks this)
 
 ### Outstanding
 
 - [ ] Rows placed in `f64` all the way to the screen (deferred: `ScrollView` offsets are `f32`, so past about 4M px of content rows land on half pixels, past 16M on whole ones; fine for now, revisit if a transcript gets that long)
-- [ ] agent-ui: `TranscriptLayout` keeps its heights in a `RowHeights` (built, uncommitted; the pane still scrolls by pixels, and a page put in front still clears the layout until phase 5)
-- [ ] agent-ui: `TranscriptPane` scrolls by the anchored `ListState`; `Held` / `hold` / `reading` go
 - [ ] gameui `GroupList` (its own running total of row heights in `GroupLayout`) onto `RowHeights` (deferred: after the transcript move)
 - [ ] Gallery entry: a list of rows of different heights (deferred: after the agent-ui move shows the API works)
 
@@ -236,6 +236,28 @@ call (`content_scroll`, `scroll_at`).
 > remembered (the old layout forgot it), which is harmless: its key never comes back changed. The
 > pane still reads offsets as `f32`, so `row_at` steps onto the next row when a `y` rounded from
 > its top lands a hair above it; phase 5 moves the pane onto the `f64` positions.
+
+> **2026-10-13 update (phase 5 built):** the pane draws through `List::draw_measured`, answering
+> open question 1 with "through `List`". `List` gained what the pane needed: `with_hover(false)`
+> (cards show their own hover), `with_wheel_speed`, `measure_width(rect)` (so the layout sets the
+> rows' width before the list does, and re-estimates on a resize itself) and `ListState::scroll_by`
+> (a selection dragged past an edge). `TranscriptLayout::split` hands the list the heights and a
+> `Cards` value that measures and paints rows, whose plan cache both callbacks share through a
+> `RefCell`. A page put in front goes into the heights with `TranscriptLayout::prepend` rather than
+> rebuilding the layout. The pane still re-anchors the reader's row by index when a page goes in
+> front: until the list draws again its row index counts from the old first row, and a snapshot
+> or another page arriving before then asks for it. A move made in code still blocks loading
+> older pages until it is drawn (`has_anchor`).
+
+> **2026-10-13 update (phase 5 review):** because the layout re-estimates on a new width before
+> the list draws, the list never saw the width change and the reader lost their share of the top
+> row. `ListState::keep_share(&heights)` fixes that for any owner that re-estimates rows itself
+> (a new width or new fonts): called just before, it records the share, and the next draw puts
+> the reader back at it once the row is measured. The list's own width path uses the same code.
+> Also from the review: `scroll_to_row`, `glide_to_row` and `follow_end` drop a pending
+> `scroll_by`; `END_SLACK` went from 0.5 to 2 px, because f32 screen positions a few million
+> pixels down can only reach the end to within a pixel; `Transcript::prepend` reports only the
+> loaded rows whose pairing changed, not every paired row.
 
 ## Phasing
 
