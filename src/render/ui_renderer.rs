@@ -935,6 +935,64 @@ impl UiRenderer {
         Ok(sprite)
     }
 
+    /// Register a live GPU texture as an image sprite, without copying its
+    /// pixels through the CPU. Re-registering `name` replaces the view/size and
+    /// keeps the returned SpriteId stable. Use `unload_sprite(name)` to release it.
+    ///
+    /// The view must be single-sampled, 2D, filterable float and created with
+    /// TEXTURE_BINDING usage. Its sampled values must be sRGB-encoded colors
+    /// (use a plain Rgba8Unorm view for a sprite render target). As with wgpu
+    /// bind groups, incompatible views report a device validation error.
+    /// Record writes to the texture before rendering UI that samples it.
+    /// The bind group retains the view; this renderer never uploads its pixels.
+    pub fn register_texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> Result<SpriteId, SpriteError> {
+        if width == 0 || height == 0 {
+            return Err(SpriteError::Empty);
+        }
+        if width > self.max_texture_size() || height > self.max_texture_size() {
+            return Err(SpriteError::TooLarge {
+                width,
+                height,
+                max: self.max_texture_size(),
+            });
+        }
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ui external sprite"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        let id = self.textures.external(name, width, height, bind_group)?;
+        self.image_cache.remove(name);
+        Ok(id)
+    }
+
+    /// Release a named sprite loaded from bytes or a caller-owned GPU view.
+    /// Pending draws already submitted retain their GPU references. Unknown
+    /// names are harmless and return false. Cached images of this name are
+    /// invalidated too, so a subsequent image load cannot return the freed id.
+    pub fn unload_sprite(&mut self, name: &str) -> bool {
+        self.image_cache.remove(name);
+        self.textures
+            .id_for(name)
+            .is_some_and(|id| self.textures.remove(id))
+    }
+
     /// Look up a sprite id by name.
     pub fn sprite_id(&self, name: &str) -> Option<SpriteId> {
         self.textures.id_for(name)

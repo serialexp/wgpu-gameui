@@ -161,6 +161,10 @@ enum Home {
         atlas: AtlasId,
         slot: AtlasSlot,
     },
+    /// Caller-rendered texture. The bind group retains its view without uploads.
+    External {
+        bind_group: wgpu::BindGroup,
+    },
 }
 
 struct Sprite {
@@ -326,6 +330,51 @@ impl Textures {
         Ok(id)
     }
 
+    /// Register a caller-rendered view with no pending pixel upload. Replacing
+    /// an existing name keeps its SpriteId stable, including across resizes.
+    pub fn external(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        bind_group: wgpu::BindGroup,
+    ) -> Result<SpriteId, SpriteError> {
+        if width == 0 || height == 0 {
+            return Err(SpriteError::Empty);
+        }
+        if width > self.max_dimension || height > self.max_dimension {
+            return Err(SpriteError::TooLarge {
+                width,
+                height,
+                max: self.max_dimension,
+            });
+        }
+        let sprite = Sprite {
+            name: Some(name.to_owned()),
+            width,
+            height,
+            home: Home::External { bind_group },
+        };
+        if let Some(id) = self.names.get(name).copied() {
+            if let Some(old) = self.sprites[id as usize].take()
+                && let Home::Atlas { atlas, slot } = old.home
+            {
+                self.atlases[atlas.0 as usize].atlas.remove(slot);
+            }
+            self.sprites[id as usize] = Some(sprite);
+            return Ok(id);
+        }
+        let id = if let Some(id) = self.free.pop() {
+            self.sprites[id as usize] = Some(sprite);
+            id
+        } else {
+            self.sprites.push(Some(sprite));
+            (self.sprites.len() - 1) as SpriteId
+        };
+        self.names.insert(name.to_owned(), id);
+        Ok(id)
+    }
+
     /// Unload a sprite: a texture of its own is freed (once the GPU has
     /// finished any work already submitted with it), an atlas slot is
     /// reclaimed. Returns `false` for an unknown or already unloaded id.
@@ -355,7 +404,7 @@ impl Textures {
     pub fn resolve(&self, id: SpriteId) -> Option<Resolved> {
         let sprite = self.sprite(id)?;
         Some(match sprite.home {
-            Home::Own { .. } => Resolved {
+            Home::Own { .. } | Home::External { .. } => Resolved {
                 binding: Binding::Own(id),
                 region: AtlasRegion {
                     x: 0,
@@ -378,14 +427,19 @@ impl Textures {
 
     /// The bind group sampling `binding`'s texture, once it has been uploaded.
     pub fn bind_group(&self, binding: Binding) -> Option<&wgpu::BindGroup> {
-        let gpu = match binding {
+        match binding {
             Binding::Own(id) => match &self.sprite(id)?.home {
-                Home::Own { gpu, .. } => gpu.as_ref(),
+                Home::Own { gpu, .. } => gpu.as_ref().map(|gpu| &gpu.bind_group),
+                Home::External { bind_group } => Some(bind_group),
                 Home::Atlas { .. } => None,
             },
-            Binding::Atlas(atlas) => self.atlases.get(atlas.0 as usize)?.gpu.as_ref(),
-        };
-        gpu.map(|gpu| &gpu.bind_group)
+            Binding::Atlas(atlas) => self
+                .atlases
+                .get(atlas.0 as usize)?
+                .gpu
+                .as_ref()
+                .map(|gpu| &gpu.bind_group),
+        }
     }
 
     /// Upload what changed since the last flush: new sprites of their own, and
