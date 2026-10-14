@@ -2119,6 +2119,8 @@ fn check_overlap(nodes: &[DebugNode], inside_widgets: bool, out: &mut Vec<Proble
         }
         by_parent.entry(node.parent).or_default().push(node);
     }
+    // Named controls and readable text, as against inferred chrome/geometry.
+    let compared = |node: &DebugNode| node.named || node.kind == NodeKind::Text;
     for siblings in by_parent.values() {
         for (i, a) in siblings.iter().enumerate() {
             for b in siblings.iter().skip(i + 1) {
@@ -2133,16 +2135,10 @@ fn check_overlap(nodes: &[DebugNode], inside_widgets: bool, out: &mut Vec<Proble
                 // usually a row or panel background. Compare named controls and
                 // readable text, not those implementation primitives. Strict
                 // mode keeps every pair for widget-author diagnostics.
-                if !inside_widgets
-                    && !(a.named || a.kind == NodeKind::Text)
-                    && !(b.named || b.kind == NodeKind::Text)
-                {
+                if !(inside_widgets || compared(a) || compared(b)) {
                     continue;
                 }
-                if !inside_widgets
-                    && ((a.named || a.kind == NodeKind::Text)
-                        != (b.named || b.kind == NodeKind::Text))
-                {
+                if !inside_widgets && compared(a) != compared(b) {
                     continue;
                 }
                 if a.bounds.contains_rect(b.bounds, 0.0) || b.bounds.contains_rect(a.bounds, 0.0) {
