@@ -5,6 +5,20 @@ Custom wgpu-based immediate-mode-ish game UI library. Widgets draw into a
 persistent state (scroll offset, drag ownership, focus) is **caller-owned** and
 passed in by `&mut`. The public API surface is re-exported from `src/lib.rs`.
 
+## Repository layout
+
+A Cargo workspace; run cargo from the repo root.
+
+- `crates/core` is the library, published as `wgpu-gameui`.
+- `crates/media` (`wgpu-gameui-media`) is video and audio playback, in progress
+  (`docs/design/video-playback.md`). It holds what core leaves out on purpose:
+  threads, decoding and the audio device.
+
+Paths in this file, `TODO.md` and the design docs (`src/…`, `tests/…`,
+`examples/…`, `assets/…`, `test_output/…`) are relative to `crates/core`
+unless they name another crate. Tests and examples run with `crates/core` as
+their working directory, so their output lands in `crates/core/test_output/`.
+
 `TODO.md` is the working 1.0 backlog (P0/P1/P2) — open items only. As an item
 lands, move it to `TODO_DONE.md` with a short note describing the API that
 closed it; `TODO_DONE.md` is the record of everything shipped, and nothing in
@@ -40,9 +54,9 @@ A widget isn't done until **all** of these are true — treat it as the checklis
    DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
    ```
    Writes one PNG per section to
-   `test_output/widget_gallery/<category>/<Component>.png`, one per labeled
-   cell to `test_output/widget_gallery/<category>/<Component>/`, and
-   `test_output/widget_gallery/index.html` to browse them (filter, zoom, and
+   `crates/core/test_output/widget_gallery/<category>/<Component>.png`, one per labeled
+   cell to `crates/core/test_output/widget_gallery/<category>/<Component>/`, and
+   `crates/core/test_output/widget_gallery/index.html` to browse them (filter, zoom, and
    which Forge components are still missing). Open your section's PNG and
    look at it. Rendering has already caught real bugs
    (e.g. a too-large default padding that shrank an icon to a speck) that the
@@ -114,7 +128,8 @@ The flow, both halves triggered by pushes to `main`:
 
 1. `.github/workflows/release.yml` — on every non-release push, opens (or
    updates) a **release PR** on a `release/YYYY-MM-DD` branch carrying the
-   changelog, the rewritten `Cargo.toml` version, and a `release: X.Y.Z` commit.
+   changelog, the workspace version rewritten in the root `Cargo.toml`
+   (`[workspace.package]`, shared by every crate), and a `release: X.Y.Z` commit.
    Nothing is published; the PR is the review point.
 2. `.github/workflows/publish.yml` — when that PR merges, builds and runs
    `cargo test --lib`, then runs `cargo publish` and cuts the GitHub release and

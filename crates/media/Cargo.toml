@@ -1,0 +1,11 @@
+[package]
+name = "wgpu-gameui-media"
+version.workspace = true
+edition.workspace = true
+description = "Video and audio playback for wgpu-gameui: decoding, sound output and the clock"
+license.workspace = true
+repository.workspace = true
+# Nothing to publish until it plays something.
+publish = false
+
+[dependencies]

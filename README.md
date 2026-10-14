@@ -7,7 +7,9 @@ framing, per-subtree styling, and a Teardown-style immediate-mode verb API.
 
 - **Render-only.** No windowing, audio, or device I/O — the app owns the event
   loop and fills a plain `InputState` struct. Renders through a single
-  `UiRenderer::render` call into a wgpu `TextureView`.
+  `UiRenderer::render` call into a wgpu `TextureView`. Video and audio
+  playback, which need threads and an audio device, are a separate crate in
+  this repository (`crates/media`, in progress).
 - **Immediate-mode.** Build a `DrawList` per frame from widget calls; nothing
   is retained across frames except the caller-owned state structs (`UiState`,
   `ScrollState`, `FocusState`, `DragCapture`, …).
@@ -164,10 +166,10 @@ category (forms, keys, layout, data, feedback, …, plus `foundations` and
 
 ```
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery/<category>/<Component>.png (one per component)
-#      + test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
-#      + test_output/widget_gallery/index.html (browse them all, see Forge coverage)
-#      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
+# writes crates/core/test_output/widget_gallery/<category>/<Component>.png (one per component)
+#      + crates/core/test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
+#      + crates/core/test_output/widget_gallery/index.html (browse them all, see Forge coverage)
+#      + crates/core/test_output/widget_gallery.debug.{txt,json} (the layout dump)
 ```
 
 ---
@@ -359,7 +361,7 @@ With the default `bundled-font` feature, unstyled text resolves to IBM Plex Sans
 registered IBM Plex Mono handle for technical UI such as coordinates, shortcuts,
 and status readouts; apply it per `TextBlock::with_font` or a scoped
 `UiContext::font`. Both unmodified families are distributed under OFL-1.1; the
-notice is included in `assets/fonts/ibm-plex/OFL-1.1.txt`.
+notice is included in `crates/core/assets/fonts/ibm-plex/OFL-1.1.txt`.
 
 ### Input & focus
 
@@ -534,10 +536,10 @@ cargo test --lib
 
 # Widget gallery (headless GPU render → per-component PNGs, an index page, and a layout dump)
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes test_output/widget_gallery/<category>/<Component>.png (one per component)
-#      + test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
-#      + test_output/widget_gallery/index.html (browse them all, see Forge coverage)
-#      + test_output/widget_gallery.debug.{txt,json} (the layout dump)
+# writes crates/core/test_output/widget_gallery/<category>/<Component>.png (one per component)
+#      + crates/core/test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
+#      + crates/core/test_output/widget_gallery/index.html (browse them all, see Forge coverage)
+#      + crates/core/test_output/widget_gallery.debug.{txt,json} (the layout dump)
 
 # Benchmarks (CPU-only groups need no GPU; render groups do)
 DISPLAY=:0 cargo bench --bench ui_stress

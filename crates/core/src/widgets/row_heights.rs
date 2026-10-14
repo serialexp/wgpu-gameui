@@ -478,12 +478,6 @@ trait HeightIndex: Default {
     fn find(&self, y: f64) -> usize;
 }
 
-/// The lowest set bit of `i` (`0` for `0`): how many values Fenwick slot `i`
-/// covers. `usize::isolate_lowest_one` once it is stable.
-fn lowest_bit(i: usize) -> usize {
-    i & i.wrapping_neg()
-}
-
 /// A Fenwick tree (binary indexed tree) over `f64` values: `sums[i]` holds
 /// the sum of the `i & -i` values ending at value `i - 1`, so a prefix sum
 /// or a change to one value walks about log₂ n slots.
@@ -500,7 +494,7 @@ impl Sums {
         sums.push(0.0);
         sums.extend(values);
         for i in 1..=n {
-            let parent = i + lowest_bit(i);
+            let parent = i + i.isolate_lowest_one();
             if parent <= n {
                 sums[parent] += sums[i];
             }
@@ -517,9 +511,9 @@ impl Sums {
             self.sums.push(0.0);
         }
         let i = self.sums.len();
-        // Slot `i` covers values `i - lowest_bit(i) .. i`; all but the new one
+        // Slot `i` covers values `i - i.isolate_lowest_one() .. i`; all but the new one
         // are already in the tree.
-        let covered = self.prefix(i - 1) - self.prefix(i - lowest_bit(i));
+        let covered = self.prefix(i - 1) - self.prefix(i - i.isolate_lowest_one());
         self.sums.push(covered + value);
     }
 
@@ -527,7 +521,7 @@ impl Sums {
         let mut i = index + 1;
         while i < self.sums.len() {
             self.sums[i] += delta;
-            i += lowest_bit(i);
+            i += i.isolate_lowest_one();
         }
     }
 
@@ -536,7 +530,7 @@ impl Sums {
         let mut sum = 0.0;
         while i > 0 {
             sum += self.sums[i];
-            i -= lowest_bit(i);
+            i -= i.isolate_lowest_one();
         }
         sum
     }

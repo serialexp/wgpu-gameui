@@ -1,5 +1,5 @@
 /target/
 Cargo.lock
 .codex
-/test_output/
+/crates/*/test_output/
 /gothab-plans/
