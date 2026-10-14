@@ -78,6 +78,14 @@ fn render(list: &DrawList) -> Option<(Vec<u8>, RenderStats)> {
     Some((pixels, stats))
 }
 
+/// A rectangle drawn as soup (vertex) geometry: an ordering barrier between
+/// runs of analytic instances. Lines and translated quads are analytic
+/// instances themselves, so they don't split a run.
+fn soup_rect(list: &mut DrawList, rect: Rect, color: [f32; 4]) {
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
+    list.triangle_strip([(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|corner| (corner, color)));
+}
+
 fn rgba_at(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     let offset = ((y * W + x) * 4) as usize;
     pixels[offset..offset + 4].try_into().unwrap()
@@ -122,9 +130,17 @@ fn one_draw_preserves_many_overlapping_source_over_operations() {
         // Off-sample soup is an ordering barrier, forcing the established
         // multi-draw path to serve as the same-GPU compositing oracle.
         let y = 2.0 + (pair % 200) as f32;
-        ordered_draw_reference.line([220.0, y], [224.0, y], 1.0, [0.0, 0.0, 0.0, 0.0]);
+        soup_rect(
+            &mut ordered_draw_reference,
+            Rect::new(220.0, y - 0.5, 4.0, 1.0),
+            [0.0; 4],
+        );
         ordered_draw_reference.chrome_rect(rect, 0.0, 0.0, CHROME, CHROME);
-        ordered_draw_reference.line([228.0, y], [232.0, y], 1.0, [0.0, 0.0, 0.0, 0.0]);
+        soup_rect(
+            &mut ordered_draw_reference,
+            Rect::new(228.0, y - 0.5, 4.0, 1.0),
+            [0.0; 4],
+        );
     }
 
     let Some((unified_pixels, stats)) = render(&unified) else {
@@ -214,7 +230,11 @@ fn alternating_shadow_chrome_and_soup_preserves_pixels_and_stats() {
             chrome_color,
             [1.0, 1.0, 1.0, 1.0],
         );
-        list.line([42.0, y + 4.5], [60.0, y + 4.5], 8.0, [0.0, 1.0, 1.0, 1.0]);
+        soup_rect(
+            &mut list,
+            Rect::new(42.0, y + 0.5, 18.0, 8.0),
+            [0.0, 1.0, 1.0, 1.0],
+        );
     }
     // Flush the final soup run without adding another soup primitive.
     list.chrome_rect(Rect::new(70.0, 5.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [1.0; 4]);
