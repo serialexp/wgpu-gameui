@@ -10,6 +10,8 @@
 //   - `vs_circle`/`fs_circle`: instanced SDF circle (filled disc + ring outline).
 //   - `vs_icon`/`fs_icon`: instanced textured quads (icons, sprites, images);
 //     corners baked per-instance, bilinearly interpolated, atlas × tint.
+//   - `vs_icon`/`fs_yuv`: the same quads drawn from a YUV sprite's three
+//     planes (its own group 1), converted to colour × tint.
 //   - `vs_nine_slice`/`fs_nine_slice`: instanced nine-slice panels; the fragment
 //     remaps local coords into the source UV (nine-region piecewise map).
 //
@@ -804,8 +806,9 @@ fn vs_icon(in: IconVsIn) -> IconVsOut {
     return out;
 }
 
-@fragment
-fn fs_icon(in: IconVsOut) -> @location(0) vec4<f32> {
+// Where an icon fragment samples its texture; discards a fragment outside
+// the instance's clip.
+fn icon_uv(in: IconVsOut) -> vec2<f32> {
     if (in.clip_enabled > 0.5) {
         let p = in.frag_pos;
         if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
@@ -823,8 +826,62 @@ fn fs_icon(in: IconVsOut) -> @location(0) vec4<f32> {
         let rel = (in.uv - in.uv_rect.xy) / span;
         uv = in.uv_rect.xy + fract(rel) * span;
     }
-    let sampled = textureSample(atlas_tex, atlas_sampler, uv);
+    return uv;
+}
+
+@fragment
+fn fs_icon(in: IconVsOut) -> @location(0) vec4<f32> {
+    let sampled = textureSample(atlas_tex, atlas_sampler, icon_uv(in));
     return sampled * in.tint;
+}
+
+// ---- YUV sprite path ------------------------------------------------------
+//
+// A video frame as its decoder gives it: brightness (Y) at full size and the
+// two colour planes (U, V) at half size, each a single-channel texture sampled
+// at the same UV. `yuv_to_rgb` is the stream's conversion (matrix and range,
+// see `YuvColour::to_rgb`); the result is sRGB-encoded like every other UI
+// colour. These bindings replace the atlas' in group 1 for this pipeline only:
+// two entry points may declare the same group and binding, since each
+// pipeline's layout only covers the ones its own entry points use.
+
+// Per sprite: the colour conversion's rows (colour = dot(row, (y, u, v, 1))),
+// and `chroma_scale.xy`, which turns the picture's UV into the colour planes'.
+// At an odd size the colour planes are rounded up and reach half a pixel past
+// the picture, so their UV is a little short of the picture's.
+//
+// Colour samples are taken as centred between the brightness samples they
+// cover. H.264's default puts them in line with the left column instead; the
+// difference is a quarter of a pixel sideways in the colour.
+struct YuvSprite {
+    r: vec4<f32>,
+    g: vec4<f32>,
+    b: vec4<f32>,
+    chroma_scale: vec4<f32>,
+};
+
+@group(1) @binding(0) var yuv_y: texture_2d<f32>;
+@group(1) @binding(1) var yuv_u: texture_2d<f32>;
+@group(1) @binding(2) var yuv_v: texture_2d<f32>;
+@group(1) @binding(3) var yuv_sampler: sampler;
+@group(1) @binding(4) var<uniform> yuv_sprite: YuvSprite;
+
+@fragment
+fn fs_yuv(in: IconVsOut) -> @location(0) vec4<f32> {
+    let uv = icon_uv(in);
+    let chroma_uv = uv * yuv_sprite.chroma_scale.xy;
+    let yuv = vec4<f32>(
+        textureSample(yuv_y, yuv_sampler, uv).r,
+        textureSample(yuv_u, yuv_sampler, chroma_uv).r,
+        textureSample(yuv_v, yuv_sampler, chroma_uv).r,
+        1.0,
+    );
+    let rgb = clamp(
+        vec3<f32>(dot(yuv_sprite.r, yuv), dot(yuv_sprite.g, yuv), dot(yuv_sprite.b, yuv)),
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    return vec4<f32>(rgb, 1.0) * in.tint;
 }
 
 // ---- Instanced nine-slice path -------------------------------------------

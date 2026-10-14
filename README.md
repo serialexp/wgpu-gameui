@@ -265,6 +265,41 @@ slot recycled); shelf *fragmentation* left by churn is reclaimed by
 full. It repacks tallest first; should the repacked images not fit (shelf
 packing is no perfect fit), it returns `false` and leaves the atlas as it was.
 
+### Pictures that change
+
+A picture that changes every frame (a video, a live preview) keeps one sprite:
+`update_sprite_rgba8(sprite, pixels)` writes new pixels into the texture it has,
+at the next render, so its `SpriteId` stays the same and no texture is created
+or freed. Only a sprite with a texture of its own can be updated, and only at
+its own size; an atlas sprite refuses (`SpriteError::InAtlas`).
+`RenderStats::textures_created` counts the textures made, so a test can check
+that an update made none.
+
+Video decoders give frames as YUV 4:2:0: brightness at full size and two colour
+planes at half size. `create_yuv_sprite(name, width, height, planes, colour)`
+keeps them as they are and converts to colour in the shader, and
+`update_yuv_sprite` replaces them. `YuvColour` says how: the matrix
+(`YuvMatrix::Bt601` or `Bt709`) and the range of codes (`YuvRange::Limited` or
+`Full`); `YuvColour::assumed_for(width, height)` gives what players assume when
+a stream doesn't say. `YuvPlanes` takes each plane's row stride, so a decoder's
+padded rows go up without a copy (`YuvPlanes::packed` when there is no
+padding). A YUV sprite draws with `DrawList::image` and its siblings like any
+other (fit, crop, tint, clip, tiling), but not as a nine-slice.
+`unload_sprite` frees a sprite however it was loaded.
+
+### Full screen
+
+Like the browser's `requestFullscreen()`: a widget asks for the screen with
+`UiContext::request_fullscreen(id)` (or `UiState::fullscreen.request(id)`), and
+draws itself over everything at the window's size while `owns_fullscreen(id)`
+says so. The frame's `UiFrameResult::fullscreen` asks the app to change the
+window, the way it applies the cursor: `Some(true)` to enter, `Some(false)` to
+leave. Escape reaching the owner ends it (a dropdown, menu or modal open over
+it takes the key first), as does `exit_fullscreen()` or the owner not being
+drawn. Report the window's full-screen state when it changes, done or by other
+means, with `UiState::fullscreen.set_window_fullscreen(on)`; leaving ends the
+widget's full screen. A window that was already full screen stays so.
+
 ### Caller-owned state
 
 The library is immediate-mode, but interaction state persists across frames in
@@ -273,7 +308,7 @@ widgets each frame:
 
 | State struct | Owns | Used by |
 |---|---|---|
-| `UiState` | focus, drag capture, dropdowns, scroll, tree, animations, text inputs, toasts, tooltips | `UiContext` verbs, `Frame::run` |
+| `UiState` | focus, drag capture, dropdowns, scroll, tree, animations, text inputs, toasts, tooltips, full screen | `UiContext` verbs, `Frame::run` |
 | `ScrollState` | scroll offset + content extent | `ScrollView`, `List`, `Table` |
 | `ListState` | scroll + selection set + keyboard cursor | `List` |
 | `FocusState` | single focus owner + Tab ring | `TextInput`, `Button`, `Checkbox`, `Slider` |

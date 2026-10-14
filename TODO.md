@@ -15,6 +15,28 @@ still open.
 
 ---
 
+## Video phase 1 follow-ups (review, 2026-10-14)
+
+- [ ] **Change a YUV sprite's colour settings** without making a new sprite
+      (`set_yuv_colour`: rewrite its uniform at the next flush). A stream whose
+      settings arrive after the first frame needs it; until then the media
+      crate recreates the sprite, which gives it a new id.
+- [ ] **Chroma siting.** `fs_yuv` takes colour samples as centred between the
+      brightness samples; H.264's default (and its VUI `chroma_sample_loc`)
+      puts them in line with the left column, a quarter pixel sideways. Carry
+      the siting in `YuvColour` and offset the colour planes' UV.
+- [ ] **Refuse a nine-slice of a YUV sprite when it is registered.** Today
+      `register_nine_slice` accepts it and the draw is skipped with a warning.
+- [ ] **Settings key capture reads the raw Escape key** (`widgets/settings.rs`,
+      `key_escape`), so one Escape both cancels a capture and reaches anything
+      else that takes `nav.cancel` (a full-screen owner, focus).
+
+## Chart benches on a quiet machine (noted 2026-10-09)
+
+- [ ] **Rerun the chart benches** in `benches/ui_stress.rs` (`LineChart`,
+      `ScatterPlot`, `BarChart`'s overlay) on a quiet machine: the timings
+      taken on 2026-10-09 were under heavy load.
+
 ## Multi-stop gradients (noted 2026-09-29)
 
 - [ ] **Gradients with more than two colours** (`linear-gradient(red, blue 40%,

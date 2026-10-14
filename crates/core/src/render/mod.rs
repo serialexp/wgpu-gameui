@@ -34,6 +34,7 @@ mod text_contrast;
 pub(crate) mod textures;
 mod ui_renderer;
 mod uniform_arena;
+mod yuv;
 
 pub use glyph_msdf::{GlyphMetrics, GlyphMsdf, generate_glyph_msdf};
 pub use msdf_atlas::{
@@ -62,6 +63,7 @@ pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId}
 pub(crate) use ui_renderer::ortho_matrix;
 pub use ui_renderer::{NineSliceMeta, RenderStats, SMALL_TEXTURE_BATCHES_WARN, UiRenderer};
 pub(crate) use uniform_arena::UniformArena;
+pub use yuv::{YuvColour, YuvMatrix, YuvPlane, YuvPlanes, YuvRange, YuvToRgb, chroma_size};
 
 pub use crate::widgets::NineSliceId;
 

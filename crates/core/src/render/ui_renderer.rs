@@ -14,8 +14,11 @@ use crate::layout::Rect;
 use crate::render::blur::{Backdrop, Blur, BlurParams};
 use crate::render::composite::{Offscreen, TargetPlan};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
-use crate::render::textures::{self, AtlasId, Binding, Placement, SpriteError, SpriteId, Textures};
+use crate::render::textures::{
+    self, AtlasId, Binding, Placement, Sampling, SpriteError, SpriteId, Textures,
+};
 use crate::render::uniform_arena::UniformArena;
+use crate::render::yuv::{YuvColour, YuvPlanes};
 use crate::text::FontSystemHandle;
 use crate::widgets::{
     AnalyticInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, NineSliceId, PaintCmd,
@@ -91,6 +94,8 @@ enum PreparedRun {
 enum InstancedKind {
     Icon,
     NineSlice,
+    /// An icon instance drawn from a YUV sprite.
+    Yuv,
 }
 
 /// Uploaded icon or nine-slice instances: `count` records in `buffer` from
@@ -321,6 +326,9 @@ pub struct RenderStats {
     pub texture_uploads: usize,
     /// Bytes uploaded into sprites' own textures.
     pub texture_bytes_uploaded: u64,
+    /// Textures created for sprites of their own: one at each new sprite's
+    /// first upload. An update in place writes into the texture it has.
+    pub textures_created: usize,
     /// Draw calls of small sprites (see [`SMALL_SPRITE_EDGE`](crate::render::SMALL_SPRITE_EDGE))
     /// in textures of their own: each costs a texture switch that putting the
     /// sprites in a shared atlas ([`UiRenderer::create_atlas`]) would save.
@@ -418,6 +426,7 @@ pub struct UiRenderer {
     // Pipelines
     color_pipeline: wgpu::RenderPipeline,
     icon_pipeline: wgpu::RenderPipeline,
+    yuv_pipeline: wgpu::RenderPipeline,
     analytic_pipeline: wgpu::RenderPipeline,
     circle_pipeline: wgpu::RenderPipeline,
     nine_slice_pipeline: wgpu::RenderPipeline,
@@ -440,6 +449,7 @@ pub struct UiRenderer {
     // Sprite textures: one per sprite, or shared atlases (see `render::textures`).
     textures: Textures,
     texture_bind_group_layout: wgpu::BindGroupLayout,
+    yuv_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
 
     // Nine-slice registry
@@ -549,6 +559,7 @@ impl UiRenderer {
 
         // Sprite textures are created as sprites load; how they are sampled, now.
         let (sampler, texture_bgl) = create_sprite_sampling(device);
+        let yuv_bgl = create_yuv_layout(device);
         let textures = Textures::new(device.limits().max_texture_dimension_2d);
 
         // Color pipeline (no texture binding)
@@ -591,49 +602,24 @@ impl UiRenderer {
 
         // Icon (instanced textured-quad) pipeline. Shares the ortho uniform
         // (group 0) AND the atlas texture (group 1). Two vertex buffers: the
-        // chrome unit-quad base mesh + per-instance records.
-        let icon_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("ui icon pipeline layout"),
-            bind_group_layouts: &[uniform_bgl, &texture_bgl],
-            push_constant_ranges: &[],
-        });
-
-        let icon_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ui icon pipeline"),
-            layout: Some(&icon_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_icon"),
-                buffers: &[
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &CHROME_BASE_ATTRIBS,
-                    },
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<IconInstance>() as wgpu::BufferAddress,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &ICON_INSTANCE_ATTRIBS,
-                    },
-                ],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_icon"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: work_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // chrome unit-quad base mesh + per-instance records. The YUV pipeline
+        // draws the same instances from a YUV sprite's planes instead.
+        let icon_pipeline = create_icon_pipeline(
+            device,
+            &shader,
+            work_format,
+            &[uniform_bgl, &texture_bgl],
+            "fs_icon",
+            "ui icon pipeline",
+        );
+        let yuv_pipeline = create_icon_pipeline(
+            device,
+            &shader,
+            work_format,
+            &[uniform_bgl, &yuv_bgl],
+            "fs_yuv",
+            "ui yuv pipeline",
+        );
 
         // Chrome (instanced SDF rounded-rect) pipeline. Shares the ortho uniform
         // (group 0); no texture. Two vertex buffers: unit-quad base + instances.
@@ -836,6 +822,7 @@ impl UiRenderer {
         Self {
             color_pipeline,
             icon_pipeline,
+            yuv_pipeline,
             analytic_pipeline,
             circle_pipeline,
             nine_slice_pipeline,
@@ -845,6 +832,7 @@ impl UiRenderer {
             frame_boundary_required: false,
             textures,
             texture_bind_group_layout: texture_bgl,
+            yuv_bind_group_layout: yuv_bgl,
             sampler,
             nine_slices: Vec::new(),
             nine_slice_names: HashMap::new(),
@@ -937,7 +925,8 @@ impl UiRenderer {
 
     /// Register a live GPU texture as an image sprite, without copying its
     /// pixels through the CPU. Re-registering `name` replaces the view/size and
-    /// keeps the returned SpriteId stable. Use `unload_sprite(name)` to release it.
+    /// keeps the returned SpriteId stable. Release it with
+    /// [`unload_sprite`](Self::unload_sprite).
     ///
     /// The view must be single-sampled, 2D, filterable float and created with
     /// TEXTURE_BINDING usage. Its sampled values must be sRGB-encoded colors
@@ -982,15 +971,71 @@ impl UiRenderer {
         Ok(id)
     }
 
-    /// Release a named sprite loaded from bytes or a caller-owned GPU view.
-    /// Pending draws already submitted retain their GPU references. Unknown
-    /// names are harmless and return false. Cached images of this name are
-    /// invalidated too, so a subsequent image load cannot return the freed id.
-    pub fn unload_sprite(&mut self, name: &str) -> bool {
+    /// Replace a sprite's pixels, keeping its id and its texture: for a picture
+    /// that changes (a video frame, a live preview), anything drawn with
+    /// `sprite` shows the new pixels from the next render, and no texture is
+    /// created or freed. Only a sprite with a texture of its own
+    /// ([`Placement::Own`]) can be updated, and only at its own size; an atlas
+    /// is uploaded whole, so its sprites refuse ([`SpriteError::InAtlas`]).
+    ///
+    /// Uploaded at the next [`flush_textures`](Self::flush_textures) (which
+    /// [`render`](Self::render) does); updating again before then replaces the
+    /// waiting pixels, so only the latest is uploaded. Pass them owned to
+    /// spare a copy.
+    ///
+    /// An id is given to a new sprite once its own is unloaded, so stop
+    /// updating a sprite when you unload it: a stale id would write into
+    /// whichever sprite has it now.
+    pub fn update_sprite_rgba8<'a>(
+        &mut self,
+        sprite: SpriteId,
+        pixels: impl Into<Cow<'a, [u8]>>,
+    ) -> Result<(), SpriteError> {
+        self.textures.update_rgba(sprite, pixels)
+    }
+
+    /// Load a `width`×`height` picture stored as YUV 4:2:0, the way video
+    /// decoders give it, converted to colour in the shader as `colour` says
+    /// (see [`YuvColour`]). It draws with [`DrawList::image`](crate::DrawList::image)
+    /// and its siblings like any other sprite (fit, crop, tint, clip and
+    /// tiling all apply), from textures of its own: a nine-slice can't use it.
+    /// A `name` already in use moves to the new sprite and the old one is
+    /// unloaded. Free it with [`unload_sprite`](Self::unload_sprite).
+    pub fn create_yuv_sprite(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        planes: YuvPlanes<'_>,
+        colour: YuvColour,
+    ) -> Result<SpriteId, SpriteError> {
+        let sprite = self
+            .textures
+            .insert_yuv(Some(name), width, height, planes, colour)?;
         self.image_cache.remove(name);
-        self.textures
-            .id_for(name)
-            .is_some_and(|id| self.textures.remove(id))
+        Ok(sprite)
+    }
+
+    /// Replace a YUV sprite's planes, keeping its id and its textures, like
+    /// [`update_sprite_rgba8`](Self::update_sprite_rgba8) does for RGBA.
+    pub fn update_yuv_sprite(
+        &mut self,
+        sprite: SpriteId,
+        planes: YuvPlanes<'_>,
+    ) -> Result<(), SpriteError> {
+        self.textures.update_yuv(sprite, planes)
+    }
+
+    /// Free a sprite however it was loaded, and its name; an image loaded
+    /// through `load_image_*` is forgotten by the image cache too, so loading
+    /// it again decodes it again. A texture of its own is released once the
+    /// GPU has finished work already submitted with it. Returns `false` for an
+    /// unknown or already freed sprite.
+    pub fn unload_sprite(&mut self, sprite: SpriteId) -> bool {
+        if let Some(name) = self.textures.name(sprite) {
+            self.image_cache.remove(name);
+        }
+        self.textures.remove(sprite)
     }
 
     /// Look up a sprite id by name.
@@ -1291,16 +1336,17 @@ impl UiRenderer {
     pub fn flush_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_flush_textures").entered();
-        let uploads = self.textures.flush(
-            device,
-            queue,
-            &self.texture_bind_group_layout,
-            &self.sampler,
-        );
+        let sampling = Sampling {
+            sampler: &self.sampler,
+            rgba: &self.texture_bind_group_layout,
+            yuv: &self.yuv_bind_group_layout,
+        };
+        let uploads = self.textures.flush(device, queue, &sampling);
         self.frame_stats.atlas_uploads += uploads.atlases;
         self.frame_stats.atlas_bytes_uploaded += uploads.atlas_bytes;
         self.frame_stats.texture_uploads += uploads.own;
         self.frame_stats.texture_bytes_uploaded += uploads.own_bytes;
+        self.frame_stats.textures_created += uploads.created;
     }
 
     /// The counters for the frame so far: everything rendered since the last
@@ -1855,6 +1901,16 @@ impl UiRenderer {
             let Some(at) = self.textures.resolve(meta.sprite) else {
                 continue;
             };
+            if matches!(at.binding, Binding::Yuv(_)) {
+                // The nine-slice pipeline samples one RGBA texture.
+                let key = format!("yuv nine-slice:{id}");
+                if self.warned_missing.borrow_mut().insert(key) {
+                    log::warn!(
+                        "wgpu-gameui: nine-slice {id} uses a YUV sprite, which only draws as an image — draw skipped"
+                    );
+                }
+                continue;
+            }
             let (region, (aw, ah)) = (at.region, at.texture);
 
             out.push(build_nine_slice_instance(
@@ -2187,6 +2243,10 @@ impl UiRenderer {
                 self.frame_stats.small_texture_batches += 1;
                 self.note_small_texture(id);
             }
+            let kind = match binding {
+                Binding::Yuv(_) => InstancedKind::Yuv,
+                _ => kind,
+            };
             runs.push(InstancedRun {
                 kind,
                 buffer: buffer.clone(),
@@ -2218,6 +2278,7 @@ impl UiRenderer {
         pass.set_pipeline(match run.kind {
             InstancedKind::Icon => &self.icon_pipeline,
             InstancedKind::NineSlice => &self.nine_slice_pipeline,
+            InstancedKind::Yuv => &self.yuv_pipeline,
         });
         pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
         pass.set_bind_group(1, &run.texture, &[]);
@@ -2398,6 +2459,98 @@ fn create_sprite_sampling(device: &wgpu::Device) -> (wgpu::Sampler, wgpu::BindGr
         ],
     });
     (sampler, bgl)
+}
+
+/// The bind group layout a YUV sprite is drawn through (group 1 of the YUV
+/// pipeline): its three planes, the sprite sampler, and its colour conversion.
+fn create_yuv_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let plane = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            multisampled: false,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        },
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ui yuv sprite bgl"),
+        entries: &[
+            plane(0),
+            plane(1),
+            plane(2),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// A pipeline drawing icon instances (`vs_icon`) with the fragment shader
+/// `fragment`, sampling what `layouts[1]` binds.
+fn create_icon_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    work_format: wgpu::TextureFormat,
+    layouts: &[&wgpu::BindGroupLayout],
+    fragment: &str,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: layouts,
+        push_constant_ranges: &[],
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_icon"),
+            buffers: &[
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &CHROME_BASE_ATTRIBS,
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<IconInstance>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &ICON_INSTANCE_ATTRIBS,
+                },
+            ],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: work_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
 }
 
 /// The sustained-pressure report for a frame: its warnings, naming a few of the

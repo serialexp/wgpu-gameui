@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::yuv::{YuvMatrix, YuvRange};
 
 fn pixels(width: u32, height: u32) -> Vec<u8> {
     vec![255; (width * height * 4) as usize]
@@ -193,4 +194,194 @@ fn draws_batch_while_they_share_a_texture_and_keep_their_order() {
         [(atlas, 0..2), (photo, 2..3), (atlas, 3..4), (photo, 4..6)]
     );
     assert_eq!(batches(&[]).count(), 0);
+}
+
+/// A `width`×`height` picture's planes, all brightness `y`, colour neutral.
+fn planes(width: u32, height: u32, y: u8) -> YuvPlanes<'static> {
+    let (cw, ch) = chroma_size(width, height);
+    YuvPlanes::packed(
+        width,
+        vec![y; (width * height) as usize],
+        vec![128; (cw * ch) as usize],
+        vec![128; (cw * ch) as usize],
+    )
+}
+
+const HD: YuvColour = YuvColour {
+    matrix: YuvMatrix::Bt709,
+    range: YuvRange::Limited,
+};
+
+/// The pixels waiting for `id`'s next upload.
+fn waiting(textures: &Textures, id: SpriteId) -> Option<&[u8]> {
+    match &textures.sprite(id)?.home {
+        Home::Own { pixels, .. } => pixels.as_deref(),
+        _ => None,
+    }
+}
+
+#[test]
+fn updating_a_sprite_keeps_its_id_and_uploads_only_the_latest_pixels() {
+    let mut textures = Textures::new(4096);
+    let frame = textures
+        .insert(Some("frame"), 2, 2, pixels(2, 2), Placement::Own)
+        .unwrap();
+    textures.update_rgba(frame, vec![7; 16]).unwrap();
+    textures.update_rgba(frame, &[9; 16]).unwrap();
+    assert_eq!(textures.pending, [frame], "one upload waits, not three");
+    assert_eq!(waiting(&textures, frame), Some(&[9; 16][..]));
+    assert_eq!(textures.id_for("frame"), Some(frame));
+    assert_eq!(
+        textures.resolve(frame).unwrap().binding,
+        Binding::Own(frame)
+    );
+}
+
+#[test]
+fn only_a_sprite_of_its_own_at_its_own_size_can_be_updated() {
+    let mut textures = Textures::new(4096);
+    let atlas = textures.create_atlas(1024);
+    let own = textures
+        .insert(None, 2, 2, pixels(2, 2), Placement::Own)
+        .unwrap();
+    let shared = textures
+        .insert(None, 2, 2, pixels(2, 2), Placement::Atlas(atlas))
+        .unwrap();
+    let video = textures
+        .insert_yuv(None, 2, 2, planes(2, 2, 16), HD)
+        .unwrap();
+    assert_eq!(
+        textures.update_rgba(shared, pixels(2, 2)),
+        Err(SpriteError::InAtlas(shared))
+    );
+    assert_eq!(
+        textures.update_rgba(own, pixels(4, 4)),
+        Err(SpriteError::PixelCount {
+            expected: 16,
+            got: 64
+        })
+    );
+    assert_eq!(
+        textures.update_rgba(video, pixels(2, 2)),
+        Err(SpriteError::WrongFormat(video))
+    );
+    assert_eq!(
+        textures.update_yuv(own, planes(2, 2, 16)),
+        Err(SpriteError::WrongFormat(own))
+    );
+    textures.remove(own);
+    assert_eq!(
+        textures.update_rgba(own, pixels(2, 2)),
+        Err(SpriteError::UnknownSprite(own))
+    );
+    assert_eq!(
+        textures.update_rgba(99, pixels(2, 2)),
+        Err(SpriteError::UnknownSprite(99))
+    );
+}
+
+#[test]
+fn a_yuv_sprite_is_drawn_from_planes_of_its_own() {
+    let mut textures = Textures::new(4096);
+    let video = textures
+        .insert_yuv(Some("video"), 5, 3, planes(5, 3, 16), HD)
+        .unwrap();
+    let at = textures.resolve(video).unwrap();
+    assert_eq!(at.binding, Binding::Yuv(video));
+    assert_eq!(at.texture, (5, 3));
+    assert_eq!(
+        (at.region.x, at.region.y, at.region.w, at.region.h),
+        (0, 0, 5, 3)
+    );
+    assert!(
+        !at.small_own(),
+        "it has its own pipeline, so there is no atlas to put it in"
+    );
+    textures.update_yuv(video, planes(5, 3, 100)).unwrap();
+    textures.update_yuv(video, planes(5, 3, 200)).unwrap();
+    assert_eq!(textures.pending, [video], "one upload waits, not three");
+    assert_eq!(textures.id_for("video"), Some(video));
+    assert!(textures.remove(video));
+    assert_eq!(textures.resolve(video), None);
+    assert_eq!(textures.id_for("video"), None);
+}
+
+#[test]
+fn yuv_planes_must_match_the_picture_size() {
+    let mut textures = Textures::new(4096);
+    assert_eq!(
+        textures.insert_yuv(None, 0, 2, planes(1, 2, 16), HD),
+        Err(SpriteError::Empty)
+    );
+    assert_eq!(
+        textures.insert_yuv(None, 5000, 2, planes(5000, 2, 16), HD),
+        Err(SpriteError::TooLarge {
+            width: 5000,
+            height: 2,
+            max: 4096
+        })
+    );
+    let mut short = planes(5, 3, 16);
+    short.y.to_mut().pop();
+    assert_eq!(
+        textures.insert_yuv(None, 5, 3, short, HD),
+        Err(SpriteError::PlaneSize {
+            plane: YuvPlane::Y,
+            expected: 15,
+            got: 14
+        })
+    );
+    let video = textures
+        .insert_yuv(None, 5, 3, planes(5, 3, 16), HD)
+        .unwrap();
+    let mut long = planes(5, 3, 16);
+    long.v.to_mut().push(128);
+    assert_eq!(
+        textures.update_yuv(video, long),
+        Err(SpriteError::PlaneSize {
+            plane: YuvPlane::V,
+            expected: 6,
+            got: 7
+        })
+    );
+}
+
+#[test]
+fn yuv_rows_may_be_padded_as_decoders_give_them() {
+    let mut textures = Textures::new(4096);
+    // A 5×3 picture with 8-byte brightness rows and 4-byte colour rows
+    // (colour planes are 3×2).
+    let padded = |trailing: bool| {
+        let cut = |len: usize, padding: usize| if trailing { len } else { len - padding };
+        YuvPlanes {
+            y: vec![16; cut(8 * 3, 3)].into(),
+            u: vec![128; cut(4 * 2, 1)].into(),
+            v: vec![128; cut(4 * 2, 1)].into(),
+            y_stride: 8,
+            chroma_stride: 4,
+        }
+    };
+    let video = textures.insert_yuv(None, 5, 3, padded(true), HD).unwrap();
+    textures.update_yuv(video, padded(false)).unwrap();
+
+    let mut narrow = planes(5, 3, 16);
+    narrow.chroma_stride = 2;
+    assert_eq!(
+        textures.update_yuv(video, narrow),
+        Err(SpriteError::PlaneStride {
+            plane: YuvPlane::U,
+            stride: 2,
+            width: 3
+        })
+    );
+    let mut short = padded(false);
+    short.y.to_mut().pop();
+    assert_eq!(
+        textures.update_yuv(video, short),
+        Err(SpriteError::PlaneSize {
+            plane: YuvPlane::Y,
+            expected: 24,
+            got: 20
+        })
+    );
 }

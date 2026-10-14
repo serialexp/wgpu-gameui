@@ -96,6 +96,16 @@ icons! {
     X = '\u{e4f6}', "x";
     /// Filled right-pointing play control.
     Play = '\u{e3d0}', "play";
+    /// Speaker with three sound waves (loud volume).
+    SpeakerHigh = '\u{e44a}', "speaker-high";
+    /// Speaker with one sound wave (quiet volume).
+    SpeakerLow = '\u{e44c}', "speaker-low";
+    /// Speaker without sound waves (volume at zero).
+    SpeakerNone = '\u{e44e}', "speaker-none";
+    /// Speaker with a cross (muted).
+    SpeakerX = '\u{e45c}', "speaker-x";
+    /// Four arrows pointing inwards (leave full screen).
+    ArrowsIn = '\u{e09a}', "arrows-in";
     /// Open eye (reveal / visible).
     Eye = '\u{e220}', "eye";
     /// Crossed-out eye (hide / hidden).
@@ -136,7 +146,7 @@ icons! {
     Diamond = '\u{e1ec}', "diamond";
     /// Circular arrow, clockwise (rotate forwards).
     ArrowClockwise = '\u{e036}', "arrow-clockwise";
-    /// Circular arrow, counter-clockwise (rotate backwards).
+    /// Circular arrow, counter-clockwise (rotate backwards, replay).
     ArrowCounterClockwise = '\u{e038}', "arrow-counter-clockwise";
     /// Ruler (measurement / size).
     Ruler = '\u{e6b8}', "ruler";
@@ -196,7 +206,7 @@ icons! {
     Repeat = '\u{e3f6}', "repeat";
     /// Four arrows out from a centre (move in any direction).
     ArrowsOutCardinal = '\u{e0a4}', "arrows-out-cardinal";
-    /// Four arrows out to the corners (scale).
+    /// Four arrows out to the corners (scale, enter full screen).
     ArrowsOut = '\u{e0a2}', "arrows-out";
 }
 

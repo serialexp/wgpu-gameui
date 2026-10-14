@@ -239,6 +239,11 @@ pub struct UiState {
     /// so a dropdown's list can open upward near the bottom of the window.
     /// `[0, 0]` until set: unknown, and widgets then assume room everywhere.
     screen: [f32; 2],
+    /// Which widget owns the screen (see [`FullscreenState`](crate::FullscreenState)).
+    /// Its owner asks [`owns_fullscreen`](Self::owns_fullscreen) each frame it
+    /// draws; [`end_frame`](Self::end_frame) puts the window change in the
+    /// frame result.
+    pub fullscreen: crate::FullscreenState,
 }
 
 impl UiState {
@@ -306,6 +311,9 @@ impl UiState {
     /// Dropdowns before focus is what stops a single Escape from both closing an
     /// open list and blurring the focused field; the tree and focus both read
     /// directional intents, so they must come after whichever popup claims them.
+    /// Full screen takes Escape later still, while its owner draws
+    /// ([`owns_fullscreen`](Self::owns_fullscreen)), so anything open over the
+    /// owner has it first.
     ///
     /// `nav` is a [`NavMap`](crate::NavMap) — pass [`KeyboardNav`](crate::KeyboardNav)
     /// for the default keyboard binding, a closure that also folds in a
@@ -420,7 +428,23 @@ impl UiState {
         for &deadline in &self.app_deadlines {
             self.frame_timings.mark_after(deadline);
         }
-        self.frame_timings.finish()
+        crate::frame_result::UiFrameResult {
+            fullscreen: self.fullscreen.end_frame(),
+            ..self.frame_timings.finish()
+        }
+    }
+
+    /// Whether the widget keyed by `id` owns the screen, asked by the owner
+    /// each frame it draws, with the input it draws with (see
+    /// [`FullscreenState::owns`](crate::FullscreenState::owns)). Escape in that
+    /// input ends full screen, and is then used up: it doesn't also blur the
+    /// focused widget.
+    pub fn owns_fullscreen(&mut self, id: u64, input: &InputState) -> bool {
+        let leaving = input.nav.cancel && self.fullscreen.owner() == Some(id);
+        if leaving {
+            self.focus.claim_escape();
+        }
+        self.fullscreen.owns(id, input)
     }
 
     /// Register an application-owned deadline: "something I animate on my own
@@ -1079,6 +1103,37 @@ impl<'a> UiContext<'a> {
     pub fn request_repaint_after(&mut self, seconds: f32) {
         if let Some(state) = self.state.as_mut() {
             state.request_repaint_after(seconds);
+        }
+    }
+
+    /// Give the screen to the widget keyed by `id` (see
+    /// [`FullscreenState::request`](crate::FullscreenState::request)): the
+    /// frame result asks the app for a full-screen window, and the widget
+    /// draws itself over everything while
+    /// [`owns_fullscreen`](Self::owns_fullscreen) says so. No-op outside
+    /// interactive mode.
+    pub fn request_fullscreen(&mut self, id: u64) {
+        if let Some(state) = self.state.as_mut() {
+            state.fullscreen.request(id);
+        }
+    }
+
+    /// End full screen, whichever widget owns it. No-op outside interactive
+    /// mode.
+    pub fn exit_fullscreen(&mut self) {
+        if let Some(state) = self.state.as_mut() {
+            state.fullscreen.exit();
+        }
+    }
+
+    /// Whether the widget keyed by `id` owns the screen (see
+    /// [`UiState::owns_fullscreen`]). Its owner asks each frame it draws; one
+    /// not drawn in a frame loses the screen, and Escape reaching it ends full
+    /// screen. `false` outside interactive mode.
+    pub fn owns_fullscreen(&mut self, id: u64) -> bool {
+        match (self.state.as_mut(), self.input) {
+            (Some(state), Some(input)) => state.owns_fullscreen(id, input),
+            _ => false,
         }
     }
 
@@ -5679,6 +5734,48 @@ mod tests {
         assert!(
             state.focus.is_focused(7),
             "and the same Escape must not blur the focused field"
+        );
+    }
+
+    #[test]
+    fn escape_closes_a_list_then_leaves_full_screen_and_never_blurs() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let escape = || {
+            let mut input = InputState {
+                key_escape: true,
+                ..InputState::default()
+            };
+            crate::map_keyboard(&mut input);
+            input
+        };
+        // Field 7 and player 3 are drawn every frame.
+        state.focus.focus(7);
+        state.focus.register(7);
+        state.fullscreen.request(3);
+        assert_eq!(state.end_frame().fullscreen, Some(true));
+        state
+            .dropdowns
+            .open_for_test(1, Rect::new(10.0, 10.0, 120.0, 28.0), &["1×", "2×"], 0);
+
+        // The first Escape closes the list open in the full-screen player.
+        let mut input = escape();
+        state.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
+        state.focus.register(7);
+        assert!(state.owns_fullscreen(3, &input));
+        let frame = state.end_frame();
+        assert!(!state.dropdowns.is_open(1));
+        assert_eq!(frame.fullscreen, None, "still full screen");
+
+        // The second reaches the player, which leaves full screen.
+        let mut input = escape();
+        state.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
+        state.focus.register(7);
+        assert!(!state.owns_fullscreen(3, &input));
+        assert_eq!(state.end_frame().fullscreen, Some(false));
+        assert!(
+            state.focus.is_focused(7),
+            "neither Escape blurred the field"
         );
     }
 

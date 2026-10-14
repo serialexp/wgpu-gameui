@@ -1,12 +1,21 @@
-# Done, not committed: the rest of Forge's charts (2026-10-09)
+# Current task: video playback (2026-10-14)
 
-Bart asked: "Lets try building the other forge charts, then we can add those
-to the benchmark after too." `LineChart`, `ScatterPlot` and `BarChart`'s
-overlay are built, tested, in the gallery and in `benches/ui_stress.rs`;
-`DrawList::triangle_strip` came along. What changed is in TODO_DONE.md "The
-rest of Forge's charts". Left: commit when Bart asks, and rerun the chart
-benches on a quiet machine (timings on 2026-10-09 were taken under heavy
-load).
+Bart asked for a video component in pure Rust, with sound. The plan is
+`docs/design/video-playback.md`, and its "Implementation status" is the
+checklist; read it first.
+
+- Phase 0 (the workspace: `crates/core`, `crates/media`) is committed
+  (`8cd9515`, agent-ui `1137178`).
+- Phase 1 (core) is committed: in-place sprite updates, YUV sprites with
+  colour handling, full screen on request, and the media icons. A review
+  agent checked it; its findings were fixed, and the ones left are in TODO.md
+  "Video phase 1 follow-ups". It changes `UiFrameResult` (a `fullscreen`
+  field), so agent-ui's `crates/desktop/src/redraw.rs` tests changed with it.
+- Next: phase 2 in `crates/media` (MP4
+  reading with `re_mp4`, `rust_h264` on a worker, AAC, the clock, seeking),
+  tests first, with fixtures made once by ffmpeg.
+- The research clones (rust_h264, re_mp4, symphonia, cpal) were in
+  /tmp/video-research; clone them again if /tmp was cleared.
 
 # Current task: Timeline and viewport gizmos from Forge (2026-10-11)
 

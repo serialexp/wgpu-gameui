@@ -101,6 +101,7 @@ pub mod debug;
 mod drag_tracker;
 mod frame;
 mod frame_result;
+mod fullscreen;
 mod interaction;
 mod keys;
 pub mod layer;
@@ -134,6 +135,7 @@ pub use debug::DebugReport;
 pub use drag_tracker::{DEFAULT_DRAG_THRESHOLD, DragTracker};
 pub use frame::Frame;
 pub use frame_result::{MAX_DT, NOMINAL_FRAME_DT, UiFrameResult};
+pub use fullscreen::FullscreenState;
 pub use interaction::{
     HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
 };
@@ -155,7 +157,8 @@ pub use render::HeadlessGpu;
 pub use render::{
     AtlasId, Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta,
     Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, TextContrast, UiRenderer,
-    capture_draw_list, capture_layers, capture_with, write_png,
+    YuvColour, YuvMatrix, YuvPlane, YuvPlanes, YuvRange, capture_draw_list, capture_layers,
+    capture_with, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{

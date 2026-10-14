@@ -241,6 +241,13 @@ impl FocusState {
         self.click_claimed = true;
     }
 
+    /// Mark this frame's Escape (the `cancel` intent) as used, so it doesn't
+    /// also blur the focused widget: for a widget that acts on it while
+    /// drawing, after focus has seen the frame's input (leaving full screen).
+    pub fn claim_escape(&mut self) {
+        self.escape = false;
+    }
+
     /// Programmatically clear focus.
     pub fn blur(&mut self) {
         self.focused = None;

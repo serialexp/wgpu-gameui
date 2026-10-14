@@ -137,6 +137,10 @@ required-features = ["headless"]
 name = "render_stats"
 required-features = ["headless"]
 
+[[test]]
+name = "yuv_sprites"
+required-features = ["headless"]
+
 [[bench]]
 name = "ui_stress"
 harness = false

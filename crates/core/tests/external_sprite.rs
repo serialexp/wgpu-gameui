@@ -88,8 +88,8 @@ fn external_view_replaces_in_place_samples_and_unloads_without_uploads() {
         Err(SpriteError::Empty)
     );
     assert_eq!(gpu.renderer().sprite_id("preview"), Some(id));
-    assert!(gpu.renderer().unload_sprite("preview"));
-    assert!(!gpu.renderer().unload_sprite("preview"));
+    assert!(gpu.renderer().unload_sprite(id));
+    assert!(!gpu.renderer().unload_sprite(id));
     assert_eq!(gpu.renderer().sprite_id("preview"), None);
     let pixels = gpu.capture(&list, (32, 32));
     assert!(pixels.iter().all(|&byte| byte == 0));

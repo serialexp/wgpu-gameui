@@ -36,6 +36,13 @@ pub struct UiFrameResult {
     /// *now* (the moment `end_frame` ran); `0.0` means the next frame. `None`
     /// = nothing pending; the host may idle indefinitely.
     pub next_deadline: Option<f32>,
+    /// A change to the window's full-screen state for the host to make, the
+    /// way it applies the cursor: `Some(true)` to enter full screen (with
+    /// winit, `set_fullscreen(Some(Fullscreen::Borderless(None)))`),
+    /// `Some(false)` to leave, `None` to leave the window as it is. Asked for
+    /// once, in the frame a widget took or gave up the screen (see
+    /// [`FullscreenState`](crate::FullscreenState)).
+    pub fullscreen: Option<bool>,
 }
 
 impl UiFrameResult {
@@ -43,13 +50,15 @@ impl UiFrameResult {
     pub const IDLE: UiFrameResult = UiFrameResult {
         needs_repaint: false,
         next_deadline: None,
+        fullscreen: None,
     };
 
     /// Fold another source's contribution into this result.
     ///
-    /// `needs_repaint` is an OR; `next_deadline` keeps the minimum. Useful on
-    /// the host side for combining the UI frame's result with the
-    /// application's own timers before scheduling the next redraw.
+    /// `needs_repaint` is an OR; `next_deadline` keeps the minimum; a
+    /// full-screen change in `other`, the later result, wins. Useful on the
+    /// host side for combining the UI frame's result with the application's
+    /// own timers before scheduling the next redraw.
     pub fn merge(&mut self, other: UiFrameResult) {
         self.needs_repaint |= other.needs_repaint;
         self.next_deadline = match (self.next_deadline, other.next_deadline) {
@@ -57,6 +66,7 @@ impl UiFrameResult {
             (d, None) => d,
             (Some(a), Some(b)) => Some(a.min(b)),
         };
+        self.fullscreen = other.fullscreen.or(self.fullscreen);
     }
 }
 
@@ -96,6 +106,7 @@ impl FrameTimings {
         UiFrameResult {
             needs_repaint: self.next_deadline.is_some(),
             next_deadline: self.next_deadline,
+            fullscreen: None,
         }
     }
 }
@@ -144,13 +155,25 @@ mod tests {
         r.merge(UiFrameResult {
             needs_repaint: false,
             next_deadline: Some(2.0),
+            fullscreen: Some(true),
         });
         r.merge(UiFrameResult {
             needs_repaint: true,
             next_deadline: Some(0.5),
+            fullscreen: None,
         });
         assert!(r.needs_repaint);
         assert_eq!(r.next_deadline, Some(0.5));
+        assert_eq!(
+            r.fullscreen,
+            Some(true),
+            "kept: the later result asks nothing"
+        );
+        r.merge(UiFrameResult {
+            fullscreen: Some(false),
+            ..UiFrameResult::IDLE
+        });
+        assert_eq!(r.fullscreen, Some(false));
     }
 
     #[test]

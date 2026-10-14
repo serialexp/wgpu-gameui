@@ -9,35 +9,31 @@ Tracking the gap between this design and what's on the main branch.
 
 ### Done
 
-(nothing yet)
+Phase 0, the workspace (2026-10-14, gameui `8cd9515`, agent-ui `1137178`):
 
-### Outstanding
+- Today's crate moved into `crates/core` (still published as `wgpu-gameui`), with its tests,
+  examples and assets; the repo root is a Cargo workspace sharing version, edition, licence and
+  repository through `[workspace.package]`
+- agent-ui's `[patch]` entry points at `~/Projects/wgpu-gameui/crates/core`
+- An empty `crates/media` (`wgpu-gameui-media`, `publish = false` until it plays something)
 
-Phase 0, the workspace:
+Phase 1, core (2026-10-14, the commit after `8cd9515`). Checked with the format check, strict
+clippy, every test in the workspace, and the ignored GPU tests in `tests/yuv_sprites.rs` and
+`tests/icon_instancing.rs`; what's left over is in TODO.md, "Video phase 1 follow-ups".
 
-Built in the working tree on 2026-10-14, not yet committed: all three below. Checked with the
-format check, strict clippy, every test in the workspace, a dry-run publish of `wgpu-gameui`,
-and an agent-ui desktop build against the new path.
-
-- [ ] Move today's crate into `crates/core` (still published as `wgpu-gameui`, so dependents
-  don't change their dependency), with its tests, examples and assets; the repo root becomes a
-  Cargo workspace
-- [ ] Point agent-ui's `[patch]` entry at `~/Projects/wgpu-gameui/crates/core` in the same step
-- [ ] An empty `crates/media` (`wgpu-gameui-media`) in the workspace
-
-Phase 1, core:
-
-- [ ] Sprites whose pixels can be replaced in place: same `SpriteId`, same texture, new pixels
+- [x] Sprites whose pixels can be replaced in place: same `SpriteId`, same texture, new pixels
   written with `queue.write_texture` (no new texture or bind group per frame)
-- [ ] Planar YUV 4:2:0 sprites: three single-channel (`R8Unorm`) planes, converted to RGB in a
+- [x] Planar YUV 4:2:0 sprites: three single-channel (`R8Unorm`) planes, converted to RGB in a
   shader, drawn through `DrawList::image` like any other sprite (tint, crop, clip)
-- [ ] Colour handling for those sprites: BT.709 and BT.601 matrices, limited and full range
-- [ ] A headless GPU test: known YUV planes in, the expected RGB pixels out
-- [ ] Full screen on request: a widget asks to take the whole window, gameui asks the app to
+- [x] Colour handling for those sprites: BT.709 and BT.601 matrices, limited and full range
+- [x] A headless GPU test: known YUV planes in, the expected RGB pixels out
+- [x] Full screen on request: a widget asks to take the whole window, gameui asks the app to
   make the window full screen and draws that widget over everything, and Esc (or the window
   leaving full screen) ends it
-- [ ] Phosphor icons for the media widgets: pause, replay, speaker (high, low, none, muted), and
+- [x] Phosphor icons for the media widgets: pause, replay, speaker (high, low, none, muted), and
   full screen in and out
+
+### Outstanding
 
 Phase 2, the media crate (decoding and timing, no GPU, no audio device):
 
@@ -207,21 +203,27 @@ the other agents first.
 Like the browser's `element.requestFullscreen()`: a widget asks to take over the screen, and
 gameui does the rest.
 
-- `UiContext::request_fullscreen(id)` (and a `UiState` form for the raw widgets) records which
-  widget wants the screen. The frame's `UiFrameResult` then carries a window request,
+- `UiContext::request_fullscreen(id)` (and `UiState::fullscreen.request(id)` for the raw
+  widgets, a `FullscreenState`) records which widget wants the screen. The frame's `UiFrameResult` then carries a window request,
   "full screen on", which the app applies to its window (with winit, `set_fullscreen`), the way
   it applies the cursor.
-- While a widget owns full screen, it draws into a top layer covering the whole window, over
-  everything else, without its border or rounding. The rest of the UI still draws underneath, so
-  leaving full screen puts it back as it was.
-- Esc, the widget's own key, or `exit_fullscreen` ends it, and the frame result carries "full
-  screen off". When the window leaves full screen some other way (the OS's own key, say), the
-  app tells gameui with `UiState::set_window_fullscreen(false)`, and the owner is cleared.
+- While a widget owns full screen (`owns_fullscreen(id)`, asked each frame it draws), it draws
+  into a top layer covering the whole window, over everything else, without its border or
+  rounding. The rest of the UI still draws underneath, so leaving full screen puts it back as it
+  was. An owner not drawn in a frame loses the screen, so a closed player can't leave the window
+  stuck in full screen.
+- Esc reaching the owner (checked as it draws, so a dropdown, menu or modal open over it takes
+  the key first), the widget's own key, or `exit_fullscreen` ends it, and the frame result
+  carries "full screen off". The app reports the window's full-screen state when it changes
+  with `UiState::fullscreen.set_window_fullscreen(on)`; leaving some other way (the OS's own
+  key, say) clears the owner. A report contradicting a change still in progress (macOS animates
+  into full screen) is ignored. A window that was full screen before the widget asked stays
+  full screen when it leaves.
 - The video player is the first user. Anything else (an image viewer, a chart) can use it too.
 
 ### Renderer: pictures that change
 
-**Updating a sprite in place.** A new `UiRenderer::update_sprite(sprite, pixels)` writes new
+**Updating a sprite in place.** A new `UiRenderer::update_sprite_rgba8(sprite, pixels)` writes new
 pixels into the sprite's existing texture with `queue.write_texture`, at the next flush, if the
 size is the same. Anything drawn with that `SpriteId` shows the new pixels. This only applies to
 sprites with their own texture (`Placement::Own`): an atlas re-uploads all of itself when
@@ -231,8 +233,13 @@ anything in it changes, so atlas sprites refuse.
 colour planes (U and V) at half the width and half the height. Converting to RGB on the CPU at
 1080p costs about as much as decoding again; on the GPU it is a few multiplications per pixel.
 
-- `UiRenderer::create_yuv_sprite(width, height, colour)` makes three `R8Unorm` textures in one
-  bind group, and `update_yuv_sprite(sprite, y, u, v)` writes new planes into them.
+- `UiRenderer::create_yuv_sprite(name, width, height, planes, colour)` makes three `R8Unorm`
+  textures in one bind group, and `update_yuv_sprite(sprite, planes)` writes new planes into
+  them. `YuvPlanes` holds the three as `Cow`s with their row strides, so a decoder's owned,
+  padded buffers move in and upload as they are.
+- At an odd picture size the colour planes are rounded up, so the shader scales their UV to
+  match the picture. Colour samples are treated as centred between the brightness samples;
+  H.264's default siting (in line with the left column) differs by a quarter pixel sideways.
 - A YUV sprite is drawn with `DrawList::image` like any other, so fitting, cropping, tinting and
   clipping work unchanged.
 - The renderer gets one more pipeline, a copy of the icon pipeline whose fragment shader samples
@@ -249,7 +256,7 @@ stream doesn't say, the default is BT.709, limited range for HD sizes and BT.601
 which is what other players do.
 
 The shader's result is sRGB-encoded, which is what the rest of the UI blends in
-(`ui_renderer.rs:396-416`), so a video frame and the controls drawn over it mix correctly.
+(the `UiRenderer` docs on colour and target formats), so a video frame and the controls drawn over it mix correctly.
 
 ### Media crate: reading and decoding
 

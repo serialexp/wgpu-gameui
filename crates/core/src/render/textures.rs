@@ -13,6 +13,12 @@
 //! own ([`RenderStats::small_texture_batches`](crate::RenderStats)), so a frame
 //! full of them is reported as a sign they belong in an atlas.
 //!
+//! A sprite of its own can have its pixels replaced in place
+//! ([`Textures::update_rgba`]), keeping its id and texture: a picture that
+//! changes every frame costs an upload, not a new texture. YUV sprites
+//! ([`Textures::insert_yuv`], see [`super::yuv`]) always have textures of their
+//! own and are drawn through a pipeline of their own.
+//!
 //! Sprite ids are global across all textures; names are too.
 
 use std::borrow::Cow;
@@ -20,6 +26,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use super::atlas::{AtlasRegion, AtlasSlot, SpriteAtlas};
+use super::yuv::{YuvColour, YuvPlane, YuvPlanes, chroma_size};
 
 /// Opaque handle to a loaded sprite, wherever its pixels live. Stable until the
 /// sprite is unloaded.
@@ -78,6 +85,35 @@ pub enum SpriteError {
     },
     /// No atlas with this id was created.
     UnknownAtlas(AtlasId),
+    /// No sprite with this id is loaded.
+    UnknownSprite(SpriteId),
+    /// The sprite is packed into an atlas, which is uploaded whole: only a
+    /// sprite with a texture of its own can be updated in place.
+    InAtlas(SpriteId),
+    /// The sprite holds the other kind of pixels: RGBA given for a YUV sprite,
+    /// or YUV planes for an RGBA one.
+    WrongFormat(SpriteId),
+    /// The sprite shows a caller's GPU texture: draw into that texture instead.
+    External(SpriteId),
+    /// A YUV plane's rows are shorter than the picture needs.
+    PlaneStride {
+        /// The plane.
+        plane: YuvPlane,
+        /// The stride given.
+        stride: u32,
+        /// The plane's width, the least its stride may be.
+        width: u32,
+    },
+    /// A YUV plane holds too few or too many bytes for its rows: it needs
+    /// every row at its stride, the last with or without its padding.
+    PlaneSize {
+        /// The plane.
+        plane: YuvPlane,
+        /// Its bytes with every row at its stride.
+        expected: usize,
+        /// The bytes given.
+        got: usize,
+    },
 }
 
 impl std::fmt::Display for SpriteError {
@@ -103,6 +139,31 @@ impl std::fmt::Display for SpriteError {
                 atlas.0
             ),
             SpriteError::UnknownAtlas(atlas) => write!(f, "no atlas {}", atlas.0),
+            SpriteError::UnknownSprite(sprite) => write!(f, "no sprite {sprite}"),
+            SpriteError::InAtlas(sprite) => write!(
+                f,
+                "sprite {sprite} is in an atlas, so it can't be updated in place"
+            ),
+            SpriteError::WrongFormat(sprite) => {
+                write!(f, "sprite {sprite} holds the other kind of pixels")
+            }
+            SpriteError::External(sprite) => write!(
+                f,
+                "sprite {sprite} shows a caller's GPU texture, so it has no pixels to update"
+            ),
+            SpriteError::PlaneStride {
+                plane,
+                stride,
+                width,
+            } => write!(
+                f,
+                "YUV plane {plane:?} has a stride of {stride}, less than its width {width}"
+            ),
+            SpriteError::PlaneSize {
+                plane,
+                expected,
+                got,
+            } => write!(f, "YUV plane {plane:?} is {got} bytes, expected {expected}"),
         }
     }
 }
@@ -114,6 +175,8 @@ impl std::error::Error for SpriteError {}
 pub(crate) enum Binding {
     Own(SpriteId),
     Atlas(AtlasId),
+    /// A YUV sprite's planes, drawn through the YUV pipeline.
+    Yuv(SpriteId),
 }
 
 /// What drawing a sprite needs: its texture, where it is in it, and how large
@@ -135,13 +198,23 @@ impl Resolved {
 }
 
 /// Texture uploads made by [`Textures::flush`]: whole atlases, and sprites of
-/// their own.
+/// their own (RGBA or YUV).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Uploads {
     pub atlases: usize,
     pub atlas_bytes: u64,
     pub own: usize,
     pub own_bytes: u64,
+    /// Textures of their own created: one per sprite, at its first upload.
+    pub created: usize,
+}
+
+/// What sprite textures are sampled through: the sampler, and the bind group
+/// layouts of the RGBA and the YUV pipelines.
+pub(crate) struct Sampling<'a> {
+    pub sampler: &'a wgpu::Sampler,
+    pub rgba: &'a wgpu::BindGroupLayout,
+    pub yuv: &'a wgpu::BindGroupLayout,
 }
 
 /// One uploaded texture and the bind group that samples it.
@@ -150,12 +223,29 @@ struct Gpu {
     bind_group: wgpu::BindGroup,
 }
 
+/// A YUV sprite's three plane textures and the bind group that samples them
+/// with its colour conversion.
+struct YuvGpu {
+    planes: [wgpu::Texture; 3],
+    bind_group: wgpu::BindGroup,
+}
+
 enum Home {
-    /// A texture of its own. `pixels` waits for the first flush, which creates
-    /// `gpu` and drops them: the GPU copy is the only one kept.
+    /// A texture of its own. `pixels` waits for the next flush (the first, or
+    /// one after an update), which creates `gpu` if needed, writes them and
+    /// drops them: the GPU copy is the only one kept.
     Own {
         pixels: Option<Vec<u8>>,
         gpu: Option<Gpu>,
+    },
+    /// Three plane textures of its own; `planes` waits for the next flush like
+    /// an RGBA sprite's pixels.
+    Yuv {
+        planes: Option<YuvPlanes<'static>>,
+        colour: YuvColour,
+        /// Boxed: three textures and a bind group would make every sprite
+        /// the size of a YUV one.
+        gpu: Option<Box<YuvGpu>>,
     },
     Atlas {
         atlas: AtlasId,
@@ -192,7 +282,9 @@ pub(crate) struct Textures {
     free: Vec<SpriteId>,
     names: HashMap<String, SpriteId>,
     atlases: Vec<Shared>,
-    /// Sprites of their own waiting for their first flush.
+    /// Sprites of their own waiting for the next flush: their first upload,
+    /// or an update. May hold an id twice, or one since unloaded; the flush
+    /// skips a sprite with nothing waiting.
     pending: Vec<SpriteId>,
 }
 
@@ -266,13 +358,7 @@ impl Textures {
         let home =
             match placement {
                 Placement::Own => {
-                    if width > self.max_dimension || height > self.max_dimension {
-                        return Err(SpriteError::TooLarge {
-                            width,
-                            height,
-                            max: self.max_dimension,
-                        });
-                    }
+                    self.check_own_size(width, height)?;
                     Home::Own {
                         // Owned pixels move in: a screenful isn't copied.
                         pixels: Some(pixels.into_owned()),
@@ -301,10 +387,109 @@ impl Textures {
                     Home::Atlas { atlas, slot }
                 }
             };
+        Ok(self.add(name, width, height, home))
+    }
+
+    /// Load a `width`×`height` YUV 4:2:0 sprite, in textures of its own, whose
+    /// codes turn into colour as `colour` says. Names work as for
+    /// [`insert`](Self::insert).
+    pub fn insert_yuv(
+        &mut self,
+        name: Option<&str>,
+        width: u32,
+        height: u32,
+        planes: YuvPlanes<'_>,
+        colour: YuvColour,
+    ) -> Result<SpriteId, SpriteError> {
+        if width == 0 || height == 0 {
+            return Err(SpriteError::Empty);
+        }
+        self.check_own_size(width, height)?;
+        check_planes(width, height, &planes)?;
+        let home = Home::Yuv {
+            planes: Some(planes.into_owned()),
+            colour,
+            gpu: None,
+        };
+        Ok(self.add(name, width, height, home))
+    }
+
+    /// Replace an RGBA sprite's pixels, keeping its id and its texture. Only a
+    /// sprite with a texture of its own can be updated, and only at its size.
+    /// The pixels are uploaded at the next flush; updating again before then
+    /// replaces them, so only the latest is uploaded.
+    pub fn update_rgba<'a>(
+        &mut self,
+        id: SpriteId,
+        pixels: impl Into<Cow<'a, [u8]>>,
+    ) -> Result<(), SpriteError> {
+        let sprite = self.sprite_mut(id)?;
+        let expected = sprite.width as usize * sprite.height as usize * 4;
+        let Home::Own {
+            pixels: waiting, ..
+        } = &mut sprite.home
+        else {
+            return Err(match sprite.home {
+                Home::Atlas { .. } => SpriteError::InAtlas(id),
+                Home::External { .. } => SpriteError::External(id),
+                _ => SpriteError::WrongFormat(id),
+            });
+        };
+        let pixels = pixels.into();
+        if pixels.len() != expected {
+            return Err(SpriteError::PixelCount {
+                expected,
+                got: pixels.len(),
+            });
+        }
+        let queued = waiting.replace(pixels.into_owned()).is_some();
+        if !queued {
+            self.pending.push(id);
+        }
+        Ok(())
+    }
+
+    /// Replace a YUV sprite's planes, keeping its id and its textures. Uploaded
+    /// at the next flush, like [`update_rgba`](Self::update_rgba).
+    pub fn update_yuv(&mut self, id: SpriteId, planes: YuvPlanes<'_>) -> Result<(), SpriteError> {
+        let sprite = self.sprite_mut(id)?;
+        let (width, height) = (sprite.width, sprite.height);
+        let Home::Yuv {
+            planes: waiting, ..
+        } = &mut sprite.home
+        else {
+            return Err(match sprite.home {
+                Home::External { .. } => SpriteError::External(id),
+                _ => SpriteError::WrongFormat(id),
+            });
+        };
+        check_planes(width, height, &planes)?;
+        let queued = waiting.replace(planes.into_owned()).is_some();
+        if !queued {
+            self.pending.push(id);
+        }
+        Ok(())
+    }
+
+    /// Refuse a texture of its own larger than the GPU allows.
+    fn check_own_size(&self, width: u32, height: u32) -> Result<(), SpriteError> {
+        if width > self.max_dimension || height > self.max_dimension {
+            return Err(SpriteError::TooLarge {
+                width,
+                height,
+                max: self.max_dimension,
+            });
+        }
+        Ok(())
+    }
+
+    /// Give a loaded sprite an id (and `name`, taking it from the sprite that
+    /// had it), and queue a texture of its own for its first upload.
+    fn add(&mut self, name: Option<&str>, width: u32, height: u32, home: Home) -> SpriteId {
         if let Some(previous) = name.and_then(|name| self.names.get(name).copied()) {
             self.remove(previous);
         }
-        let own = matches!(home, Home::Own { .. });
+        let own = !matches!(home, Home::Atlas { .. });
         let sprite = Sprite {
             name: name.map(str::to_owned),
             width,
@@ -327,7 +512,7 @@ impl Textures {
         if own {
             self.pending.push(id);
         }
-        Ok(id)
+        id
     }
 
     /// Register a caller-rendered view with no pending pixel upload. Replacing
@@ -342,13 +527,7 @@ impl Textures {
         if width == 0 || height == 0 {
             return Err(SpriteError::Empty);
         }
-        if width > self.max_dimension || height > self.max_dimension {
-            return Err(SpriteError::TooLarge {
-                width,
-                height,
-                max: self.max_dimension,
-            });
-        }
+        self.check_own_size(width, height)?;
         let sprite = Sprite {
             name: Some(name.to_owned()),
             width,
@@ -403,25 +582,28 @@ impl Textures {
     /// Where to sample `id` from, or `None` for an unknown sprite.
     pub fn resolve(&self, id: SpriteId) -> Option<Resolved> {
         let sprite = self.sprite(id)?;
-        Some(match sprite.home {
-            Home::Own { .. } | Home::External { .. } => Resolved {
-                binding: Binding::Own(id),
-                region: AtlasRegion {
-                    x: 0,
-                    y: 0,
-                    w: sprite.width,
-                    h: sprite.height,
-                },
-                texture: (sprite.width, sprite.height),
-            },
+        let binding = match sprite.home {
+            Home::Own { .. } | Home::External { .. } => Binding::Own(id),
+            Home::Yuv { .. } => Binding::Yuv(id),
             Home::Atlas { atlas, slot } => {
                 let shared = &self.atlases[atlas.0 as usize];
-                Resolved {
+                return Some(Resolved {
                     binding: Binding::Atlas(atlas),
                     region: shared.atlas.region(slot)?,
                     texture: (shared.atlas.width(), shared.atlas.height()),
-                }
+                });
             }
+        };
+        // A texture of its own is the whole sprite.
+        Some(Resolved {
+            binding,
+            region: AtlasRegion {
+                x: 0,
+                y: 0,
+                w: sprite.width,
+                h: sprite.height,
+            },
+            texture: (sprite.width, sprite.height),
         })
     }
 
@@ -431,7 +613,11 @@ impl Textures {
             Binding::Own(id) => match &self.sprite(id)?.home {
                 Home::Own { gpu, .. } => gpu.as_ref().map(|gpu| &gpu.bind_group),
                 Home::External { bind_group } => Some(bind_group),
-                Home::Atlas { .. } => None,
+                _ => None,
+            },
+            Binding::Yuv(id) => match &self.sprite(id)?.home {
+                Home::Yuv { gpu, .. } => gpu.as_ref().map(|gpu| &gpu.bind_group),
+                _ => None,
             },
             Binding::Atlas(atlas) => self
                 .atlases
@@ -442,15 +628,14 @@ impl Textures {
         }
     }
 
-    /// Upload what changed since the last flush: new sprites of their own, and
-    /// atlases that gained, lost or moved sprites (all of an atlas' pixels,
-    /// into a new texture if it grew).
+    /// Upload what changed since the last flush: new and updated sprites of
+    /// their own, and atlases that gained, lost or moved sprites (all of an
+    /// atlas' pixels, into a new texture if it grew).
     pub fn flush(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
+        sampling: &Sampling<'_>,
     ) -> Uploads {
         let mut uploads = Uploads::default();
         for shared in &mut self.atlases {
@@ -464,7 +649,7 @@ impl Textures {
             }
             let grew = shared.gpu.is_none() || shared.gpu_size != size;
             if grew {
-                shared.gpu = Some(Gpu::new(device, layout, sampler, size, "ui sprite atlas"));
+                shared.gpu = Some(Gpu::new(device, sampling, size, "ui sprite atlas"));
                 shared.gpu_size = size;
             }
             if shared.atlas.take_dirty() || grew {
@@ -480,15 +665,39 @@ impl Textures {
                 continue;
             };
             let size = (sprite.width, sprite.height);
-            if let Home::Own { pixels, gpu } = &mut sprite.home
-                && let Some(pixels) = pixels.take()
-            {
-                let created = Gpu::new(device, layout, sampler, size, "ui sprite texture");
-                created.write(queue, size, &pixels);
-                *gpu = Some(created);
-                uploads.own += 1;
-                uploads.own_bytes += pixels.len() as u64;
-            }
+            let created = match &mut sprite.home {
+                Home::Own { pixels, gpu } => {
+                    let Some(pixels) = pixels.take() else {
+                        continue;
+                    };
+                    let created = gpu.is_none();
+                    gpu.get_or_insert_with(|| {
+                        Gpu::new(device, sampling, size, "ui sprite texture")
+                    })
+                    .write(queue, size, &pixels);
+                    uploads.own_bytes += pixels.len() as u64;
+                    created
+                }
+                Home::Yuv {
+                    planes,
+                    colour,
+                    gpu,
+                } => {
+                    let Some(planes) = planes.take() else {
+                        continue;
+                    };
+                    let created = gpu.is_none();
+                    gpu.get_or_insert_with(|| {
+                        Box::new(YuvGpu::new(device, queue, sampling, size, *colour))
+                    })
+                    .write(queue, size, &planes);
+                    uploads.own_bytes += planes.len() as u64;
+                    created
+                }
+                Home::Atlas { .. } | Home::External { .. } => continue,
+            };
+            uploads.own += 1;
+            uploads.created += usize::from(created);
         }
         uploads
     }
@@ -496,34 +705,52 @@ impl Textures {
     fn sprite(&self, id: SpriteId) -> Option<&Sprite> {
         self.sprites.get(id as usize)?.as_ref()
     }
+
+    fn sprite_mut(&mut self, id: SpriteId) -> Result<&mut Sprite, SpriteError> {
+        self.sprites
+            .get_mut(id as usize)
+            .and_then(Option::as_mut)
+            .ok_or(SpriteError::UnknownSprite(id))
+    }
+}
+
+/// Refuse planes that aren't the sizes a `width`×`height` 4:2:0 picture has:
+/// each row at least the plane's width, and every row there at its stride,
+/// the last with or without its padding.
+fn check_planes(width: u32, height: u32, planes: &YuvPlanes<'_>) -> Result<(), SpriteError> {
+    let (cw, ch) = chroma_size(width, height);
+    for (plane, bytes, stride, (width, rows)) in [
+        (YuvPlane::Y, &planes.y, planes.y_stride, (width, height)),
+        (YuvPlane::U, &planes.u, planes.chroma_stride, (cw, ch)),
+        (YuvPlane::V, &planes.v, planes.chroma_stride, (cw, ch)),
+    ] {
+        if stride < width {
+            return Err(SpriteError::PlaneStride {
+                plane,
+                stride,
+                width,
+            });
+        }
+        let padded = stride as usize * rows as usize;
+        let least = padded - (stride - width) as usize;
+        if !(least..=padded).contains(&bytes.len()) {
+            return Err(SpriteError::PlaneSize {
+                plane,
+                expected: padded,
+                got: bytes.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 impl Gpu {
-    fn new(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-        (width, height): (u32, u32),
-        label: &str,
-    ) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+    fn new(device: &wgpu::Device, sampling: &Sampling<'_>, size: (u32, u32), label: &str) -> Self {
+        let texture = create_texture(device, size, wgpu::TextureFormat::Rgba8Unorm, label);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
-            layout,
+            layout: sampling.rgba,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -531,7 +758,7 @@ impl Gpu {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
+                    resource: wgpu::BindingResource::Sampler(sampling.sampler),
                 },
             ],
         });
@@ -542,26 +769,137 @@ impl Gpu {
     }
 
     fn write(&self, queue: &wgpu::Queue, (width, height): (u32, u32), pixels: &[u8]) {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+        write_texture(queue, &self.texture, (width, height), 4 * width, pixels);
     }
+}
+
+impl YuvGpu {
+    /// The plane textures for a `size` picture, and a bind group that samples
+    /// them with `colour`'s conversion (written once: it doesn't change).
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        sampling: &Sampling<'_>,
+        (width, height): (u32, u32),
+        colour: YuvColour,
+    ) -> Self {
+        let chroma = chroma_size(width, height);
+        let planes = [
+            ((width, height), "ui yuv sprite y"),
+            (chroma, "ui yuv sprite u"),
+            (chroma, "ui yuv sprite v"),
+        ]
+        .map(|(size, label)| create_texture(device, size, wgpu::TextureFormat::R8Unorm, label));
+        let views = planes
+            .each_ref()
+            .map(|plane| plane.create_view(&wgpu::TextureViewDescriptor::default()));
+        // `YuvSprite` in `ui.wgsl`: the colour conversion's three rows, then
+        // what turns the picture's UV into the colour planes' (rounded up at
+        // an odd size, they reach half a pixel past the picture).
+        let [r, g, b] = colour.to_rgb().rows;
+        let chroma_scale = [
+            width as f32 / (2 * chroma.0) as f32,
+            height as f32 / (2 * chroma.1) as f32,
+            0.0,
+            0.0,
+        ];
+        let uniform = [r, g, b, chroma_scale];
+        let conversion = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ui yuv sprite colour"),
+            size: std::mem::size_of_val(&uniform) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&conversion, 0, bytemuck::cast_slice(&uniform));
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ui yuv sprite"),
+            layout: sampling.yuv,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&views[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(sampling.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: conversion.as_entire_binding(),
+                },
+            ],
+        });
+        Self { planes, bind_group }
+    }
+
+    fn write(&self, queue: &wgpu::Queue, (width, height): (u32, u32), planes: &YuvPlanes<'_>) {
+        let chroma = chroma_size(width, height);
+        let [y, u, v] = &self.planes;
+        write_texture(queue, y, (width, height), planes.y_stride, &planes.y);
+        write_texture(queue, u, chroma, planes.chroma_stride, &planes.u);
+        write_texture(queue, v, chroma, planes.chroma_stride, &planes.v);
+    }
+}
+
+/// A sampled texture the CPU writes into.
+fn create_texture(
+    device: &wgpu::Device,
+    (width, height): (u32, u32),
+    format: wgpu::TextureFormat,
+    label: &str,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+/// Write a whole `width`×`height` texture from rows `stride` bytes apart
+/// (`write_texture`, unlike a buffer copy, needs no particular stride).
+fn write_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    (width, height): (u32, u32),
+    stride: u32,
+    pixels: &[u8],
+) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(stride),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 /// Split draws, in paint order, into runs that sample the same texture: each
