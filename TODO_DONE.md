@@ -2365,3 +2365,29 @@ editor. Coverage 85 of 91.
   (marker, then rename), Ctrl+A, `+`/`-` zoom (Fit is a transport button),
   Escape clears the selection. Rows and keys outside the view
   are culled. `timecode(frame, fps)` formats the readout.
+
+## 2026-10-15 — Perspective-aware TransformGizmo (for mesh-forge)
+
+- [x] **TransformGizmo through the scene camera.** `TransformGizmo::new(id)`
+  no longer takes a rotation; each `draw(view: GizmoView, state, drag, ctx)`
+  says how it is seen: `GizmoView::Screen { pivot: [x, y], rotation }`
+  (orthographic, `units_per_px` per px, the old behaviour) or
+  `GizmoView::Camera { pivot: [x, y, z], camera }`. `bounds(view) ->
+  Option<Rect>` is `None` while the pivot is behind the eye.
+  `GizmoCamera::new(view_proj, viewport)` takes a column-major matrix in
+  wgpu clip space and a logical-px viewport (`world_to_screen`'s
+  conventions; perspective or orthographic, not reversed depth), with
+  `project(world) -> Option<[x, y, w]>` and `ray(px) -> Option<GizmoRay {
+  origin, dir }>` for the caller's own picking. Both views share one path:
+  arms, plane squares and rings are world geometry projected through the
+  view and kept `size` px long at the pivot's depth; a drag meets the
+  pointer's ray with its constraint, frozen at the press (an axis: the
+  plane holding it that faces the eye; a plane square: its plane; the
+  centre: the plane facing the eye), so it tracks the pointer at any angle,
+  zoom or viewport, and applying the value each frame does not feed back.
+  A ray that misses (an axis pointing at the eye, a grazing plane, a hit
+  behind the eye) holds the last value. Geometry nearer than a tenth of the
+  pivot's clip `w` is cut; a pivot behind the eye draws nothing and cannot
+  be grabbed, and a drag on goes on until released or cancelled. Rotation
+  still follows the pointer's angle about the pivot on screen. Gallery:
+  four camera cells over a projected ground grid.

@@ -1,7 +1,7 @@
 # Video playback
 
 **Status:** Accepted
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-15
 
 ## Implementation status
 
@@ -33,25 +33,65 @@ clippy, every test in the workspace, and the ignored GPU tests in `tests/yuv_spr
 - [x] Phosphor icons for the media widgets: pause, replay, speaker (high, low, none, muted), and
   full screen in and out
 
+Phase 2, the media crate (2026-10-15, decoding and timing, no GPU, no audio device). The public
+face is `Player` (`crates/media/src/player.rs`): `open` / `from_reader` / `with_ahead`, `play`,
+`pause`, `seek(to, SeekMode, now)`, `set_speed`, and `update(now)`, which moves the picture on
+and returns when the next one is due. Every time comes in as an argument, so the tests drive it
+with made-up moments.
+
+- [x] MP4 reading with `re_mp4`: the H.264 video track and the AAC audio track, their timing,
+  and which video samples are keyframes (`container.rs`). `re_mp4` ignores edit lists and starts
+  each track at zero, so we apply the first edit ourselves (its media time and any empty edit
+  before it): the AAC encoder's priming block lands before zero, as ffmpeg puts it. A file cut
+  short fails at open, because `re_mp4` refuses an `mdat` longer than the file
+- [x] H.264 decoding with `rust_h264` on a worker thread (`video.rs`, `worker.rs`): one sample
+  in, a flush, one picture out; display order from the sample table (`Reorder`); a bounded queue
+  of decoded frames (`Ahead`, eight pictures and a second of sound by default)
+- [x] The colour settings `rust_h264` skips, read from the stream's SPS ourselves (`sps.rs`),
+  which also refuses interlaced, 10-bit and non-4:2:0 streams before decoding
+- [x] AAC decoding with `symphonia-codec-aac` on the same worker (`audio.rs`); AAC-LC, mono or
+  stereo
+- [x] The clock passed in as an argument (`clock.rs`); following the audio device's position is
+  phase 3
+- [x] Choosing the frame to show for a clock time, and dropping frames that are late
+  (`schedule.rs`, `advance`)
+- [x] Seeking: back to the keyframe before the target, decode forward, show the target frame;
+  also `SeekMode::NearestKeyframe`, which lands on the nearer keyframe for scrubbing
+- [x] Playback state as the Forge components use it: paused, playing, loading (waiting for
+  frames, with the clock held), ended, error
+- [x] Clear errors for what isn't supported (another codec by name, interlaced or 10-bit H.264,
+  AAC other than LC, a damaged file), and a decoder panic caught on the worker
+  (`MediaError::DecoderPanicked`) instead of taking down the app
+- [x] Test videos, made once with `ffmpeg` and committed (`crates/media/tests/fixtures/make.sh`,
+  each a second or two), with ffmpeg's frame MD5s to compare decoded pictures against
+
+Measured on 2026-10-15 (release, `cargo test -p wgpu-gameui-media --release -- --ignored`, on a
+24-core machine at load 4): 1080p30 High at 8 Mbit/s decodes at 58.5 pictures a second (17 ms
+each), 51% of one core to keep up at 30 fps; AAC at about 2,000× real time; the whole player, as
+fast as it can go, at 1.9× real time with no pictures dropped. Under load 15–21 the same runs gave
+48 pictures a second and 1.3–1.7× real time. Memory: eight 1080p pictures ahead is about 25 MB.
+
+A review of the crate (2026-10-15) found, and these were fixed with a test each: a panic on the
+worker outside the decoder calls (or in the app's waker) left the player loading forever; the
+sound bound stopped applying after the last picture; a stall was only noticed if the app happened
+to update at the right moment; a damaged sample size allocated up to 4 GiB before the file length
+was checked; a seek didn't clear an error from further on; a seek counted as landed on sound alone,
+before its picture. Fixing those turned up three more: sound alone jumped to the end when its
+queue ran dry, the pictures still queued once the video was all decoded could stall on sound, and
+the last AAC block played its padding past the track's end. Tests hold the worker at chosen
+samples with a gated reader (`test_fixtures::Gate`), so these orderings are reproduced exactly.
+
 ### Outstanding
 
-Phase 2, the media crate (decoding and timing, no GPU, no audio device):
+Phase 2 leftover:
 
-- [ ] MP4 reading with `re_mp4`: the H.264 video track and the AAC audio track, their timing,
-  and which video samples are keyframes
-- [ ] H.264 decoding with `rust_h264` on a worker thread, frames in display order, a bounded
-  queue of decoded frames
-- [ ] The colour settings `rust_h264` skips, read from the stream's SPS ourselves
-- [ ] AAC decoding with `symphonia-codec-aac` on the same worker
-- [ ] The playback clock: the audio device's position when there is sound, a clock passed in as
-  an argument when there isn't
-- [ ] Choosing the frame to show for a clock time, and dropping frames that are late
-- [ ] Seeking: back to the keyframe before the target, decode forward, show the target frame
-- [ ] Playback state as the Forge components use it: paused, playing, loading (waiting for
-  frames), ended, error
-- [ ] Clear errors for what isn't supported (another codec, interlaced or 10-bit H.264, a damaged
-  file), and a decoder panic caught on the worker instead of taking down the app
-- [ ] Test videos, made once with `ffmpeg` and committed, each a second or two long
+- [ ] `rust_h264` 0.4.0 gets chroma wrong by ±1 at low chroma QP: `dequant_chroma_dc`
+  (`src/residual.rs`) adds a rounding term when `qp_per < 5`, which the standard's eq. 8-330
+  doesn't have, and the error carries through the GOP. In `h264_aac.mp4` 15 of 60 pictures
+  differ from ffmpeg; with `*d = d.wrapping_mul(v) >> (5 - qp_per)` all 60 match, and
+  `rust_h264`'s own tests still pass. The test
+  `high_profile_with_b_frames_decodes_as_ffmpeg_does_in_display_order` fails until the fix is
+  carried (how is Bart's call)
 
 Phase 3, sound:
 

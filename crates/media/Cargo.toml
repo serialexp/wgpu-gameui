@@ -9,3 +9,17 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The picture types a decoded frame is handed over in (`YuvPlanes`, `YuvColour`).
+wgpu-gameui = { path = "../core" }
+# MP4 reading: each track's codec settings and sample table (byte position,
+# size, decode and display time, keyframe or not).
+re_mp4 = "0.5"
+# H.264 decoding, pure Rust: Baseline, Main and High, 8-bit 4:2:0 progressive.
+rust_h264 = "0.4"
+# AAC-LC decoding, pure Rust.
+symphonia-codec-aac = "0.6"
+symphonia-core = "0.6"
+
+[dev-dependencies]
+# The test videos' pictures are checked against ffmpeg's per-frame MD5s.
+md-5 = "0.11"

@@ -31,6 +31,36 @@ still open.
       `key_escape`), so one Escape both cancels a capture and reaches anything
       else that takes `nav.cancel` (a full-screen owner, focus).
 
+## Core doesn't build without its default features (noted 2026-10-15)
+
+- [ ] **`cargo build -p wgpu-gameui --no-default-features` fails**: the file
+      dialog (`widgets/file_dialog/{mod,paint}.rs`) uses `Icon`, `IconKey::new`,
+      `PhosphorIcon`, `SearchField` and `Thumb`, which only exist with
+      `phosphor-icons`. Gate the dialog on the feature, or give it a path
+      without icons; then the media crate can depend on core with
+      `default-features = false`. CI should build that combination.
+
+## Video phase 2 follow-ups (2026-10-15)
+
+- [ ] **Carry the `rust_h264` chroma DC fix.** `dequant_chroma_dc` rounds
+      where the standard doesn't (eq. 8-330), so chroma is ±1 off at low QP
+      and `media`'s ffmpeg MD5 test fails. Details and the one-line fix are in
+      `docs/design/video-playback.md`, "Phase 2 leftover".
+- [ ] **A damaged index can still exhaust memory inside `re_mp4`.** Its
+      `Mp4::read` sizes tables from counts in the file before checking them
+      against the file's length; an allocation that fails aborts the
+      process, which `catch_unwind` can't catch. Needs a check in `re_mp4`
+      (offer upstream), or a sanity pass over the box sizes before handing
+      it the file.
+- [ ] **A video sample without a picture stops playback.** One holding only
+      SEI or an access unit delimiter is `Damaged` today. Some muxers write
+      them; skipping such a sample (the reorder already takes a `None`)
+      would be more forgiving. A policy call for Bart.
+- [ ] **Caught `re_mp4` / `rust_h264` panics still print.** `Container::open`
+      and the decoders catch them, but the default hook has already printed
+      the message and backtrace to stderr by then. An app that cares installs its own hook;
+      the crate shouldn't swap the process-wide one.
+
 ## Chart benches on a quiet machine (noted 2026-10-09)
 
 - [ ] **Rerun the chart benches** in `benches/ui_stress.rs` (`LineChart`,

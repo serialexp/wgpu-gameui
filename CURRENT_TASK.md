@@ -11,9 +11,14 @@ checklist; read it first.
   agent checked it; its findings were fixed, and the ones left are in TODO.md
   "Video phase 1 follow-ups". It changes `UiFrameResult` (a `fullscreen`
   field), so agent-ui's `crates/desktop/src/redraw.rs` tests changed with it.
-- Next: phase 2 in `crates/media` (MP4
-  reading with `re_mp4`, `rust_h264` on a worker, AAC, the clock, seeking),
-  tests first, with fixtures made once by ffmpeg.
+- Phase 2 (`crates/media`: MP4, H.264 and AAC on a worker, clock, seeking,
+  states, `Player`) is written and its design-doc items are checked off
+  (2026-10-15); a review's findings are fixed (listed in the design doc),
+  not yet committed. One test fails on a `rust_h264` 0.4.0 chroma bug (see the
+  design doc's "Phase 2 leftover"); Bart is choosing how to carry the fix:
+  a serialexp fork plus `[patch.crates-io]` and an upstream PR, a local path
+  patch, or a tolerant test. A patched clone was in /tmp/rust_h264_git.
+- Next: phase 3, sound (`cpal`, `rubato`, the device clock).
 - The research clones (rust_h264, re_mp4, symphonia, cpal) were in
   /tmp/video-research; clone them again if /tmp was cleared.
 
