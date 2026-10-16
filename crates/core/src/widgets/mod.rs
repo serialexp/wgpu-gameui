@@ -196,7 +196,7 @@ pub use scatter_plot::{
 // Used by `Thumb` and by tests outside `widgets`.
 #[cfg(any(test, feature = "phosphor-icons"))]
 pub(crate) use material::sheen_over;
-pub use material::{Material, Tone};
+pub use material::{Material, Tone, deep_well_ink, draw_deep_well};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
 pub use menubar::{
     AccelPlatform, Accelerator, ActivatedItem, Key, MAX_MENU_DEPTH, Menu, MenuBar, MenuBarId,
@@ -272,8 +272,8 @@ pub use toolbar::{
 };
 pub use tooltip::{TooltipContent, TooltipHint, TooltipLayer, TooltipSide};
 pub use transform_gizmo::{
-    GizmoHandle, GizmoMode, GizmoValue, TransformEvent, TransformGizmo, TransformGizmoOutput,
-    TransformGizmoState, TransformPhase, TransformSnap,
+    GizmoCamera, GizmoHandle, GizmoMode, GizmoRay, GizmoValue, GizmoView, TransformEvent,
+    TransformGizmo, TransformGizmoOutput, TransformGizmoState, TransformPhase, TransformSnap,
 };
 pub use tree::{TreeAction, TreeIcon, TreeId, TreeNode, TreeNodeOutput, TreeState};
 pub use vector_field::{VectorField, VectorFieldOutput, VectorScrub};

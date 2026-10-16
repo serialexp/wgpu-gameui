@@ -42,10 +42,10 @@ use wgpu_gameui::{
     PromptDialog, PromptDialogState, Sheet, SheetAction,
 };
 use wgpu_gameui::{
-    AxisDir, GizmoHandle, GizmoMode, GizmoValue, HudBar, HudItem, HudKey, HudOption, HudSelect,
-    HudState, MarqueeMode, MeasureLine, SelectionMarquee, StatRow, TransformGizmo,
-    TransformGizmoState, TransformReadout, TransformSnap, ViewGizmo, ViewGizmoState, ViewRotation,
-    ViewportStats,
+    AxisDir, GizmoCamera, GizmoHandle, GizmoMode, GizmoValue, GizmoView, HudBar, HudItem, HudKey,
+    HudOption, HudSelect, HudState, MarqueeMode, MeasureLine, SelectionMarquee, StatRow,
+    TransformGizmo, TransformGizmoState, TransformReadout, TransformSnap, ViewGizmo,
+    ViewGizmoState, ViewRotation, ViewportStats,
 };
 use wgpu_gameui::{
     BADGE_HEIGHT, Badge, BadgeTone, Bar, BarChart, BarSegment, BarSeries, BarTooltip,
@@ -393,7 +393,7 @@ fn transform_gizmo_section(
         [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]]
     };
     let gizmo = |mode| {
-        TransformGizmo::new(1, orbit)
+        TransformGizmo::new(1)
             .mode(mode)
             .size(ARM)
             .snap(TransformSnap {
@@ -438,9 +438,6 @@ fn transform_gizmo_section(
             mouse_y: pivot[1] + o[1],
             ..InputState::default()
         };
-        let mut state = TransformGizmoState::new();
-        let mut drag = DragCapture::new();
-        // Every frame but the last goes to a scratch list.
         let mut frames: Vec<InputState> = Vec::new();
         match gesture {
             [] => frames.push(InputState::default()),
@@ -459,23 +456,186 @@ fn transform_gizmo_section(
                 }
             }
         }
-        let (last, earlier) = frames.split_last().expect("one frame");
-        for input in earlier {
-            let mut scratch = DrawList::new();
-            gizmo.draw(
-                pivot,
-                &mut state,
-                &mut drag,
-                &mut DrawContext::new(&mut scratch, focus, theme, input, W as f32, 600.0),
-            );
-        }
-        gizmo.draw(
+        let view = GizmoView::Screen {
             pivot,
+            rotation: orbit,
+        };
+        replay_gizmo(list, focus, theme, &gizmo, view, &frames);
+    }
+
+    // Through a perspective camera, over a projected ground grid: the
+    // handles must run along the grid's lines wherever the pivot sits.
+    struct CameraCell {
+        label: &'static str,
+        gizmo: TransformGizmo,
+        eye: [f32; 3],
+        pivot: [f32; 3],
+        drag_x: bool,
+    }
+    let camera_cells = [
+        CameraCell {
+            label: "Camera · off-centre",
+            gizmo: gizmo(GizmoMode::Move),
+            eye: [7.0, 4.5, 8.0],
+            pivot: [2.2, 0.0, -1.2],
+            drag_x: false,
+        },
+        CameraCell {
+            label: "Camera · dragging X",
+            gizmo: gizmo(GizmoMode::Move),
+            eye: [7.0, 4.5, 8.0],
+            pivot: [-1.6, 0.0, 0.8],
+            drag_x: true,
+        },
+        CameraCell {
+            label: "Camera · rotate",
+            gizmo: gizmo(GizmoMode::Rotate),
+            eye: [-6.0, 3.0, 7.0],
+            pivot: [1.4, 0.0, -0.6],
+            drag_x: false,
+        },
+        CameraCell {
+            label: "Camera · scale, local basis",
+            gizmo: gizmo(GizmoMode::Scale).basis(tilted),
+            eye: [5.0, 2.0, 9.0],
+            pivot: [-1.8, 0.0, 0.4],
+            drag_x: false,
+        },
+    ];
+    for CameraCell {
+        label,
+        gizmo,
+        eye,
+        pivot,
+        drag_x,
+    } in camera_cells
+    {
+        let r = flow.cell(list, label, 300.0, 200.0);
+        let camera = gallery_camera(eye, r);
+        camera_stage(list, r, &camera);
+        let view = GizmoView::Camera { pivot, camera };
+        let mut frames = vec![InputState::default()];
+        if drag_x {
+            // Press 40 px out along X's arm, then pull it a unit and a half.
+            let on = |w: [f32; 3]| {
+                let [x, y, _] = camera.project(w).expect("in view");
+                [x, y]
+            };
+            let c = on(pivot);
+            let d = on([pivot[0] + 0.01, pivot[1], pivot[2]]);
+            let len = (d[0] - c[0]).hypot(d[1] - c[1]);
+            let press = [
+                c[0] + (d[0] - c[0]) / len * 40.0,
+                c[1] + (d[1] - c[1]) / len * 40.0,
+            ];
+            let to = on([pivot[0] + 1.5, pivot[1], pivot[2]]);
+            let to = [to[0] + press[0] - c[0], to[1] + press[1] - c[1]];
+            frames = vec![
+                InputState {
+                    mouse_x: press[0],
+                    mouse_y: press[1],
+                    mouse_down: true,
+                    mouse_clicked: true,
+                    ..InputState::default()
+                },
+                InputState {
+                    mouse_x: to[0],
+                    mouse_y: to[1],
+                    mouse_down: true,
+                    ..InputState::default()
+                },
+            ];
+        }
+        list.push_clip(r);
+        replay_gizmo(list, focus, theme, &gizmo, view, &frames);
+        list.pop_clip();
+    }
+}
+
+/// Draw `gizmo` through `frames`, every frame but the last into a scratch
+/// list, so a drag is set up and only its last frame shows.
+fn replay_gizmo(
+    list: &mut DrawList,
+    focus: &mut FocusState,
+    theme: &Theme,
+    gizmo: &TransformGizmo,
+    view: GizmoView,
+    frames: &[InputState],
+) {
+    let mut state = TransformGizmoState::new();
+    let mut drag = DragCapture::new();
+    let (last, earlier) = frames.split_last().expect("one frame");
+    for input in earlier {
+        let mut scratch = DrawList::new();
+        gizmo.draw(
+            view,
             &mut state,
             &mut drag,
-            &mut DrawContext::new(list, focus, theme, last, W as f32, 600.0),
+            &mut DrawContext::new(&mut scratch, focus, theme, input, W as f32, 600.0),
         );
     }
+    gizmo.draw(
+        view,
+        &mut state,
+        &mut drag,
+        &mut DrawContext::new(list, focus, theme, last, W as f32, 600.0),
+    );
+}
+
+/// A 50° perspective camera at `eye` looking at the origin, rendering into
+/// `viewport` (wgpu's 0..1 depth).
+fn gallery_camera(eye: [f32; 3], viewport: Rect) -> GizmoCamera {
+    use nalgebra::{Matrix4, Perspective3, Point3, Vector3};
+    let view = Matrix4::look_at_rh(&Point3::from(eye), &Point3::origin(), &Vector3::y());
+    let proj = Perspective3::new(
+        viewport.width / viewport.height,
+        50f32.to_radians(),
+        0.1,
+        100.0,
+    );
+    let gl_to_wgpu = Matrix4::new(
+        1.0, 0.0, 0.0, 0.0, //
+        0.0, 1.0, 0.0, 0.0, //
+        0.0, 0.0, 0.5, 0.5, //
+        0.0, 0.0, 0.0, 1.0,
+    );
+    GizmoCamera::new((gl_to_wgpu * proj.to_homogeneous() * view).into(), viewport)
+}
+
+/// A dark stage with the ground's unit grid (y = 0) projected through
+/// `camera`; the X and Z lines through the origin in their axis tints.
+fn camera_stage(list: &mut DrawList, r: Rect, camera: &GizmoCamera) {
+    list.paint_quad_background(
+        r,
+        wgpu_gameui::Background::LinearGradient {
+            start: [0.2, 0.27, 0.32, 1.0],
+            end: [0.07, 0.09, 0.1, 1.0],
+            axis: wgpu_gameui::GradientAxis::Vertical,
+        },
+        wgpu_gameui::CornerRadii::uniform(2.0),
+    );
+    list.push_clip(r);
+    let theme = Theme::default();
+    let on = |w: [f32; 3]| camera.project(w).map(|[x, y, _]| [x, y]);
+    for i in -5..=5 {
+        let k = i as f32;
+        let (x_color, z_color) = if i == 0 {
+            (
+                [theme.axis_z[0], theme.axis_z[1], theme.axis_z[2], 0.6],
+                [theme.axis_x[0], theme.axis_x[1], theme.axis_x[2], 0.6],
+            )
+        } else {
+            ([1.0, 1.0, 1.0, 0.09], [1.0, 1.0, 1.0, 0.09])
+        };
+        // A line of constant x runs along Z, and of constant z along X.
+        if let (Some(a), Some(b)) = (on([k, 0.0, -5.0]), on([k, 0.0, 5.0])) {
+            list.line(a, b, 1.0, x_color);
+        }
+        if let (Some(a), Some(b)) = (on([-5.0, 0.0, k]), on([5.0, 0.0, k])) {
+            list.line(a, b, 1.0, z_color);
+        }
+    }
+    list.pop_clip();
 }
 
 /// The passive viewport overlays, each over a stand-in scene: the transform
