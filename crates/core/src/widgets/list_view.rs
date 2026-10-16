@@ -6,8 +6,9 @@
 //! row backgrounds (zebra, hover, the focus-aware selection); this widget
 //! paints each row's content from a [`ListRow`]:
 //!
-//! - an optional glyph (a Phosphor icon), the label (sans or mono, cut with
-//!   `…` when it doesn't fit), and an optional right-aligned mono `meta`;
+//! - an optional glyph (a Phosphor icon) or [`Thumb`](super::Thumb)
+//!   monogram, the label (sans or mono, cut with `…` when it doesn't fit),
+//!   and an optional right-aligned mono `meta`;
 //! - with [`two_line`](ListView::two_line), a mono subtitle under the label
 //!   (34 px rows instead of 22) — put a short id there rather than showing a
 //!   raw id as the label;
@@ -46,7 +47,7 @@ use crate::style::{Ink, TextSize};
 use crate::text::{TextAlign, TextBlock, TextStyleRange, Underline};
 use crate::{InputState, StyleKey, StyleResolver};
 
-use super::{DrawList, Icon, List, ListItem, ListState};
+use super::{DrawList, Icon, List, ListItem, ListState, Thumb};
 
 /// Space before the glyph (or label) and after the meta (`padding: 0 14px 0 9px`).
 const PAD_LEFT: f32 = 9.0;
@@ -55,6 +56,9 @@ const PAD_RIGHT: f32 = 14.0;
 const GAP: f32 = 7.0;
 /// Width of the glyph's column, and the icon's size.
 const GLYPH: f32 = 10.0;
+/// A thumb's side in a one-line and a two-line row.
+const THUMB: f32 = 14.0;
+const THUMB_TWO_LINE: f32 = 26.0;
 /// How much taller a two-line row is than a one-line row (34 px against 22).
 const TWO_LINE_EXTRA: f32 = 12.0;
 /// In a two-line row, the centres of the label and the sub line below the
@@ -80,6 +84,9 @@ pub struct ListRow<'a> {
     pub meta: Option<&'a str>,
     /// A glyph before the label.
     pub glyph: Option<PhosphorIcon>,
+    /// A [`Thumb`] monogram of this name before the label (after the
+    /// glyph, if both are given).
+    pub thumb: Option<&'a str>,
     /// Set the label in the mono font (paths, ids).
     pub mono: bool,
     /// Dim the row; it never hovers, selects or opens.
@@ -113,6 +120,14 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn glyph(mut self, glyph: PhosphorIcon) -> Self {
         self.glyph = Some(glyph);
+        self
+    }
+
+    /// Add a monogram tile of `name` before the label: 26 px in two-line
+    /// rows, 14 px in one-line rows.
+    #[must_use]
+    pub fn thumb(mut self, name: &'a str) -> Self {
+        self.thumb = Some(name);
         self
     }
 
@@ -379,6 +394,16 @@ impl<'a> ListView<'a> {
                 list,
             );
             left += GLYPH + GAP;
+        }
+        if let Some(name) = row.thumb {
+            let side = if self.two_line { THUMB_TWO_LINE } else { THUMB };
+            Thumb::new().name(name).size(side).selected(on_accent).draw(
+                left,
+                cell.y + (cell.height - side) * 0.5,
+                list,
+                s,
+            );
+            left += side + GAP;
         }
 
         let mut right = cell.x + cell.width - PAD_RIGHT;
@@ -716,6 +741,39 @@ mod tests {
         );
         assert_eq!(list.icons_msdf.len(), 1);
         assert_eq!(text(&list, "src").x, PAD_LEFT + GLYPH + GAP);
+    }
+
+    #[test]
+    fn a_thumb_sits_before_the_label_and_the_sub_line() {
+        let rows = [ListRow::new("agent-ui").subtitle("zsh").thumb("agent-ui")];
+        let view = ListView::new().two_line(true);
+        let (list, _) = frame(
+            view,
+            &rows,
+            None,
+            &mut ListState::new(),
+            &mut at(-1.0, -1.0),
+        );
+        let left = PAD_LEFT + THUMB_TWO_LINE + GAP;
+        assert_eq!(text(&list, "agent-ui").x, left);
+        assert_eq!(text(&list, "zsh").x, left);
+        assert!(
+            list.texts.iter().any(|t| t.content == "AU"),
+            "the monogram's initials are drawn"
+        );
+    }
+
+    #[test]
+    fn a_one_line_row_has_a_small_thumb() {
+        let rows = [ListRow::new("src").thumb("src")];
+        let (list, _) = frame(
+            ListView::new(),
+            &rows,
+            None,
+            &mut ListState::new(),
+            &mut at(-1.0, -1.0),
+        );
+        assert_eq!(text(&list, "src").x, PAD_LEFT + THUMB + GAP);
     }
 
     #[test]
