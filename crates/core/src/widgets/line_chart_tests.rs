@@ -489,3 +489,281 @@ fn a_chart_with_no_room_draws_without_panicking() {
         1
     );
 }
+
+#[test]
+fn fixed_gutters_align_different_units_and_empty_charts() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let values = [Some(1.0), Some(2.0)];
+    let series = [line("A", RED, &values)];
+    let chart = LineChart::new(&series, &format).y_gutter(72.0);
+    let long = |v| format!("{v} very long units");
+    let other = LineChart::new(&series, &long).y_gutter(72.0);
+    let empty = LineChart::new(&[], &format).y_gutter(72.0);
+    let a = layout_of(&chart, &s);
+    for b in [layout_of(&other, &s), layout_of(&empty, &s)] {
+        assert_eq!((a.left, a.span), (b.left, b.span));
+        assert_eq!(a.px(0.0), b.px(0.0));
+        assert_eq!(a.px(1.0), b.px(1.0));
+    }
+}
+
+#[test]
+fn step_after_holds_until_the_next_x_and_never_slopes_or_bridges_gaps() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let x = [0.0, 3.0, 4.0, 8.0, 9.0];
+    let values = [Some(1.0), Some(4.0), None, Some(2.0), Some(3.0)];
+    let series = [line("A", RED, &values)];
+    let chart = LineChart::new(&series, &format)
+        .x(&x)
+        .step_after(true)
+        .legend(false);
+    let layout = layout_of(&chart, &s);
+    let (list, _) = paint(&chart, &s, &away());
+    let segments: Vec<_> = segments_of(&list, RED)
+        .into_iter()
+        .filter(|(_, half)| close(*half, LINE_WIDTH * 0.5))
+        .map(|(ends, _)| ends)
+        .collect();
+    assert_eq!(
+        paint(&chart, &s, &at(layout.px(2.9), 50.0)).1.hovered,
+        Some(0)
+    );
+    assert_eq!(
+        paint(&chart, &s, &at(layout.px(3.0), 50.0)).1.hovered,
+        Some(1)
+    );
+    assert_eq!(
+        paint(&chart, &s, &at(layout.px(7.9), 50.0)).1.hovered,
+        Some(2)
+    );
+    assert_eq!(segments.len(), 4);
+    assert_eq!(
+        segments[0],
+        [
+            layout.px(0.0),
+            layout.py(1.0),
+            layout.px(3.0),
+            layout.py(1.0)
+        ]
+    );
+    assert_eq!(
+        segments[1],
+        [
+            layout.px(3.0),
+            layout.py(1.0),
+            layout.px(3.0),
+            layout.py(4.0)
+        ]
+    );
+    assert!(
+        segments
+            .iter()
+            .all(|p| close(p[0], p[2]) || close(p[1], p[3]))
+    );
+    assert!(
+        segments
+            .iter()
+            .all(|p| p[2] <= layout.px(3.0) || p[0] >= layout.px(8.0))
+    );
+}
+
+#[test]
+fn markers_use_x_geometry_return_original_hover_and_respect_capture() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let values = [Some(1.0), Some(2.0)];
+    let x = [0.0, 10.0];
+    let series = [line("A", RED, &values)];
+    let markers = [
+        LineMarker {
+            x: -1.0,
+            label: "outside",
+            detail: "",
+        },
+        LineMarker {
+            x: 4.0,
+            label: "reset",
+            detail: "window restarted",
+        },
+    ];
+    let chart = LineChart::new(&series, &format)
+        .x(&x)
+        .markers(&markers)
+        .y_gutter(60.0);
+    let layout = layout_of(&chart, &s);
+    let input = at(layout.px(4.0), PAD + 10.0);
+    let (list, out) = paint(&chart, &s, &input);
+    assert!(shows(&list, "reset") && !shows(&list, "outside"));
+    assert_eq!(out.hovered_marker, Some(1));
+    let tip = out.marker_tooltip.unwrap();
+    assert_eq!(tip.guide, layout.px(4.0));
+    let mut overlay = DrawList::new();
+    let rect = chart
+        .draw_marker_tooltip(&tip, VIEWPORT, &mut overlay, &s)
+        .unwrap();
+    assert!(rect.x >= VIEWPORT.x && rect.right() <= VIEWPORT.right());
+    assert!(shows(&overlay, "window restarted"));
+    let captured = InputState {
+        mouse_consumed: true,
+        ..input
+    };
+    assert_eq!(paint(&chart, &s, &captured).1.hovered_marker, None);
+    let stale = LineMarkerTooltip { index: 99, ..tip };
+    assert!(
+        chart
+            .draw_marker_tooltip(&stale, VIEWPORT, &mut overlay, &s)
+            .is_none()
+    );
+}
+
+#[test]
+fn dense_steps_and_markers_have_pixel_bounded_geometry() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    for n in [10_000, 100_000, 1_000_000] {
+        let values: Vec<_> = (0..n)
+            .map(|i| {
+                if i % 101 == 0 {
+                    None
+                } else {
+                    Some((i % 17) as f64)
+                }
+            })
+            .collect();
+        let series = [line("A", RED, &values)];
+        let markers: Vec<_> = (0..n)
+            .map(|i| LineMarker {
+                x: i as f64,
+                label: "event",
+                detail: "detail",
+            })
+            .collect();
+        let chart = LineChart::new(&series, &format)
+            .step_after(true)
+            .markers(&markers)
+            .legend(false);
+        let layout = layout_of(&chart, &s);
+        let mut points = Vec::new();
+        chart.reduce(&series[0], &layout, &mut points);
+        assert!(points.len() <= 9 * (layout.span.ceil() as usize + 1));
+        assert!(points.windows(2).all(|p| p[0].0 <= p[1].0));
+        let (list, _) = paint(&chart, &s, &away());
+        assert!(list.prim_counts().segment_instances <= 17 * WIDTH as usize);
+        assert!(list.texts.len() <= WIDTH as usize);
+        // A gap column never connects two retained extrema across its gaps.
+        if n >= 100_000 {
+            assert!(
+                points
+                    .windows(2)
+                    .all(|p| p[0].1.is_none() || p[1].1.is_none())
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "deliberate release-mode measurement, no timing gate"]
+fn measure_million_point_steps_and_markers() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let values = vec![Some(1.0); 1_000_000];
+    let series = [line("A", RED, &values)];
+    let markers: Vec<_> = (0..values.len())
+        .map(|i| LineMarker {
+            x: i as f64,
+            label: "event",
+            detail: "detail",
+        })
+        .collect();
+    let chart = LineChart::new(&series, &format)
+        .step_after(true)
+        .markers(&markers);
+    let mut list = DrawList::new();
+    chart.draw(0.0, 0.0, WIDTH, &mut list, &s, &away());
+    list.clear();
+    let start = std::time::Instant::now();
+    chart.draw(0.0, 0.0, WIDTH, &mut list, &s, &away());
+    eprintln!(
+        "million points + markers: {:?}, {:?}",
+        start.elapsed(),
+        list.prim_counts()
+    );
+}
+
+#[test]
+fn dense_steps_keep_column_boundary_values_as_well_as_sharp_extrema() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let mut values = vec![Some(20.0); 100_000];
+    values[50_000] = Some(100.0);
+    values[50_001] = Some(0.0);
+    let series = [line("A", RED, &values)];
+    let chart = LineChart::new(&series, &format)
+        .step_after(true)
+        .legend(false);
+    let layout = layout_of(&chart, &s);
+    let mut points = Vec::new();
+    chart.reduce(&series[0], &layout, &mut points);
+    assert!(points.contains(&(50_000.0, Some(100.0))));
+    assert!(points.contains(&(50_001.0, Some(0.0))));
+    assert_eq!(points.first(), Some(&(0.0, Some(20.0))));
+    assert_eq!(points.last(), Some(&(99_999.0, Some(20.0))));
+    let (list, _) = paint(&chart, &s, &away());
+    assert!(list.prim_counts().segment_instances <= 16 * WIDTH as usize);
+    assert!(
+        segments_of(&list, RED)
+            .iter()
+            .all(|(p, _)| close(p[0], p[2]) || close(p[1], p[3]))
+    );
+}
+
+#[cfg(feature = "headless")]
+#[test]
+#[ignore = "GPU visual check of focused timeline extensions"]
+fn render_timeline_extensions() {
+    use crate::{HeadlessGpu, Srgb, write_png};
+    let mut gpu = HeadlessGpu::new().expect("GPU adapter");
+    let mut list = gpu.draw_list();
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let color = s.color(StyleKey::Accent);
+    let observations = [
+        Some(20.0),
+        Some(65.0),
+        Some(30.0),
+        None,
+        Some(80.0),
+        Some(45.0),
+    ];
+    let series = [line("Utilization", color, &observations)];
+    let events = [
+        LineMarker {
+            x: 1.0,
+            label: "reset",
+            detail: "Quota window restarted",
+        },
+        LineMarker {
+            x: 4.0,
+            label: "retry",
+            detail: "Request resumed",
+        },
+    ];
+    let chart = LineChart::new(&series, &format)
+        .step_after(true)
+        .y_gutter(64.0)
+        .markers(&events)
+        .height(120.0);
+    let layout = chart.layout(12.0, 12.0, 400.0, &mut list, &s);
+    let out = chart.draw(12.0, 12.0, 400.0, &mut list, &s, &at(layout.px(1.0), 65.0));
+    chart.draw_marker_tooltip(
+        &out.marker_tooltip.unwrap(),
+        Rect::new(0.0, 0.0, 440.0, 300.0),
+        &mut list,
+        &s,
+    );
+    let pixels = gpu.capture_on(&list, (440, 300), Srgb::new(theme.background));
+    std::fs::create_dir_all("test_output").unwrap();
+    write_png("test_output/line_chart_timeline.png", &pixels, (440, 300)).unwrap();
+}

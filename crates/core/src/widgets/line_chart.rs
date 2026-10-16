@@ -98,10 +98,25 @@ impl LineSeries<'_> {
     }
 }
 
+/// A vertical event on the chart's x axis. Markers must be sorted by x.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineMarker<'a> {
+    /// Position in the same units as [`LineChart::x`].
+    pub x: f64,
+    /// Short caption above the marker.
+    pub label: &'a str,
+    /// Additional hover text (one line).
+    pub detail: &'a str,
+}
+
+/// Placement of a marker tooltip; `index` addresses the original markers slice.
+pub type LineMarkerTooltip = LineTooltip;
+
 /// What a [`LineChart`] did this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LineChartOutput {
-    /// The point the pointer is nearest along x, if it is over the plot.
+    /// The nearest point along x, or the preceding observation in step-after
+    /// mode, if the pointer is over the plot.
     pub hovered: Option<usize>,
     /// The legend entry under the pointer, if any.
     pub hovered_series: Option<usize>,
@@ -111,6 +126,10 @@ pub struct LineChartOutput {
     /// [`LineChart::draw_tooltip`]. Only while the pointer itself is over
     /// the plot: a point lit from a table row shows no tooltip.
     pub tooltip: Option<LineTooltip>,
+    /// Original marker index nearest the pointer (within six pixels).
+    pub hovered_marker: Option<usize>,
+    /// Placement for [`LineChart::draw_marker_tooltip`].
+    pub marker_tooltip: Option<LineMarkerTooltip>,
 }
 
 /// Where a point's tooltip goes: beside the guide, on the side with more
@@ -186,6 +205,9 @@ pub struct LineChart<'a> {
     reference_label: &'a str,
     empty_label: &'a str,
     zero_label: &'a str,
+    step_after: bool,
+    y_gutter: Option<f32>,
+    markers: &'a [LineMarker<'a>],
 }
 
 impl<'a> LineChart<'a> {
@@ -210,6 +232,9 @@ impl<'a> LineChart<'a> {
             reference_label: "limit",
             empty_label: "No data in this range",
             zero_label: "All values are zero",
+            step_after: false,
+            y_gutter: None,
+            markers: &[],
         }
     }
 
@@ -218,6 +243,28 @@ impl<'a> LineChart<'a> {
     /// it.
     pub fn x(mut self, x: &'a [f64]) -> Self {
         self.x = Some(x);
+        self
+    }
+
+    /// Hold each reported value until the next observation, then jump vertically.
+    /// Missing observations break the run; no slope or bridge crosses a gap.
+    pub fn step_after(mut self, enabled: bool) -> Self {
+        self.step_after = enabled;
+        self
+    }
+
+    /// Fix the y-label gutter in logical pixels, including label padding.
+    /// The same width aligns stacked charts, including empty charts. Choose
+    /// room for the widest formatted label; it does not expand automatically.
+    pub fn y_gutter(mut self, width: f32) -> Self {
+        self.y_gutter = width.is_finite().then_some(width.max(0.0));
+        self
+    }
+
+    /// Sorted vertical events in x units. Painting is reduced to one line per
+    /// pixel and non-overlapping captions; hover identifies original events.
+    pub fn markers(mut self, markers: &'a [LineMarker<'a>]) -> Self {
+        self.markers = markers;
         self
     }
 
@@ -339,11 +386,13 @@ impl<'a> LineChart<'a> {
         let all_zero = any && most <= 0.0;
         let max = nice_max(most.max(self.reference.unwrap_or(0.0)));
         let ticks = chart::axis_ticks(max, all_zero, self.format);
-        let gutter = if any {
-            chart::gutter(&ticks, list, s)
-        } else {
-            0.0
-        };
+        let gutter = self.y_gutter.unwrap_or_else(|| {
+            if any {
+                chart::gutter(&ticks, list, s)
+            } else {
+                0.0
+            }
+        });
         let (x0, x1) = if n > 0 {
             (self.xv(0), self.xv(n - 1))
         } else {
@@ -379,6 +428,9 @@ impl<'a> LineChart<'a> {
             } else {
                 hi = mid;
             }
+        }
+        if self.step_after {
+            return if self.xv(hi) <= t { hi } else { lo };
         }
         if (self.xv(lo) - t).abs() <= (self.xv(hi) - t).abs() {
             lo
@@ -424,6 +476,7 @@ impl<'a> LineChart<'a> {
         let (base, top) = (layout.base, layout.base - self.height);
         let n = layout.n;
         let hit = self.hit(area, &layout, input);
+        let hovered_marker = self.draw_markers(area, &layout, list, s, input);
         let lit = hit.or(self.hovered).filter(|&i| i < n);
         let current = self.current_point(n);
 
@@ -513,7 +566,116 @@ impl<'a> LineChart<'a> {
             hovered_series,
             height,
             tooltip,
+            hovered_marker,
+            marker_tooltip: hovered_marker.map(|index| {
+                let guide = layout.px(self.markers[index].x);
+                LineMarkerTooltip {
+                    index,
+                    guide,
+                    right_of_guide: guide < x + width * 0.5,
+                    top: y,
+                }
+            }),
         }
+    }
+
+    fn draw_markers(
+        &self,
+        area: Rect,
+        layout: &Layout,
+        list: &mut DrawList,
+        s: &StyleResolver,
+        input: &InputState,
+    ) -> Option<usize> {
+        if layout.n == 0 || layout.span <= 0.0 {
+            return None;
+        }
+        let top = layout.base - layout.height;
+        let plot = Rect::new(layout.left, top, area.right() - layout.left, layout.height);
+        let can_hover = !input.mouse_consumed && plot.contains(input.mouse_x, input.mouse_y);
+        let mut nearest = None;
+        let mut distance = 6.0;
+        let mut column = None;
+        let mut caption_right = f32::NEG_INFINITY;
+        // Binary range lookup means off-screen events do no per-event work.
+        let start = self.markers.partition_point(|m| m.x < layout.x0);
+        let end = self.markers.partition_point(|m| m.x <= layout.x1);
+        for (i, marker) in self.markers[start..end].iter().enumerate() {
+            if !marker.x.is_finite() {
+                continue;
+            }
+            let x = layout.px(marker.x);
+            let d = (input.mouse_x - x).abs();
+            if can_hover && d < distance {
+                nearest = Some(start + i);
+                distance = d;
+            }
+            let pixel = x.floor() as i64;
+            if column == Some(pixel) {
+                continue;
+            }
+            column = Some(pixel);
+            list.line(
+                [x.round(), top],
+                [x.round(), layout.base],
+                1.0,
+                s.ink(Ink::Dim),
+            );
+            // Measure only candidates with enough room since the previous label.
+            if x >= caption_right + 8.0 && !marker.label.is_empty() {
+                let w = s.mono_width(list, marker.label, TextSize::Caption);
+                if x + w <= area.right() {
+                    list.text(s.mono_block(marker.label, x, top, TextSize::Caption, Ink::Second));
+                    caption_right = x + w;
+                }
+            }
+        }
+        nearest
+    }
+
+    /// Paint a marker's label and detail above other UI, clamped to viewport.
+    pub fn draw_marker_tooltip(
+        &self,
+        tip: &LineMarkerTooltip,
+        viewport: Rect,
+        list: &mut DrawList,
+        s: &StyleResolver,
+    ) -> Option<Rect> {
+        let marker = self.markers.get(tip.index)?;
+        let content = chart::row_text_width(list, s, marker.label).max(chart::row_text_width(
+            list,
+            s,
+            marker.detail,
+        ));
+        let rows = if marker.detail.is_empty() { 1.0 } else { 2.0 };
+        let (width, height) = chart::tooltip_size(s, content, rows * TIP_ROW, TIP_MIN_WIDTH);
+        let x = if tip.right_of_guide {
+            tip.guide + TIP_GAP
+        } else {
+            tip.guide - TIP_GAP - width
+        };
+        let rect = Rect::new(
+            x.min(viewport.right() - width).max(viewport.x).round(),
+            tip.top
+                .min(viewport.bottom() - height)
+                .max(viewport.y)
+                .round(),
+            width,
+            height,
+        );
+        chart::paint_tooltip(list, s, rect, |list, inner| {
+            list.text(s.sans_block(marker.label, inner.x, inner.y, TextSize::Row, Ink::Max));
+            if !marker.detail.is_empty() {
+                list.text(s.sans_block(
+                    marker.detail,
+                    inner.x,
+                    inner.y + TIP_ROW,
+                    TextSize::Row,
+                    Ink::Second,
+                ));
+            }
+        });
+        Some(rect)
     }
 
     /// Run `paint` faded when another series' legend entry is hovered.
@@ -550,12 +712,12 @@ impl<'a> LineChart<'a> {
             let x = self.xv(i);
             let at = column_of(x);
             if at != column.at {
-                column.flush(out);
+                column.flush(out, self.step_after);
                 column = Column::new(at);
             }
             column.add(i, x, series.value(i));
         }
-        column.flush(out);
+        column.flush(out, self.step_after);
     }
 
     /// Paint `series` through `points`: under each run its area, then its
@@ -582,7 +744,16 @@ impl<'a> LineChart<'a> {
         run.clear();
         for &(x, value) in points {
             match value {
-                Some(v) => run.push([layout.px(x), layout.py(v)]),
+                Some(v) => {
+                    let point = [layout.px(x), layout.py(v)];
+                    if self.step_after
+                        && let Some(previous) = run.last()
+                    {
+                        let previous: &[f32; 2] = previous;
+                        run.push([point[0], previous[1]]);
+                    }
+                    run.push(point);
+                }
                 None => {
                     paint(run, list);
                     run.clear();
@@ -992,6 +1163,8 @@ struct Column {
     hi: Option<(usize, f64, f64)>,
     gap: bool,
     last: f64,
+    first_value: Option<(usize, f64, f64)>,
+    last_value: Option<(usize, f64, f64)>,
 }
 
 impl Column {
@@ -1002,6 +1175,8 @@ impl Column {
             hi: None,
             gap: false,
             last: 0.0,
+            first_value: None,
+            last_value: None,
         }
     }
 
@@ -1011,6 +1186,8 @@ impl Column {
             self.gap = true;
             return;
         };
+        self.first_value.get_or_insert((i, x, v));
+        self.last_value = Some((i, x, v));
         if self.lo.is_none_or(|(_, _, lo)| v < lo) {
             self.lo = Some((i, x, v));
         }
@@ -1021,13 +1198,25 @@ impl Column {
 
     /// Its lowest and highest point in the order they come, then a break
     /// after it if it had a gap.
-    fn flush(&self, out: &mut Vec<(f64, Option<f64>)>) {
-        if let (Some(lo), Some(hi)) = (self.lo, self.hi) {
-            let (a, b) = if lo.0 <= hi.0 { (lo, hi) } else { (hi, lo) };
-            out.push((a.1, Some(a.2)));
-            if b.0 != a.0 {
-                out.push((b.1, Some(b.2)));
+    fn flush(&self, out: &mut Vec<(f64, Option<f64>)>, step: bool) {
+        // Stack scratch; boundary values keep steps true at column edges.
+        let mut samples = [self.lo, self.hi, None, None];
+        if step {
+            samples[2] = self.first_value;
+            samples[3] = self.last_value;
+        }
+        samples.sort_unstable_by_key(|p| p.map_or(usize::MAX, |p| p.0));
+        let mut previous = None;
+        for point in samples.into_iter().flatten() {
+            if previous == Some(point.0) {
+                continue;
             }
+            // Conservatively disconnect a gap column: never invent a bridge.
+            if self.gap {
+                out.push((point.1, None));
+            }
+            out.push((point.1, Some(point.2)));
+            previous = Some(point.0);
         }
         if self.gap {
             out.push((self.last, None));

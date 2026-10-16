@@ -2176,6 +2176,14 @@ of Forge's 83 components.
   `dots` (hidden past one per 4px), a fading `area` and `estimated` dashes.
   Hover snaps to the nearest x with a guide; past two points a pixel each
   column keeps its lowest and highest, so 100,000 points draw like 800.
+- [x] **LineChart timeline extensions** — `.step_after(bool)` holds reported
+  observations until the next x, `.y_gutter(px)` fixes a shared alignment
+  gutter (including empty charts), `.markers(&[LineMarker { x, label, detail }])`
+  draws vertical events with thinned captions. `hovered_marker` and
+  `marker_tooltip` identify original events; `draw_marker_tooltip` paints details.
+  Dense steps retain first/last and min/max per pixel column; gap columns are
+  conservatively disconnected. Marker geometry is pixel-bounded and scratch
+  allocation is per draw, never per observation.
 - [x] **BarChart overlay** — `.overlay(BarOverlay { label, color, values,
   max, format })`: a line with dots through the bar centres on its own
   right axis, broken at `None`; a legend entry ("RIGHT AXIS") whose hover

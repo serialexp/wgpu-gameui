@@ -1698,6 +1698,58 @@ struct GalleryPage {
     img: image::RgbaImage,
 }
 
+/// Keep an exact component name for focused visual verification. Remap cell
+/// section indexes so the same save path works for filtered and full galleries.
+fn filter_gallery(sections: &mut Vec<GallerySection>, cells: &mut Vec<GalleryCell>, name: &str) {
+    let mut remap = vec![None; sections.len()];
+    let mut next = 0;
+    for (i, section) in sections.iter().enumerate() {
+        if section.component == name {
+            remap[i] = Some(next);
+            next += 1;
+        }
+    }
+    assert!(next > 0, "unknown gallery component {name:?}");
+    sections.retain(|section| section.component == name);
+    cells.retain_mut(|cell| {
+        if let Some(index) = remap[cell.section] {
+            cell.section = index;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+#[test]
+fn component_filter_matches_exactly_and_remaps_cells() {
+    let mut sections = vec![
+        GallerySection {
+            category: Category::Data,
+            component: "LineChartExtra",
+            subtitle: "",
+            top: 0.0,
+            bottom: 10.0,
+        },
+        GallerySection {
+            category: Category::Data,
+            component: "LineChart",
+            subtitle: "",
+            top: 10.0,
+            bottom: 20.0,
+        },
+    ];
+    let mut cells = vec![
+        GalleryCell::new(0, "other", Rect::new(0.0, 0.0, 10.0, 10.0), 10.0),
+        GalleryCell::new(1, "kept", Rect::new(0.0, 10.0, 10.0, 10.0), 10.0),
+    ];
+    filter_gallery(&mut sections, &mut cells, "LineChart");
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].component, "LineChart");
+    assert_eq!(cells.len(), 1);
+    assert_eq!((cells[0].section, cells[0].label.as_str()), (0, "kept"));
+}
+
 /// Everything `render_gallery_page` draws: the widget layers, plus the
 /// backdrop-blur demo (a stand-in game scene blurred into `blur_rect`, with a
 /// crisp panel on top).
@@ -2447,8 +2499,8 @@ fn render_widget_gallery() {
     let mut layers = LayerStack::new();
     let theme = gallery_theme();
     let mut input = InputState::default();
-    let gallery_sections;
-    let gallery_cells;
+    let mut gallery_sections;
+    let mut gallery_cells;
 
     // Focus owner for the text inputs. Seed the first as focused so the rendered
     // PNG shows a caret; `begin_frame`/`end_frame` bracket the draws below.
@@ -6384,6 +6436,37 @@ fn render_widget_gallery() {
             let r = flow.cell(list, "Nothing in range", 360.0, h);
             chart.draw(r.x, r.y, r.width, list, &s, &input);
 
+            let observations = [
+                Some(0.20),
+                Some(0.65),
+                Some(0.30),
+                None,
+                Some(0.80),
+                Some(0.45),
+            ];
+            let events = [
+                wgpu_gameui::LineMarker {
+                    x: 1.0,
+                    label: "reset",
+                    detail: "Quota window restarted",
+                },
+                wgpu_gameui::LineMarker {
+                    x: 4.0,
+                    label: "retry",
+                    detail: "Request resumed",
+                },
+            ];
+            let series = [line("Utilization", hue(200.0), &observations)];
+            let chart = LineChart::new(&series, &percent)
+                .step_after(true)
+                .y_gutter(64.0)
+                .markers(&events)
+                .height(120.0)
+                .legend(false);
+            let h = chart.measure_height(360.0, list, &s);
+            let r = flow.cell(list, "Held observations, gaps and time markers", 360.0, h);
+            chart.draw(r.x, r.y, r.width, list, &s, &input);
+
             let zeros = [Some(0.0); 7];
             let week = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
             let series = [line("Errors", hue(230.0), &zeros)];
@@ -7686,6 +7769,11 @@ fn render_widget_gallery() {
         blur_rect,
         panel: &panel_list,
     };
+    // Optional exact-name filter, e.g. GAMEUI_GALLERY_COMPONENT=LineChart.
+    // Unset preserves the full catalogue and all existing checks.
+    if let Ok(component) = std::env::var("GAMEUI_GALLERY_COMPONENT") {
+        filter_gallery(&mut gallery_sections, &mut gallery_cells, &component);
+    }
     let pages: Vec<GalleryPage> = page_spans(&gallery_sections)
         .into_iter()
         .map(|(top, bottom)| render_gallery_page(&mut ui, &scene, top, bottom))

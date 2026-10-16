@@ -186,7 +186,9 @@ pub use inspector::{
     INSPECTOR_MAX_BODY_HEIGHT, INSPECTOR_WIDTH, Inspector, InspectorOutput, InspectorSelection,
     InspectorState,
 };
-pub use line_chart::{LineChart, LineChartOutput, LineSeries, LineTooltip};
+pub use line_chart::{
+    LineChart, LineChartOutput, LineMarker, LineMarkerTooltip, LineSeries, LineTooltip,
+};
 pub use list::{List, ListItem, ListOutput, ListState, SelectionMode};
 #[cfg(feature = "phosphor-icons")]
 pub use list_view::{ListRow, ListView, ListViewOutput};
