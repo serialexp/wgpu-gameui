@@ -27,6 +27,15 @@ struct Uniforms {
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
+// Whether `p` lies outside `clip` (`x, y, width, height`). A clip of zero or
+// negative size holds nothing: nested clips that don't overlap make one, and
+// without this test a pixel centre exactly on it would still draw.
+fn outside_clip(p: vec2<f32>, clip: vec4<f32>) -> bool {
+    return clip.z <= 0.0 || clip.w <= 0.0
+        || p.x < clip.x || p.x > clip.x + clip.z
+        || p.y < clip.y || p.y > clip.y + clip.w;
+}
+
 // ---- Colored quad path ---------------------------------------------------
 
 struct ColorVsIn {
@@ -59,8 +68,7 @@ fn vs_color(in: ColorVsIn) -> ColorVsOut {
 fn fs_color(in: ColorVsOut) -> @location(0) vec4<f32> {
     if (in.clip_enabled > 0.5) {
         let p = in.frag_pos;
-        if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
-            || p.y < in.clip.y || p.y > in.clip.y + in.clip.w) {
+        if (outside_clip(p, in.clip)) {
             discard;
         }
     }
@@ -133,8 +141,10 @@ fn vs_analytic(in: AnalyticVsIn) -> AnalyticVsOut {
         out.local = uv;
     } else if (in.kind != 1u) {
         // Chrome and stripes. The edge's anti-aliasing ramp reaches up to
-        // ~0.7px past the rect, so pad the quad or the outer half of that ramp
-        // is never rasterized: a fractional edge then loses its outside pixel.
+        // ~0.6px past the rect (`CHROME_REACH` in draw_box.rs), so pad the
+        // quad or the outer half of that ramp is never rasterized: a
+        // fractional edge then loses its outside pixel. Draw ordering takes
+        // each record's box from this padding (`draw_box::analytic`).
         // Translate-only records pad 1px (on whole pixels those pixels come
         // out empty and are discarded); under rotation/scale, 2 screen px
         // converted to local units per axis. `local` is from the rect's
@@ -177,7 +187,10 @@ fn corner_radius(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
 
 // Coverage of a pixel by the inside of an edge (`sdf` as above), with the
 // screen pixel pulled back to local space as `pixel_x`/`pixel_y`. A pixel
-// whose centre is half a pixel inside a whole-pixel edge is solid.
+// whose centre is half a pixel inside a whole-pixel edge is solid. With
+// `box_sdf` this sets how far chrome reaches past its rect, which
+// `CHROME_REACH` in draw_box.rs bounds (and its tests copy): change one, change
+// the other.
 fn edge_coverage(sdf: vec3<f32>, pixel_x: vec2<f32>, pixel_y: vec2<f32>) -> f32 {
     let footprint = max(abs(dot(pixel_x, sdf.yz)) + abs(dot(pixel_y, sdf.yz)), 1e-4);
     return clamp(0.5 - sdf.x / footprint, 0.0, 1.0);
@@ -238,8 +251,7 @@ fn inner_sdf(p: vec2<f32>, size: vec2<f32>, outer_radii: vec4<f32>, widths: vec4
 }
 
 fn shade_chrome(in: AnalyticVsOut) -> vec4<f32> {
-    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
-        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    if (in.p1.z > 0.5 && outside_clip(in.world, in.p8)) { discard; }
     let size = in.p2.zw;
     let pixel_x = dpdx(in.local);
     let pixel_y = dpdy(in.local);
@@ -297,6 +309,7 @@ fn vs_circle(in: CircleVsIn) -> CircleVsOut {
     let radius = in.center.z;
     let thickness = in.center.w;
     // Bounding half-extent covers the outline band plus an AA margin.
+    // `draw_box::circle` takes a circle's box from this.
     let extent = radius + max(thickness, 0.0) * 0.5 + 2.0;
     let world = center + (in.corner * 2.0 - vec2<f32>(1.0)) * extent;
     out.clip_position = uniforms.view_proj * vec4<f32>(world, 0.0, 1.0);
@@ -313,8 +326,7 @@ fn fs_circle(in: CircleVsOut) -> @location(0) vec4<f32> {
     // Per-pixel scissor (same convention as fs_color / analytic chrome).
     if (in.params.x > 0.5) {
         let p = in.frag_pos;
-        if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
-            || p.y < in.clip.y || p.y > in.clip.y + in.clip.w) {
+        if (outside_clip(p, in.clip)) {
             discard;
         }
     }
@@ -423,8 +435,7 @@ fn blur_shadow_x(x: f32, y: f32, sigma: f32, radii: vec4<f32>, half: vec2<f32>) 
 }
 
 fn shade_shadow(in: AnalyticVsOut) -> vec4<f32> {
-    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
-        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    if (in.p1.z > 0.5 && outside_clip(in.world, in.p8)) { discard; }
 
     let sigma_y = in.p9.x;
     let sigma_x_conditional = in.p9.z;
@@ -492,8 +503,7 @@ fn shade_shadow(in: AnalyticVsOut) -> vec4<f32> {
 // edge is smoothed like chrome's. Crisp bands (`p5.y` 1) paint a pixel fully
 // when its centre is in a band and the rect, like an unsmoothed 1 px line.
 fn shade_stripes(in: AnalyticVsOut) -> vec4<f32> {
-    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
-        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    if (in.p1.z > 0.5 && outside_clip(in.world, in.p8)) { discard; }
     let period = in.p4.z;
     let half_width = in.p4.w * 0.5;
     let t = dot(in.local, in.p4.xy) - in.p5.x - half_width;
@@ -640,8 +650,7 @@ fn stroke_coverage(sdf: vec3<f32>, pixel_x: vec2<f32>, pixel_y: vec2<f32>) -> f3
 }
 
 fn shade_segment(in: AnalyticVsOut) -> vec4<f32> {
-    if (in.p1.z > 0.5 && (in.world.x < in.p8.x || in.world.x > in.p8.x + in.p8.z
-        || in.world.y < in.p8.y || in.world.y > in.p8.y + in.p8.w)) { discard; }
+    if (in.p1.z > 0.5 && outside_clip(in.world, in.p8)) { discard; }
     // The pixel centre in the stroke's space, from its position on the target
     // rather than an interpolated value, so neighbouring segments agree.
     let scale = uniforms.view.z;
@@ -811,8 +820,7 @@ fn vs_icon(in: IconVsIn) -> IconVsOut {
 fn icon_uv(in: IconVsOut) -> vec2<f32> {
     if (in.clip_enabled > 0.5) {
         let p = in.frag_pos;
-        if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
-            || p.y < in.clip.y || p.y > in.clip.y + in.clip.w) {
+        if (outside_clip(p, in.clip)) {
             discard;
         }
     }
@@ -973,8 +981,7 @@ fn nine_axis(c: f32, size: f32, b0: f32, b1: f32, o0: f32, i0: f32, i1: f32, o1:
 fn fs_nine_slice(in: NineVsOut) -> @location(0) vec4<f32> {
     if (in.clip_enabled > 0.5) {
         let p = in.frag_pos;
-        if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
-            || p.y < in.clip.y || p.y > in.clip.y + in.clip.w) {
+        if (outside_clip(p, in.clip)) {
             discard;
         }
     }

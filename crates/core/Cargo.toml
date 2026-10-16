@@ -42,7 +42,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 pollster = { version = "0.3", optional = true }
 # Generic Tree-sitter highlighting is entirely opt-in. Language grammars are
 # separate features so normal text widgets do not compile parser dependencies.
-tree-sitter-highlight = { version = "0.25.10", optional = true }
+tree-sitter-highlight = { version = "0.27.1", optional = true }
 tree-sitter-lua = { version = "0.5.0", optional = true }
 # Markdown parsing for the opt-in `markdown` module (CommonMark plus the GFM
 # tables, strikethrough and task lists). No HTML output is needed.
@@ -77,8 +77,18 @@ headless = ["dep:pollster"]
 # atlas. Disable (`--no-default-features`) to drop the ~0.5 MB font; widgets
 # fall back to text glyphs (`+`/`\u{2212}`) for their icon affordances.
 phosphor-icons = []
+# Test switches for batching (`docs/design/draw-call-batching.md`):
+# `UiRenderer::set_paint_order` draws in paint order, as before batching, and
+# `UiRenderer::set_check_plan` checks each list's batches against a brute-force
+# oracle. The crate's own tests turn it on through the dev-dependency below.
+paint-order-oracle = []
 
 [dev-dependencies]
+# The crate itself, so its tests (integration tests build as a separate crate,
+# out of `cfg(test)`'s reach) get the paint-order switches. Without
+# `default-features = false` this would turn the default features back on in a
+# `--no-default-features` run. Publishing strips path-only dev-dependencies.
+wgpu-gameui = { path = ".", default-features = false, features = ["paint-order-oracle"] }
 winit = "0.30"
 pollster = "0.3"
 env_logger = "0.11"
@@ -103,6 +113,10 @@ required-features = ["phosphor-icons"]
 # GPU tests that create their own device through `HeadlessGpu`.
 [[test]]
 name = "alignment_gallery"
+required-features = ["headless"]
+
+[[test]]
+name = "batch_order"
 required-features = ["headless"]
 
 [[test]]
@@ -134,12 +148,32 @@ name = "view_origin"
 required-features = ["headless"]
 
 [[test]]
+name = "text_projection"
+required-features = ["headless"]
+
+[[test]]
+name = "zero_size_clips"
+required-features = ["headless"]
+
+[[test]]
 name = "render_stats"
 required-features = ["headless"]
 
 [[test]]
 name = "yuv_sprites"
 required-features = ["headless"]
+
+[[test]]
+name = "external_sprite"
+required-features = ["headless"]
+
+[[test]]
+name = "text_contrast"
+required-features = ["headless"]
+
+[[test]]
+name = "widget_gallery"
+required-features = ["headless", "phosphor-icons"]
 
 [[bench]]
 name = "ui_stress"

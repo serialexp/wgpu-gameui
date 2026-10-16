@@ -2399,3 +2399,21 @@ editor. Coverage 85 of 91.
   be grabbed, and a drag on goes on until released or cancelled. Rotation
   still follows the pointer's angle about the pivot on screen. Gallery:
   four camera cells over a projected ground grid.
+
+## 2026-10-16 — Draw-call batching (`docs/design/draw-call-batching.md`)
+
+- [x] **`cargo build -p wgpu-gameui --no-default-features` fails** (noted
+      2026-10-15). The file dialog is gated on `phosphor-icons`, the test
+      targets that need a GPU or icons declare `required-features`, and
+      `publish.yml` builds the library with `--no-default-features` and runs
+      clippy on it.
+- [x] **P1 — Measure draw-call batching before building anything** (from
+      "Learned from gpui"). Measured on 2026-10-16 (the doc's "Measurement"
+      table: 1,000 labelled boxes took 2,000 draw calls and 6.6 ms to encode,
+      against 0.8 ms grouped), then built: `DrawOrder` gives each unit an
+      order from what it overlaps, `DrawPlan` groups each order's units by
+      pipeline and texture, and the renderer uploads each family once per
+      list and draws a call per batch. `RenderStats` gained `batches`,
+      `units_ordered`, `order_overlap_tests` and `order_cell_visits`;
+      `UiRenderer::set_paint_order` (feature `paint-order-oracle`) draws the
+      old way for comparison.

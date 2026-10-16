@@ -280,10 +280,11 @@ fn instanced_icon_crop_samples_subrect() {
     }
 }
 
-/// Draws that switch between a texture of a sprite's own and a shared atlas
-/// keep their paint order: each switch starts a new draw call rather than the
-/// sprites being regrouped by texture. Only the small sprite of its own counts
-/// as a batch an atlas would have saved.
+/// Overlapping draws that switch between a texture of a sprite's own and a
+/// shared atlas keep their paint order: the sprites are only regrouped by
+/// texture where they don't overlap, so here each switch is a new draw call.
+/// Only the small sprite of its own counts as a batch an atlas would have
+/// saved.
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn switching_textures_keeps_paint_order() {

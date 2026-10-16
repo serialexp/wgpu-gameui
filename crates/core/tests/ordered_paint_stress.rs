@@ -1,4 +1,9 @@
 //! Headless regressions for ordered color runs corrupting soup geometry.
+//!
+//! Each list is drawn on the batched path and on the paint-order path
+//! (`UiRenderer::set_paint_order`, `docs/design/draw-call-batching.md`). Draw
+//! counts are asserted on the paint-order path, where they are the paint
+//! stream's; pixels on both.
 
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{BoxShadow, CornerRadii, DrawList, RenderStats, UiRenderer};
@@ -6,7 +11,8 @@ use wgpu_gameui::{BoxShadow, CornerRadii, DrawList, RenderStats, UiRenderer};
 const W: u32 = 256;
 const H: u32 = 256;
 
-fn render(list: &DrawList) -> Option<(Vec<u8>, RenderStats)> {
+/// Draw `list` in batches, or in paint order when `paint_order`.
+fn render(list: &DrawList, paint_order: bool) -> Option<(Vec<u8>, RenderStats)> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
     let (device, queue) =
@@ -15,6 +21,8 @@ fn render(list: &DrawList) -> Option<(Vec<u8>, RenderStats)> {
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let fonts = wgpu_gameui::shared_font_system();
     let mut renderer = UiRenderer::new(&device, &queue, format, fonts);
+    renderer.set_paint_order(paint_order);
+    renderer.set_check_plan(!paint_order);
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("ordered paint stress target"),
         size: wgpu::Extent3d {
@@ -143,24 +151,27 @@ fn one_draw_preserves_many_overlapping_source_over_operations() {
         );
     }
 
-    let Some((unified_pixels, stats)) = render(&unified) else {
+    // The reference keeps its barriers only in paint order: batched, they
+    // overlap nothing, and its draws would collapse into the one `unified` makes.
+    let Some((reference_pixels, reference_stats)) = render(&ordered_draw_reference, true) else {
         return;
     };
-    let Some((reference_pixels, reference_stats)) = render(&ordered_draw_reference) else {
-        return;
-    };
-    assert_eq!(stats.primitives, PAIRS * 2);
-    assert_eq!(stats.paint_runs, 1);
-    assert_eq!(stats.draw_calls, 1);
-    assert_eq!(stats.color_runs, 1);
-    assert_eq!(stats.render_passes, 1);
     assert!(reference_stats.draw_calls > PAIRS * 2);
-
-    assert_eq!(
-        rgba_at(&unified_pixels, 96, 96),
-        rgba_at(&reference_pixels, 96, 96),
-        "one heterogeneous draw must match explicit ordered source-over draws"
-    );
+    for paint_order in [true, false] {
+        let Some((unified_pixels, stats)) = render(&unified, paint_order) else {
+            return;
+        };
+        assert_eq!(stats.primitives, PAIRS * 2);
+        assert_eq!(stats.paint_runs, 1);
+        assert_eq!(stats.draw_calls, 1, "paint order {paint_order}");
+        assert_eq!(stats.color_runs, 1);
+        assert_eq!(stats.render_passes, 1);
+        assert_eq!(
+            rgba_at(&unified_pixels, 96, 96),
+            rgba_at(&reference_pixels, 96, 96),
+            "one heterogeneous draw must match explicit ordered source-over draws (paint order {paint_order})"
+        );
+    }
 }
 
 #[test]
@@ -181,19 +192,22 @@ fn many_alternating_runs_do_not_produce_screen_sized_triangle() {
         list.text(wgpu_gameui::TextBlock::new("run", 52.0, y).with_size(6.0));
     }
 
-    let Some((pixels, _)) = render(&list) else {
-        return;
-    };
-    let white = pixels
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .filter(|p| p[0] > 245 && p[1] > 245 && p[2] > 245)
-        .count();
-    assert!(
-        white < (W * H / 20) as usize,
-        "unexpected screen-sized white geometry: {white} white pixels"
-    );
+    // Both paths: the upload offsets this guards are the batches'.
+    for paint_order in [true, false] {
+        let Some((pixels, _)) = render(&list, paint_order) else {
+            return;
+        };
+        let white = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] > 245 && p[1] > 245 && p[2] > 245)
+            .count();
+        assert!(
+            white < (W * H / 20) as usize,
+            "unexpected screen-sized white geometry: {white} white pixels (paint order {paint_order})"
+        );
+    }
 }
 
 #[test]
@@ -239,7 +253,7 @@ fn alternating_shadow_chrome_and_soup_preserves_pixels_and_stats() {
     // Flush the final soup run without adding another soup primitive.
     list.chrome_rect(Rect::new(70.0, 5.0, 5.0, 5.0), 0.0, 0.0, [1.0; 4], [1.0; 4]);
 
-    let Some((pixels, stats)) = render(&list) else {
+    let Some((_, stats)) = render(&list, true) else {
         return;
     };
     assert_eq!(stats.shadow_instances, ROWS);
@@ -249,9 +263,20 @@ fn alternating_shadow_chrome_and_soup_preserves_pixels_and_stats() {
     assert_eq!(stats.color_runs, ROWS * 2 + 1);
     assert_eq!(stats.render_passes, 1);
 
-    for row in 0..ROWS {
+    for paint_order in [true, false] {
+        let Some((pixels, _)) = render(&list, paint_order) else {
+            return;
+        };
+        check_rows(&pixels, ROWS);
+    }
+}
+
+/// Each row's shadow, chrome and soup in their colours, and nothing in the
+/// corner.
+fn check_rows(pixels: &[u8], rows: usize) {
+    for row in 0..rows {
         let y = 5 + row as u32 * 22;
-        let shadow = rgba_at(&pixels, 20, y + 15);
+        let shadow = rgba_at(pixels, 20, y + 15);
         if row % 2 == 0 {
             assert!(
                 shadow[0] > 240 && shadow[2] < 20,
@@ -263,16 +288,16 @@ fn alternating_shadow_chrome_and_soup_preserves_pixels_and_stats() {
                 "blue shadow row {row}: {shadow:?}"
             );
         }
-        let chrome = rgba_at(&pixels, 20, y + 4);
+        let chrome = rgba_at(pixels, 20, y + 4);
         assert!(
             chrome[0] > 20 || chrome[1] > 100,
             "chrome row {row}: {chrome:?}"
         );
-        let soup = rgba_at(&pixels, 50, y + 4);
+        let soup = rgba_at(pixels, 50, y + 4);
         assert!(
             soup[1] > 240 && soup[2] > 240 && soup[0] < 20,
             "soup row {row}: {soup:?}"
         );
     }
-    assert_eq!(rgba_at(&pixels, 200, 240), [0, 0, 0, 255]);
+    assert_eq!(rgba_at(pixels, 200, 240), [0, 0, 0, 255]);
 }

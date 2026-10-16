@@ -23,6 +23,8 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -34,6 +36,15 @@ jobs:
 
       - name: Test
         run: cargo test --lib
+
+      # The tests turn on `paint-order-oracle` through the crate's dev-dependency
+      # on itself, so check the library as published, without it, and without
+      # its default features (`IconMsdf` sits behind `phosphor-icons`).
+      - name: Library without the test switches
+        run: cargo clippy -p wgpu-gameui --lib -- -D warnings
+
+      - name: Library without default features
+        run: cargo build -p wgpu-gameui --lib --no-default-features
 
       - uses: actions/setup-node@v5
         with:

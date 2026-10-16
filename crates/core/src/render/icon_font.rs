@@ -155,14 +155,14 @@ pub fn icon_font_data(font: IconFontId) -> Option<&'static [u8]> {
 /// [`MsdfGlyphAtlas::glyph`](crate::render::MsdfGlyphAtlas::glyph) for MSDF
 /// generation on a cache miss, indexed by [`IconFontId::index`].
 ///
-/// The render/prewarm paths call this **once per batch** and then index the
-/// returned `Vec` per icon: the bytes are `&'static`, so the lock is released
-/// before any MSDF generation happens. An id past the end of the `Vec` is an
-/// unregistered font, and its icons are skipped.
-pub(crate) fn icon_font_snapshot() -> Vec<&'static [u8]> {
-    match registry().read() {
-        Ok(fonts) => fonts.iter().map(|f| f.data).collect(),
-        Err(_) => Vec::new(),
+/// The render/prewarm paths call this **once per batch**, into a `Vec` they
+/// keep, and then index it per icon: the bytes are `&'static`, so the lock is
+/// released before any MSDF generation happens. An id past the end of `out`
+/// is an unregistered font, and its icons are skipped.
+pub(crate) fn icon_font_snapshot(out: &mut Vec<&'static [u8]>) {
+    out.clear();
+    if let Ok(fonts) = registry().read() {
+        out.extend(fonts.iter().map(|f| f.data));
     }
 }
 
@@ -180,11 +180,13 @@ mod tests {
     #[test]
     fn phosphor_is_always_font_zero() {
         assert_eq!(IconFontId::PHOSPHOR.index(), 0);
+        let mut fonts = Vec::new();
+        icon_font_snapshot(&mut fonts);
         assert!(
-            !icon_font_snapshot().is_empty(),
+            !fonts.is_empty(),
             "Phosphor must be registered without any explicit call"
         );
-        assert_eq!(icon_font_snapshot()[0], PHOSPHOR_TTF);
+        assert_eq!(fonts[0], PHOSPHOR_TTF);
     }
 
     /// The snapshot is what the render pass indexes per icon, so its ordering
@@ -193,7 +195,8 @@ mod tests {
     #[test]
     fn the_snapshot_is_indexed_by_font_id() {
         let font = register_icon_font("test-snapshot-order", second_font()).expect("valid font");
-        let snap = icon_font_snapshot();
+        let mut snap = Vec::new();
+        icon_font_snapshot(&mut snap);
         assert_eq!(snap[font.index() as usize], second_font());
         assert_eq!(snap[IconFontId::PHOSPHOR.index() as usize], PHOSPHOR_TTF);
     }
@@ -217,7 +220,9 @@ mod tests {
     fn unregistered_font_resolves_to_none_rather_than_panicking() {
         let bogus = IconFontId(9999);
         assert_eq!(icon_glyph(bogus, 'a'), None);
-        assert!(icon_font_snapshot().get(bogus.index() as usize).is_none());
+        let mut fonts = Vec::new();
+        icon_font_snapshot(&mut fonts);
+        assert!(fonts.get(bogus.index() as usize).is_none());
     }
 
     #[cfg(feature = "bundled-font")]

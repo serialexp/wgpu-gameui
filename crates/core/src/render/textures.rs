@@ -8,9 +8,12 @@
 //! ([`UiRenderer::create_atlas`](crate::UiRenderer::create_atlas)) and names it
 //! when loading each sprite that belongs there ([`Placement::Atlas`]).
 //!
-//! The renderer draws runs of consecutive sprites that share a texture in one
-//! call ([`batches`]), and counts each run of a small sprite in a texture of its
-//! own ([`RenderStats::small_texture_batches`](crate::RenderStats)), so a frame
+//! The renderer draws sprites that share a texture in one call where paint
+//! order allows: a list's plan groups them by texture
+//! (`docs/design/draw-call-batching.md`), and a list filled through the public
+//! arrays draws runs of consecutive ones ([`batches`]). It counts each draw of
+//! small sprites in a texture of their own
+//! ([`RenderStats::small_texture_batches`](crate::RenderStats)), so a frame
 //! full of them is reported as a sign they belong in an atlas.
 //!
 //! A sprite of its own can have its pixels replaced in place
@@ -177,6 +180,17 @@ pub(crate) enum Binding {
     Atlas(AtlasId),
     /// A YUV sprite's planes, drawn through the YUV pipeline.
     Yuv(SpriteId),
+}
+
+impl Binding {
+    /// A number of its own for each texture, to tell batches apart.
+    pub(crate) fn code(self) -> u64 {
+        match self {
+            Binding::Own(id) => u64::from(id) << 2,
+            Binding::Atlas(AtlasId(n)) => u64::from(n) << 2 | 1,
+            Binding::Yuv(id) => u64::from(id) << 2 | 2,
+        }
+    }
 }
 
 /// What drawing a sprite needs: its texture, where it is in it, and how large
@@ -904,7 +918,8 @@ fn write_texture(
 
 /// Split draws, in paint order, into runs that sample the same texture: each
 /// run is one draw call, so order is kept and a texture switch only happens
-/// where the texture changes.
+/// where the texture changes. Used for lists without a paint stream; a list
+/// with one is grouped by its plan.
 pub(crate) fn batches(bindings: &[Binding]) -> impl Iterator<Item = (Binding, Range<usize>)> + '_ {
     let mut start = 0;
     std::iter::from_fn(move || {

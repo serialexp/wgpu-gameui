@@ -925,6 +925,229 @@ fn timeline_section(flow: &mut Flow, list: &mut DrawList, focus: &mut FocusState
     }
 }
 
+/// A made-up 16:9 picture as a YUV sprite: a dusk sky over dark ground, so
+/// the player's fitting and colour show.
+#[cfg(feature = "phosphor-icons")]
+fn gallery_picture(ui: &mut UiRenderer) -> wgpu_gameui::Picture {
+    use wgpu_gameui::{YuvColour, YuvPlanes};
+    const PW: u32 = 320;
+    const PH: u32 = 180;
+    let (cw, ch) = (PW / 2, PH / 2);
+    let horizon = PH * 2 / 3;
+    let y: Vec<u8> = (0..PH)
+        .flat_map(|row| {
+            let luma = if row < horizon {
+                40 + (row * 120 / horizon) as u8
+            } else {
+                30
+            };
+            std::iter::repeat_n(luma, PW as usize)
+        })
+        .collect();
+    // Blue above fading to orange at the horizon; neutral below.
+    let chroma = |sky: fn(u32) -> u8| -> Vec<u8> {
+        (0..ch)
+            .flat_map(|row| {
+                let code = if row * 2 < horizon { sky(row * 2) } else { 128 };
+                std::iter::repeat_n(code, cw as usize)
+            })
+            .collect()
+    };
+    let u = chroma(|row| (170 - row * 70 / 120) as u8);
+    let v = chroma(|row| (110 + row * 60 / 120) as u8);
+    let sprite = ui
+        .create_yuv_sprite(
+            "gallery-video",
+            PW,
+            PH,
+            YuvPlanes::packed(PW, y, u, v),
+            YuvColour::assumed_for(PW, PH),
+        )
+        .expect("make the video picture");
+    wgpu_gameui::Picture {
+        sprite,
+        width: PW,
+        height: PH,
+    }
+}
+
+/// A media source standing still, for the gallery's media widgets.
+#[cfg(feature = "phosphor-icons")]
+struct StillSource {
+    state: wgpu_gameui::PlayState,
+    time: f32,
+    muted: bool,
+    volume: f32,
+    error: Option<&'static str>,
+    picture: Option<wgpu_gameui::Picture>,
+}
+
+#[cfg(feature = "phosphor-icons")]
+impl StillSource {
+    fn new(state: wgpu_gameui::PlayState, picture: Option<wgpu_gameui::Picture>) -> Self {
+        Self {
+            state,
+            time: 83.0,
+            muted: false,
+            volume: 0.7,
+            error: None,
+            picture,
+        }
+    }
+}
+
+#[cfg(feature = "phosphor-icons")]
+impl wgpu_gameui::MediaSource for StillSource {
+    fn state(&self) -> wgpu_gameui::PlayState {
+        self.state
+    }
+    fn time(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f32(self.time)
+    }
+    fn length(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs(214))
+    }
+    fn buffered(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs(120))
+    }
+    fn volume(&self) -> f32 {
+        self.volume
+    }
+    fn muted(&self) -> bool {
+        self.muted
+    }
+    fn speed(&self) -> f64 {
+        1.0
+    }
+    fn error(&self) -> Option<String> {
+        self.error.map(str::to_owned)
+    }
+    fn picture(&self) -> Option<wgpu_gameui::Picture> {
+        self.picture
+    }
+    fn next_change(&self) -> Option<std::time::Duration> {
+        None
+    }
+    fn play(&mut self) {}
+    fn pause(&mut self) {}
+    fn seek(&mut self, _: std::time::Duration) {}
+    fn set_volume(&mut self, _: f32) {}
+    fn set_muted(&mut self, _: bool) {}
+    fn set_speed(&mut self, _: f64) {}
+}
+
+/// Scrubber, PlayButton and VideoPlayer.
+#[cfg(feature = "phosphor-icons")]
+fn media_sections(
+    flow: &mut Flow,
+    list: &mut DrawList,
+    focus: &mut FocusState,
+    theme: &Theme,
+    picture: wgpu_gameui::Picture,
+) {
+    use wgpu_gameui::{PlayButton, PlayState, Scrubber, VideoPlayer, VideoPlayerState};
+    let input = InputState::default();
+    let s = StyleResolver::new(theme);
+
+    flow.section(
+        list,
+        Category::Media,
+        "Scrubber",
+        "played over buffered / hovered / volume / bare / disabled",
+    );
+    let percent = |v: f32| format!("{}%", (v * 100.0).round());
+    let scrubbers = [
+        (
+            "Played, buffered",
+            Scrubber::new(214.0).buffered(140.0),
+            83.0,
+            None,
+        ),
+        (
+            "Hovered",
+            Scrubber::new(214.0).buffered(140.0),
+            83.0,
+            Some((0.75, 0.5)),
+        ),
+        ("Volume", Scrubber::new(1.0).format(&percent), 0.6, None),
+        ("Bare meter", Scrubber::new(1.0).knob(false), 0.4, None),
+        ("Disabled", Scrubber::new(214.0).enabled(false), 83.0, None),
+    ];
+    for (label, scrubber, value, pointer) in scrubbers {
+        let r = flow.cell(list, label, 180.0, 40.0);
+        let track = Rect::new(r.x + 8.0, r.y + 22.0, r.width - 16.0, 12.0);
+        let input = match pointer {
+            Some((fx, fy)) => InputState {
+                mouse_x: track.x + track.width * fx,
+                mouse_y: track.y + track.height * fy,
+                ..InputState::default()
+            },
+            None => InputState::default(),
+        };
+        let mut capture = DragCapture::new();
+        let mut ctx = DrawContext::new(list, focus, theme, &input, W as f32, 600.0);
+        scrubber.draw(value, 1, &mut capture, track, &mut ctx);
+    }
+
+    flow.section(
+        list,
+        Category::Media,
+        "PlayButton",
+        "paused / playing / loading / ended / error / progress",
+    );
+    let buttons = [
+        ("Paused", PlayButton::new(PlayState::Paused)),
+        ("Playing", PlayButton::new(PlayState::Playing)),
+        ("Loading", PlayButton::new(PlayState::Loading).phase(0.2)),
+        ("Ended", PlayButton::new(PlayState::Ended)),
+        ("Error", PlayButton::new(PlayState::Error)),
+        (
+            "Progress",
+            PlayButton::new(PlayState::Playing).progress(0.4),
+        ),
+        ("Large", PlayButton::new(PlayState::Paused).size(40.0)),
+    ];
+    for (label, button) in buttons {
+        let [w, h] = button.outer_size(&s);
+        let r = flow.cell(list, label, w.max(56.0), h);
+        let mut ctx = DrawContext::new(list, focus, theme, &input, W as f32, 600.0);
+        button.draw(Rect::new(r.x, r.y, w, h), &mut ctx);
+    }
+
+    flow.section(
+        list,
+        Category::Media,
+        "VideoPlayer",
+        "playing with a title / before its picture / can't play",
+    );
+    let width = 340.0;
+    let mut quiet = StillSource::new(PlayState::Paused, None);
+    quiet.muted = true;
+    let players: [(&str, VideoPlayer, StillSource); 3] = [
+        (
+            "Playing",
+            VideoPlayer::new(500).title("dusk-timelapse.mp4"),
+            StillSource::new(PlayState::Playing, Some(picture)),
+        ),
+        ("Before its picture, muted", VideoPlayer::new(510), quiet),
+        (
+            "Can't play",
+            VideoPlayer::new(520),
+            StillSource {
+                error: Some("10-bit H.264 isn't supported"),
+                ..StillSource::new(PlayState::Error, None)
+            },
+        ),
+    ];
+    for (label, player, mut source) in players {
+        let height = player.height_for(width, 16.0 / 9.0, &s);
+        let r = flow.cell(list, label, width, height);
+        let mut state = VideoPlayerState::new();
+        let mut ctx = DrawContext::new(list, focus, theme, &input, W as f32, 600.0);
+        player.draw(&mut source, &mut state, r, &mut ctx);
+    }
+}
+
 fn viewport_overlay_sections(flow: &mut Flow, list: &mut DrawList, theme: &Theme) {
     let s = StyleResolver::new(theme);
 
@@ -1282,6 +1505,7 @@ enum Category {
     Inspector,
     Keys,
     Layout,
+    Media,
     Mobile,
     Palette,
     Settings,
@@ -1294,7 +1518,7 @@ enum Category {
 
 impl Category {
     /// Every category, in index-page order.
-    const ALL: [Category; 18] = [
+    const ALL: [Category; 19] = [
         Category::Foundations,
         Category::Chrome,
         Category::Data,
@@ -1305,6 +1529,7 @@ impl Category {
         Category::Inspector,
         Category::Keys,
         Category::Layout,
+        Category::Media,
         Category::Mobile,
         Category::Palette,
         Category::Settings,
@@ -1330,6 +1555,7 @@ impl Category {
             Category::Inspector => "inspector",
             Category::Keys => "keys",
             Category::Layout => "layout",
+            Category::Media => "media",
             Category::Mobile => "mobile",
             Category::Palette => "palette",
             Category::Settings => "settings",
@@ -1452,6 +1678,10 @@ const FORGE_COMPONENTS: &[(Category, &[&str])] = &[
             "SpanTabs",
             "Splitter",
         ],
+    ),
+    (
+        Category::Media,
+        &["AudioPlayer", "PlayButton", "Scrubber", "VideoPlayer"],
     ),
     (Category::Mobile, &["AppBar", "TabBar"]),
     (Category::Palette, &["CommandPalette"]),
@@ -2473,6 +2703,9 @@ fn render_widget_gallery() {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let font_system = wgpu_gameui::shared_font_system();
     let mut ui = UiRenderer::new(&device, &queue, format, font_system.clone());
+    // Every page's batches are checked against the brute-force oracle as they
+    // are planned: the gallery is the widest set of real lists there is.
+    ui.set_check_plan(true);
 
     // Real PNG art from assets/ — decoded through the same `load_image_file`
     // path the game uses, so the gallery doubles as a smoke test for it.
@@ -2493,6 +2726,8 @@ fn render_widget_gallery() {
         .load_sprite_rgba8("frame", 32, 32, &frame_pixels, wgpu_gameui::Placement::Own)
         .expect("load the frame sprite");
     let nine_slice_id = ui.register_nine_slice("frame", frame_sprite, [4, 4, 4, 4]);
+    #[cfg(feature = "phosphor-icons")]
+    let video_picture = gallery_picture(&mut ui);
 
     // (Slider needs no assets — it renders procedurally from the theme.)
 
@@ -7525,6 +7760,8 @@ fn render_widget_gallery() {
         viewport_overlay_sections(&mut flow, list, &theme);
         #[cfg(feature = "phosphor-icons")]
         timeline_section(&mut flow, list, &mut focus, &theme);
+        #[cfg(feature = "phosphor-icons")]
+        media_sections(&mut flow, list, &mut focus, &theme, video_picture);
 
         // Tooltip target last: its popup floats down-and-right into the empty
         // headroom below, overlapping no other widget. The reserve keeps the

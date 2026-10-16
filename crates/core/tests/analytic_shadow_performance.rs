@@ -4,12 +4,15 @@
 //! regressions deterministic across adapters. Run it with:
 //! `DISPLAY=:0 cargo test --test analytic_shadow_performance -- --ignored --nocapture`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::mem::size_of;
 
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{AnalyticInstance, BoxShadow, CornerRadii, DrawList, RenderStats, UiRenderer};
+
+#[path = "support/counting_alloc.rs"]
+mod counting_alloc;
+
+use counting_alloc::count_allocations;
 
 const SHADOW_COUNT: usize = 512;
 const VIEWPORT: (u32, u32) = (256, 256);
@@ -21,47 +24,6 @@ const SHADOW: BoxShadow = BoxShadow {
     inset: false,
 };
 const RADII: CornerRadii = CornerRadii::uniform(4.0);
-
-struct ThreadCountingAllocator;
-
-thread_local! {
-    // Counting only the measured thread prevents test-harness and wgpu worker
-    // activity on other threads from making this structural assertion flaky.
-    static COUNT_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
-    static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-fn record_allocation() {
-    COUNT_ALLOCATIONS.with(|enabled| {
-        if enabled.get() {
-            ALLOCATION_COUNT.with(|count| count.set(count.get() + 1));
-        }
-    });
-}
-
-unsafe impl GlobalAlloc for ThreadCountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record_allocation();
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record_allocation();
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        record_allocation();
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: ThreadCountingAllocator = ThreadCountingAllocator;
 
 fn shadow_rect(index: usize) -> Rect {
     let column = index % 32;
@@ -91,13 +53,10 @@ fn clear_and_rebuild_after_warmup_allocates_nothing() {
     // representative high-water mark through the normal public build path.
     build_alternating_shadow_chrome(&mut list);
 
-    // Initialize this thread's allocator TLS before entering the measured span.
-    ALLOCATION_COUNT.with(|count| count.set(0));
-    COUNT_ALLOCATIONS.with(|enabled| enabled.set(true));
-    list.clear();
-    build_alternating_shadow_chrome(&mut list);
-    COUNT_ALLOCATIONS.with(|enabled| enabled.set(false));
-    let allocations = ALLOCATION_COUNT.with(Cell::get);
+    let ((), allocations) = count_allocations(|| {
+        list.clear();
+        build_alternating_shadow_chrome(&mut list);
+    });
 
     assert_eq!(list.shadow_instance_count(), SHADOW_COUNT);
     assert_eq!(list.chrome_instance_count(), SHADOW_COUNT);
@@ -171,11 +130,11 @@ fn shadow_batching_and_uploads_stay_structurally_bounded() {
         return;
     };
 
-    // An empty render isolates the renderer's per-call uniform write without
-    // depending on its private representation size.
+    // An empty render isolates the per-call uniform writes (the renderer's and
+    // the text pipeline's) without depending on their private sizes.
     let empty = DrawList::new();
     let baseline = fixture.render(&empty);
-    assert_eq!(baseline.buffer_write_calls, 1);
+    assert_eq!(baseline.buffer_write_calls, 2);
 
     let mut contiguous = DrawList::new();
     build_contiguous_shadows(&mut contiguous);

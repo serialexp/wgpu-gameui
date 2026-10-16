@@ -2185,7 +2185,7 @@ impl DebugReport {
         ));
         if let Some(stats) = self.render_stats {
             s.push_str("RENDER:\n");
-            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={}\n  color_runs={} render_passes={} shadow_instances={} stripe_instances={} segment_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} texture_uploads={} texture_bytes_uploaded={} textures_created={} small_texture_batches={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.segment_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.textures_created, stats.small_texture_batches, stats.buffer_reallocations));
+            s.push_str(&format!("  draw_lists={} primitives={} paint_runs={} draw_calls={} batches={}\n  units_ordered={} order_overlap_tests={} order_cell_visits={}\n  color_runs={} render_passes={} shadow_instances={} stripe_instances={} segment_instances={} text_runs={} icon_runs={} fragmentation={:.3}\n  buffer_write_calls={} buffer_bytes_uploaded={} atlas_uploads={} atlas_bytes_uploaded={} texture_uploads={} texture_bytes_uploaded={} textures_created={} small_texture_batches={} buffer_reallocations={}\n", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.batches, stats.units_ordered, stats.order_overlap_tests, stats.order_cell_visits, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.segment_instances, stats.text_runs, stats.icon_runs, stats.fragmentation_ratio(), stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.textures_created, stats.small_texture_batches, stats.buffer_reallocations));
             for warning in stats.warnings() {
                 s.push_str(&format!("!! WARN  render {warning}\n"));
             }
@@ -2304,7 +2304,7 @@ impl DebugReport {
 
         match self.render_stats {
             Some(stats) => {
-                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"color_runs\": {}, \"render_passes\": {}, \"shadow_instances\": {}, \"stripe_instances\": {}, \"segment_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"texture_uploads\": {}, \"texture_bytes_uploaded\": {}, \"textures_created\": {}, \"small_texture_batches\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.segment_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.textures_created, stats.small_texture_batches, stats.buffer_reallocations, stats.fragmentation_ratio()));
+                s.push_str(&format!("  \"render_stats\": {{\"draw_lists\": {}, \"primitives\": {}, \"paint_runs\": {}, \"draw_calls\": {}, \"batches\": {}, \"units_ordered\": {}, \"order_overlap_tests\": {}, \"order_cell_visits\": {}, \"color_runs\": {}, \"render_passes\": {}, \"shadow_instances\": {}, \"stripe_instances\": {}, \"segment_instances\": {}, \"text_runs\": {}, \"icon_runs\": {}, \"buffer_write_calls\": {}, \"buffer_bytes_uploaded\": {}, \"atlas_uploads\": {}, \"atlas_bytes_uploaded\": {}, \"texture_uploads\": {}, \"texture_bytes_uploaded\": {}, \"textures_created\": {}, \"small_texture_batches\": {}, \"buffer_reallocations\": {}, \"fragmentation_ratio\": {:.6}, \"warnings\": [", stats.draw_lists, stats.primitives, stats.paint_runs, stats.draw_calls, stats.batches, stats.units_ordered, stats.order_overlap_tests, stats.order_cell_visits, stats.color_runs, stats.render_passes, stats.shadow_instances, stats.stripe_instances, stats.segment_instances, stats.text_runs, stats.icon_runs, stats.buffer_write_calls, stats.buffer_bytes_uploaded, stats.atlas_uploads, stats.atlas_bytes_uploaded, stats.texture_uploads, stats.texture_bytes_uploaded, stats.textures_created, stats.small_texture_batches, stats.buffer_reallocations, stats.fragmentation_ratio()));
                 for (i, warning) in stats.warnings().iter().enumerate() {
                     if i > 0 {
                         s.push_str(", ");
@@ -3562,8 +3562,12 @@ mod tests {
         let stats = RenderStats {
             draw_lists: 2,
             primitives: 100,
-            paint_runs: 130,
-            draw_calls: 7,
+            paint_runs: 140,
+            draw_calls: 130,
+            batches: 128,
+            units_ordered: 90,
+            order_overlap_tests: 700,
+            order_cell_visits: 800,
             color_runs: 3,
             shadow_instances: 0,
             stripe_instances: 5,
@@ -3584,7 +3588,10 @@ mod tests {
         let report = plain.with_render_stats(stats);
         let text = report.to_text();
         assert!(text.contains("RENDER:"));
-        assert!(text.contains("draw_lists=2 primitives=100 paint_runs=130 draw_calls=7"));
+        assert!(
+            text.contains("draw_lists=2 primitives=100 paint_runs=140 draw_calls=130 batches=128")
+        );
+        assert!(text.contains("units_ordered=90 order_overlap_tests=700 order_cell_visits=800"));
         assert!(text.contains("!! WARN  render"));
         let json = report.to_json();
         assert!(json.contains("\"render_stats\": {"));
@@ -3593,6 +3600,8 @@ mod tests {
         assert!(json.contains("\"textures_created\": 1"));
         assert!(json.contains("\"stripe_instances\": 5"));
         assert!(json.contains("\"segment_instances\": 6"));
+        assert!(json.contains("\"batches\": 128, \"units_ordered\": 90"));
+        assert!(json.contains("\"order_overlap_tests\": 700, \"order_cell_visits\": 800"));
         assert!(text.contains("shadow_instances=0 stripe_instances=5 segment_instances=6"));
         assert!(
             text.contains(

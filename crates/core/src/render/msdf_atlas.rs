@@ -159,6 +159,17 @@ impl MsdfGlyphAtlas {
         }
     }
 
+    /// This empty atlas starting at `size` square instead of
+    /// [`INITIAL_MSDF_ATLAS_SIZE`], so a test can make it grow with a few
+    /// glyphs.
+    #[cfg(all(test, feature = "bundled-font"))]
+    pub(crate) fn starting_at(mut self, size: u32) -> Self {
+        assert!(self.glyphs.is_empty(), "only an empty atlas can be resized");
+        self.width = size;
+        self.height = size;
+        self
+    }
+
     /// Current atlas width in pixels.
     pub fn width(&self) -> u32 {
         self.width

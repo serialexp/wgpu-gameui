@@ -10,10 +10,10 @@ use crate::shadow::{BoxShadow, CornerRadii, ShadowInstance};
 use crate::text::{FontHandle, FontSystemHandle, FontVMetrics, TextBlock, TextMeasurer, Underline};
 use crate::widgets::stroke::{self, SegmentInstance, Stroke};
 
-const ANALYTIC_KIND_CHROME: u32 = 0;
-const ANALYTIC_KIND_SHADOW: u32 = 1;
-const ANALYTIC_KIND_STRIPES: u32 = 2;
-const ANALYTIC_KIND_SEGMENT: u32 = 3;
+pub(crate) const ANALYTIC_KIND_CHROME: u32 = 0;
+pub(crate) const ANALYTIC_KIND_SHADOW: u32 = 1;
+pub(crate) const ANALYTIC_KIND_STRIPES: u32 = 2;
+pub(crate) const ANALYTIC_KIND_SEGMENT: u32 = 3;
 
 /// Monotonic source of per-`DrawList` identity. Each `DrawList` gets a unique,
 /// never-reused id at construction so the renderer can detect the "freshly
@@ -369,15 +369,15 @@ pub struct CircleInstance {
     pub params: [f32; 4],
 }
 
-/// One entry in a [`DrawList`]'s ordered paint stream.
+/// One entry in a [`DrawList`]'s ordered paint stream: a run of one family's
+/// records, in the order the drawing methods recorded them.
 ///
-/// The colored-quad stage is no longer a single soup draw: chrome rects are
-/// instanced and must interleave with surrounding soup geometry in submission
-/// order (a hover overlay quad drawn *over* a button, a panel *under* it). The
-/// renderer walks these in order, drawing each soup index sub-range with the
-/// color pipeline and each chrome instance sub-range with the instanced chrome
-/// pipeline. When no `chrome_rect` is ever called the stream stays empty and the
-/// renderer keeps its original single-draw fast path.
+/// The renderer plans from this stream (`render/draw_plan.rs`): each record
+/// keeps its place relative to every earlier record it overlaps (a hover
+/// overlay drawn *over* a button, a panel *under* it), and records that
+/// don't overlap are grouped into one draw per family and texture. Only a
+/// list filled through the public arrays alone has an empty stream; it is
+/// drawn family by family, in a fixed order.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PaintCmd {
     /// Draw soup index positions `start..end` (absolute into `indices`).

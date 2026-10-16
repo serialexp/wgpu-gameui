@@ -209,11 +209,12 @@ DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
 ### Rendering pipeline
 
 `UiRenderer` owns the wgpu pipelines, a dynamic sprite atlas, a nine-slice
-metadata table, and the MSDF glyph atlas. `render(&DrawList)` preserves primitive
-submission order across nine-slices, coloured geometry, sprite/MSDF icons, and
-text. Adjacent compatible submissions are coalesced into ranged paint commands,
-but commands are never regrouped across another primitive family: a later
-widget therefore paints completely over an earlier overlapping widget.
+metadata table, and the MSDF glyph atlas. `render(&DrawList)` keeps submission
+order wherever it shows: a later widget paints completely over an earlier
+overlapping one. Draws that can't touch the same pixel may be regrouped, so a
+screen of buttons draws every box in one call and every label in another
+(`docs/design/draw-call-batching.md`); `RenderStats` reports the `batches` and
+`draw_calls` that came of it.
 
 `render_layers(&LayerStack)` renders each ordered list in layer order, so outer
 popup/modal/tooltip ordering remains explicit. Direct mutation of `DrawList`'s

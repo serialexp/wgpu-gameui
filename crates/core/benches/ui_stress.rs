@@ -79,6 +79,8 @@ struct Harness {
     view: wgpu::TextureView,
     font_system: FontSystemHandle,
     size: (u32, u32),
+    /// Physical pixels per logical one, 1 unless a bench sets it.
+    scale: f32,
     // Keep the target alive for `view`.
     _target: wgpu::Texture,
 }
@@ -158,6 +160,7 @@ impl Harness {
             view,
             font_system,
             size,
+            scale: 1.0,
             _target: target,
         }
     }
@@ -171,7 +174,7 @@ impl Harness {
     /// Encode + submit one frame for `list`, draining finished GPU work without
     /// blocking on it (keeps the queue from backing up across Criterion iters).
     fn render_frame(&mut self, list: &DrawList) {
-        self.encode_and_submit(list);
+        let _ = self.encode_and_submit(list);
         self.device.poll(wgpu::Maintain::Poll);
     }
 
@@ -179,11 +182,11 @@ impl Harness {
     /// finished it — so the sample includes GPU execution (fill-rate costs
     /// such as the offscreen clear + composite), not just CPU encode.
     fn render_frame_and_wait(&mut self, list: &DrawList) {
-        self.encode_and_submit(list);
+        let _ = self.encode_and_submit(list);
         self.device.poll(wgpu::Maintain::Wait);
     }
 
-    fn encode_and_submit(&mut self, list: &DrawList) {
+    fn encode_and_submit(&mut self, list: &DrawList) -> wgpu_gameui::RenderStats {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -206,16 +209,17 @@ impl Harness {
                 occlusion_query_set: None,
             });
         }
-        self.ui.render(
+        let stats = self.ui.render(
             &self.device,
             &self.queue,
             &mut encoder,
             &self.view,
             self.size,
-            1.0,
+            self.scale,
             list,
         );
         self.queue.submit(Some(encoder.finish()));
+        stats
     }
 }
 
@@ -425,7 +429,12 @@ fn bench_frame_render(c: &mut Criterion) {
         let mut list = harness.draw_list();
         build_buttons(&mut list, count, &theme, &input);
         // Warm the atlas/buffers once before timing.
-        harness.render_frame(&list);
+        let stats = harness.encode_and_submit(&list);
+        harness.device.poll(wgpu::Maintain::Wait);
+        eprintln!(
+            "frame_render/{count}: paint_runs={} draw_calls={} primitives={}",
+            stats.paint_runs, stats.draw_calls, stats.primitives
+        );
 
         group.throughput(Throughput::Elements(count as u64));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
@@ -1906,6 +1915,162 @@ fn bench_strokes_render(c: &mut Criterion) {
     group.finish();
 }
 
+/// N labelled boxes (a chrome rect and its text), none overlapping, in paint
+/// order (box, text, box, text: a run each) or with every box before every
+/// text (two runs). The pixels are the same; the gap between the two is what
+/// batching non-overlapping draws could save. Most of the 10k grid is off the
+/// target.
+fn build_labelled_boxes(list: &mut DrawList, count: usize, grouped: bool) {
+    let cols = cols_for(count);
+    let boxes = |list: &mut DrawList, i: usize| {
+        list.chrome_rect(
+            grid_rect(i, cols),
+            4.0,
+            1.0,
+            [0.12, 0.15, 0.18, 1.0],
+            [0.0, 0.0, 0.0, 0.8],
+        );
+    };
+    let label = |list: &mut DrawList, i: usize| {
+        let r = grid_rect(i, cols);
+        list.text(TextBlock::new("OK", r.x + 8.0, r.y + 4.0).with_size(14.0));
+    };
+    if grouped {
+        (0..count).for_each(|i| boxes(list, i));
+        (0..count).for_each(|i| label(list, i));
+    } else {
+        for i in 0..count {
+            boxes(list, i);
+            label(list, i);
+        }
+    }
+}
+
+/// Touching list rows filling the target at `scale`: a background each, in
+/// four columns, with a label over it. Neighbouring rows share an edge, so
+/// how tight the text box is decides whether a label shares a cell with the
+/// next row's background.
+fn build_list_rows(list: &mut DrawList, scale: f32) {
+    let (w, h) = (W as f32 / scale, H as f32 / scale);
+    let (col_w, row_h) = (w / 4.0, 24.0);
+    for col in 0..4 {
+        for row in 0..(h / row_h).ceil() as usize {
+            let r = Rect::new(col as f32 * col_w, row as f32 * row_h, col_w, row_h);
+            let shade = if row % 2 == 0 { 0.14 } else { 0.18 };
+            list.chrome_rect(r, 0.0, 0.0, [shade, shade, shade + 0.03, 1.0], [0.0; 4]);
+            list.text(
+                TextBlock::new(format!("Session {col}-{row}"), r.x + 8.0, r.y + 5.0)
+                    .with_size(13.0),
+            );
+        }
+    }
+}
+
+/// Scatter markers on a 16 px grid over the whole target, as circles, with a
+/// short segment in the middle of each gap: many small units that don't
+/// overlap (a circle's box reaches 2 px past its radius), alternating keys in
+/// the same order cells.
+fn build_dense_chart(list: &mut DrawList) {
+    let step = 16.0;
+    for gy in 0..(H as f32 / step) as usize {
+        for gx in 0..(W as f32 / step) as usize {
+            let (x, y) = (6.0 + gx as f32 * step, 6.0 + gy as f32 * step);
+            list.circle((x, y), 3.0, [0.3, 0.55, 0.85, 1.0]);
+            list.line([x + 7.0, y + 8.0], [x + 9.0, y + 8.0], 1.0, [0.6; 4]);
+        }
+    }
+}
+
+/// The cases `bench_batching` draws, each a list built once.
+fn batching_cases(harness: &mut Harness) -> Vec<(String, f32, DrawList)> {
+    let mut cases = Vec::new();
+    for &count in RENDER_COUNTS {
+        for grouped in [false, true] {
+            let mut list = harness.draw_list();
+            build_labelled_boxes(&mut list, count, grouped);
+            let kind = if grouped { "grouped" } else { "interleaved" };
+            cases.push((format!("{kind}/{count}"), 1.0, list));
+        }
+    }
+    for scale in [1.0, 1.5] {
+        let mut list = harness.draw_list();
+        build_list_rows(&mut list, scale);
+        cases.push((format!("list_rows/x{scale}"), scale, list));
+    }
+    let mut list = harness.draw_list();
+    build_dense_chart(&mut list);
+    cases.push(("dense_chart".to_owned(), 1.0, list));
+    let mut list = harness.draw_list();
+    build_stroke(&mut list, "polyline", &chart_points(10_000));
+    cases.push(("polyline/10000".to_owned(), 1.0, list));
+    // One soup command of 10k triangles: what bounding soup per triangle
+    // costs (the polyline above is segment records, not soup). The box after
+    // it makes the soup a paint command; soup recorded last is drawn
+    // without being planned.
+    let mut list = harness.draw_list();
+    let points: Vec<_> = (0..10_000)
+        .map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 10_000.0;
+            (960.0 + 500.0 * a.cos(), 540.0 + 500.0 * a.sin())
+        })
+        .collect();
+    list.filled_polygon(&points, [0.3, 0.55, 0.85, 0.5]);
+    list.chrome_rect(
+        Rect::new(10.0, 10.0, 40.0, 20.0),
+        4.0,
+        0.0,
+        [1.0; 4],
+        [0.0; 4],
+    );
+    cases.push(("soup_polygon/10000".to_owned(), 1.0, list));
+    cases
+}
+
+/// Each case drawn batched and in paint order (the identity plan, as before
+/// batching), first reporting what the frame did, then timed: the CPU only
+/// (encode and submit), and with the GPU's work too.
+fn bench_batching(c: &mut Criterion) {
+    let mut harness = Harness::new();
+    let mut group = c.benchmark_group("batching");
+    group.sample_size(30);
+    for (name, scale, list) in batching_cases(&mut harness) {
+        harness.scale = scale;
+        for paint_order in [false, true] {
+            harness.ui.set_paint_order(paint_order);
+            let path = if paint_order {
+                "paint_order"
+            } else {
+                "batched"
+            };
+            let stats = harness.encode_and_submit(&list);
+            harness.device.poll(wgpu::Maintain::Wait);
+            eprintln!(
+                "batching/{name}/{path}: primitives={} units_ordered={} paint_runs={} \
+                 batches={} draw_calls={} buffer_write_calls={} order_overlap_tests={} \
+                 order_cell_visits={}",
+                stats.primitives,
+                stats.units_ordered,
+                stats.paint_runs,
+                stats.batches,
+                stats.draw_calls,
+                stats.buffer_write_calls,
+                stats.order_overlap_tests,
+                stats.order_cell_visits,
+            );
+            group.throughput(Throughput::Elements(stats.primitives as u64));
+            group.bench_function(BenchmarkId::new(format!("{name}/{path}"), "encode"), |b| {
+                b.iter(|| harness.render_frame(&list))
+            });
+            group.bench_function(BenchmarkId::new(format!("{name}/{path}"), "wait"), |b| {
+                b.iter(|| harness.render_frame_and_wait(&list))
+            });
+        }
+    }
+    harness.ui.set_paint_order(false);
+    harness.scale = 1.0;
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_drawlist_build,
@@ -1937,5 +2102,6 @@ criterion_group!(
     bench_charts_render,
     bench_strokes_build,
     bench_strokes_render,
+    bench_batching,
 );
 criterion_main!(benches);

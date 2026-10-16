@@ -40,7 +40,7 @@ const VMETRICS_CACHE_CAP: usize = 256;
 /// The font system that measuring and drawing share, with the text layouts
 /// they share. Reached through a [`FontSystemHandle`](crate::FontSystemHandle).
 /// A renderer holds its lock for the whole of a draw list's text, glyph
-/// generation included (see `TextRenderer::build_vertices`).
+/// generation included (see `MsdfCpu::prepare_texts`).
 pub struct SharedFontSystem {
     font_system: FontSystem,
     layouts: LayoutCache,

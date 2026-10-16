@@ -444,9 +444,15 @@ mod tests {
     #[test]
     fn vector_checked_falls_back_to_checkmark_geometry() {
         let (checked, _) = draw_cb(&Checkbox::new(), true, "", rect(), &input_at(-1.0, -1.0));
+        // The tick's two strokes, recorded as stroke segments.
+        let segments = checked
+            .analytic_instances
+            .iter()
+            .filter(|r| r.kind == crate::widgets::ANALYTIC_KIND_SEGMENT)
+            .count();
         assert!(
-            !checked.vertices.is_empty(),
-            "no-icon builds retain a vector checkmark fallback"
+            segments >= 2,
+            "no-icon builds retain a vector checkmark fallback, got {segments} segments"
         );
     }
 

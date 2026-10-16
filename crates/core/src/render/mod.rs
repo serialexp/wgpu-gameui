@@ -12,17 +12,26 @@
 //! arena owned by the frame, not by the pass: see [`uniform_arena`] for why passes
 //! in one submission must not share bytes.
 //!
-//! `UiRenderer::render` consumes a `DrawList` in its paint order: every run is
-//! uploaded first, then all of them are drawn in **one** render pass, switching
-//! pipelines between runs. A pass per run would load and store the whole target
-//! each time (costly on tile-based GPUs), and on Metal each pass holds a command
+//! `UiRenderer::render` draws a `DrawList` in batches: primitives that can't
+//! change the same pixel may be regrouped, so every non-overlapping box goes in
+//! one draw call and every glyph in another, while primitives that overlap keep
+//! their paint order (`docs/design/draw-call-batching.md`; `draw_box`,
+//! `draw_order`, `draw_plan` and `batch_draws`). Every batch is uploaded first,
+//! then all of them are drawn in **one** render pass, switching pipelines
+//! between batches. A pass per batch would load and store the whole target each
+//! time (costly on tile-based GPUs), and on Metal each pass holds a command
 //! buffer until the submission completes — around a thousand passes in one
 //! submission exhausted the queue and hung the frame.
 
 mod atlas;
+mod batch_draws;
 mod blur;
 mod capture;
 mod composite;
+mod draw_box;
+mod draw_order;
+mod draw_plan;
+mod frame_arena;
 mod glyph_msdf;
 #[cfg(feature = "phosphor-icons")]
 mod icon_font;
@@ -57,6 +66,7 @@ pub use capture::HeadlessGpu;
 pub use capture::{
     CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, capture_with, write_png,
 };
+pub(crate) use frame_arena::FrameArena;
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub use text_contrast::TextContrast;
 pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId};

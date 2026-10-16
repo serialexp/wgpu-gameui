@@ -23,11 +23,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use bytemuck::{Pod, Zeroable};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::RenderStats;
 use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
 use crate::render::{DEFAULT_PX_RANGE, IconGlyph, PhosphorIcon, icon_font_snapshot};
 use crate::render::{
-    GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, TextContrast, UniformArena, ortho_matrix,
+    FrameArena, GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, TextContrast, UniformArena,
+    ortho_matrix,
 };
 use crate::shaping::{LayoutSpec, ShapedGlyph, SharedFontSystem};
 #[cfg(feature = "phosphor-icons")]
@@ -37,6 +39,10 @@ use cosmic_text::{
     Align as CosmicAlign, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style,
     Weight, Wrap, fontdb,
 };
+
+#[path = "text_prep.rs"]
+mod prep;
+pub(crate) use prep::{MsdfCpu, MsdfPrepared};
 
 const MSDF_SHADER: &str = include_str!("render/ui_msdf.wgsl");
 
@@ -421,13 +427,13 @@ pub fn load_font_bytes(fs: &FontSystemHandle, bytes: &[u8]) -> Result<FontHandle
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-struct MsdfVertex {
-    position: [f32; 2],
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
+pub(crate) struct MsdfVertex {
+    pub(crate) position: [f32; 2],
     uv: [f32; 2],
     fill: [f32; 4],
-    clip: [f32; 4],
-    clip_enabled: f32,
+    pub(crate) clip: [f32; 4],
+    pub(crate) clip_enabled: f32,
     /// Distance-ramp width of the field in atlas texels (constant per atlas).
     px_range: f32,
     /// Outline/glow color composited under the fill (a == 0 disables).
@@ -450,6 +456,14 @@ const MSDF_VERTEX_ATTRIBS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array!
     8 => Float32,
 ];
 
+/// Which atlas an MSDF upload samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MsdfAtlas {
+    Glyphs,
+    #[cfg(feature = "phosphor-icons")]
+    Icons,
+}
+
 /// One MSDF run (text or icons) uploaded for drawing: its vertices sit in
 /// `vbo` at `offset`, and the bind groups it samples were captured at upload.
 /// Drawn with [`TextRenderer::draw_prepared`] inside a render pass the caller
@@ -463,30 +477,23 @@ pub(crate) struct PreparedMsdf {
     uniform_offset: u32,
 }
 
-impl PreparedMsdf {
-    /// The vertex bytes uploading this run wrote, for
-    /// [`RenderStats::buffer_bytes_uploaded`](crate::RenderStats::buffer_bytes_uploaded).
-    pub(crate) fn uploaded_bytes(&self) -> u64 {
-        self.vertices as u64 * std::mem::size_of::<MsdfVertex>() as u64
-    }
-}
-
 /// GPU text renderer: owns the MSDF glyph atlas (and optional Phosphor icon
 /// atlas), the shaping font system, and the wgpu pipeline/buffers that draw
 /// shaped glyph quads. One instance is created per [`crate::UiRenderer`].
 pub struct TextRenderer {
-    font_system: FontSystemHandle,
+    /// The glyph and icon atlases' pixels (the source of truth their GPU
+    /// mirrors copy), the font keys and the font system.
+    cpu: MsdfCpu,
+    /// The last list's text and icons, prepared and waiting to be uploaded.
+    prepared: MsdfPrepared,
 
-    // MSDF glyph atlas (CPU source of truth) + its GPU mirror.
-    atlas: MsdfGlyphAtlas,
+    // The glyph atlas's GPU mirror.
     atlas_bgl: wgpu::BindGroupLayout,
     glyph_gpu: MsdfTextureGpu,
 
-    // Phosphor icon atlas (separate ref_px, never evicted) + its GPU mirror.
-    // Shares the atlas bind-group layout and the MSDF pipeline with text; only
-    // the bound texture (and vertex slice) differ.
-    #[cfg(feature = "phosphor-icons")]
-    icon_atlas: MsdfGlyphAtlas,
+    // The icon atlas's GPU mirror (the icon atlas has its own ref_px and is
+    // never evicted). Shares the atlas bind-group layout and the MSDF pipeline
+    // with text; only the bound texture (and vertex slice) differ.
     #[cfg(feature = "phosphor-icons")]
     icon_gpu: MsdfTextureGpu,
 
@@ -503,27 +510,22 @@ pub struct TextRenderer {
 
     pipeline: wgpu::RenderPipeline,
 
-    vbo: wgpu::Buffer,
-    vbo_capacity: u64,
-    /// Bytes already used in `vbo` this frame. Each `render` pass writes at this
-    /// offset and advances it, so multiple text passes within one submit (e.g.
-    /// base layer + tooltip layer) occupy disjoint regions instead of all
-    /// aliasing offset 0 and reading the last-written data at draw time. Reset
-    /// to 0 by [`begin_frame`](Self::begin_frame) each frame.
-    vbo_offset: u64,
-    /// Replaced buffers retained for the renderer's lifetime. Ordered painting
-    /// can grow the VBO while encoded or submitted passes still reference its
-    /// predecessor. Growth is geometric, so this remains a small bounded set and
-    /// avoids backend-specific completion polling before releasing resources.
+    /// This frame's vertices, run after run, so the text passes of one submit
+    /// (e.g. base layer + tooltip layer) read their own and not the last
+    /// written. Reset by [`begin_frame`](Self::begin_frame).
+    vbo: FrameArena,
+    /// Buffers `vbo` replaced as it grew, kept for the renderer's lifetime:
+    /// encoded or submitted passes may still read them.
     retired_vbos: Vec<wgpu::Buffer>,
+    /// Buffer writes and growth since [`take_upload_stats`](Self::take_upload_stats)
+    /// last asked: only the buffer counters are used.
+    upload_stats: RenderStats,
 
-    /// Stable per-font keys for the atlas, assigned on first sighting. Decouples
-    /// the atlas from cosmic-text's `fontdb::ID`.
-    font_keys: HashMap<fontdb::ID, u64>,
-    next_font_key: u64,
-
-    width: u32,
-    height: u32,
+    /// The logical size projected onto the target, exactly as the geometry
+    /// pipelines project it: not rounded, so text lands where chrome does at a
+    /// size that doesn't divide by the scale factor.
+    width: f32,
+    height: f32,
     /// Logical → physical ratio, kept from the last [`resize`](Self::resize) so
     /// glyph snapping can round onto the *device* pixel grid rather than the
     /// logical one.
@@ -560,7 +562,7 @@ impl TextRenderer {
         format: wgpu::TextureFormat,
         font_system: FontSystemHandle,
     ) -> Self {
-        let atlas = MsdfGlyphAtlas::new();
+        let cpu = MsdfCpu::new(font_system);
 
         // Uniform (group 0): ortho projection, matching the main UI pipelines,
         // plus the text contrast the fragment shader applies. One arena slot per
@@ -578,15 +580,9 @@ impl TextRenderer {
         // Atlas texture (group 1): linear filtering, linear (non-sRGB) format.
         // The layout is shared by the text and icon atlas mirrors and the pipeline.
         let atlas_bgl = create_msdf_atlas_bgl(device);
-        let glyph_gpu = MsdfTextureGpu::new(device, &atlas_bgl, &atlas);
-
-        // Icon atlas: same MSDF machinery, generated at a higher reference size
-        // (icons render anywhere from ~16px steppers to ~48px gallery cells) and
-        // the standard distance ramp so the shared shader's AA math is unchanged.
+        let glyph_gpu = MsdfTextureGpu::new(device, &atlas_bgl, &cpu.atlas);
         #[cfg(feature = "phosphor-icons")]
-        let icon_atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
-        #[cfg(feature = "phosphor-icons")]
-        let icon_gpu = MsdfTextureGpu::new(device, &atlas_bgl, &icon_atlas);
+        let icon_gpu = MsdfTextureGpu::new(device, &atlas_bgl, &cpu.icon_atlas);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("msdf text shader"),
@@ -627,21 +623,18 @@ impl TextRenderer {
             cache: None,
         });
 
-        let vbo_capacity = (4096 * std::mem::size_of::<MsdfVertex>()) as u64;
-        let vbo = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("msdf text vbo"),
-            size: vbo_capacity,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let vbo = FrameArena::new(
+            device,
+            "msdf text vbo",
+            wgpu::BufferUsages::VERTEX,
+            (4096 * std::mem::size_of::<MsdfVertex>()) as u64,
+        );
 
         Self {
-            font_system,
-            atlas,
+            cpu,
+            prepared: MsdfPrepared::default(),
             atlas_bgl,
             glyph_gpu,
-            #[cfg(feature = "phosphor-icons")]
-            icon_atlas,
             #[cfg(feature = "phosphor-icons")]
             icon_gpu,
             uniform,
@@ -649,13 +642,10 @@ impl TextRenderer {
             view_origin: [0.0, 0.0],
             pipeline,
             vbo,
-            vbo_capacity,
-            vbo_offset: 0,
             retired_vbos: Vec::new(),
-            font_keys: HashMap::new(),
-            next_font_key: 0,
-            width: 1,
-            height: 1,
+            upload_stats: RenderStats::default(),
+            width: 1.0,
+            height: 1.0,
             scale_factor: 1.0,
             snap: GlyphSnap::default(),
             hint: true,
@@ -668,7 +658,7 @@ impl TextRenderer {
     /// Use this to construct a `DrawList` / `TextMeasurer` that shares font state with
     /// this renderer.
     pub fn font_system_handle(&self) -> FontSystemHandle {
-        Arc::clone(&self.font_system)
+        Arc::clone(&self.cpu.font_system)
     }
 
     /// Update the viewport size used to build the ortho projection, and give this
@@ -701,21 +691,21 @@ impl TextRenderer {
             1.0
         };
         // Store the logical dimensions — ortho_matrix needs these, not physical.
-        self.width = ((width as f32 / scale) as u32).max(1);
-        self.height = ((height as f32 / scale) as u32).max(1);
+        self.width = width as f32 / scale;
+        self.height = height as f32 / scale;
         // Glyph snapping rounds onto device pixels, so it needs the ratio too.
         self.scale_factor = scale;
-        let (slot, _grew) = self.uniform.allocate(device);
+        let (slot, grew) = self.uniform.allocate(device);
         let uniforms = MsdfUniforms {
-            view_proj: ortho_matrix(self.view_origin, self.width as f32, self.height as f32),
+            view_proj: ortho_matrix(self.view_origin, self.width, self.height),
             gamma_ratios: self.contrast.gamma_ratios(),
             contrast: [self.contrast.contrast(), 0.0, 0.0, 0.0],
         };
-        queue.write_buffer(
-            self.uniform.buffer(),
-            slot,
-            bytemuck::cast_slice(&[uniforms]),
-        );
+        let bytes = bytemuck::bytes_of(&uniforms);
+        queue.write_buffer(self.uniform.buffer(), slot, bytes);
+        self.upload_stats.buffer_reallocations += usize::from(grew);
+        self.upload_stats.buffer_write_calls += 1;
+        self.upload_stats.buffer_bytes_uploaded += bytes.len() as u64;
         self.uniform_offset = slot;
     }
 
@@ -744,12 +734,7 @@ impl TextRenderer {
     /// The device-pixel grid glyph origins round onto, from the view origin and
     /// the scale factor of the last [`resize`](Self::resize).
     fn pixel_grid(&self) -> PixelGrid {
-        PixelGrid {
-            snap: self.snap,
-            scale: self.scale_factor,
-            view_origin: self.view_origin,
-            hint: self.hint,
-        }
+        PixelGrid::new(self.snap, self.scale_factor, self.view_origin, self.hint)
     }
 
     /// Generate small text from outlines **hinted** for the size they are drawn
@@ -794,7 +779,7 @@ impl TextRenderer {
     /// The text glyph atlas's dimensions in pixels, as `(width, height)`: what
     /// the MSDF glyph cache occupies on the GPU (four bytes a pixel).
     pub fn glyph_atlas_size(&self) -> (u32, u32) {
-        (self.atlas.width(), self.atlas.height())
+        (self.cpu.atlas.width(), self.cpu.atlas.height())
     }
 
     /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.
@@ -802,7 +787,8 @@ impl TextRenderer {
     /// *not* once per pass: passes within one submission must keep their own regions,
     /// and only the frame boundary makes those regions reusable.
     pub fn begin_frame(&mut self) {
-        self.vbo_offset = 0;
+        self.vbo.reset();
+        self.upload_stats = RenderStats::default();
         self.uniform.reset();
         self.uniform_offset = 0;
     }
@@ -810,7 +796,7 @@ impl TextRenderer {
     /// Bytes of per-frame GPU scratch this renderer is holding: vertex data plus
     /// uniform slots. Part of `UiRenderer`'s frame-arena accounting.
     pub(crate) fn frame_arena_bytes(&self) -> u64 {
-        self.vbo_offset + self.uniform.bytes_used()
+        self.vbo.used() + self.uniform.bytes_used()
     }
 
     /// Drop the text layouts and font metrics shared with the measurers,
@@ -818,7 +804,8 @@ impl TextRenderer {
     /// ([`SharedFontSystem::clear_caches`]). Loading a font through this crate
     /// already does this.
     pub fn clear_shape_cache(&mut self) {
-        self.font_system
+        self.cpu
+            .font_system
             .lock()
             .expect("FontSystem poisoned")
             .clear_caches();
@@ -832,7 +819,7 @@ impl TextRenderer {
         if text.is_empty() {
             return (0.0, spec.line_height);
         }
-        let mut shared = self.font_system.lock().expect("FontSystem poisoned");
+        let mut shared = self.cpu.font_system.lock().expect("FontSystem poisoned");
         shared.layout(&spec, text).size
     }
 
@@ -849,11 +836,14 @@ impl TextRenderer {
     pub fn prewarm_ascii(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, sizes: &[f32]) {
         let ascii: String = (0x20u8..=0x7e).map(|c| c as char).collect();
         // Clone the handle so the guard borrows a local, not `self` (frees `self`
-        // for `self.font_key`/`self.atlas`).
-        let fs_handle = Arc::clone(&self.font_system);
+        // for `self.font_key`/`self.cpu.atlas`).
+        let fs_handle = Arc::clone(&self.cpu.font_system);
         let mut shared = fs_handle.lock().expect("FontSystem poisoned");
         let fs = shared.font_system();
-        let mut buffer = Buffer::new(fs, Metrics::new(self.atlas.ref_px(), self.atlas.ref_px()));
+        let mut buffer = Buffer::new(
+            fs,
+            Metrics::new(self.cpu.atlas.ref_px(), self.cpu.atlas.ref_px()),
+        );
         buffer.set_text(
             &ascii,
             &Attrs::new().family(Family::SansSerif),
@@ -870,10 +860,11 @@ impl TextRenderer {
             .collect();
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
-                let font_key = self.font_key(glyph.font_id);
+                let font_key = self.cpu.font_key(glyph.font_id);
                 if let Some(font) = fs.get_font(glyph.font_id, glyph.font_weight) {
                     for &sizing in &sizings {
-                        self.atlas
+                        self.cpu
+                            .atlas
                             .glyph(font_key, glyph.glyph_id, sizing, font.data());
                     }
                 }
@@ -881,10 +872,6 @@ impl TextRenderer {
         }
         drop(shared);
         self.upload_atlas(device, queue);
-    }
-
-    fn font_key(&mut self, id: fontdb::ID) -> u64 {
-        resolve_font_key(&mut self.font_keys, &mut self.next_font_key, id)
     }
 
     /// Pre-generate every curated [`PhosphorIcon`] into the icon atlas so the
@@ -910,12 +897,13 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         glyphs: &[IconGlyph],
     ) {
-        let fonts = icon_font_snapshot();
+        let mut fonts = Vec::new();
+        icon_font_snapshot(&mut fonts);
         for g in glyphs {
             let Some(data) = fonts.get(g.font.index() as usize) else {
                 continue;
             };
-            self.icon_atlas.glyph(
+            self.cpu.icon_atlas.glyph(
                 g.font.index() as u64,
                 g.glyph_id,
                 GlyphSizing::Scalable,
@@ -923,28 +911,30 @@ impl TextRenderer {
             );
         }
         self.icon_gpu
-            .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
+            .upload(device, queue, &self.atlas_bgl, &mut self.cpu.icon_atlas);
     }
 
-    /// Resolve every glyph needed by an ordered paint stream before encoding its
-    /// first text pass. Text runs are rendered separately to preserve submission
-    /// order; without this preflight, a later run can grow the atlas after earlier
-    /// passes have baked UVs against its old dimensions.
+    /// Prepare a list's text for drawing as `commands`, each a range of
+    /// `texts` drawn as one paint command, and upload the glyph atlas it grew.
+    /// Every glyph is placed before any vertex is built, so every command's
+    /// UVs use the atlas's final size; each command is then uploaded with
+    /// [`upload_text_command`](Self::upload_text_command).
     pub(crate) fn prepare_texts(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texts: &[TextBlock],
+        commands: impl IntoIterator<Item = std::ops::Range<u32>>,
     ) {
-        if texts.is_empty() {
-            return;
-        }
-        let _ = self.build_vertices(texts);
+        let grid = self.pixel_grid();
+        self.cpu
+            .prepare_texts(&mut self.prepared, grid, texts, commands);
         self.upload_atlas(device, queue);
     }
 
-    /// Resolve every icon glyph needed by an ordered paint stream before its first
-    /// icon pass, for the same atlas-stability reason as [`prepare_texts`](Self::prepare_texts).
+    /// Prepare a list's MSDF icons for drawing, and upload the icon atlas they
+    /// grew; for the same reason as [`prepare_texts`](Self::prepare_texts),
+    /// before any quad is built.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) fn prepare_icons(
         &mut self,
@@ -952,20 +942,14 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         icons: &[IconMsdf],
     ) {
-        let fonts = icon_font_snapshot();
-        for icon in icons {
-            let Some(data) = fonts.get(icon.glyph.font.index() as usize) else {
-                continue;
-            };
-            self.icon_atlas.glyph(
-                icon.glyph.font.index() as u64,
-                icon.glyph.glyph_id,
-                GlyphSizing::Scalable,
-                data,
-            );
-        }
+        self.cpu.prepare_icons(&mut self.prepared, icons);
         self.icon_gpu
-            .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
+            .upload(device, queue, &self.atlas_bgl, &mut self.cpu.icon_atlas);
+    }
+
+    /// The text and icons last prepared.
+    pub(crate) fn prepared(&self) -> &MsdfPrepared {
+        &self.prepared
     }
 
     /// Prepare and render a batch of MSDF icons in a pass of their own. Mirrors
@@ -982,90 +966,142 @@ impl TextRenderer {
         view: &wgpu::TextureView,
         icons: &[IconMsdf],
     ) {
-        if let Some(run) = self.upload_icons(device, queue, icons) {
+        self.prepare_icons(device, queue, icons);
+        if let Some(run) = self.upload_icon_command(device, queue, 0..icons.len() as u32) {
             let mut pass = crate::render::load_pass(encoder, view, "msdf icon pass");
             self.draw_prepared(&mut pass, &run);
         }
     }
 
-    /// Build and upload a batch of MSDF icons, ready for
-    /// [`draw_prepared`](Self::draw_prepared). `None` when nothing draws.
+    /// Upload the prepared icons `icons` (a range of the list's MSDF icons),
+    /// ready for [`draw_prepared`](Self::draw_prepared). `None` when nothing
+    /// draws.
     #[cfg(feature = "phosphor-icons")]
-    pub(crate) fn upload_icons(
+    pub(crate) fn upload_icon_command(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        icons: &[IconMsdf],
+        icons: std::ops::Range<u32>,
     ) -> Option<PreparedMsdf> {
-        if icons.is_empty() {
-            return None;
-        }
-
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_icon_render").entered();
-
-        // One lock acquisition for the whole batch; the bytes are `'static`, so
-        // MSDF generation below runs with the registry unlocked.
-        let fonts = icon_font_snapshot();
-        let px_range = self.icon_atlas.px_range();
-        let mut verts: Vec<MsdfVertex> = Vec::with_capacity(icons.len() * 6);
-        for icon in icons {
-            // An icon from an unregistered font simply doesn't draw.
-            let Some(data) = fonts.get(icon.glyph.font.index() as usize) else {
-                continue;
-            };
-            let Some(tile) = self.icon_atlas.glyph(
-                icon.glyph.font.index() as u64,
-                icon.glyph.glyph_id,
-                GlyphSizing::Scalable,
-                data,
-            ) else {
-                continue;
-            };
-            push_icon_quad(
-                &mut verts,
-                &tile,
-                icon,
-                self.icon_atlas.width(),
-                self.icon_atlas.height(),
-                px_range,
-            );
-        }
-
-        // Glyph generation may have dirtied / grown the icon atlas — upload first.
-        self.icon_gpu
-            .upload(device, queue, &self.atlas_bgl, &mut self.icon_atlas);
-
-        if verts.is_empty() {
-            return None;
-        }
-
-        let atlas = self.icon_gpu.bind_group.clone();
-        Some(self.upload_vertices(device, queue, &verts, atlas))
+        let range = self.prepared.icon_range(icons);
+        let vertices = &self.prepared.icon_vertices[range.start as usize..range.end as usize];
+        let offset = Self::write_vertices(
+            &mut self.vbo,
+            &mut self.retired_vbos,
+            &mut self.upload_stats,
+            device,
+            queue,
+            vertices,
+        );
+        self.run(offset, range.len(), MsdfAtlas::Icons)
     }
 
-    /// Bump-allocate `verts` into this frame's vertex buffer (so the run doesn't
-    /// alias earlier runs in the same submit, which would all read the last
-    /// write at draw time) and capture what drawing it needs.
-    fn upload_vertices(
+    /// Upload the prepared text command `index` (in paint order), ready for
+    /// [`draw_prepared`](Self::draw_prepared). `None` when nothing draws.
+    pub(crate) fn upload_text_command(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        verts: &[MsdfVertex],
-        atlas: wgpu::BindGroup,
-    ) -> PreparedMsdf {
-        let vbytes = std::mem::size_of_val(verts) as u64;
-        let offset = self.ensure_vbo_capacity(device, vbytes);
-        queue.write_buffer(&self.vbo, offset, bytemuck::cast_slice(verts));
-        self.vbo_offset = offset + vbytes;
-        PreparedMsdf {
-            vbo: self.vbo.clone(),
-            offset,
-            vertices: verts.len() as u32,
-            atlas,
+        index: usize,
+    ) -> Option<PreparedMsdf> {
+        #[cfg(feature = "tracy")]
+        let _span = tracing::info_span!("gameui_text_render").entered();
+        let range = self.prepared.text_commands[index].clone();
+        let vertices = &self.prepared.text_vertices[range.start as usize..range.end as usize];
+        let offset = Self::write_vertices(
+            &mut self.vbo,
+            &mut self.retired_vbos,
+            &mut self.upload_stats,
+            device,
+            queue,
+            vertices,
+        );
+        self.run(offset, range.len(), MsdfAtlas::Glyphs)
+    }
+
+    /// Upload `vertices`, a list's text or icon vertices in the order its
+    /// batches draw them, sampling `atlas`. `None` when there are none.
+    pub(crate) fn upload_vertices(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[MsdfVertex],
+        atlas: MsdfAtlas,
+    ) -> Option<PreparedMsdf> {
+        let offset = Self::write_vertices(
+            &mut self.vbo,
+            &mut self.retired_vbos,
+            &mut self.upload_stats,
+            device,
+            queue,
+            vertices,
+        );
+        self.run(offset, vertices.len(), atlas)
+    }
+
+    /// Write `vertices` into `vbo` after this frame's earlier runs (so a run
+    /// doesn't alias one uploaded earlier in the same submit, which would read
+    /// the last write at draw time), returning where they went; nothing when
+    /// empty. Takes the fields it writes rather than `self`, so vertices kept
+    /// in `prepared` can be written without a copy.
+    fn write_vertices(
+        vbo: &mut FrameArena,
+        retired: &mut Vec<wgpu::Buffer>,
+        stats: &mut RenderStats,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[MsdfVertex],
+    ) -> Option<u64> {
+        (!vertices.is_empty()).then(|| {
+            vbo.write(
+                device,
+                queue,
+                bytemuck::cast_slice(vertices),
+                retired,
+                stats,
+            )
+        })
+    }
+
+    /// The run of `vertices` vertices written at `offset`, sampling `atlas`.
+    fn run(&self, offset: Option<u64>, vertices: usize, atlas: MsdfAtlas) -> Option<PreparedMsdf> {
+        let atlas = match atlas {
+            MsdfAtlas::Glyphs => &self.glyph_gpu.bind_group,
+            #[cfg(feature = "phosphor-icons")]
+            MsdfAtlas::Icons => &self.icon_gpu.bind_group,
+        };
+        Some(PreparedMsdf {
+            vbo: self.vbo.buffer().clone(),
+            offset: offset?,
+            vertices: vertices as u32,
+            atlas: atlas.clone(),
             uniform: self.uniform.bind_group().clone(),
             uniform_offset: self.uniform_offset as u32,
-        }
+        })
+    }
+
+    /// Draw vertices `vertices` of an uploaded run into `pass`.
+    pub(crate) fn draw_prepared_range(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        run: &PreparedMsdf,
+        vertices: std::ops::Range<u32>,
+    ) {
+        debug_assert!(vertices.end <= run.vertices, "{vertices:?} past the run");
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &run.uniform, &[run.uniform_offset]);
+        pass.set_bind_group(1, &run.atlas, &[]);
+        pass.set_vertex_buffer(0, run.vbo.slice(run.offset..));
+        pass.draw(vertices, 0..1);
+    }
+
+    /// The buffer writes made, and how often a buffer grew, since this was
+    /// last asked (or since [`begin_frame`](Self::begin_frame)): only the
+    /// `buffer_*` counters are set.
+    pub(crate) fn take_upload_stats(&mut self) -> RenderStats {
+        std::mem::take(&mut self.upload_stats)
     }
 
     /// Draw an uploaded run into `pass`. Everything it binds was captured at
@@ -1079,135 +1115,17 @@ impl TextRenderer {
         pass.draw(0..run.vertices, 0..1);
     }
 
-    /// Build glyph quads for all text blocks, generating any unseen glyphs into the
-    /// atlas. Returns the vertex list (6 verts/glyph, triangle list).
-    fn build_vertices(&mut self, texts: &[TextBlock]) -> Vec<MsdfVertex> {
-        #[cfg(feature = "tracy")]
-        let _span = tracing::info_span!("gameui_text_shape").entered();
-
-        let px_range = self.atlas.px_range();
-
-        // First pass: resolve every block to a list of `GlyphPlacement`s. The
-        // layouts come from the font system shared with the measurers, which
-        // shapes through cosmic-text only for a layout it doesn't keep — so a
-        // block measured for layout earlier this frame, or drawn on an earlier
-        // one, is not shaped again. We resolve uv only *after* this pass,
-        // because glyph generation can grow the atlas (changing the size uv
-        // divides by) — pixel regions stay valid (top-left origin) but uv must use
-        // the final size.
-        //
-        // The font system stays locked for the whole pass, including drawing
-        // new glyphs into the atlas (~1.5 ms each, once per glyph): a placed
-        // glyph borrows its layout from the shared cache, and its outline
-        // comes from the font system. Measuring and drawing run on one thread,
-        // so nothing waits on it; a renderer on another thread sharing this
-        // handle would wait for the pass.
-        let mut placements: Vec<GlyphPlacement> = Vec::new();
-        let grid = self.pixel_grid();
-        let fs_handle = Arc::clone(&self.font_system);
-        let mut shared = fs_handle.lock().expect("FontSystem poisoned");
-        for block in texts {
-            if block.content.is_empty() {
-                continue;
-            }
-            let (layout, fs) =
-                shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
-            append_placements(
-                &mut self.atlas,
-                &mut self.font_keys,
-                &mut self.next_font_key,
-                fs,
-                block,
-                &block.spans,
-                &layout.glyphs,
-                grid,
-                &mut placements,
-            );
-        }
-        drop(shared);
-
-        // Second pass: resolve uv against the final atlas size and emit quads in
-        // back-to-front sweeps so every glyph's shadow/glow sits behind ALL fills:
-        //   1. shadows  2. glow  3. fill (+ outline)
-        let (aw, ah) = (self.atlas.width(), self.atlas.height());
-        let mut verts: Vec<MsdfVertex> = Vec::with_capacity(placements.len() * 6);
-
-        for p in &placements {
-            if let Some((color, offset, softness)) = p.shadow {
-                // A shadow is a fill with widened AA; cap the blur to the field reach.
-                let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
-                push_glyph_quad(
-                    &mut verts,
-                    p,
-                    aw,
-                    ah,
-                    px_range,
-                    &QuadStyle {
-                        fill: color,
-                        outline: [0.0; 4],
-                        outline_width: 0.0,
-                        softness: softness.min(safe),
-                        offset,
-                    },
-                );
-            }
-        }
-        for p in &placements {
-            if let Some((color, radius)) = p.glow {
-                // The glow is a grown, soft, fill-less halo. Cap its band (width +
-                // softness) to the field's valid reach so it follows the glyph instead
-                // of filling the tile rectangle (graceful degradation at small sizes).
-                let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
-                let radius = radius.min(safe / 1.5);
-                let softness = (radius * 0.5).max(0.5).min((safe - radius).max(0.0));
-                push_glyph_quad(
-                    &mut verts,
-                    p,
-                    aw,
-                    ah,
-                    px_range,
-                    &QuadStyle {
-                        fill: [0.0; 4],
-                        outline: color,
-                        outline_width: radius,
-                        softness,
-                        offset: [0.0, 0.0],
-                    },
-                );
-            }
-        }
-        for p in &placements {
-            let (outline, outline_width) = p.outline.unwrap_or(([0.0; 4], 0.0));
-            // Cap the outline thickness to the field reach to avoid tile-fill artifacts.
-            let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
-            push_glyph_quad(
-                &mut verts,
-                p,
-                aw,
-                ah,
-                px_range,
-                &QuadStyle {
-                    fill: p.fill,
-                    outline,
-                    outline_width: outline_width.min(safe),
-                    softness: 0.0,
-                    offset: [0.0, 0.0],
-                },
-            );
-        }
-        verts
-    }
-
     /// (Re)upload the atlas pixels to the GPU if the CPU atlas changed. Recreates
     /// the texture + bind group when the atlas has grown.
     fn upload_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_text_atlas_upload").entered();
         self.glyph_gpu
-            .upload(device, queue, &self.atlas_bgl, &mut self.atlas);
+            .upload(device, queue, &self.atlas_bgl, &mut self.cpu.atlas);
     }
 
-    /// Prepare and render text in a pass of its own.
+    /// Prepare and render text in a pass of its own, its blocks drawn as one
+    /// command (every shadow, then every glow, then every fill).
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -1216,57 +1134,11 @@ impl TextRenderer {
         view: &wgpu::TextureView,
         texts: &[TextBlock],
     ) {
-        if let Some(run) = self.upload_texts(device, queue, texts) {
+        self.prepare_texts(device, queue, texts, std::iter::once(0..texts.len() as u32));
+        if let Some(run) = self.upload_text_command(device, queue, 0) {
             let mut pass = crate::render::load_pass(encoder, view, "msdf text pass");
             self.draw_prepared(&mut pass, &run);
         }
-    }
-
-    /// Shape and upload a batch of text, ready for
-    /// [`draw_prepared`](Self::draw_prepared). `None` when nothing draws.
-    pub(crate) fn upload_texts(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        texts: &[TextBlock],
-    ) -> Option<PreparedMsdf> {
-        if texts.is_empty() {
-            return None;
-        }
-
-        #[cfg(feature = "tracy")]
-        let _span = tracing::info_span!("gameui_text_render").entered();
-
-        let verts = self.build_vertices(texts);
-        // Glyph generation may have dirtied / grown the atlas — upload before drawing.
-        self.upload_atlas(device, queue);
-
-        if verts.is_empty() {
-            return None;
-        }
-        let atlas = self.glyph_gpu.bind_group.clone();
-        Some(self.upload_vertices(device, queue, &verts, atlas))
-    }
-
-    /// Ensure `vbo` can hold `bytes` starting at the current frame offset, and
-    /// return the byte offset to write/draw this pass at. Grows by allocating a
-    /// fresh buffer when needed; earlier passes keep referencing the old buffer
-    /// (held alive by the encoder), so their data stays valid.
-    fn ensure_vbo_capacity(&mut self, device: &wgpu::Device, bytes: u64) -> u64 {
-        let offset = self.vbo_offset;
-        let needed = offset + bytes;
-        if needed > self.vbo_capacity {
-            self.vbo_capacity = needed.next_power_of_two();
-            let replacement = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("msdf text vbo"),
-                size: self.vbo_capacity,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.retired_vbos
-                .push(std::mem::replace(&mut self.vbo, replacement));
-        }
-        offset
     }
 }
 
@@ -1292,7 +1164,7 @@ fn color_to_rgba(c: Color) -> [f32; 4] {
 /// Each inserted `'\n'` is one byte. A glyph's offset is per-buffer-line, so the
 /// caller's content byte is recovered as `line_start[line_i] + glyph.start -
 /// line_i` — the shaped line base, minus the `line_i` separators that precede the
-/// cluster (the correction applied in `build_vertices`). See
+/// cluster (the correction applied when its glyphs are placed). See
 /// [`TextBlock::with_vertical`].
 pub(crate) fn vertical_stack_string(s: &str) -> String {
     s.graphemes(true).collect::<Vec<_>>().join("\n")
@@ -1405,7 +1277,7 @@ pub enum GlyphSnap {
 /// device pixels from the target's top-left corner. Snapping in canvas space
 /// instead would land off-grid on any HiDPI output or scrolled view.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct PixelGrid {
+pub(crate) struct PixelGrid {
     snap: GlyphSnap,
     scale: f32,
     view_origin: [f32; 2],
@@ -1415,6 +1287,15 @@ struct PixelGrid {
 }
 
 impl PixelGrid {
+    pub(crate) fn new(snap: GlyphSnap, scale: f32, view_origin: [f32; 2], hint: bool) -> Self {
+        Self {
+            snap,
+            scale,
+            view_origin,
+            hint,
+        }
+    }
+
     /// Round `v` — a canvas coordinate along `axis` (0 = x, 1 = y) — to the
     /// nearest whole device pixel.
     fn round(&self, v: f32, axis: usize) -> f32 {
@@ -3808,15 +3689,16 @@ impl TextBlock {
 #[cfg(test)]
 mod tests {
     use super::{
-        CaretPos, FontHandle, FontVMetrics, GlyphSnap, LINE_HEIGHT_RATIO, MsdfVertex, PixelGrid,
-        SelRect, TextAlign, TextBlock, TextDirection, TextMeasurer, TextRenderer, TextSpan,
-        TextStyleRange, Underline, VisualGlyph, WrapMode, byte_at_point, byte_on_adjacent_line,
-        caret_for_byte, color_to_rgba, cosmic_align, direction_prefix, ellipsize_to_width,
-        field_reach, has_cjk, has_lowercase, load_font_bytes, resolve_range_color,
-        resolve_span_color, selection_rects, shared_font_system, text_caret_layout,
-        text_cursor_positions, text_visual_layout, vcentered_line_y, vertical_stack_string,
-        visual_caret_neighbor,
+        CaretPos, FontHandle, FontVMetrics, GlyphSnap, LINE_HEIGHT_RATIO, PixelGrid, SelRect,
+        TextAlign, TextBlock, TextDirection, TextMeasurer, TextSpan, Underline, VisualGlyph,
+        WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
+        cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
+        load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
+        shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
+        vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
+    #[cfg(feature = "bundled-font")]
+    use super::{MsdfVertex, TextStyleRange};
     use crate::render::{GlyphSizing, MAX_HINTED_PX};
     use crate::shaping::{LayoutSpec, LayoutStats, shape_layout};
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
@@ -4744,8 +4626,8 @@ mod tests {
     fn forced_rtl_right_flushes_neutral_content() {
         // A forced-RTL base direction makes a line flush to the right edge (cosmic
         // lays an RTL paragraph out from `line_width`), so even Latin content is
-        // pushed rightward versus the LTR default. Mirrors `build_vertices`'
-        // prefix mechanism without a GPU.
+        // pushed rightward versus the LTR default. Mirrors the renderer's
+        // prefix mechanism.
         let fs = shared_font_system();
         let mut shared = fs.lock().unwrap();
         let guard = shared.font_system();
@@ -4937,7 +4819,7 @@ mod tests {
 
     #[test]
     fn alignment_shifts_leftmost_glyph_within_max_width() {
-        // Mirrors the shaping in `build_vertices`: a short line in a wide box
+        // Mirrors the renderer's shaping: a short line in a wide box
         // moves rightward under Center then Right. Asserting on cosmic-text's
         // per-glyph x (which the renderer adds to `block.x`) keeps this GPU-free.
         let fs = shared_font_system();
@@ -5323,59 +5205,82 @@ mod tests {
         assert_eq!(pos.last().map(|(i, _)| *i), Some(6));
     }
 
-    // ----- Shaped-text cache (GPU-gated, like the chrome parity test) -----
+    // ----- Shaped-text cache -----
 
-    /// Build a headless `TextRenderer` + a bundled Plex Sans handle, or `None` if
-    /// no GPU adapter is available (so the `#[ignore]`d tests below no-op safely).
-    fn headless_renderer() -> Option<(wgpu::Device, wgpu::Queue, TextRenderer, FontHandle)> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("text-cache test device"),
-                ..Default::default()
-            },
-            None,
-        ))
-        .ok()?;
+    #[cfg(feature = "bundled-font")]
+    /// The CPU half of a text renderer: all that drawing text needs before
+    /// the GPU, so these tests need none.
+    struct Prep {
+        cpu: super::MsdfCpu,
+        prepared: super::MsdfPrepared,
+    }
+
+    #[cfg(feature = "bundled-font")]
+    impl Prep {
+        /// The vertices drawing `blocks` as one command uploads, placed as a
+        /// new renderer places them.
+        fn build_vertices(&mut self, blocks: &[TextBlock]) -> Vec<MsdfVertex> {
+            let grid = PixelGrid {
+                snap: GlyphSnap::default(),
+                scale: 1.0,
+                view_origin: [0.0, 0.0],
+                hint: true,
+            };
+            self.cpu.prepare_texts(
+                &mut self.prepared,
+                grid,
+                blocks,
+                std::iter::once(0..blocks.len() as u32),
+            );
+            self.prepared.text_vertices.clone()
+        }
+
+        fn clear_shape_cache(&mut self) {
+            self.cpu
+                .font_system
+                .lock()
+                .expect("FontSystem poisoned")
+                .clear_caches();
+        }
+    }
+
+    #[cfg(feature = "bundled-font")]
+    /// A text renderer's CPU half on a font system of its own, and a bundled
+    /// Plex Sans handle.
+    fn text_prep() -> (Prep, FontHandle) {
         let fs = shared_font_system();
         let font = super::register_bundled_fonts(&fs).expect("register bundled fonts");
-        let renderer = TextRenderer::with_font_system(
-            &device,
-            &queue,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            fs,
-        );
-        Some((device, queue, renderer, font))
+        let prep = Prep {
+            cpu: super::MsdfCpu::new(fs),
+            prepared: super::MsdfPrepared::default(),
+        };
+        (prep, font)
     }
 
+    #[cfg(feature = "bundled-font")]
     /// Layouts kept in the renderer's shared font system.
-    fn cache_total(r: &TextRenderer) -> usize {
-        r.font_system.lock().unwrap().layout_stats().layouts
+    fn cache_total(r: &Prep) -> usize {
+        r.cpu.font_system.lock().unwrap().layout_stats().layouts
     }
 
-    /// Reinterpret a vertex slice as raw bytes for exact-equality comparison
-    /// (`MsdfVertex` is `Pod` but not `PartialEq`).
+    #[cfg(feature = "bundled-font")]
+    /// Reinterpret a vertex slice as raw bytes, to compare vertices bit for
+    /// bit.
     fn vbytes(v: &[MsdfVertex]) -> &[u8] {
         bytemuck::cast_slice(v)
     }
 
+    #[cfg(feature = "bundled-font")]
     fn label(text: &str, font: &FontHandle) -> TextBlock {
         TextBlock::new(text, 40.0, 40.0)
             .with_size(18.0)
             .with_font(font.clone())
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn shape_cache_reuses_layout_and_matches_cold() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         let blocks = [label("Cached label", &font)];
 
         // Cold: shapes and records exactly one entry.
@@ -5389,12 +5294,10 @@ mod tests {
         assert_eq!(vbytes(&cold), vbytes(&warm), "cache must not change pixels");
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn moving_block_reuses_cache_and_shifts() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         let a = r.build_vertices(&[label("Move me", &font)]);
         let mut moved = label("Move me", &font);
         moved.x += 100.0;
@@ -5413,12 +5316,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn distinct_attributes_create_distinct_entries() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // Each variant differs in exactly one keyed attribute, so each is a miss.
         let base = label("Same", &font);
         let mut bigger = label("Same", &font);
@@ -5454,12 +5355,10 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn direction_is_part_of_the_shape_cache_key() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // Same content/metrics, three base directions → three distinct entries.
         let auto = label("dir", &font);
         let ltr = label("dir", &font).with_direction(TextDirection::Ltr);
@@ -5472,12 +5371,10 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn span_colours_survive_the_direction_prefix() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // A two-span string: the direction prefix shifts cosmic's byte offsets,
         // but `byte_start` is corrected back so per-span colour resolution is
         // unaffected. The set of emitted fills must match between Auto and Rtl.
@@ -5515,13 +5412,12 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn a_block_measured_for_layout_is_drawn_without_shaping_it_again() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
-        let mut measurer = TextMeasurer::with_font_system(std::sync::Arc::clone(&r.font_system));
+        let (mut r, font) = text_prep();
+        let mut measurer =
+            TextMeasurer::with_font_system(std::sync::Arc::clone(&r.cpu.font_system));
         let block = label("Measured, then drawn", &font)
             .with_max_width(90.0)
             .with_align(TextAlign::Center);
@@ -5548,12 +5444,10 @@ mod tests {
         assert_eq!(vbytes(&verts), vbytes(&r.build_vertices(&[block])));
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn clear_shape_cache_forces_reshape_with_identical_result() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         let blocks = [label("Reshape", &font)];
         let before = r.build_vertices(&blocks);
         assert_eq!(cache_total(&r), 1);
@@ -5575,12 +5469,10 @@ mod tests {
     /// and the vertical shaping branch already do. Without the rebase, every
     /// line after the first resolves style ranges against earlier lines' bytes
     /// and syntax highlighting drifts off the text it describes.
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn style_ranges_map_to_the_correct_glyphs_across_lines() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // Two lines; the second starts at byte 4 ("RED\n"). Only the first
         // line's bytes carry a style range, so only "RED" may render red. The
         // block colour is white — any red on line 2 is the bug.
@@ -5626,12 +5518,10 @@ mod tests {
     /// the *shaped* text (mark included), and the prefix is subtracted once from
     /// the absolute byte — so line 2's glyphs must land on caller bytes 8.. and
     /// stay white; the styled range still colours only line 1's "RED".
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn style_ranges_stay_aligned_with_a_direction_prefix() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         let content = "RED\nBLUE";
         let red = [1.0, 0.0, 0.0, 1.0];
         let block = label(content, &font)
@@ -5658,12 +5548,10 @@ mod tests {
     /// visual rows of the *same* buffer line. Every row's glyphs must keep
     /// addressing their true content bytes — the styled "RED" prefix stays red
     /// and the rest falls back to the block colour, never the reverse.
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn style_ranges_survive_soft_wrapping() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // Wide-ish glyphs at 18px: force a wrap after ~3 glyphs.
         let content = "REDBLUE";
         let red = [1.0, 0.0, 0.0, 1.0];
@@ -6014,9 +5902,9 @@ mod tests {
 
     /// Pull the cached `ShapedGlyph`s for a block's content, sorted by `rel_y`
     /// then `rel_x` (visual top→bottom, left→right within a row).
-    #[cfg(test)]
-    fn cached_vertical_glyphs(r: &TextRenderer, content: &str) -> Vec<(f32, f32, u32)> {
-        let shared = r.font_system.lock().unwrap();
+    #[cfg(feature = "bundled-font")]
+    fn cached_vertical_glyphs(r: &Prep, content: &str) -> Vec<(f32, f32, u32)> {
+        let shared = r.cpu.font_system.lock().unwrap();
         let mut out: Vec<(f32, f32, u32)> = shared
             .kept_layouts(content)
             .flat_map(|layout| layout.glyphs.iter())
@@ -6026,12 +5914,10 @@ mod tests {
         out
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn vertical_stacks_glyphs_top_to_bottom() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         let content = "あいう";
         let block = TextBlock::new(content, 0.0, 0.0)
             .with_size(24.0)
@@ -6050,12 +5936,10 @@ mod tests {
         assert_eq!(glyphs[2].2, 6);
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn vertical_centers_narrow_glyph_in_column() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // A wide full-width kanji over a thin Latin 'l': the narrow row gets pushed
         // right so it centers under the wide one (manual in-column centering).
         let content = "漢l";
@@ -6075,12 +5959,10 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "bundled-font")]
     #[test]
-    #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
     fn vertical_align_center_offsets_column_within_max_width() {
-        let Some((_d, _q, mut r, font)) = headless_renderer() else {
-            return;
-        };
+        let (mut r, font) = text_prep();
         // Full-width kana (equal advance) so per-row centering is zero — any x
         // offset is purely the column being centred within `max_width`.
         let content = "あいう";
@@ -6113,6 +5995,7 @@ mod tests {
 #[cfg(all(test, feature = "phosphor-icons"))]
 mod icon_tests {
     use super::*;
+    use crate::render::icon_font_data;
 
     #[test]
     fn fit_centered_em_full_glyph_maps_to_smaller_dimension() {
@@ -6173,7 +6056,7 @@ mod icon_tests {
     fn icon_atlas_generates_and_caches_a_tile() {
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
         let g = PhosphorIcon::Plus.glyph().expect("Plus resolves");
-        let data = icon_font_snapshot()[g.font.index() as usize];
+        let data = icon_font_data(g.font).expect("registered");
         let key = g.font.index() as u64;
 
         let t1 = atlas
@@ -6213,7 +6096,8 @@ mod icon_tests {
             glyph_id: phosphor.glyph_id,
         };
 
-        let fonts = icon_font_snapshot();
+        let mut fonts = Vec::new();
+        icon_font_snapshot(&mut fonts);
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
         let a = atlas
             .glyph(
@@ -6242,7 +6126,7 @@ mod icon_tests {
         use crate::affine::Affine2;
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
         let g = PhosphorIcon::Check.glyph().unwrap();
-        let data = icon_font_snapshot()[g.font.index() as usize];
+        let data = icon_font_data(g.font).expect("registered");
         let tile = atlas
             .glyph(
                 g.font.index() as u64,

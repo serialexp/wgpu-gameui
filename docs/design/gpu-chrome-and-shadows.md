@@ -2,7 +2,7 @@
 
 Status: implemented; verification complete
 Owner: Bart
-Last updated: 2026-09-21
+Last updated: 2026-10-16
 
 ## Implementation status
 
@@ -697,6 +697,14 @@ roots; the arbitrary-affine path retains screen-isotropic semantics.
   soup/chrome/text interleaving preserves immediate paint order;
 - `clear()` retains capacity and resets shadow state;
 - primitive/debug/render counts include shadows.
+
+> **2026-10-16 update:** "exact painter order" and "immediate paint order"
+> above now hold only where draws overlap. Draw-call batching
+> (`docs/design/draw-call-batching.md`) regroups draws that can't touch the
+> same pixel, so a list's analytic records draw in batch order, and chrome
+> separated by text or soup in paint order can share one draw call. The
+> paint-order path (`UiRenderer::set_paint_order`, behind the
+> `paint-order-oracle` feature) still draws as described here.
 
 ### GPU tests
 

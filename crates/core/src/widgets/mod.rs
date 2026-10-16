@@ -33,6 +33,7 @@ mod drop_zone;
 mod dropdown;
 mod empty_state;
 mod field_label;
+#[cfg(feature = "phosphor-icons")]
 mod file_dialog;
 mod file_field;
 mod filter_chip;
@@ -54,6 +55,7 @@ mod list;
 #[cfg(feature = "phosphor-icons")]
 mod list_view;
 mod material;
+mod media;
 mod menu_screens;
 mod menubar;
 mod meter;
@@ -146,6 +148,9 @@ pub use drag_list::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListOutput, DragLis
 #[cfg(feature = "phosphor-icons")]
 pub use draw_list::IconMsdf;
 pub(crate) use draw_list::PaintCmd;
+pub(crate) use draw_list::{
+    ANALYTIC_KIND_CHROME, ANALYTIC_KIND_SEGMENT, ANALYTIC_KIND_SHADOW, ANALYTIC_KIND_STRIPES,
+};
 pub use draw_list::{
     AnalyticInstance, ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw,
     NineSliceDraw, NineSliceId, PrimCounts, StripeInstance, Stripes, Vertex,
@@ -154,6 +159,7 @@ pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use empty_state::{EmptyGlyph, EmptyState};
 pub use field_label::FieldLabel;
+#[cfg(feature = "phosphor-icons")]
 pub use file_dialog::{
     Clock, EntryThumb, FavouriteFolder, FileDialog, FileDialogEvent, FileDialogMode,
     FileDialogOutput, FileDialogState, FileEntry, FileKind, FilePlace, FileSource, FileView,
@@ -199,6 +205,12 @@ pub use scatter_plot::{
 #[cfg(any(test, feature = "phosphor-icons"))]
 pub(crate) use material::sheen_over;
 pub use material::{Material, Tone, deep_well_ink, draw_deep_well};
+pub use media::{
+    MediaSource, Picture, PlayState, SPEEDS, Scrubber, ScrubberOutput, format_speed, format_time,
+    next_speed, toggle as toggle_playback,
+};
+#[cfg(feature = "phosphor-icons")]
+pub use media::{PlayButton, VideoPlayer, VideoPlayerOutput, VideoPlayerState};
 pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
 pub use menubar::{
     AccelPlatform, Accelerator, ActivatedItem, Key, MAX_MENU_DEPTH, Menu, MenuBar, MenuBarId,

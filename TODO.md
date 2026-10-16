@@ -15,6 +15,16 @@ still open.
 
 ---
 
+## Code editor follow-ups (2026-10-16)
+
+- [ ] **Show IME composition** (preedit) at the caret in `CodeEditor`.
+- [ ] **Word delete and line moves**: Alt/Ctrl-Backspace, Alt-Up/Down.
+- [ ] **Long non-ASCII lines** are shaped whole when in view; window them as ASCII ones are.
+- [ ] **Sideways scroll width never shrinks** (widest line seen so far).
+- [ ] **Injections** (Markdown fences, script in HTML) and **WGSL** (needs a grammar on
+      Tree-sitter 0.27).
+- [ ] **Diagnostics and completion** from a language server.
+
 ## Video phase 1 follow-ups (review, 2026-10-14)
 
 - [ ] **Change a YUV sprite's colour settings** without making a new sprite
@@ -31,14 +41,58 @@ still open.
       `key_escape`), so one Escape both cancels a capture and reaches anything
       else that takes `nav.cancel` (a full-screen owner, focus).
 
-## Core doesn't build without its default features (noted 2026-10-15)
+## Video phase 4 follow-ups (2026-10-16)
 
-- [ ] **`cargo build -p wgpu-gameui --no-default-features` fails**: the file
-      dialog (`widgets/file_dialog/{mod,paint}.rs`) uses `Icon`, `IconKey::new`,
-      `PhosphorIcon`, `SearchField` and `Thumb`, which only exist with
-      `phosphor-icons`. Gate the dialog on the feature, or give it a path
-      without icons; then the media crate can depend on core with
-      `default-features = false`. CI should build that combination.
+- [ ] **"Can't play this video" is in `DangerText`.** Forge colours it
+      `--danger-rule`, which has no `StyleKey`; add one if the two differ
+      enough to matter.
+- [ ] **The placeholder's time has no letter spacing.** Forge spaces it
+      0.12em; `mono_block` has no tracking.
+- [ ] **The player's frame isn't clipped to its border's rounded corners.**
+      A picture's corner pixels show just outside the curve; `DrawList` has
+      no rounded clip.
+- [ ] **Full screen can wait forever for a window that never changes.**
+      `FullscreenState` ignores a report contradicting the change it is
+      `awaiting`, and only a report of that state clears it. If the app's
+      window change brings no resize (a window already the screen's size),
+      no report comes, and a later real "not full screen" (the OS's own
+      key) is dropped as stale: the owner keeps the screen over a windowed
+      window until Escape. Needs some way to end the wait that isn't a
+      timer: the app reporting the window's state after applying the
+      change, say, if that can be told apart from macOS's stale reports.
+
+## Video phase 3 follow-ups (review, 2026-10-16)
+
+- [ ] **Pictures dropped around a late device start.** On Bart's Mac
+      (a 44.1 kHz output with about 320 ms of latency, opening in 1.3 to
+      2.4 s), the real-device test shows 8 of 60 pictures dropped, likely
+      around the restart after the device opens late. Look at what the clock
+      does there.
+- [ ] **Open the device before it's needed.** The device opens when the
+      player does, and a Bluetooth one took up to 2.4 s: an app that plays
+      right after opening waits up to a second, then plays without sound
+      until it's ready. Sharing one open device between players would also
+      help.
+- [x] **agent-ui needs the media profile lines.** `[profile.dev.package]`
+      only applies at the workspace root: an app using `wgpu-gameui-media`
+      should copy gameui's `opt-level = 3` for `wsola`, `rubato`, `realfft`
+      and `rustfft`, or a debug build may not stretch sound in real time.
+      (Done in agent-ui's root `Cargo.toml`, with `rust_h264` and
+      `symphonia-codec-aac`.)
+- [ ] **Reopen the device.** Any `cpal` stream error ends the sound for good
+      (the picture goes on by the wall clock), including errors that don't
+      stop the stream, and a new default output (headphones plugged in) isn't
+      followed. Reopening on failure and on a default-device change would fix
+      both.
+- [ ] **Pause, seek and a new speed cut the sound.** What follows fades in,
+      but what stops doesn't fade out: the stream pauses (or the ring is
+      skipped) mid-wave, which can click. A fade-out needs the callback to
+      play a short ramp before the pause takes effect.
+- [ ] **Sound starved mid-play shows as playing.** If the worker falls behind
+      on sound, the clock waits with the device, but the state stays
+      `Playing`, not `Loading`.
+- [ ] **The clock can step back a few milliseconds** when a callback runs
+      late (the frame heard is set as is). Harmless for picture choice.
 
 ## Video phase 2 follow-ups (2026-10-15)
 
@@ -65,7 +119,9 @@ still open.
 
 - [ ] **Rerun the chart benches** in `benches/ui_stress.rs` (`LineChart`,
       `ScatterPlot`, `BarChart`'s overlay) on a quiet machine: the timings
-      taken on 2026-10-09 were under heavy load.
+      taken on 2026-10-09 were under heavy load. The same goes for the
+      `batching` group's times recorded on 2026-10-16 in
+      `docs/design/draw-call-batching.md` (load average 10 to 25).
 
 ## Multi-stop gradients (noted 2026-09-29)
 
@@ -433,15 +489,21 @@ harden those foundations rather than create parallel replacements.
 
 ## Learned from gpui (compared with ~/Projects/gpuix, 2026-10-08)
 
-- [ ] **P1 — Measure draw-call batching before building anything.** gameui
-      draws in strict paint order, so a screen of buttons alternates "box,
-      text, box, text": roughly 2,000 draw calls for 1,000 buttons. gpui
-      gives each primitive an order number from what it overlaps and then
-      draws every non-overlapping box in one batch and every glyph in
-      another. Check first with `RenderStats::draw_calls` /
-      `fragmentation_ratio` in the `ui_stress` bench whether this explains
-      part of the `frame_render` slowdown above; only then decide whether
-      overlap-based reordering is worth it.
+- [ ] **P2 — Cost of boxing soup per triangle.** Batching's draw boxes
+      (`render/draw_box.rs`) bound a soup command by visiting every triangle
+      and its three clips. A 10k-point polyline drawn as soup pays that each
+      frame. Measure it with the Phase 6 bench (`docs/design/draw-call-batching.md`)
+      and, if it shows, cache the bound with the command or bound the
+      vertices in one pass. Measured 2026-10-16 (`batching/soup_polygon`, a
+      busy machine): about 16 ns per triangle, 0.44 ms against 0.28 ms in
+      paint order for one 10k-triangle command. Bart to decide whether that
+      is worth the cache.
+- [ ] **P2 — Skip ordering a list of one key.** When every unit of a list
+      has the same batch key, ordering can't change anything: the units
+      draw as one batch, in paint order. The plan still boxes
+      and orders each unit, which costs a 10k-segment polyline about 0.6 ms
+      to encode over paint order (`batching/polyline`, 2026-10-16). The
+      boxes are still needed to cull; the grid isn't.
 - [ ] **P1 — `List` with measured row heights and an item-anchored scroll
       position.** `List` only handles fixed row heights. gpui's list keeps
       its position as "item N, this far into it" instead of a pixel offset,

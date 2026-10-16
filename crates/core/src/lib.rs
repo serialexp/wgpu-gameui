@@ -64,6 +64,7 @@ mod markdown;
 mod shaping;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax;
+mod syntax_theme;
 mod text;
 mod text_select;
 mod text_units;
@@ -74,7 +75,8 @@ pub use shaping::{LayoutStats, SharedFontSystem};
 #[cfg(feature = "syntax-lua")]
 pub use syntax::SyntaxConfigurationError;
 #[cfg(feature = "syntax-highlighting")]
-pub use syntax::{HighlightConfiguration, SyntaxHighlighting, SyntaxTheme};
+pub use syntax::{HighlightConfiguration, SyntaxHighlighting};
+pub use syntax_theme::SyntaxTheme;
 pub use text::{
     CaretPos, FaceRange, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign,
     TextBlock, TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer, TextShadow,
@@ -116,6 +118,12 @@ mod style;
 mod theme;
 mod ui_context;
 mod widgets;
+
+/// Counts allocations, for the tests that check a path allocates nothing
+/// (the one here plans lists with text, so needs the bundled font).
+#[cfg(all(test, feature = "bundled-font"))]
+#[path = "../tests/support/counting_alloc.rs"]
+mod counting_alloc;
 
 pub use affine::Affine2;
 pub use animation::{AnimSlot, AnimationState, Easing, ease, lerp, lerp_color};

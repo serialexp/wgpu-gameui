@@ -97,12 +97,20 @@ fn corrected_coverage(coverage: f32, rgb: vec3<f32>) -> f32 {
     return saturate(a + a * (1.0 - a) * correction);
 }
 
+// Whether `p` lies outside `clip` (`x, y, width, height`). A clip of zero or
+// negative size holds nothing: nested clips that don't overlap make one, and
+// without this test a pixel centre exactly on it would still draw.
+fn outside_clip(p: vec2<f32>, clip: vec4<f32>) -> bool {
+    return clip.z <= 0.0 || clip.w <= 0.0
+        || p.x < clip.x || p.x > clip.x + clip.z
+        || p.y < clip.y || p.y > clip.y + clip.w;
+}
+
 @fragment
 fn fs_msdf(in: VsOut) -> @location(0) vec4<f32> {
     if (in.clip_enabled > 0.5) {
         let p = in.frag_pos;
-        if (p.x < in.clip.x || p.x > in.clip.x + in.clip.z
-            || p.y < in.clip.y || p.y > in.clip.y + in.clip.w) {
+        if (outside_clip(p, in.clip)) {
             discard;
         }
     }

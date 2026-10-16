@@ -12,8 +12,6 @@
 //! measured by an ignored test that only prints:
 //! `cargo test --release --test group_list_performance -- --ignored --nocapture`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -23,6 +21,11 @@ use wgpu_gameui::{
     GroupRowKind, Ink, InputState, Status, StyleResolver, TextSize, Theme, Thumb,
 };
 
+#[path = "support/counting_alloc.rs"]
+mod counting_alloc;
+
+use counting_alloc::count_allocations;
+
 const GROUPS: usize = 300;
 const TOTAL_ROWS: usize = 10_000;
 const VIEW: Rect = Rect {
@@ -31,55 +34,6 @@ const VIEW: Rect = Rect {
     width: 272.0,
     height: 720.0,
 };
-
-struct ThreadCountingAllocator;
-
-thread_local! {
-    // Only the measured thread counts, so the test harness and other tests
-    // running in parallel can't make the assertion flaky.
-    static COUNT_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
-    static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-fn record_allocation() {
-    COUNT_ALLOCATIONS.with(|enabled| {
-        if enabled.get() {
-            ALLOCATION_COUNT.with(|count| count.set(count.get() + 1));
-        }
-    });
-}
-
-unsafe impl GlobalAlloc for ThreadCountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record_allocation();
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record_allocation();
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        record_allocation();
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: ThreadCountingAllocator = ThreadCountingAllocator;
-
-fn count_allocations<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    ALLOCATION_COUNT.with(|count| count.set(0));
-    COUNT_ALLOCATIONS.with(|enabled| enabled.set(true));
-    let value = f();
-    COUNT_ALLOCATIONS.with(|enabled| enabled.set(false));
-    (value, ALLOCATION_COUNT.with(Cell::get))
-}
 
 /// The caller's side of a sidebar: owned strings the rows borrow.
 enum Source {
