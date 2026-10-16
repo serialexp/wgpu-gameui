@@ -11,6 +11,11 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/serialexp/wgpu-gameui"
 
+# rust_h264 0.4.0 rounds chroma DC where the standard doesn't (chroma ±1 at low
+# QP); the fix is on our fork's branch until it is released upstream.
+[patch.crates-io]
+rust_h264 = { git = "https://github.com/serialexp/rust_h264", branch = "fix/chroma-dc-dequant-rounding" }
+
 # Glyph and icon MSDFs are generated on the CPU by fdsm; unoptimised, the
 # atlas warm-up and the MSDF quality tests run about thirty times slower.
 [profile.dev.package.fdsm]

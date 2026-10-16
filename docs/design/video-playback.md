@@ -85,13 +85,14 @@ samples with a gated reader (`test_fixtures::Gate`), so these orderings are repr
 
 Phase 2 leftover:
 
-- [ ] `rust_h264` 0.4.0 gets chroma wrong by ±1 at low chroma QP: `dequant_chroma_dc`
+- [x] `rust_h264` 0.4.0 gets chroma wrong by ±1 at low chroma QP: `dequant_chroma_dc`
   (`src/residual.rs`) adds a rounding term when `qp_per < 5`, which the standard's eq. 8-330
   doesn't have, and the error carries through the GOP. In `h264_aac.mp4` 15 of 60 pictures
-  differ from ffmpeg; with `*d = d.wrapping_mul(v) >> (5 - qp_per)` all 60 match, and
-  `rust_h264`'s own tests still pass. The test
-  `high_profile_with_b_frames_decodes_as_ffmpeg_does_in_display_order` fails until the fix is
-  carried (how is Bart's call)
+  differed from ffmpeg. Fixed on the fork `serialexp/rust_h264`, branch
+  `fix/chroma-dc-dequant-rounding` (with byte-exact x264 test streams), which the root
+  `Cargo.toml` patches in as a git dependency; all 60 pictures match
+- [ ] Offer that fix upstream (`roticv/rust_h264`) as a PR, and drop the patch once a release
+  carries it
 
 Phase 3, sound:
 
