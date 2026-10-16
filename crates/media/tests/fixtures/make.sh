@@ -2,7 +2,8 @@
 # Makes the test videos in this directory, and ffmpeg's decode of their
 # pictures to check ours against (`*.framemd5`: one MD5 per frame, of its
 # three planes one after the other). Run once; the output is committed, so the tests
-# never need ffmpeg. Made with ffmpeg 6.1.1 and libx264.
+# never need ffmpeg. Made with ffmpeg 6.1.1 and libx264 (short_sound.mp4
+# with ffmpeg 9.0.2, on its own).
 #
 # `make.sh bench` instead makes the clip the decode measurement plays
 # (`cargo test -p wgpu-gameui-media --release -- --ignored --nocapture`):
@@ -68,6 +69,18 @@ ffmpeg "${quiet[@]}" \
   -movflags +faststart -map_metadata -1 -fflags +bitexact -flags:a +bitexact \
   late_video.mp4
 rm -r "$late"
+
+# Sound that ends long before the pictures: a third of a second of it under
+# a second and a half of video, further than the worker decodes pictures
+# ahead, so playing it shows the clock isn't left waiting for sound that
+# won't come.
+ffmpeg "${quiet[@]}" \
+  -f lavfi -i testsrc=size=176x144:rate=25:duration=1.5 \
+  -f lavfi -i 'sine=frequency=440:sample_rate=48000:duration=0.3' \
+  -c:v libx264 -profile:v baseline -pix_fmt yuv420p -g 10 -sc_threshold 0 \
+  -c:a aac -b:a 64k -ac 1 -movflags +faststart -map_metadata -1 \
+  -fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
+  short_sound.mp4
 
 # Sound alone: one second of mono AAC-LC in an M4A.
 ffmpeg "${quiet[@]}" \

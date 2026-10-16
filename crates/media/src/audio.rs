@@ -62,7 +62,7 @@ impl AudioBlock {
     }
 }
 
-fn frames_to_nanos(frames: i64, rate: u32) -> i64 {
+pub(crate) fn frames_to_nanos(frames: i64, rate: u32) -> i64 {
     (i128::from(frames) * 1_000_000_000 / i128::from(rate.max(1))) as i64
 }
 

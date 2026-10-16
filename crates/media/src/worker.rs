@@ -56,6 +56,16 @@ pub(crate) struct Queues {
     pub video_done: bool,
     /// Every sample of both tracks since the last seek is decoded.
     pub done: bool,
+    /// All the sound before this (nanoseconds) is queued, or was heard, or
+    /// is silent: the next sound sample's time, `i64::MAX` once the sound
+    /// track is decoded to its end (or there is none). The sound thread
+    /// plays silence up to it rather than waiting.
+    pub sound_known_to: i64,
+    /// How far the sound has been taken (nanoseconds): where the player's
+    /// clock was at its last update, or, if further, how far the sound
+    /// thread has read, which works ahead of the clock by the device's
+    /// latency and what its ring holds.
+    pub played_to: i64,
     /// Why decoding stopped, until the player takes it.
     pub error: Option<MediaError>,
     /// Decoding stopped at an error, taken or not: the worker decodes
@@ -66,6 +76,13 @@ pub(crate) struct Queues {
     /// The player is gone.
     pub stop: bool,
 }
+
+/// While the sound known is less than this ahead of where it has been taken
+/// to, the worker decodes pictures past [`Ahead::frames`]: the clock may be
+/// waiting for that sound (the device plays it), and the pictures queued in
+/// decode order may be what's ahead of it (B-frames, or a high frame rate's
+/// short queue).
+const SOUND_FLOOR: i64 = 300_000_000;
 
 impl Queues {
     fn sound_ahead(&self) -> i64 {
@@ -83,9 +100,10 @@ impl Queues {
     /// Whether the worker has nothing to do until the player takes from the
     /// queues or seeks.
     fn full(&self, ahead: &Ahead, has_video: bool) -> bool {
+        let sound_short = self.sound_known_to.saturating_sub(self.played_to) < SOUND_FLOOR;
         self.done
             || self.failed
-            || self.frames.len() >= ahead.frames
+            || (self.frames.len() >= ahead.frames && !sound_short)
             || (self.sound_ahead() >= nanos(ahead.sound)
                 // With video, never wait on sound while no picture is queued
                 // and more are to come: the player may be waiting for one.
@@ -113,6 +131,8 @@ impl Shared {
                 landed_at: seek_to,
                 video_done: false,
                 done: false,
+                sound_known_to: seek_to,
+                played_to: seek_to,
                 error: None,
                 failed: false,
                 exited: false,
@@ -228,6 +248,7 @@ fn decode(mut container: Container, shared: &Shared, ahead: Ahead) {
             }
             queues.landed_at = plan.target;
             queues.decoded_to = plan.target;
+            queues.sound_known_to = sound_known_to(&sound_samples, plan.sound_from, plan.target);
             match started {
                 Ok(started) => position = Some(started),
                 Err(error) => {
@@ -260,6 +281,7 @@ fn decode(mut container: Container, shared: &Shared, ahead: Ahead) {
             (None, Some(sound)) => decode_sound(&mut container, at, sound, &mut bytes),
             (None, None) => Ok(Decoded::Nothing),
         };
+        let known_to = sound_known_to(&sound_samples, at.next_sound, at.target);
         let finished_video = at.next_video >= video_samples.len();
         let finished = finished_video && at.next_sound >= sound_samples.len();
         let mut wake_app = false;
@@ -297,6 +319,7 @@ fn decode(mut container: Container, shared: &Shared, ahead: Ahead) {
                     wake_app = true;
                 }
             }
+            queues.sound_known_to = known_to;
             if finished_video && !queues.video_done {
                 queues.video_done = true;
                 wake_app = true;
@@ -310,6 +333,15 @@ fn decode(mut container: Container, shared: &Shared, ahead: Ahead) {
             shared.call_waker();
         }
     }
+}
+
+/// How far the sound is known with `next` the next sound sample to decode
+/// after a seek to `target`: to that sample's time (not before the target),
+/// or to the end of time once there is none.
+fn sound_known_to(samples: &[Sample], next: usize, target: i64) -> i64 {
+    samples
+        .get(next)
+        .map_or(i64::MAX, |sample| sample.shown_at.max(target))
 }
 
 /// Decoders ready to decode from where `plan` says. Opening the file

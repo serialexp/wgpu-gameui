@@ -5,6 +5,9 @@
 
 use super::*;
 use crate::container::Sample;
+use crate::convert::Format;
+use crate::device::{Fake, OpenDevice};
+use crate::sound::Segment;
 use crate::test_fixtures::{Gate, bytes, ffmpeg_frames, gated, planes_md5, reader};
 use std::io::Cursor;
 use std::sync::mpsc;
@@ -28,7 +31,7 @@ struct Rig {
 
 impl Rig {
     fn new(name: &str) -> Self {
-        Self::with(Player::from_reader(reader(name)).expect("opens"))
+        Self::with(silent(reader(name)).expect("opens"))
     }
 
     fn with(mut player: Player) -> Self {
@@ -47,7 +50,16 @@ impl Rig {
     /// Fixture `name` read through a [`Gate`].
     fn gated(name: &str, ahead: Ahead) -> Self {
         let (reader, gate) = gated(name);
-        let mut rig = Self::with(Player::with_ahead(reader, ahead).expect("opens"));
+        let mut rig = Self::with(
+            Player::with_options(
+                reader,
+                Options {
+                    ahead,
+                    sound: false,
+                },
+            )
+            .expect("opens"),
+        );
         rig.gate = Some(gate);
         rig
     }
@@ -91,6 +103,141 @@ impl Rig {
     }
 }
 
+/// A player of `reader` that lets its sound go as its time passes, without
+/// a device: the clock runs on the wall.
+fn silent(reader: Box<dyn MediaReader>) -> Result<Player, MediaError> {
+    Player::with_options(
+        reader,
+        Options {
+            sound: false,
+            ..Options::default()
+        },
+    )
+}
+
+/// `h264_aac.mp4` playing its sound (48 kHz stereo) on a fake device.
+fn with_fake_device() -> (Rig, Fake) {
+    on_fake_device("h264_aac.mp4")
+}
+
+/// Fixture `name` playing its sound on a fake device in the sound's own
+/// format.
+fn on_fake_device(name: &str) -> (Rig, Fake) {
+    let track = Container::open(reader(name))
+        .expect("opens")
+        .audio
+        .expect("sound");
+    let device = Fake::new(Format {
+        rate: track.sample_rate,
+        channels: track.channels,
+    });
+    let player =
+        Player::with_device(reader(name), Ahead::default(), Some(device.opener())).expect("opens");
+    (Rig::with(player), device)
+}
+
+/// Play the rig to its end with the fake device playing as made-up time
+/// passes: every 10 ms the device plays the next 10 ms of sound, heard
+/// `latency` later, and the player updates. Returns the pictures shown, in
+/// order.
+fn play_along(rig: &mut Rig, device: &Fake, latency: Duration) -> Vec<i64> {
+    let rate = rig.player.info().sound.expect("sound").0;
+    let step = rate as usize / 100;
+    // Landed at the start (which may have no picture), then playing.
+    rig.update_until(rig.at(0), |player, _| !player.seeking);
+    rig.player.play(rig.at(0));
+    rig.player.update(rig.at(0));
+    let mut shown: Vec<i64> = rig
+        .player
+        .frame()
+        .map(|frame| frame.shown_at)
+        .into_iter()
+        .collect();
+    let limit = Instant::now() + HUNG;
+    // Frames the device has played of the segment playing: a stall starts
+    // a new one, which the sound thread counts from nothing.
+    let mut played = 0;
+    let mut segment = rig.sound().segment();
+    let mut millis = 0;
+    while rig.player.state() != PlaybackState::Ended {
+        assert!(
+            Instant::now() < limit,
+            "never ended: {:?} at {:?}",
+            rig.player.state(),
+            rig.player.time(rig.at(millis))
+        );
+        if rig.sound().segment() != segment {
+            segment = rig.sound().segment();
+            played = 0;
+        }
+        // The sound thread is ahead of the device, as it is ahead of a
+        // real one, unless the sound has ended.
+        while rig.player.state() == PlaybackState::Playing
+            && !rig.sound().ended()
+            && rig
+                .sound()
+                .written()
+                .is_none_or(|written| written < played + step as u64)
+        {
+            assert!(Instant::now() < limit, "the sound thread hung");
+            std::thread::yield_now();
+        }
+        if device.play(step, rig.at(millis) + latency).is_some() {
+            played += step as u64;
+        }
+        millis += 10;
+        let update = rig.player.update(rig.at(millis));
+        if update.new_picture
+            && let Some(frame) = rig.player.frame()
+        {
+            shown.push(frame.shown_at);
+        }
+        if rig.player.state() == PlaybackState::Loading {
+            // Waiting for the worker: let it get on.
+            std::thread::yield_now();
+        }
+    }
+    shown
+}
+
+impl Rig {
+    fn sound(&self) -> &Sound {
+        self.player.sound.as_ref().expect("a sound thread")
+    }
+
+    /// Wait (by looking) until the sound thread has written `frames` frames
+    /// of the playing segment.
+    fn wait_for_sound(&self, frames: u64) {
+        let limit = Instant::now() + HUNG;
+        while self
+            .sound()
+            .written()
+            .is_none_or(|written| written < frames)
+        {
+            assert!(Instant::now() < limit, "the sound thread hung");
+            std::thread::yield_now();
+        }
+    }
+
+    /// Wait (by looking) until `ready` says so of the fake device.
+    fn wait_for_device(&self, device: &Fake, mut ready: impl FnMut(&Fake) -> bool) {
+        let limit = Instant::now() + HUNG;
+        while !ready(device) {
+            assert!(Instant::now() < limit, "the sound thread hung");
+            std::thread::yield_now();
+        }
+    }
+
+    /// Paused on the first picture with the pictures after it decoded,
+    /// then playing from `now`.
+    fn play_from_the_start(&mut self, now: Instant) {
+        self.update_until(now, |player, _| player.frame().is_some());
+        self.wait_for_queued(8);
+        self.player.play(now);
+        self.player.update(now);
+    }
+}
+
 fn ms(time: Duration) -> u128 {
     time.as_millis()
 }
@@ -127,7 +274,7 @@ fn the_file_says_what_it_holds() {
 #[test]
 fn what_it_cannot_play_is_refused_when_opened() {
     for name in ["hevc.mp4", "high10.mp4", "interlaced.mp4", "mp3_audio.mp4"] {
-        match Player::from_reader(reader(name)) {
+        match silent(reader(name)) {
             Err(MediaError::Unsupported(_)) => {}
             Err(other) => panic!("{name}: {other}"),
             Ok(_) => panic!("{name} opened"),
@@ -198,7 +345,16 @@ fn out_of_pictures_the_clock_waits_for_them() {
         frames: 2,
         ..Ahead::default()
     };
-    let mut rig = Rig::with(Player::with_ahead(reader("h264_aac.mp4"), ahead).expect("opens"));
+    let mut rig = Rig::with(
+        Player::with_options(
+            reader("h264_aac.mp4"),
+            Options {
+                ahead,
+                sound: false,
+            },
+        )
+        .expect("opens"),
+    );
     let now = rig.at(0);
     rig.update_until(now, |player, _| player.frame().is_some());
     rig.wait_for_queued(2);
@@ -345,7 +501,7 @@ fn a_damaged_picture_stops_playback_with_an_error() {
     let sample = container.video.as_ref().expect("video").samples[5];
     let start = sample.offset as usize;
     file[start..start + sample.size as usize].fill(0);
-    let mut rig = Rig::with(Player::from_reader(Box::new(Cursor::new(file))).expect("opens"));
+    let mut rig = Rig::with(silent(Box::new(Cursor::new(file))).expect("opens"));
     let mut now = rig.at(0);
     rig.player.play(now);
     loop {
@@ -441,7 +597,7 @@ fn a_seek_back_from_a_decode_error_ahead_plays_on() {
     let sample = video_samples("baseline_full_range.mp4")[20];
     let start = sample.offset as usize;
     file[start..start + sample.size as usize].fill(0);
-    let mut rig = Rig::with(Player::from_reader(Box::new(Cursor::new(file))).expect("opens"));
+    let mut rig = Rig::with(silent(Box::new(Cursor::new(file))).expect("opens"));
     let now = rig.at(0);
     // From the keyframe at 0.4 s on to the damaged one at 0.8 s.
     rig.player
@@ -462,7 +618,7 @@ fn a_seek_back_from_a_decode_error_ahead_plays_on() {
 /// error, instead of leaving the player waiting forever.
 #[test]
 fn a_panic_on_the_worker_stops_playback_with_an_error() {
-    let mut player = Player::from_reader(reader("baseline_full_range.mp4")).expect("opens");
+    let mut player = silent(reader("baseline_full_range.mp4")).expect("opens");
     player.set_waker(|| panic!("the app's waker"));
     let now = Instant::now();
     player.play(now);
@@ -636,4 +792,254 @@ fn dropping_a_player_stops_its_worker() {
     rig.wait_for_queued(8);
     // The worker is waiting for room; dropping must not hang on it.
     drop(rig);
+}
+
+#[test]
+fn with_sound_the_clock_follows_what_the_device_has_played() {
+    let (mut rig, device) = with_fake_device();
+    rig.play_from_the_start(rig.at(0));
+    rig.wait_for_sound(4_800);
+    // A tenth of a second played, its first frame heard 30 ms in: at 70 ms
+    // on the wall, 40 ms of it has been heard.
+    device.play(4_800, rig.at(30)).expect("playing");
+    rig.player.update(rig.at(70));
+    assert_eq!(ms(rig.player.time(rig.at(70))), 40);
+    assert_eq!(rig.player.frame().expect("a picture").shown_at, picture(1));
+}
+
+#[test]
+fn until_the_device_plays_any_the_clock_waits_where_the_sound_starts() {
+    let (mut rig, _device) = with_fake_device();
+    rig.play_from_the_start(rig.at(0));
+    rig.wait_for_sound(4_800);
+    rig.player.update(rig.at(50));
+    assert_eq!(ms(rig.player.time(rig.at(50))), 0);
+    assert_eq!(rig.player.frame().expect("a picture").shown_at, 0);
+    // A device that never plays doesn't hold the picture for ever: after a
+    // second, the clock runs without it.
+    rig.player.update(rig.at(1_000));
+    assert!(ms(rig.player.time(rig.at(1_100))) >= 100);
+}
+
+#[test]
+fn pausing_pauses_the_sound_and_playing_plays_it() {
+    let (mut rig, device) = with_fake_device();
+    rig.wait_for_device(&device, |device| !device.playing());
+    rig.play_from_the_start(rig.at(0));
+    rig.wait_for_device(&device, Fake::playing);
+    rig.player.pause(rig.at(10));
+    rig.wait_for_device(&device, |device| !device.playing());
+    assert_eq!(rig.sound().segment(), None);
+}
+
+#[test]
+fn a_new_speed_starts_the_sound_again_from_where_it_is() {
+    let (mut rig, _device) = with_fake_device();
+    rig.play_from_the_start(rig.at(0));
+    rig.player.set_speed(2.0, rig.at(100));
+    assert_eq!(
+        rig.sound().segment(),
+        Some(Segment {
+            at: 100_000_000,
+            speed: 2.0
+        })
+    );
+}
+
+#[test]
+fn a_seek_stops_the_sound_until_it_lands() {
+    let (mut rig, _device) = with_fake_device();
+    rig.play_from_the_start(rig.at(0));
+    rig.player
+        .seek(Duration::from_millis(1250), SeekMode::Exact, rig.at(100));
+    assert_eq!(rig.sound().segment(), None);
+    rig.update_until(rig.at(100), |player, _| {
+        player.state() == PlaybackState::Playing
+    });
+    assert_eq!(
+        rig.sound().segment(),
+        Some(Segment {
+            at: 1_250_000_000,
+            speed: 1.0
+        })
+    );
+}
+
+#[test]
+fn muted_it_plays_silence() {
+    let (mut rig, device) = with_fake_device();
+    rig.player.set_muted(true);
+    assert!(rig.player.muted());
+    rig.play_from_the_start(rig.at(0));
+    rig.wait_for_sound(4_800);
+    let played = device.play(4_800, rig.at(0)).expect("playing");
+    assert!(played.iter().all(|&sample| sample == 0.0));
+    // The tone comes back unmuted.
+    rig.player.set_muted(false);
+    rig.wait_for_sound(9_600);
+    let played = device.play(4_800, rig.at(100)).expect("playing");
+    assert!(played.iter().any(|&sample| sample.abs() > 0.01));
+}
+
+#[test]
+fn the_volume_is_kept_between_silent_and_full() {
+    let (mut rig, _device) = with_fake_device();
+    assert_eq!(rig.player.volume(), 1.0);
+    rig.player.set_volume(0.25);
+    assert_eq!(rig.player.volume(), 0.25);
+    rig.player.set_volume(1.5);
+    assert_eq!(rig.player.volume(), 1.0);
+    rig.player.set_volume(-1.0);
+    assert_eq!(rig.player.volume(), 0.0);
+    rig.player.set_volume(f32::NAN);
+    assert_eq!(rig.player.volume(), 0.0);
+}
+
+#[test]
+fn without_a_device_it_plays_on_the_wall_clock_and_says_why() {
+    let open: OpenDevice = Box::new(|| Err(MediaError::Unsupported("no sound device".into())));
+    let player =
+        Player::with_device(reader("h264_aac.mp4"), Ahead::default(), Some(open)).expect("opens");
+    let mut rig = Rig::with(player);
+    let limit = Instant::now() + HUNG;
+    while rig.player.sound_error().is_none() {
+        assert!(Instant::now() < limit, "the sound thread hung");
+        std::thread::yield_now();
+    }
+    rig.play_from_the_start(rig.at(0));
+    rig.player.update(rig.at(50));
+    assert_eq!(rig.player.state(), PlaybackState::Playing);
+    assert_eq!(ms(rig.player.time(rig.at(50))), 50);
+}
+
+/// Plays `h264_aac.mp4` (two seconds of a 440 Hz tone) on this machine's
+/// sound device, to the end. Run by hand: `cargo test -p wgpu-gameui-media
+/// --lib -- --ignored plays_on_the_real_sound_device --nocapture`.
+#[test]
+#[ignore = "plays on the real sound device"]
+fn plays_on_the_real_sound_device() {
+    let mut player = Player::from_reader(reader("h264_aac.mp4")).expect("opens");
+    let start = Instant::now();
+    player.play(start);
+    let mut pictures = 0;
+    while player.state() != PlaybackState::Ended {
+        let now = Instant::now();
+        assert!(now < start + HUNG, "never ended: {:?}", player.state());
+        let update = player.update(now);
+        pictures += usize::from(update.new_picture);
+        let wait = update.next_at.map_or(Duration::from_millis(5), |at| {
+            at.saturating_duration_since(now)
+        });
+        std::thread::sleep(wait.min(Duration::from_millis(5)));
+    }
+    assert!(player.sound_error().is_none(), "{:?}", player.sound_error());
+    println!(
+        "{pictures} pictures shown, {} dropped, in {:?}",
+        player.dropped_frames(),
+        start.elapsed()
+    );
+}
+
+#[test]
+fn opened_without_sound_it_starts_no_sound_thread() {
+    let player = silent(reader("h264_aac.mp4")).expect("opens");
+    assert!(player.sound.is_none());
+    assert!(player.sound_error().is_none());
+}
+
+/// The sound ends a second and more before the pictures: the clock goes on
+/// without it, and every picture is shown.
+#[test]
+fn with_sound_shorter_than_the_video_it_plays_every_picture_to_the_end() {
+    let (mut rig, device) = on_fake_device("short_sound.mp4");
+    let shown = play_along(&mut rig, &device, Duration::ZERO);
+    let expected: Vec<i64> = (0..38).map(|index| index * 40_000_000).collect();
+    assert_eq!(shown, expected);
+    assert_eq!(rig.player.dropped_frames(), 0);
+    assert!(rig.player.sound_error().is_none());
+}
+
+/// The sound starts half a second before the pictures, and plays on after
+/// them.
+#[test]
+fn with_the_pictures_inside_the_sound_it_plays_both_to_the_end() {
+    let (mut rig, device) = on_fake_device("late_video.mp4");
+    let end = rig.player.info().duration;
+    play_along(&mut rig, &device, Duration::ZERO);
+    assert_eq!(rig.player.dropped_frames(), 0);
+    assert_eq!(rig.player.time(Instant::now()), end);
+}
+
+/// A Bluetooth device's sound is heard a third of a second after it is
+/// played: the sound thread works that far ahead of the clock, and the
+/// worker decodes far enough ahead for it.
+#[test]
+fn with_a_device_heard_late_it_plays_every_picture_to_the_end() {
+    let (mut rig, device) = with_fake_device();
+    let shown = play_along(&mut rig, &device, Duration::from_millis(320));
+    assert_eq!(shown.len(), 60);
+    assert_eq!(rig.player.time(Instant::now()), Duration::from_secs(2));
+}
+
+/// A device can take seconds to open (a Bluetooth one waking up). The
+/// clock goes on without it after a second; once it opens, the sound
+/// starts from where the clock has got to, not from where it was asked
+/// for.
+#[test]
+fn a_device_slow_to_open_starts_from_where_the_clock_has_got_to() {
+    let device = Fake::new(Format {
+        rate: 48_000,
+        channels: 2,
+    });
+    let (release, gate) = mpsc::channel::<()>();
+    let opener = device.opener();
+    let open: OpenDevice = Box::new(move || {
+        let _ = gate.recv();
+        opener()
+    });
+    let player =
+        Player::with_device(reader("h264_aac.mp4"), Ahead::default(), Some(open)).expect("opens");
+    let mut rig = Rig::with(player);
+    rig.play_from_the_start(rig.at(0));
+    rig.player.update(rig.at(500));
+    assert_eq!(
+        ms(rig.player.time(rig.at(500))),
+        0,
+        "waiting for the device"
+    );
+    rig.player.update(rig.at(1_000));
+    assert_eq!(
+        ms(rig.player.time(rig.at(1_100))),
+        100,
+        "gone on without it"
+    );
+    let _ = release.send(());
+    rig.wait_for_device(&device, Fake::open);
+    rig.player.update(rig.at(1_100));
+    assert_eq!(
+        rig.sound().segment(),
+        Some(Segment {
+            at: 100_000_000,
+            speed: 1.0
+        })
+    );
+    // Waiting again, now for the device to play it.
+    rig.player.update(rig.at(1_150));
+    assert_eq!(ms(rig.player.time(rig.at(1_150))), 100);
+}
+
+#[test]
+fn speeds_are_kept_to_what_the_sound_can_be_stretched_to() {
+    let (mut rig, _device) = with_fake_device();
+    let now = rig.at(0);
+    rig.player.set_speed(8.0, now);
+    assert_eq!(rig.player.speed(), 4.0);
+    rig.player.set_speed(0.1, now);
+    assert_eq!(rig.player.speed(), 0.25);
+    rig.player.set_speed(-1.0, now);
+    assert_eq!(rig.player.speed(), 0.25);
+    rig.player.set_speed(f64::NAN, now);
+    assert_eq!(rig.player.speed(), 0.25);
+    rig.player.set_speed(1.5, now);
+    assert_eq!(rig.player.speed(), 1.5);
 }

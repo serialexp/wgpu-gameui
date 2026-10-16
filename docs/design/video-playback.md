@@ -1,7 +1,7 @@
 # Video playback
 
 **Status:** Accepted
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-16
 
 ## Implementation status
 
@@ -96,39 +96,62 @@ Phase 2 leftover:
 
 Phase 3, sound:
 
-- [ ] Audio output through `cpal`: a callback fed from a lock-free buffer of samples
-- [ ] Resampling to the device's rate with `rubato`, and mixing the channels to what the device has
-- [ ] Volume and mute
-- [ ] Keeping sound and picture together: the clock is how far the device has played, so the
+- [x] Audio output through `cpal`: a callback fed from a lock-free buffer of samples
+  (`device.rs`, `ring.rs`, the sound thread in `sound.rs`)
+- [x] Resampling to the device's rate with `rubato`, and mixing the channels to what the device has
+  (`convert.rs`, `mix.rs`)
+- [x] Volume and mute (`Player::set_volume`, `set_muted`: a gain the callback ramps to)
+- [x] Keeping sound and picture together: the clock is how far the device has played, so the
   picture follows the sound
-- [ ] Playback speed 0.5×, 1×, 1.5×, 2× (the Forge player's speed key), with the sound's pitch
-  kept, through `soundtouch-rs`
+- [x] Playback speed 0.5×, 1×, 1.5×, 2× (the Forge player's speed key), with the sound's pitch
+  kept, through `wsola` (`soundtouch-rs` turned out LGPL-2.1; see question 5)
+- [x] A player that has no sound device (none in the machine, or opened without sound) plays
+  by the wall clock as in phase 2, and so do the tests, through a fake device they play by hand
+  (`Options::sound`, `Player::sound_error`)
+
+The `cpal` adaptor itself runs only in the ignored `plays_on_the_real_sound_device` test; every
+other sound test uses the fake device.
 
 Phase 4, widgets (the Forge `components/media` set):
 
-- [ ] `Scrubber`: a track with a dim "buffered" layer under the accent "played" fill, a knob
+Written 2026-10-16, not committed. The widgets are in core (`src/widgets/media/`) and read a
+`MediaSource` trait: state, time, length, buffered, volume, mute, speed, error, the `Picture`
+(a sprite and its size) and when something shown next changes, and they tell it play, pause,
+seek, scrub (a quick keyframe seek while the timeline is dragged, then an exact seek where it is
+let go), volume, mute and speed. The media crate's `PlayerSource` is that trait over a `Player`:
+each frame the app calls `update(now, sink)`, which moves playback on and puts a new picture in
+a YUV sprite through a `PictureSink` (`UiRenderer` is one; the tests use a fake), and
+`release(sink)` frees the sprite.
+
+- [x] `Scrubber`: a track with a dim "buffered" layer under the accent "played" fill, a knob
   that's always shown, the time under the pointer in a tip, seeking live while dragging, and
   ←/→ (5 s, Shift 30 s), Home, End when focused
-- [ ] `PlayButton`: a latch key, pressed in while playing, in five states (paused: play icon,
+- [x] `PlayButton`: a latch key, pressed in while playing, in five states (paused: play icon,
   playing: pause icon, loading: spinner, ended: replay icon, error: red "!"), and an optional
   progress strip along its bottom
-- [ ] `VideoPlayer`: the frame, fitted, on black, with the toolbar strip under it (scrubber,
+- [x] `VideoPlayer`: the frame, fitted, on black, with the toolbar strip under it (scrubber,
   play, mute and volume, time / length, speed, full screen) always shown. Title over the top of
-  the frame, "Can't play this video" over it on error, a striped placeholder before the first
-  frame. Click the frame to play or pause, double-click or F for full screen (through core's
-  full-screen request), Space / K, ←/→ 5 s and M when focused. Asks for its next frame at the
-  time it's due
+  the frame, "Can't play this video" over it on error (with the source's reason under it), a
+  striped placeholder before the first frame. Click the frame to play or pause, double-click
+  or F for full screen; Space and ←/→ 5 s while its frame has the keyboard, and K, M and F
+  while any of its keys has it (not with the shortcut key or Alt held). `width_for` (the inverse
+  of `height_for`) and `min_width` (its keys side by side) size it. Asks for its next frame at
+  the time it's due. A widget can't reach `UiState`, so it doesn't request full screen itself: it
+  is told whether it is full screen and returns `toggle_fullscreen`, which the app passes to
+  its `FullscreenState`
+- [x] `PlayerSource` and `PictureSink` in the media crate, as above
 - [ ] `AudioPlayer`: the bar player (play key, title and time over the scrubber, mute and
   volume) and its 28 px compact row
 - [ ] Audio-only files for `AudioPlayer`: M4A through `re_mp4`, and WAV, FLAC, Ogg Vorbis and MP3
   through Symphonia's readers
-- [ ] Widget gallery: a `Media` category, with the four components under their Forge names, and
-  frames from a fake source so the render is the same every time
+- [x] Widget gallery: a `Media` category, with the components under their Forge names, and
+  a still source with a made-up YUV picture so the render is the same every time
 - [ ] A windowed example that plays a file given on the command line
 
 Later (deferred):
 
-- [ ] Use in agent-ui (deferred: Bart chose gameui only for now, 2026-10-14)
+- [ ] Use in agent-ui: started 2026-10-16 (Bart: play videos in its Files tab, read from the
+  server in ranges)
 - [ ] Offer `rust_h264` a change that keeps the colour settings on the decoder, and drop our own
   SPS reading if it lands (deferred: Bart, 2026-10-14, "offer later")
 - [ ] Check whether eight decoded frames ahead is enough, and what it costs in memory, once
@@ -356,7 +379,53 @@ visible.
 **Speed.** At 1.5× the sound has to play faster without rising in pitch. That needs a time
 stretch: cut the sound into short overlapping pieces and lay them closer together (or further
 apart for 0.5×), at points where the pieces line up. The video side only needs the clock to run
-faster. Which crate does the stretch is an open question.
+faster. [`wsola`](https://crates.io/crates/wsola) does the stretch (question 5).
+
+**How phase 3 builds it** (planned and built 2026-10-16, changed after its review the same day).
+
+- *Who fills the ring.* A sound thread per player, beside the decoding worker. The worker
+  queues decoded blocks as in phase 2, and the player still lets each go once it has been
+  heard. The sound thread reads the blocks from where the sound has got to, stretches them
+  (skipped at 1×), resamples them to the device's rate (`rubato`'s `Fft`, skipped when the rates
+  match), mixes the channels and writes the result into an `rtrb` ring of a second, kept a fifth
+  of a second full (or twice the device's largest callback, if more).
+- *Silence.* The worker says how far the sound is known: the time of the next sound sample it
+  hasn't decoded, or "to the end" once the track is decoded. Up to there, wherever no block is
+  queued (before the sound starts, a gap, after a sound track shorter than the video) the
+  thread writes silence without waiting, so the device keeps counting time through it. Gaps
+  under half a frame are none: block times are whole nanoseconds, so a block can start a
+  nanosecond after the last ended.
+- *Neither waits for the other.* While the sound known is less than 0.3 s ahead of the clock,
+  the worker decodes pictures past `Ahead::frames`: the clock may be waiting for that sound,
+  and in decode order it lies behind the pictures queued (B-frames, a high frame rate).
+- *Emptying the ring without a lock.* The ring counts every frame written and read. To throw
+  away what's in it (a seek, a pause, a new speed), the sound thread records the count written
+  so far, and the callback skips reading up to that count before it plays anything. Nothing
+  waits on the callback, which doesn't run while the stream is paused. What follows fades in
+  over the first callback that plays it.
+- *Segments.* Each time the player's clock starts (play, a seek landing, a stall ending, a new
+  speed), the sound starts a segment: a media time, the speed, and the count written when it
+  began. How far into the segment the device has played, at the speed, is the media time heard.
+  When the clock stops, the stream pauses and the ring is emptied. The decoded blocks are still
+  queued until heard, so the next segment converts again from where the sound was.
+- *The picture follows the sound.* Each callback notes when its first frame is heard (cpal's
+  playback time); the frame heard at a moment runs on from there at the rate, no further than
+  the device has been handed. While a segment plays, each update sets the player's clock to the
+  media time heard. Until the device has played any of it (opening, its output latency), the
+  clock waits where the segment starts, for up to a second, then runs without it; once the
+  device is ready, the segment starts again from where the clock has got to. Once the sound
+  has all been heard, or without a working device, the clock runs on the wall.
+- *What the worker counts as short* is measured from how far the sound thread has read, not
+  from the clock: the thread works ahead of the clock by the device's latency (about 320 ms on
+  a Bluetooth output) and what its ring holds. A callback of only silence leaves when the last
+  of the sound is heard as it was. (Both found playing on a real device, 2026-10-16.)
+- *Speed* is kept to 0.25–4×, what `wsola` stretches to.
+- *Volume and mute* are a gain the callback applies, ramped over one callback so a change
+  doesn't click.
+- *No device.* A machine without one, a device that fails, an app that opens the player
+  without sound, and the tests use the wall clock (`Player::sound_error` says why). The tests
+  that check the sound path use a fake device, which reads from the ring only when a test says
+  how many frames it played.
 
 **Frame choice.** Each time the widget draws, it asks the source for the frame for the current
 time. The source drops queued frames that are more than one frame late, so a slow machine skips
@@ -498,6 +567,10 @@ All answered by Bart on 2026-10-14; kept with their answers for the record.
      beats. More than we need.
    - *Let the pitch change* (just resample). Trivial, but chipmunk voices at 2×.
    > **2026-10-14, answered:** `soundtouch-rs`.
+   >
+   > **2026-10-16, changed:** `soundtouch-rs` is LGPL-2.1 (like SoundTouch) and not on
+   > crates.io, which doesn't fit gameui's MIT/Apache licence. Bart chose `wsola` (MIT, pure Rust,
+   > v0.2.0 by then) instead.
 6. **Should `AudioPlayer` play audio-only formats beyond M4A?** Symphonia makes WAV, FLAC, Ogg
    Vorbis and MP3 cheap to add, since the output and clock are shared. Recommended: yes, in
    phase 4 with the widget.

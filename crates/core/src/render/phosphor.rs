@@ -208,6 +208,12 @@ icons! {
     ArrowsOutCardinal = '\u{e0a4}', "arrows-out-cardinal";
     /// Four arrows out to the corners (scale, enter full screen).
     ArrowsOut = '\u{e0a2}', "arrows-out";
+    /// An exclamation mark on its own (can't, failed).
+    ExclamationMark = '\u{ee44}', "exclamation-mark";
+    /// Four corners pointing outwards (enter full screen).
+    CornersOut = '\u{e1d0}', "corners-out";
+    /// Four corners pointing inwards (leave full screen).
+    CornersIn = '\u{e1ce}', "corners-in";
 }
 
 impl PhosphorIcon {

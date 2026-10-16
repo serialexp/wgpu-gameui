@@ -3,9 +3,11 @@ use wgpu_gameui::{YuvColour, YuvPlanes};
 
 const SECOND: i64 = 1_000_000_000;
 
+/// Queues after a seek to 0, with the sound decoded to its end.
 fn queues() -> Queues {
     let mut queues = Shared::new(0).queues.into_inner().expect("not poisoned");
     queues.seek = None;
+    queues.sound_known_to = i64::MAX;
     queues
 }
 
@@ -46,6 +48,21 @@ fn a_full_picture_queue_waits() {
     for index in 0..8 {
         queues.frames.push_back(frame(index));
     }
+    assert!(queues.full(&Ahead::default(), true));
+}
+
+/// The clock may be waiting for that sound, and the worker reaches it
+/// through the pictures in decode order.
+#[test]
+fn pictures_decode_past_their_bound_while_the_sound_is_short() {
+    let mut queues = queues();
+    for index in 0..8 {
+        queues.frames.push_back(frame(index));
+    }
+    queues.played_to = SECOND;
+    queues.sound_known_to = SECOND + SECOND / 10;
+    assert!(!queues.full(&Ahead::default(), true));
+    queues.sound_known_to = 2 * SECOND;
     assert!(queues.full(&Ahead::default(), true));
 }
 

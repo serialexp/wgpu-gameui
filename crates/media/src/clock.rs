@@ -1,10 +1,11 @@
-//! The playback clock for a video without sound: a media time it was at, the
-//! moment it was there, and how fast it runs. Every reading takes the
-//! moment as an argument (`Instant::now()` in an app, a made-up one in
-//! tests), so the clock itself never looks at the wall.
+//! The playback clock: a media time it was at, the moment it was there, and
+//! how fast it runs. Every reading takes the moment as an argument
+//! (`Instant::now()` in an app, a made-up one in tests), so the clock itself
+//! never looks at the wall.
 //!
-//! With sound, the sound device's position becomes the clock (phase 3), and
-//! this one is what a silent video plays by.
+//! While the sound device plays, the player sets this clock to what it is
+//! hearing at each update, and it runs on from there between updates; a
+//! video without sound (or a device) plays by it alone.
 
 use std::time::{Duration, Instant};
 

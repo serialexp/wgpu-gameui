@@ -11,13 +11,23 @@ use crate::MediaError;
 use crate::audio::{AudioBlock, AudioDecoder};
 use crate::clock::Clock;
 use crate::container::{Container, MediaReader, duration, nanos};
+use crate::convert::Format;
+use crate::device::{OpenDevice, default_device};
 use crate::schedule::{SeekMode, advance};
+use crate::sound::{Hearing, Segment, Sound};
 use crate::video::{VideoDecoder, VideoFrame};
 use crate::worker::{self, Ahead, Shared, Waker};
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+/// How long the clock waits at the start of the sound for the device to play
+/// it (opening, or its output latency) before running without it.
+const START_GRACE: Duration = Duration::from_secs(1);
+
+/// The speeds the sound can be stretched to with its pitch kept.
+const SPEEDS: std::ops::RangeInclusive<f64> = 0.25..=4.0;
 
 /// What a player is doing, as the Forge media components show it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,10 +69,37 @@ pub struct Update {
     pub next_at: Option<Instant>,
 }
 
-/// Plays one file: its pictures, and (from phase 3) its sound.
+/// How a player is opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Options {
+    /// How far ahead to decode.
+    pub ahead: Ahead,
+    /// Play the sound on the system's default output. Without, or without a
+    /// device to play on, the sound is let go as its time passes and the
+    /// clock runs on the wall.
+    pub sound: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            ahead: Ahead::default(),
+            sound: true,
+        }
+    }
+}
+
+/// Plays one file: its pictures and its sound.
 pub struct Player {
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
+    /// Plays the sound, if the file has any and the player was opened to.
+    /// Dropped before the worker is stopped (it reads the worker's queues).
+    sound: Option<Sound>,
+    /// When the sound's segment was asked for.
+    sound_since: Option<Instant>,
+    volume: f32,
+    muted: bool,
     info: MediaInfo,
     clock: Clock,
     /// Asked to play (it may be [loading](PlaybackState::Loading)).
@@ -81,20 +118,36 @@ pub struct Player {
 }
 
 impl Player {
-    /// Open the MP4 at `path`. A file this player can't play is an error
-    /// here, before any playing: another codec, interlaced or 10-bit H.264,
-    /// or not an MP4.
+    /// Open the MP4 at `path`, to play its sound on the default output. A
+    /// file this player can't play is an error here, before any playing:
+    /// another codec, interlaced or 10-bit H.264, or not an MP4. Not having
+    /// a sound device isn't: see [`sound_error`](Self::sound_error).
     pub fn open(path: impl AsRef<Path>) -> Result<Self, MediaError> {
         Self::from_reader(Box::new(std::fs::File::open(path)?))
     }
 
-    /// Open the MP4 read by `reader`.
+    /// Open the MP4 read by `reader`, to play its sound on the default
+    /// output.
     pub fn from_reader(reader: Box<dyn MediaReader>) -> Result<Self, MediaError> {
-        Self::with_ahead(reader, Ahead::default())
+        Self::with_options(reader, Options::default())
     }
 
-    /// Open the MP4 read by `reader`, decoding as far ahead as `ahead` says.
-    pub fn with_ahead(reader: Box<dyn MediaReader>, ahead: Ahead) -> Result<Self, MediaError> {
+    /// Open the MP4 read by `reader` as `options` say.
+    pub fn with_options(
+        reader: Box<dyn MediaReader>,
+        options: Options,
+    ) -> Result<Self, MediaError> {
+        let open: Option<OpenDevice> = options.sound.then(|| Box::new(default_device) as _);
+        Self::with_device(reader, options.ahead, open)
+    }
+
+    /// Open the MP4 read by `reader`, decoding as far ahead as `ahead` says,
+    /// and playing its sound on the device `open` finds (none without).
+    pub(crate) fn with_device(
+        reader: Box<dyn MediaReader>,
+        ahead: Ahead,
+        open: Option<OpenDevice>,
+    ) -> Result<Self, MediaError> {
         let container = Container::open(reader)?;
         // Make the decoders once here so what they refuse is refused now;
         // the worker makes its own.
@@ -121,6 +174,17 @@ impl Player {
             ..ahead
         };
         let shared = Arc::new(Shared::new(0));
+        // The sound thread first: if the worker then fails to start, the
+        // sound thread is stopped as it drops, while a worker left behind
+        // would wait for its queues forever.
+        let sound = match (info.sound, open) {
+            (Some((rate, channels)), Some(open)) => Some(Sound::start(
+                shared.clone(),
+                Format { rate, channels },
+                open,
+            )?),
+            _ => None,
+        };
         let worker = std::thread::Builder::new()
             .name("gameui-media".into())
             .spawn({
@@ -130,6 +194,10 @@ impl Player {
         Ok(Self {
             shared,
             worker: Some(worker),
+            sound,
+            sound_since: None,
+            volume: 1.0,
+            muted: false,
             info,
             clock: Clock::stopped_at(0),
             playing: false,
@@ -217,6 +285,70 @@ impl Player {
         self.clock.speed()
     }
 
+    /// How loud the sound plays, from 0.0 (silent) to 1.0 (as decoded).
+    pub fn volume(&self) -> f32 {
+        self.volume
+    }
+
+    /// Play the sound at `volume` (clamped to 0.0 to 1.0, a multiple of
+    /// the decoded samples), from the device's next callback.
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = if volume.is_nan() {
+            0.0
+        } else {
+            volume.clamp(0.0, 1.0)
+        };
+        self.apply_gain();
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted
+    }
+
+    /// Silence the sound, or let it be heard at its volume again. The
+    /// picture plays on by the sound either way.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        self.apply_gain();
+    }
+
+    fn apply_gain(&mut self) {
+        let gain = if self.muted { 0.0 } else { self.volume };
+        if let Some(sound) = &mut self.sound {
+            sound.set_gain(gain);
+        }
+    }
+
+    /// Why the sound isn't playing, when the file has sound and the player
+    /// was opened to play it: there's no sound device, or it failed. The
+    /// picture plays on, by the wall clock.
+    pub fn sound_error(&self) -> Option<Arc<MediaError>> {
+        self.sound.as_ref().and_then(Sound::error)
+    }
+
+    /// Start, stop or restart the sound to match the clock: playing from
+    /// where the clock is while it runs, at its speed.
+    fn follow_clock(&mut self, now: Instant) {
+        let Some(sound) = &mut self.sound else {
+            return;
+        };
+        let wanted = self.clock.is_running().then(|| Segment {
+            at: self.clock.time(now),
+            speed: self.clock.speed(),
+        });
+        let playing = sound.segment();
+        let same = match (playing, wanted) {
+            (None, None) => true,
+            // The sound leads a running clock: it only restarts at a new speed.
+            (Some(playing), Some(wanted)) => playing.speed == wanted.speed,
+            _ => false,
+        };
+        if !same {
+            sound.set_segment(wanted);
+            self.sound_since = wanted.map(|_| now);
+        }
+    }
+
     /// Play from where it is; from the start once it has ended.
     pub fn play(&mut self, now: Instant) {
         if self.error.is_some() || self.playing {
@@ -229,6 +361,7 @@ impl Player {
         if !self.seeking && !self.stalled {
             self.clock.start(now);
         }
+        self.follow_clock(now);
     }
 
     /// Stop where it is.
@@ -236,6 +369,7 @@ impl Player {
         self.playing = false;
         self.clock.stop(now);
         self.stalled = false;
+        self.follow_clock(now);
     }
 
     /// Play if paused (or ended), pause if playing.
@@ -264,6 +398,8 @@ impl Player {
             queues.landed_at = target;
             queues.video_done = false;
             queues.done = false;
+            queues.sound_known_to = target;
+            queues.played_to = target;
             // Decoding failed further on, and the player hadn't got there
             // yet: from the new place it may not. A worker that panicked is
             // gone, though, and its error stays.
@@ -283,13 +419,18 @@ impl Player {
         self.ended = false;
         self.buffered = target;
         self.heard_to = target;
+        self.follow_clock(now);
     }
 
-    /// Play at `speed` times normal (more than zero; the Forge player offers
-    /// 0.5, 1, 1.5 and 2).
+    /// Play at `speed` times normal, from a quarter to four times (what the
+    /// sound can be stretched to with its pitch kept; the Forge player
+    /// offers 0.5, 1, 1.5 and 2). Others are clamped to that; not a number
+    /// changes nothing.
     pub fn set_speed(&mut self, speed: f64, now: Instant) {
-        if speed > 0.0 && speed.is_finite() {
+        if !speed.is_nan() {
+            let speed = speed.clamp(*SPEEDS.start(), *SPEEDS.end());
             self.clock.set_speed(speed, now);
+            self.follow_clock(now);
         }
     }
 
@@ -297,6 +438,47 @@ impl Player {
     /// queue, notice the end, a stall or an error, and say when to update
     /// next.
     pub fn update(&mut self, now: Instant) -> Update {
+        let update = self.step(now);
+        self.follow_clock(now);
+        update
+    }
+
+    fn step(&mut self, now: Instant) -> Update {
+        // While the device plays the sound, the clock is where it has got
+        // to: the picture follows the sound. Until it plays any, the clock
+        // waits where the sound starts (for a while: a device that never
+        // plays doesn't hold the picture for ever).
+        if self.clock.is_running()
+            && let Some(sound) = &self.sound
+        {
+            let waited = self
+                .sound_since
+                .map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+            let mut restart = None;
+            match sound.hearing(now) {
+                Hearing::At(at) => self.clock.set(at, now),
+                Hearing::Starting(at) if waited <= START_GRACE => self.clock.set(at, now),
+                // The clock went on without the device; once it is ready,
+                // the sound starts again from where the clock has got to.
+                Hearing::Starting(at) => {
+                    let time = self.clock.time(now);
+                    if sound.is_ready() && time > at {
+                        restart = Some(Segment {
+                            at: time,
+                            speed: self.clock.speed(),
+                        });
+                    }
+                }
+                Hearing::Nothing => {}
+            }
+            if let Some(segment) = restart
+                && let Some(sound) = &mut self.sound
+            {
+                sound.set_segment(Some(segment));
+                self.sound_since = Some(now);
+                self.clock.set(segment.at, now);
+            }
+        }
         let has_video = self.info.video_size.is_some();
         let mut new_picture = false;
         let next_picture_at;
@@ -321,7 +503,7 @@ impl Player {
             if queues.frames.is_empty() && queues.error.is_some() {
                 self.error = queues.error.take();
             }
-            // Without a sound device (phase 3) the sound due is let go.
+            // The sound heard (or, without a device, due) is let go.
             let mut took = changed;
             while let Some(block) = queues.sound.pop_front_if(|block| block.ends_at() <= time) {
                 self.heard_to = block.ends_at();
@@ -336,6 +518,7 @@ impl Player {
             video_done = queues.video_done;
             done = queues.done;
             self.buffered = queues.decoded_to;
+            queues.played_to = queues.played_to.max(time);
             // A seek has landed once its picture is here (shown now, or
             // queued for a moment after the target when the video starts
             // later) or there is none to come. Sound can be decoded before
@@ -420,8 +603,8 @@ impl Player {
                 None => None,
             };
             // Without pictures to move it on, the player lets the sound go as
-            // it is due, so the worker can decode on (phase 3's sound device
-            // takes it instead), notices it running out, and the end.
+            // it is heard, so the worker can decode on, notices it running
+            // out, and the end.
             let sound = next_sound_ends_at
                 .or(waiting_on_sound.then_some(sound_runs_out_at))
                 .filter(|_| no_more_pictures);
@@ -443,6 +626,7 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
+        self.sound = None;
         self.shared.lock().stop = true;
         self.shared.wake.notify_one();
         if let Some(worker) = self.worker.take() {

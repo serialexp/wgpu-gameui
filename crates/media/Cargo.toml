@@ -19,6 +19,14 @@ rust_h264 = "0.4"
 # AAC-LC decoding, pure Rust.
 symphonia-codec-aac = "0.6"
 symphonia-core = "0.6"
+# Sound output: the default device on each platform (CoreAudio, WASAPI, ALSA).
+cpal = "0.18"
+# The lock-free ring the device's callback reads sound from.
+rtrb = "0.4"
+# Resampling to the device's rate.
+rubato = "5"
+# Playing faster or slower with the pitch kept (WSOLA), pure Rust, MIT.
+wsola = "0.2"
 
 [dev-dependencies]
 # The test videos' pictures are checked against ffmpeg's per-frame MD5s.

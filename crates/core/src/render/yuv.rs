@@ -182,6 +182,18 @@ impl<'a> YuvPlanes<'a> {
         }
     }
 
+    /// The planes, lending their bytes: for uploading planes kept
+    /// elsewhere without copying them first.
+    pub fn borrowed(&self) -> YuvPlanes<'_> {
+        YuvPlanes {
+            y: Cow::Borrowed(&self.y),
+            u: Cow::Borrowed(&self.u),
+            v: Cow::Borrowed(&self.v),
+            y_stride: self.y_stride,
+            chroma_stride: self.chroma_stride,
+        }
+    }
+
     /// Total bytes in the three planes.
     pub fn len(&self) -> usize {
         self.y.len() + self.u.len() + self.v.len()

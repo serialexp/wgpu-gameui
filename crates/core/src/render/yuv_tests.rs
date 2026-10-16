@@ -108,3 +108,12 @@ fn the_colour_planes_are_half_the_size_rounded_up() {
     assert_eq!(chroma_size(5, 3), (3, 2));
     assert_eq!(chroma_size(1, 1), (1, 1));
 }
+
+#[test]
+fn borrowed_planes_lend_the_same_bytes() {
+    let owned = YuvPlanes::packed(2, vec![1, 2, 3, 4], vec![5], vec![6]).into_owned();
+    let lent = owned.borrowed();
+    assert!(matches!(lent.y, Cow::Borrowed(_)));
+    assert!(std::ptr::eq(lent.y.as_ptr(), owned.y.as_ptr()));
+    assert_eq!(lent, owned);
+}
