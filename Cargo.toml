@@ -1,7 +1,7 @@
 [workspace]
 # `designer/` is the theme designer, a binary built only from the library's
 # widgets.
-members = ["crates/core", "crates/media", "designer"]
+members = ["crates/core", "crates/media", "crates/code", "designer"]
 resolver = "3"
 
 # Every crate is released together at one version (just-release bumps it here).
@@ -19,4 +19,18 @@ rust_h264 = { git = "https://github.com/serialexp/rust_h264", branch = "fix/chro
 # Glyph and icon MSDFs are generated on the CPU by fdsm; unoptimised, the
 # atlas warm-up and the MSDF quality tests run about thirty times slower.
 [profile.dev.package.fdsm]
+opt-level = 3
+
+# The sound is stretched and resampled as it plays; unoptimised, a debug
+# build may not keep up with the device, and the converter tests run slowly.
+[profile.dev.package.wsola]
+opt-level = 3
+
+[profile.dev.package.rubato]
+opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
+
+[profile.dev.package.rustfft]
 opt-level = 3

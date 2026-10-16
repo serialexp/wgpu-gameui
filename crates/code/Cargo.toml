@@ -1,0 +1,68 @@
+[package]
+name = "wgpu-gameui-code"
+version.workspace = true
+edition.workspace = true
+description = "A source code editor for wgpu-gameui: rope text, editing rules and Tree-sitter colours"
+license.workspace = true
+repository.workspace = true
+# Nothing to publish until it has a host beyond agent-ui.
+publish = false
+
+[dependencies]
+wgpu-gameui = { path = "../core" }
+log = "0.4"
+# The text, in a rope: edits anywhere in a long file stay cheap. No Unicode
+# line breaks, so only `\n` ends a line, as it does for Tree-sitter.
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+# Words and characters as the reader sees them, for the caret's steps.
+unicode-segmentation = "1"
+# The parser runtime. One version per program: the crate `links` its C
+# library. agent-ui's outline tool uses 0.27 too.
+tree-sitter = "0.27"
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-lua = { version = "0.5", optional = true }
+tree-sitter-md = { version = "0.5", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+
+[features]
+# A program that wants fewer grammars turns these off.
+default = ["all-languages"]
+# Every grammar below.
+all-languages = [
+    "bash",
+    "css",
+    "go",
+    "html",
+    "javascript",
+    "json",
+    "lua",
+    "markdown",
+    "python",
+    "rust",
+    "toml",
+    "typescript",
+    "yaml",
+]
+bash = ["dep:tree-sitter-bash"]
+css = ["dep:tree-sitter-css"]
+go = ["dep:tree-sitter-go"]
+html = ["dep:tree-sitter-html"]
+javascript = ["dep:tree-sitter-javascript"]
+json = ["dep:tree-sitter-json"]
+lua = ["dep:tree-sitter-lua"]
+markdown = ["dep:tree-sitter-md"]
+python = ["dep:tree-sitter-python"]
+rust = ["dep:tree-sitter-rust"]
+toml = ["dep:tree-sitter-toml-ng"]
+# TypeScript's highlights extend JavaScript's.
+typescript = ["dep:tree-sitter-typescript", "javascript"]
+yaml = ["dep:tree-sitter-yaml"]

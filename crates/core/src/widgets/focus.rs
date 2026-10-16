@@ -248,6 +248,13 @@ impl FocusState {
         self.escape = false;
     }
 
+    /// Mark this frame's Tab or Shift-Tab (the `next` and `prev` intents)
+    /// as used, so focus doesn't move on: for a focused widget that types
+    /// it, a code editor indenting.
+    pub fn claim_tab(&mut self) {
+        self.tab = 0;
+    }
+
     /// Programmatically clear focus.
     pub fn blur(&mut self) {
         self.focused = None;
@@ -492,6 +499,20 @@ mod tests {
         f.register(5);
         f.end_frame(None);
         assert_eq!(f.focused(), None);
+    }
+
+    #[test]
+    fn a_claimed_tab_leaves_focus_where_it_is() {
+        for shift in [false, true] {
+            let mut f = FocusState::new();
+            f.focus(10);
+            f.begin_frame(&input(true, shift, false, false));
+            f.register(10);
+            f.claim_tab();
+            f.register(20);
+            f.end_frame(None);
+            assert!(f.is_focused(10), "shift {shift}");
+        }
     }
 
     #[test]

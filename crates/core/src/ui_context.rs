@@ -277,6 +277,15 @@ impl UiState {
         self.clipboard_set = Some(std::rc::Rc::new(std::cell::RefCell::new(set)));
     }
 
+    /// The callbacks [`set_clipboard`](Self::set_clipboard) installed, to
+    /// share with an editor that keeps its own (a code editor); `None`
+    /// before there are any.
+    pub fn clipboard(
+        &self,
+    ) -> Option<(crate::widgets::ClipboardGet, crate::widgets::ClipboardSet)> {
+        Some((self.clipboard_get.clone()?, self.clipboard_set.clone()?))
+    }
+
     /// Put `text` on the clipboard through the callback
     /// [`set_clipboard`](Self::set_clipboard) installed, for a host's own
     /// Copy button. Returns `false` when no clipboard is installed.
@@ -3726,6 +3735,19 @@ mod tests {
         state.set_clipboard(String::new, move |text| *sink.borrow_mut() = text);
         assert!(state.copy_text("{\"a\":1}".into()));
         assert_eq!(*copied.borrow(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn the_installed_clipboard_can_be_shared() {
+        let mut state = UiState::new();
+        assert!(state.clipboard().is_none());
+        let copied = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let sink = copied.clone();
+        state.set_clipboard(|| "pasted".into(), move |text| *sink.borrow_mut() = text);
+        let (get, set) = state.clipboard().expect("installed");
+        assert_eq!((get.borrow_mut())(), "pasted");
+        (set.borrow_mut())("copied".into());
+        assert_eq!(*copied.borrow(), "copied");
     }
 
     #[test]

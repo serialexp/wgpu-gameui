@@ -7,7 +7,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{TextStyleRange, Underline};
+use crate::{SyntaxTheme, TextStyleRange, Underline};
 pub use tree_sitter_highlight::HighlightConfiguration;
 use tree_sitter_highlight::{HighlightEvent, Highlighter};
 
@@ -30,6 +30,8 @@ const CAPTURE_NAMES: &[&str] = &[
     "boolean",
     "comment",
     "constant",
+    // `true`, `nil` and Rust's numbers: literals (see `SyntaxTheme::for_capture`).
+    "constant.builtin",
     "number",
     "keyword",
     "conditional",
@@ -47,71 +49,6 @@ const CAPTURE_NAMES: &[&str] = &[
     "punctuation",
     "string",
 ];
-
-/// Reusable palette for Tree-sitter capture categories, as sRGB-encoded RGBA values.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SyntaxTheme {
-    /// Comments and documentation.
-    pub comment: [f32; 4],
-    /// Strings and character literals.
-    pub string: [f32; 4],
-    /// Numeric literals and booleans.
-    pub literal: [f32; 4],
-    /// Language keywords and preprocessor forms.
-    pub keyword: [f32; 4],
-    /// Function, method, and constructor names.
-    pub function: [f32; 4],
-    /// Types, constants, and attributes.
-    pub type_or_constant: [f32; 4],
-    /// Parameters, properties, and labels.
-    pub symbol: [f32; 4],
-    /// Operators and punctuation.
-    pub operator: [f32; 4],
-    /// Variables not covered by a more specific capture.
-    pub variable: [f32; 4],
-    /// Conditional keywords (`if`/`then`/`else`); falls back to
-    /// [`keyword`](Self::keyword) by `Default` and in the built-in mapping.
-    pub conditional: [f32; 4],
-    /// Loop keywords (`while`/`for`/`repeat`); falls back to
-    /// [`keyword`](Self::keyword) by `Default` and in the built-in mapping.
-    pub repeat: [f32; 4],
-}
-
-impl Default for SyntaxTheme {
-    fn default() -> Self {
-        let keyword = [0.86, 0.48, 0.96, 1.0];
-        Self {
-            comment: [0.46, 0.52, 0.48, 1.0],
-            string: [0.55, 0.82, 0.48, 1.0],
-            literal: [0.96, 0.72, 0.38, 1.0],
-            keyword,
-            function: [0.38, 0.72, 0.96, 1.0],
-            type_or_constant: [0.38, 0.78, 0.78, 1.0],
-            symbol: [0.86, 0.76, 0.48, 1.0],
-            operator: [0.78, 0.80, 0.84, 1.0],
-            variable: [0.82, 0.84, 0.88, 1.0],
-            conditional: keyword,
-            repeat: keyword,
-        }
-    }
-}
-
-impl SyntaxTheme {
-    fn color(self, capture: usize) -> [f32; 4] {
-        match CAPTURE_NAMES[capture] {
-            "comment" => self.comment,
-            "string" => self.string,
-            "number" | "boolean" => self.literal,
-            "keyword" | "preproc" | "conditional" | "repeat" => self.keyword,
-            "function" | "method" | "constructor" => self.function,
-            "type" | "constant" | "attribute" => self.type_or_constant,
-            "parameter" | "property" | "label" => self.symbol,
-            "operator" | "punctuation" => self.operator,
-            "variable" => self.variable,
-            _ => unreachable!("CAPTURE_NAMES and SyntaxTheme mapping disagree"),
-        }
-    }
-}
 
 /// Immutable, shareable language configuration and palette.
 ///
@@ -180,7 +117,7 @@ impl SyntaxHighlighting {
     ) {
         out.clear();
         let Ok(events) =
-            highlighter.highlight(&self.configuration, source.as_bytes(), None, |_| None)
+            highlighter.highlight(&self.configuration, source.as_bytes(), None, None, |_| None)
         else {
             return;
         };
@@ -195,7 +132,7 @@ impl SyntaxHighlighting {
                     if let Some(&capture) = active.last() {
                         out.push(TextStyleRange {
                             range: start..end,
-                            color: Some(self.theme.color(capture)),
+                            color: self.theme.for_capture(CAPTURE_NAMES[capture]),
                             underline: Underline::None,
                         });
                     }

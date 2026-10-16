@@ -1,26 +1,54 @@
-# Current task: video playback (2026-10-14)
+# Current task: code editor (2026-10-16)
+
+A source editor widget after Forge's `CodeEditor`, in a new crate `crates/code`
+(`wgpu-gameui-code`). Design notes and what's left: `docs/design/code-editor.md`.
+Nothing is committed yet.
+
+- Done: the document (rope, selections, undo groups), the editing rules, Tree-sitter
+  colouring by the screenful (13 grammars behind features; tree-sitter 0.27 so agent-ui can
+  link it), the widget (gutter, band, selection, caret, both-way scrolling, mouse, keys,
+  read-only, status strip, frameless option). 118 tests in the crate.
+- Outside the crate: core's `SyntaxTheme` (Forge `--syn-*` inks, compiled without the
+  `syntax` feature), tree-sitter-highlight 0.25 → 0.27.1, `FocusState::claim_tab`,
+  `UiState::clipboard()`. Each has its tests.
+- agent-ui's Files tab shows files in it, read-only. Saving exists on the server and in the
+  desktop's network client (`Command::SaveFile`), but has no UI yet.
+- Next: editing in the Files tab (save key, conflict prompt, refuse files shown in part), then
+  the Later list in the design doc.
+
+# Current task: video playback (2026-10-14, updated 2026-10-16)
 
 Bart asked for a video component in pure Rust, with sound. The plan is
 `docs/design/video-playback.md`, and its "Implementation status" is the
 checklist; read it first.
 
-- Phase 0 (the workspace: `crates/core`, `crates/media`) is committed
-  (`8cd9515`, agent-ui `1137178`).
-- Phase 1 (core) is committed: in-place sprite updates, YUV sprites with
-  colour handling, full screen on request, and the media icons. A review
-  agent checked it; its findings were fixed, and the ones left are in TODO.md
-  "Video phase 1 follow-ups". It changes `UiFrameResult` (a `fullscreen`
-  field), so agent-ui's `crates/desktop/src/redraw.rs` tests changed with it.
-- Phase 2 (`crates/media`: MP4, H.264 and AAC on a worker, clock, seeking,
-  states, `Player`) is written and its design-doc items are checked off
-  (2026-10-15); a review's findings are fixed (listed in the design doc),
-  not yet committed. One test fails on a `rust_h264` 0.4.0 chroma bug (see the
-  design doc's "Phase 2 leftover"); Bart is choosing how to carry the fix:
-  a serialexp fork plus `[patch.crates-io]` and an upstream PR, a local path
-  patch, or a tolerant test. A patched clone was in /tmp/rust_h264_git.
-- Next: phase 3, sound (`cpal`, `rubato`, the device clock).
-- The research clones (rust_h264, re_mp4, symphonia, cpal) were in
-  /tmp/video-research; clone them again if /tmp was cleared.
+- Phases 0, 1 and 2 are committed and pushed.
+- Phase 3 (sound) is written, not committed (2026-10-16): `convert.rs`
+  (wsola, rubato, `mix.rs`), `ring.rs` (rtrb ring, flush by skip count, gain
+  ramp, the frame heard at a moment), `device.rs` (cpal, and a fake device
+  for tests), `sound.rs` (a sound thread per player, playing segments), and
+  `player.rs` (`Options`, volume, mute, `sound_error`, the clock following
+  `Sound::hearing`), plus the worker saying how far the sound is known.
+  A review's findings are fixed (the design doc's "How phase 3 builds it"
+  says how it works now); what's left is in TODO.md "Video phase 3
+  follow-ups". New fixture `short_sound.mp4` (made on its own with ffmpeg
+  9.0.2; `make.sh` has its block). `cargo test -p wgpu-gameui-media --lib`,
+  clippy and fmt pass.
+  The real device has only the ignored `plays_on_the_real_sound_device`
+  test, not run yet: it beeps on the speakers.
+- Phase 4 (widgets) is written, not committed (2026-10-16): core's
+  `src/widgets/media/` (`Scrubber`, `PlayButton`, `VideoPlayer`, the
+  `MediaSource` trait), `YuvPlanes::borrowed`, the corner and exclamation
+  icons, the media crate's `source.rs` (`PlayerSource`, `PictureSink`), and
+  the gallery's Media category. Workspace tests, clippy and fmt pass, and
+  the gallery renders it (`test_output/widget_gallery/media/`).
+  Still open from phase 4: `AudioPlayer`, audio-only files, the windowed
+  example.
+- agent-ui's Files tab plays videos with it (agent-ui's CURRENT_TASK.md,
+  "Video in the Files tab"). A review there added `VideoPlayer::width_for`,
+  `min_width` and `FOCUS_IDS`, letter keys from any of the player's keys, and a guard
+  against the shortcut key and Alt. One edge case is left in `TODO.md`:
+  full screen waiting forever for a window that never resizes.
 
 # Current task: Timeline and viewport gizmos from Forge (2026-10-11)
 
