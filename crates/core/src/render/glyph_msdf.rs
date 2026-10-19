@@ -20,10 +20,12 @@
 //!    turned to one winding direction. Each step's doc says what it prevents;
 //!    Phosphor's outlines need all of them.
 //! 4. `edge_coloring_simple` assigns R/G/B channels to edges, `.prepare()` builds
-//!    the acceleration structure, `generate_msdf` fills an f32 image,
-//!    `correct_error_msdf` evens out texels whose channels would interpolate to
-//!    ink off the outline, and `correct_sign_msdf` fixes the inside/outside sign
-//!    (median > 0.5 == inside) before the field is quantised to RGB8.
+//!    the acceleration structure, `generate_mtsdf` fills an f32 image (the
+//!    three channels plus the true distance in alpha), `correct_error_mtsdf`
+//!    evens out texels whose channels would interpolate to ink off the outline,
+//!    `correct_sign_mtsdf` fixes the inside/outside sign (median > 0.5 ==
+//!    inside), and [`settle_deep_interior`] hands the true distance to texels
+//!    deep inside the ink, before the channels are quantised to RGB8.
 //!
 //! The returned [`GlyphMetrics`] carries the tile's bounds in **EM fractions**
 //! (units of `font_size`) relative to the pen-on-baseline origin, x rightward and
@@ -41,12 +43,12 @@
 
 use fdsm::bezier::scanline::FillRule;
 use fdsm::bezier::{Order, Point, Segment, Vect};
-use fdsm::correct_error::{ErrorCorrectionConfig, correct_error_msdf};
-use fdsm::generate::generate_msdf;
-use fdsm::render::correct_sign_msdf;
+use fdsm::correct_error::{ErrorCorrectionConfig, correct_error_mtsdf};
+use fdsm::generate::generate_mtsdf;
+use fdsm::render::correct_sign_mtsdf;
 use fdsm::shape::{ColoredContour, Contour, Shape};
 use fdsm::transform::Transform;
-use image::{Rgb32FImage, RgbImage};
+use image::{RgbImage, Rgba32FImage};
 use nalgebra::{Affine2, Matrix3};
 use ttf_parser::{Face, GlyphId};
 
@@ -464,31 +466,67 @@ fn rasterize_tile(tile: TileShape) -> Option<GlyphMsdf> {
     // pass, texels where two channels' false edges meet interpolate to stray
     // ink outside the outline (short lines and dots beside Phosphor's house,
     // palette and angle icons). Correction runs before the sign fix, as fdsm
-    // requires.
-    let mut field = Rgb32FImage::new(width_px, height_px);
-    generate_msdf(&prepared, tile.px_range, &mut field);
-    correct_error_msdf(
+    // requires. The true distance rides along in alpha (it costs one `min`
+    // over what the channels already compute) for `settle_deep_interior`,
+    // and is dropped at quantization.
+    let mut field = Rgba32FImage::new(width_px, height_px);
+    generate_mtsdf(&prepared, tile.px_range, &mut field);
+    correct_error_mtsdf(
         &mut field,
         &tile.colored,
         &prepared,
         tile.px_range,
         &ErrorCorrectionConfig::default(),
     );
-    correct_sign_msdf(&mut field, &prepared, FillRule::Nonzero);
+    correct_sign_mtsdf(&mut field, &prepared, FillRule::Nonzero);
+    settle_deep_interior(&mut field, tile.px_range);
     // Quantize the way fdsm's own u8 output does (scale and truncate).
     let image = RgbImage::from_fn(width_px, height_px, |x, y| {
-        image::Rgb(
-            field
-                .get_pixel(x, y)
-                .0
-                .map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8),
-        )
+        let [r, g, b, _] = field.get_pixel(x, y).0;
+        image::Rgb([r, g, b].map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8))
     });
 
     Some(GlyphMsdf {
         image,
         metrics: tile.metrics,
     })
+}
+
+/// How deep inside the ink, in tile pixels, a texel must lie before
+/// [`settle_deep_interior`] gives it the true distance: √2, the farthest a
+/// bilinear cell's corner can be from an outline crossing that cell, plus a
+/// margin for the field's f32 rounding.
+const DEEP_INTERIOR_PX: f64 = std::f64::consts::SQRT_2 + 1.0 / 64.0;
+
+/// Give every texel deeper than [`DEEP_INTERIOR_PX`] inside the ink the true
+/// distance (from the field's alpha) in all three channels.
+///
+/// A channel's distance is the *pseudo*-distance to its nearest edge — the
+/// edge's line extended past its ends — which is what keeps corners sharp. Past
+/// a sharp corner of a counter (the hollow of Phosphor's eyedropper or needle,
+/// a coin's rim) both edges' extended lines run on into the ink, and with only
+/// three channels two of them can end up reading that line: the median then
+/// says a texel 2.5 px deep is 0.4 px deep, and the ink behind the corner draws
+/// at ~85 % — a pale streak continuing the counter. Two neighbouring texels
+/// whose channels clash this way (hand-palm, between two fingers) interpolate
+/// to the same pale spot. fdsm's error correction catches neither, in any of
+/// its modes or distance checks (each was tried).
+///
+/// Neither kind of texel holds anything the field needs. A bilinear cell the
+/// outline crosses has every corner within √2 of it, so a texel deeper than
+/// that never decides where the outline is drawn; and a texel with all three
+/// channels equal interpolates with any neighbour as a plain offset, so it
+/// can't introduce a clash either. Only the interior is settled: the outside
+/// field is what outlines and glows read, and the sharp corners it carries
+/// there (a mitred outline) are the point of an MSDF.
+fn settle_deep_interior(field: &mut Rgba32FImage, px_range: f64) {
+    let deep = 0.5 + DEEP_INTERIOR_PX / px_range;
+    for texel in field.pixels_mut() {
+        let true_distance = texel.0[3];
+        if true_distance as f64 > deep {
+            texel.0 = [true_distance; 4];
+        }
+    }
 }
 
 /// How many field texels the hinted path generates per target screen pixel.
@@ -793,6 +831,34 @@ mod tests {
         report
     }
 
+    /// Deep inside the ink a texel takes the true distance in every channel;
+    /// near the outline, and anywhere outside it, the channels are left alone.
+    #[test]
+    fn only_the_deep_interior_is_settled() {
+        let range = 12.0;
+        // A texel's value for a tile-pixel distance (positive inside).
+        let v = |px: f64| (0.5 + px / range) as f32;
+        let texels = [
+            // A pale streak behind a counter's corner: 2.5 px deep, median 0.4.
+            ([v(0.4), v(2.5), v(2.5)], v(2.5), true),
+            // A clash partner, deep enough to settle though its median is right.
+            ([v(-0.4), v(1.5), v(1.6)], v(1.6), true),
+            // Within √2: may be a corner of a cell the outline crosses.
+            ([v(0.2), v(1.3), v(1.3)], v(1.3), false),
+            // Outside, past a sharp corner: the mitre outlines and glows draw.
+            ([v(-1.0), v(-1.0), v(-3.0)], v(-3.0), false),
+        ];
+        let mut field = Rgba32FImage::new(texels.len() as u32, 1);
+        for (x, &([r, g, b], a, _)) in texels.iter().enumerate() {
+            field.put_pixel(x as u32, 0, image::Rgba([r, g, b, a]));
+        }
+        settle_deep_interior(&mut field, range);
+        for (x, &([r, g, b], a, settles)) in texels.iter().enumerate() {
+            let expected = if settles { [a; 4] } else { [r, g, b, a] };
+            assert_eq!(field.get_pixel(x as u32, 0).0, expected, "texel {x}");
+        }
+    }
+
     #[cfg(feature = "phosphor-icons")]
     #[test]
     fn icon_fields_have_no_stray_ink_or_holes() {
@@ -802,15 +868,32 @@ mod tests {
         // drawn from a 9 px header-key icon up to 64 px. Each defect this
         // guards against showed at only some of these sizes.
         let scales = [0.12, 0.14, 0.16, 0.2, 0.25, 0.3, 0.4, 0.5, 0.7, 1.0];
-        let bad: Vec<_> = PhosphorIcon::ALL
-            .iter()
-            .flat_map(|&icon| {
-                let glyph = GlyphId(icon.glyph().expect("icon resolves").glyph_id);
-                msdf_faults(&face, glyph, 64.0, 12.0, &scales)
-                    .into_iter()
-                    .map(move |fault| (icon.name(), fault))
-            })
-            .collect();
+        // The whole Phosphor set: one chunk per core, each icon independent.
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let chunk = PhosphorIcon::ALL.len().div_ceil(threads);
+        let bad: Vec<_> = std::thread::scope(|scope| {
+            let workers: Vec<_> = PhosphorIcon::ALL
+                .chunks(chunk)
+                .map(|icons| {
+                    let (face, scales) = (&face, &scales);
+                    scope.spawn(move || {
+                        icons
+                            .iter()
+                            .flat_map(|&icon| {
+                                let glyph = GlyphId(icon.glyph().expect("icon resolves").glyph_id);
+                                msdf_faults(face, glyph, 64.0, 12.0, scales)
+                                    .into_iter()
+                                    .map(move |fault| (icon.name(), fault))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|w| w.join().expect("worker"))
+                .collect()
+        });
         assert!(
             bad.is_empty(),
             "icons with faults (name, (scale, count, first)): {bad:?}"

@@ -28,22 +28,25 @@ pub(crate) fn phosphor_font_name() -> &'static str {
     "phosphor"
 }
 
-/// Declare the curated icon set once: the enum, its [`PhosphorIcon::ALL`] table,
-/// the codepoints and the kebab-case names all expand from the same list, so a
-/// new icon is a single line and the four can never drift apart.
+/// Declare the icon set once: the enum, its [`PhosphorIcon::ALL`] table, the
+/// codepoints and the kebab-case names all expand from the same list (which
+/// `build.rs` generates from the vendored stylesheet), so the four can never
+/// drift apart.
 macro_rules! icons {
     ($( $(#[$doc:meta])* $variant:ident = $cp:literal, $name:literal; )*) => {
-        /// Curated set of Phosphor icons exposed by the library. Codepoints are
-        /// the Phosphor regular-weight Private-Use-Area assignments; they are
-        /// verified against the vendored font's cmap by the unit tests in this
-        /// module.
+        /// Every Phosphor regular-weight icon in the vendored font. Codepoints
+        /// are Phosphor's Private-Use-Area assignments, generated from its own
+        /// stylesheet and verified against the font's cmap by the unit tests
+        /// in this module. Glyphs are rasterized into the icon atlas lazily, on
+        /// first draw, so the size of the set costs nothing at runtime.
         ///
-        /// `#[non_exhaustive]` so we can grow the set without it being a
-        /// breaking change.
+        /// `#[non_exhaustive]` so a newer Phosphor release can add icons
+        /// without it being a breaking change.
         ///
         /// Names match Phosphor's own catalogue (<https://phosphoricons.com>),
         /// so [`from_name`](PhosphorIcon::from_name) accepts exactly what a
-        /// designer would type — useful for data- or script-driven UI.
+        /// designer would type — useful for data- or script-driven UI. Legacy
+        /// alias names (`folder-notch` for `folder`) are left out.
         #[non_exhaustive]
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
         pub enum PhosphorIcon {
@@ -51,7 +54,8 @@ macro_rules! icons {
         }
 
         impl PhosphorIcon {
-            /// Every variant, for prewarming the atlas, for `from_name`, and for tests.
+            /// Every variant, for `from_name` and for tests. Prewarm only the
+            /// icons an app shows ([`IconGlyph`] lists), never this whole table.
             pub const ALL: &'static [PhosphorIcon] = &[ $( PhosphorIcon::$variant, )* ];
 
             /// The glyph's Private-Use-Area codepoint in the Phosphor regular font.
@@ -69,8 +73,8 @@ macro_rules! icons {
             }
 
             /// Look an icon up by its kebab-case Phosphor name. `None` for a name
-            /// outside the curated set — callers decide whether that is a warning
-            /// or a hard error.
+            /// Phosphor doesn't have (or a legacy alias) — callers decide whether
+            /// that is a warning or a hard error.
             pub fn from_name(name: &str) -> Option<Self> {
                 match name {
                     $( $name => Some(PhosphorIcon::$variant), )*
@@ -81,140 +85,8 @@ macro_rules! icons {
     };
 }
 
-icons! {
-    /// Upward-pointing caret (e.g. collapse / increment).
-    CaretUp = '\u{e13c}', "caret-up";
-    /// Downward-pointing caret (e.g. expand / decrement).
-    CaretDown = '\u{e136}', "caret-down";
-    /// Plus sign (add / increment).
-    Plus = '\u{e3d4}', "plus";
-    /// Minus sign (remove / decrement).
-    Minus = '\u{e32a}', "minus";
-    /// Checkmark (confirm / enabled state).
-    Check = '\u{e182}', "check";
-    /// Cross (close / cancel).
-    X = '\u{e4f6}', "x";
-    /// Filled right-pointing play control.
-    Play = '\u{e3d0}', "play";
-    /// Speaker with three sound waves (loud volume).
-    SpeakerHigh = '\u{e44a}', "speaker-high";
-    /// Speaker with one sound wave (quiet volume).
-    SpeakerLow = '\u{e44c}', "speaker-low";
-    /// Speaker without sound waves (volume at zero).
-    SpeakerNone = '\u{e44e}', "speaker-none";
-    /// Speaker with a cross (muted).
-    SpeakerX = '\u{e45c}', "speaker-x";
-    /// Four arrows pointing inwards (leave full screen).
-    ArrowsIn = '\u{e09a}', "arrows-in";
-    /// Open eye (reveal / visible).
-    Eye = '\u{e220}', "eye";
-    /// Crossed-out eye (hide / hidden).
-    EyeSlash = '\u{e224}', "eye-slash";
-    /// Trash can (delete).
-    Trash = '\u{e4a6}', "trash";
-    /// Simple pencil (edit).
-    PencilSimple = '\u{e3b4}', "pencil-simple";
-    /// Gear (settings).
-    Gear = '\u{e270}', "gear";
-    /// Eraser (rub out / remove).
-    Eraser = '\u{e21e}', "eraser";
-    /// Paint brush (paint / recolour).
-    PaintBrush = '\u{e6f0}', "paint-brush";
-    /// Tilted paint bucket (fill).
-    PaintBucket = '\u{e392}', "paint-bucket";
-    /// Artist's palette (colour choice).
-    Palette = '\u{e6c8}', "palette";
-    /// Row of colour swatches.
-    Swatches = '\u{e5b8}', "swatches";
-    /// Isometric cube (3D volume).
-    Cube = '\u{e1da}', "cube";
-    /// Wireframe cube (transparent volume).
-    CubeTransparent = '\u{ec7c}', "cube-transparent";
-    /// Shaded sphere (3D ball).
-    Sphere = '\u{ee66}', "sphere";
-    /// Small filled dot (a single unit).
-    Dot = '\u{ecde}', "dot";
-    /// Circle outline.
-    Circle = '\u{e18a}', "circle";
-    /// Square outline.
-    Square = '\u{e45e}', "square";
-    /// Triangle outline (a wedge in cross-section).
-    Triangle = '\u{e4b0}', "triangle";
-    /// Geometric angle mark (a corner).
-    Angle = '\u{e7bc}', "angle";
-    /// Diamond outline (a bevelled solid).
-    Diamond = '\u{e1ec}', "diamond";
-    /// Circular arrow, clockwise (rotate forwards).
-    ArrowClockwise = '\u{e036}', "arrow-clockwise";
-    /// Circular arrow, counter-clockwise (rotate backwards, replay).
-    ArrowCounterClockwise = '\u{e038}', "arrow-counter-clockwise";
-    /// Ruler (measurement / size).
-    Ruler = '\u{e6b8}', "ruler";
-    /// Right-pointing caret (a collapsed tree node or section).
-    CaretRight = '\u{e13a}', "caret-right";
-    /// Magnifying glass (search).
-    MagnifyingGlass = '\u{e30c}', "magnifying-glass";
-    /// Two circular arrows, clockwise (refresh / rescan).
-    ArrowsClockwise = '\u{e094}', "arrows-clockwise";
-    /// House (go to the home folder or start page).
-    House = '\u{e2c2}', "house";
-    /// Closed folder with a tab (a directory).
-    Folder = '\u{e24a}', "folder";
-    /// Open folder (an expanded directory).
-    FolderOpen = '\u{e256}', "folder-open";
-    /// Plain folder (a project or collection).
-    FolderSimple = '\u{e25a}', "folder-simple";
-    /// Blank page (a file).
-    File = '\u{e230}', "file";
-    /// Speech bubble (a conversation or session).
-    ChatCircle = '\u{e168}', "chat-circle";
-    /// Square split in two panes, side by side (an empty layout slot).
-    SquareSplitHorizontal = '\u{e870}', "square-split-horizontal";
-    /// Three dots in a row (more actions for a row or item).
-    DotsThree = '\u{e1fe}', "dots-three";
-    /// Two stacked rows (a group of items, such as quiet projects).
-    Rows = '\u{e5a2}', "rows";
-    /// Paper plane in flight (a message sent).
-    PaperPlaneTilt = '\u{e398}', "paper-plane-tilt";
-    /// Mailbox (a message received).
-    Mailbox = '\u{ec1e}', "mailbox";
-    /// Question mark in a circle (a question asked).
-    Question = '\u{e3e8}', "question";
-    /// Square speech bubble (a reply).
-    Chat = '\u{e15c}', "chat";
-    /// Left-pointing caret (back, previous).
-    CaretLeft = '\u{e138}', "caret-left";
-    /// Upward arrow (the enclosing folder).
-    ArrowUp = '\u{e08e}', "arrow-up";
-    /// Star outline (a favourite).
-    Star = '\u{e46a}', "star";
-    /// Three lines (a list view).
-    List = '\u{e2f0}', "list";
-    /// Four squares (a grid view).
-    SquaresFour = '\u{e464}', "squares-four";
-    /// Clock with a backward arrow (recent items).
-    ClockCounterClockwise = '\u{e1a0}', "clock-counter-clockwise";
-    /// Folder with a plus (new folder).
-    FolderPlus = '\u{e258}', "folder-plus";
-    /// Two bars (pause playback).
-    Pause = '\u{e39e}', "pause";
-    /// Bar then left triangle (jump to the start).
-    SkipBack = '\u{e5a4}', "skip-back";
-    /// Right triangle then bar (jump to the end).
-    SkipForward = '\u{e5a6}', "skip-forward";
-    /// Two arrows chasing round a loop (repeat / loop playback).
-    Repeat = '\u{e3f6}', "repeat";
-    /// Four arrows out from a centre (move in any direction).
-    ArrowsOutCardinal = '\u{e0a4}', "arrows-out-cardinal";
-    /// Four arrows out to the corners (scale, enter full screen).
-    ArrowsOut = '\u{e0a2}', "arrows-out";
-    /// An exclamation mark on its own (can't, failed).
-    ExclamationMark = '\u{ee44}', "exclamation-mark";
-    /// Four corners pointing outwards (enter full screen).
-    CornersOut = '\u{e1d0}', "corners-out";
-    /// Four corners pointing inwards (leave full screen).
-    CornersIn = '\u{e1ce}', "corners-in";
-}
+// Every icon in `assets/fonts/phosphor/regular.css`, generated by `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/phosphor_icons.rs"));
 
 impl PhosphorIcon {
     /// Resolve this icon to a [`IconGlyph`] in the registered Phosphor font.

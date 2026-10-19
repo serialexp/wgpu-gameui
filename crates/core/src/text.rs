@@ -26,7 +26,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::RenderStats;
 use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
-use crate::render::{DEFAULT_PX_RANGE, IconGlyph, PhosphorIcon, icon_font_snapshot};
+use crate::render::{DEFAULT_PX_RANGE, IconGlyph, icon_font_snapshot};
 use crate::render::{
     FrameArena, GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, TextContrast, UniformArena,
     ortho_matrix,
@@ -874,19 +874,12 @@ impl TextRenderer {
         self.upload_atlas(device, queue);
     }
 
-    /// Pre-generate every curated [`PhosphorIcon`] into the icon atlas so the
-    /// first frame that shows an icon doesn't hitch. This is intentionally opt-in;
-    /// renderer construction otherwise generates icon glyphs lazily.
-    #[cfg(feature = "phosphor-icons")]
-    pub fn prewarm_icons(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let glyphs: Vec<IconGlyph> = PhosphorIcon::ALL.iter().filter_map(|i| i.glyph()).collect();
-        self.prewarm_icon_glyphs(device, queue, &glyphs);
-    }
-
-    /// Pre-generate an explicit set of icon glyphs — the route for an
-    /// application font registered with
-    /// [`register_icon_font`](crate::render::register_icon_font), whose glyph set
-    /// the library can't enumerate for itself.
+    /// Pre-generate an explicit set of icon glyphs so the first frame that
+    /// shows one doesn't hitch; glyphs are otherwise generated lazily. Pass the
+    /// icons the app actually shows — [`PhosphorIcon::glyph`](crate::render::PhosphorIcon::glyph) for built-in
+    /// ones, or glyphs of a font registered with
+    /// [`register_icon_font`](crate::render::register_icon_font). Never the
+    /// whole Phosphor set: that is ~1,500 MSDF tiles.
     ///
     /// Unresolvable glyphs (unregistered font, or a font id past the end of the
     /// registry) are skipped rather than panicking.
@@ -5995,7 +5988,7 @@ mod tests {
 #[cfg(all(test, feature = "phosphor-icons"))]
 mod icon_tests {
     use super::*;
-    use crate::render::icon_font_data;
+    use crate::render::{PhosphorIcon, icon_font_data};
 
     #[test]
     fn fit_centered_em_full_glyph_maps_to_smaller_dimension() {
