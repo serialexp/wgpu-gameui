@@ -35,8 +35,6 @@ the parser runtime and the grammars stay out of programs that only want the core
 - IME composition text (preedit) drawn at the caret; the editor asks for the IME and takes
   committed text, but doesn't show what is being composed
 - Word delete (Alt-Backspace on macOS, Ctrl-Backspace elsewhere) and line moves (Alt-Up/Down)
-- Long non-ASCII lines: an ASCII line past 2,000 bytes is drawn only where it can be seen;
-  any other long line is still shaped whole when in view
 - How far it scrolls sideways is the widest line drawn so far; it doesn't shrink when that line
   is edited shorter or scrolled away
 - WGSL: the only grammar on crates.io (`tree-sitter-wgsl` 0.0.6) is built on Tree-sitter 0.20,
@@ -66,10 +64,13 @@ they win).
 defaults to Forge's `--syn-*` inks, and maps a capture name to an ink by its first part that
 names one (`keyword.function` is a keyword).
 
-**Monospace, measured where it matters.** A line of ASCII is laid out on a grid of the mono
-font's advance. Any other line is measured with the mono font (its prefix up to the column
-wanted), so a wide character or a fallback font doesn't put the caret beside its glyph. Tabs
-are drawn as spaces to the next tab stop.
+**Monospace, on a grid.** Every character takes a whole number of columns of the mono font's
+advance: two for a wide one (most Chinese, Japanese and Korean, and emoji, by `unicode-width`),
+one for any other, and a tab the space to its next stop. So the caret, the selection and a click
+are arithmetic, never measured. Plain ASCII is drawn a run at a time; any other character alone
+at its column, so one from a fallback font, at whatever width that font gives it, keeps to the
+grid as a terminal's does. Only the columns in view (and a few either side) are drawn, however
+long the line.
 
 **Undo by groups.** Typing a run of characters, or deleting one with Backspace or Delete, is one
 step to undo; moving the caret, a newline, or any other kind of edit starts a new step. Undo

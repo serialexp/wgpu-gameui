@@ -504,13 +504,62 @@ fn code_is_coloured() {
 fn colours_follow_the_text_through_tabs() {
     let mut rig = Rig::new("\tlet x = 1;", Language::Rust);
     rig.idle();
-    let block = rig.block("    let x = 1;");
+    let block = rig.block("let x = 1;");
+    assert_eq!(block.x, rig.at(0, 4.0).0, "after the tab's stop");
     let keyword = block
         .style_ranges
         .iter()
         .find(|range| range.color == Some(SyntaxTheme::default().keyword))
         .expect("let coloured");
-    assert_eq!(keyword.range, 4..7);
+    assert_eq!(keyword.range, 0..3);
+}
+
+#[test]
+fn every_character_keeps_to_the_grid() {
+    // A wide character takes two columns, and one drawn from another font
+    // is placed at its column whatever width that font gives it.
+    let mut rig = Rig::new("é日x", Language::Plain);
+    rig.idle();
+    assert_eq!(rig.block("é").x, rig.at(0, 0.0).0);
+    assert_eq!(rig.block("日").x, rig.at(0, 1.0).0);
+    assert_eq!(rig.block("x").x, rig.at(0, 3.0).0);
+}
+
+#[test]
+fn a_wide_character_is_two_columns_to_the_caret_and_the_pointer() {
+    let mut rig = Rig::new("日x", Language::Plain).focused();
+    rig.frame(&InputState {
+        key_end: true,
+        ..away()
+    });
+    let caret = rig.editor.drawn.caret.expect("a caret");
+    assert!((caret.x - rig.at(0, 3.0).0).abs() < 0.01);
+    rig.click(0, 1.2, 1);
+    assert_eq!(rig.selection(), Selection::caret(3), "nearer its end");
+    rig.click(0, 0.8, 1);
+    assert_eq!(rig.selection(), Selection::caret(0), "nearer its start");
+    rig.frame(&InputState {
+        key_select_all: true,
+        ..away()
+    });
+    let selected = rig.editor.drawn.selection[0];
+    assert!((selected.width - 3.0 * rig.editor.drawn.advance).abs() < 0.01);
+}
+
+#[test]
+fn colours_follow_the_text_past_a_wide_character() {
+    let mut rig = Rig::new("\"日\"; fn", Language::Rust);
+    rig.idle();
+    let string = SyntaxTheme::default().string;
+    let wide = rig.block("日").style_ranges.first().expect("coloured");
+    assert_eq!((wide.range.clone(), wide.color), (0..3, Some(string)));
+    let block = rig.block("\"; fn");
+    let keyword = block
+        .style_ranges
+        .iter()
+        .find(|range| range.color == Some(SyntaxTheme::default().keyword))
+        .expect("fn coloured");
+    assert_eq!(keyword.range, 3..5);
 }
 
 #[test]
@@ -528,7 +577,8 @@ fn an_edit_is_coloured_at_once() {
 fn control_characters_are_drawn_as_pictures() {
     let mut rig = Rig::new("a\u{0}b", Language::Plain);
     rig.idle();
-    assert!(rig.texts().contains(&"a\u{2400}b"));
+    assert_eq!(rig.block("\u{2400}").x, rig.at(0, 1.0).0);
+    assert_eq!(rig.block("b").x, rig.at(0, 2.0).0);
 }
 
 #[test]
@@ -600,6 +650,37 @@ fn copy_cut_and_paste_go_through_the_clipboard() {
 }
 
 #[test]
+fn cut_keeps_the_text_when_there_is_no_clipboard_to_take_it() {
+    let mut rig = Rig::new("one two", Language::Plain).focused();
+    rig.editor.clipboard_set = None;
+    rig.click(0, 5.0, 2);
+    assert!(
+        !rig.frame(&InputState {
+            key_cut: true,
+            ..away()
+        })
+        .changed
+    );
+    assert_eq!(rig.editor.text(), "one two");
+}
+
+#[test]
+fn colours_follow_a_new_theme() {
+    let mut rig = Rig::new("fn main() {}", Language::Rust);
+    rig.idle();
+    let keyword = [1.0, 0.0, 0.0, 1.0];
+    rig.editor.theme.syntax.keyword = keyword;
+    rig.idle();
+    let block = rig.block("fn main() {}");
+    let fn_range = block
+        .style_ranges
+        .iter()
+        .find(|range| range.range == (0..2))
+        .expect("fn coloured");
+    assert_eq!(fn_range.color, Some(keyword));
+}
+
+#[test]
 fn undo_and_redo() {
     let mut rig = Rig::new("a", Language::Plain).focused();
     rig.frame(&InputState {
@@ -630,7 +711,13 @@ fn a_line_runs_on_past_the_view_rather_than_wrapping() {
     let line = "word ".repeat(300);
     let mut rig = Rig::new(&format!("{line}\nnext"), Language::Plain);
     rig.idle();
-    let first = rig.block(line.as_str()).clone();
+    let first = rig
+        .list
+        .texts
+        .iter()
+        .find(|text| text.content.starts_with("word word"))
+        .expect("the line drawn")
+        .clone();
     let (_, height) = rig.list.measure_block(&first);
     assert!(height < 2.0 * first.line_height, "{height}: one line");
     assert_eq!(rig.block("next").y - first.y, first.line_height);

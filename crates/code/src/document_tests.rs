@@ -295,3 +295,11 @@ fn the_text_comes_out_in_chunks_for_the_parser() {
     assert_eq!(read, text);
     assert_eq!(document.chunk_at(document.len()), "");
 }
+
+#[test]
+fn characters_are_counted_in_a_range() {
+    let document = Document::new("añb\n€c");
+    assert_eq!(document.chars_in(0..document.len()), 6);
+    assert_eq!(document.chars_in(1..3), 1);
+    assert_eq!(document.chars_in(2..2), 0);
+}

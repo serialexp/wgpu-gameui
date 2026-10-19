@@ -16,7 +16,7 @@ use wgpu_gameui::{
     TextSize, TextStyleRange, Underline, WrapMode,
 };
 
-use crate::columns::{Shown, column_of};
+use crate::columns::{Piece, byte_at_column, column_of, pieces};
 use crate::commands::{self, Motion, Rules};
 use crate::document::{Document, Selection};
 use crate::highlight::{Span, Syntax};
@@ -37,10 +37,8 @@ const CARET_WIDTH: f32 = 1.5;
 const STATUS_HEIGHT: f32 = 20.0;
 const STATUS_PAD: f32 = 9.0;
 const STATUS_GAP: f32 = 12.0;
-/// Past this many bytes, an ASCII line is drawn only where it can be seen.
-const LONG_LINE: usize = 2_000;
-/// Characters drawn beyond each side of what can be seen, on a long line.
-const LONG_LINE_MARGIN: usize = 16;
+/// Columns drawn beyond each side of what can be seen.
+const MARGIN: usize = 16;
 
 /// The editor's own colours, beside the syntax inks: Forge's `--code-*`
 /// tokens.
@@ -90,12 +88,13 @@ enum Drag {
     Lines(Range<usize>),
 }
 
-/// The colours of the lines last drawn, kept while neither the text nor
-/// the lines in view change.
+/// The colours of the lines last drawn, kept while neither the text, the
+/// lines in view nor the syntax inks change.
 #[derive(Clone, Debug)]
 struct Colours {
     version: u64,
     range: Range<usize>,
+    theme: SyntaxTheme,
     spans: Vec<Span>,
 }
 
@@ -321,8 +320,8 @@ impl CodeEditor {
         } else if input.key_copy {
             self.copy();
         } else if input.key_cut {
-            self.copy();
-            if editable {
+            // Only what the clipboard took is taken out.
+            if self.copy() && editable {
                 commands::cut(&mut self.document);
             }
         } else if input.key_paste {
@@ -427,10 +426,14 @@ impl CodeEditor {
         );
     }
 
-    fn copy(&mut self) {
-        if let (Some(text), Some(set)) = (commands::copied(&self.document), &self.clipboard_set) {
-            (set.borrow_mut())(text);
-        }
+    /// Put the selection on the clipboard; whether there was one to take it.
+    fn copy(&mut self) -> bool {
+        let (Some(text), Some(set)) = (commands::copied(&self.document), &self.clipboard_set)
+        else {
+            return false;
+        };
+        (set.borrow_mut())(text);
+        true
     }
 
     /// The sunken well, its border the accent's while focused; without a
@@ -473,7 +476,7 @@ impl CodeEditor {
             line_count as f32 * metrics.line_height + 2.0 * PAD_Y,
         ];
         if std::mem::take(&mut self.reveal) {
-            self.reveal_caret(body, metrics, font, cx.draw_list);
+            self.reveal_caret(body, metrics);
         }
         let view = ScrollView::new(body).overlay();
         let mut input = cx.input.clone();
@@ -484,7 +487,7 @@ impl CodeEditor {
         if inner.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed {
             cx.request_cursor(CursorIcon::Text);
         }
-        self.pointer(&input, inner, metrics, font, cx.draw_list);
+        self.pointer(&input, inner, metrics, cx.draw_list);
 
         // The lines in view.
         let top = offset[1] - PAD_Y;
@@ -497,7 +500,14 @@ impl CodeEditor {
         let caret_line = self.document.line_of(selection.head);
         let banded = focused && selection.is_empty();
         let text_x = inner.x + metrics.gutter;
+        let column_x = |column: usize| text_x + column as f32 * metrics.advance;
         let line_top = |line: usize| inner.y + PAD_Y + line as f32 * metrics.line_height;
+        // The columns in view, and a few either side.
+        let first_column = (offset[0] / metrics.advance).floor().max(0.0) as usize;
+        let visible = ((inner.width - metrics.gutter) / metrics.advance)
+            .ceil()
+            .max(0.0) as usize;
+        let columns = first_column.saturating_sub(MARGIN)..first_column + visible + MARGIN;
         // Sticky to the left edge: the content is drawn shifted by the
         // scroll offset, so this is the view's left edge.
         let left = inner.x + offset[0];
@@ -533,27 +543,18 @@ impl CodeEditor {
             let start = self.document.line_start(line);
             let end = self.document.line_end(line);
             let text = self.document.line(line);
-            let shown = Shown::new(&text, tab_size);
             let y = line_top(line);
 
             // The selection on this line.
             if !range.is_empty() && range.start <= end && range.end >= start {
-                let from = range.start.max(start) - start;
-                let x0 = x_of(
-                    cx.draw_list,
-                    metrics,
-                    font,
-                    &shown.text,
-                    shown.to_shown(from),
-                );
-                let to = range.end.min(end) - start;
-                let mut x1 = x_of(cx.draw_list, metrics, font, &shown.text, shown.to_shown(to));
+                let x0 = column_x(column_of(&text, range.start.max(start) - start, tab_size));
+                let mut x1 = column_x(column_of(&text, range.end.min(end) - start, tab_size));
                 if range.end > end {
                     // Past the line's end: a little of its line ending too.
                     x1 += metrics.advance * 0.5;
                 }
                 if x1 > x0 {
-                    let rect = Rect::new(text_x + x0, y, x1 - x0, metrics.line_height);
+                    let rect = Rect::new(x0, y, x1 - x0, metrics.line_height);
                     cx.draw_list.quad(
                         rect.x,
                         rect.y,
@@ -570,32 +571,22 @@ impl CodeEditor {
             while span_index < spans.len() && spans[span_index].range.end <= start {
                 span_index += 1;
             }
-            let mut ranges = Vec::new();
+            let mut inks = Vec::new();
             let mut index = span_index;
             while index < spans.len() && spans[index].range.start < end {
                 let span = &spans[index];
-                let piece = span.range.start.max(start) - start..span.range.end.min(end) - start;
-                if !piece.is_empty() {
-                    ranges.push(TextStyleRange {
-                        range: shown.range(piece),
-                        color: Some(span.ink),
-                        underline: Underline::None,
-                    });
+                let range = span.range.start.max(start) - start..span.range.end.min(end) - start;
+                if !range.is_empty() {
+                    inks.push((range, span.ink));
                 }
                 index += 1;
             }
-            let width = self.draw_line(
-                &shown.text,
-                ranges,
-                text_x,
-                y,
-                inner,
-                offset,
-                metrics,
-                font,
-                cx,
-            );
-            self.widest = self.widest.max(width);
+            let (pieces, width) = pieces(&text, tab_size, columns.clone());
+            for piece in pieces {
+                let x = column_x(piece.column);
+                self.draw_piece(piece, &inks, x, y, metrics, font, cx);
+            }
+            self.widest = self.widest.max(width as f32 * metrics.advance);
         }
         // As wide as the widest line seen, this frame's included.
         self.scroll.content_size[0] = metrics.gutter + self.widest + PAD_RIGHT;
@@ -604,15 +595,7 @@ impl CodeEditor {
         if focused && lines.contains(&caret_line) {
             let start = self.document.line_start(caret_line);
             let text = self.document.line(caret_line);
-            let shown = Shown::new(&text, tab_size);
-            let x = text_x
-                + x_of(
-                    cx.draw_list,
-                    metrics,
-                    font,
-                    &shown.text,
-                    shown.to_shown(selection.head - start),
-                );
+            let x = column_x(column_of(&text, selection.head - start, tab_size));
             let y = line_top(caret_line);
             cx.draw_list
                 .quad(x, y, CARET_WIDTH, metrics.line_height, self.theme.caret);
@@ -669,54 +652,40 @@ impl CodeEditor {
         view.end(&mut self.scroll, cx.draw_list, &cx.styles(), &input, begun);
     }
 
-    /// Draw one line's text at `x`, `y`; its width. A long ASCII line is
-    /// drawn only where it can be seen.
+    /// Draw `piece` at `x`, `y`, coloured by `inks`: ranges of its line.
+    /// Where the piece is the line's own bytes, each ink covers its own part
+    /// of it; a picture takes the ink of what it stands for.
     #[allow(clippy::too_many_arguments)]
-    fn draw_line(
+    fn draw_piece(
         &self,
-        text: &str,
-        ranges: Vec<TextStyleRange>,
+        piece: Piece,
+        inks: &[(Range<usize>, [f32; 4])],
         x: f32,
         y: f32,
-        inner: Rect,
-        offset: [f32; 2],
         metrics: &Metrics,
         font: &Option<FontHandle>,
         cx: &mut DrawContext,
-    ) -> f32 {
-        if text.is_empty() {
-            return 0.0;
-        }
-        let long = text.len() > LONG_LINE && text.is_ascii();
-        let (shown, ranges, x, width) = if long {
-            let visible = ((inner.width - metrics.gutter) / metrics.advance).ceil() as usize;
-            let first = ((offset[0] / metrics.advance).floor() as usize)
-                .saturating_sub(LONG_LINE_MARGIN)
-                .min(text.len());
-            let last = (first + visible + 2 * LONG_LINE_MARGIN).min(text.len());
-            let ranges = ranges
-                .into_iter()
-                .filter_map(|range| {
-                    let start = range.range.start.max(first);
-                    let end = range.range.end.min(last);
-                    (start < end).then(|| TextStyleRange {
-                        range: start - first..end - first,
-                        ..range
-                    })
+    ) {
+        let source = piece.source;
+        let own = piece.text.len() == source.len();
+        let ranges = inks
+            .iter()
+            .filter_map(|(range, ink)| {
+                let start = range.start.max(source.start);
+                let end = range.end.min(source.end);
+                (start < end).then(|| TextStyleRange {
+                    range: if own {
+                        start - source.start..end - source.start
+                    } else {
+                        0..piece.text.len()
+                    },
+                    color: Some(*ink),
+                    underline: Underline::None,
                 })
-                .collect();
-            (
-                &text[first..last],
-                ranges,
-                x + first as f32 * metrics.advance,
-                text.len() as f32 * metrics.advance,
-            )
-        } else {
-            let width = x_of(cx.draw_list, metrics, font, text, text.len());
-            (text, ranges, x, width)
-        };
+            })
+            .collect();
         cx.draw_list.text(
-            TextBlock::new(shown, x, y)
+            TextBlock::new(piece.text, x, y)
                 .with_size(metrics.size)
                 .with_line_height(metrics.line_height)
                 .with_font_opt(font.clone())
@@ -724,16 +693,19 @@ impl CodeEditor {
                 .with_style_ranges(ranges)
                 .with_wrap(WrapMode::None),
         );
-        width
     }
 
-    /// The colours of `lines`, worked out again only when the text or the
-    /// lines in view changed.
+    /// The colours of `lines`, worked out again only when the text, the
+    /// lines in view or the syntax inks changed.
     fn colours(&mut self, lines: Range<usize>) -> Vec<Span> {
         let range = self.document.line_start(lines.start)..self.document.line_end(lines.end - 1);
         let version = self.document.version();
         match &self.colours {
-            Some(colours) if colours.version == version && colours.range == range => {
+            Some(colours)
+                if colours.version == version
+                    && colours.range == range
+                    && colours.theme == self.theme.syntax =>
+            {
                 colours.spans.clone()
             }
             _ => {
@@ -743,6 +715,7 @@ impl CodeEditor {
                 self.colours = Some(Colours {
                     version,
                     range,
+                    theme: self.theme.syntax,
                     spans: spans.clone(),
                 });
                 spans
@@ -751,13 +724,7 @@ impl CodeEditor {
     }
 
     /// Scroll so the caret can be seen.
-    fn reveal_caret(
-        &mut self,
-        body: Rect,
-        metrics: &Metrics,
-        font: &Option<FontHandle>,
-        list: &mut DrawList,
-    ) {
+    fn reveal_caret(&mut self, body: Rect, metrics: &Metrics) {
         let head = self.document.selection().head;
         let line = self.document.line_of(head);
         let top = PAD_Y + line as f32 * metrics.line_height;
@@ -768,15 +735,8 @@ impl CodeEditor {
             body.height,
         );
         let text = self.document.line(line);
-        let shown = Shown::new(&text, self.rules.tab_size);
         let start = self.document.line_start(line);
-        let x = x_of(
-            list,
-            metrics,
-            font,
-            &shown.text,
-            shown.to_shown(head - start),
-        );
+        let x = column_of(&text, head - start, self.rules.tab_size) as f32 * metrics.advance;
         self.widest = self.widest.max(x + CARET_WIDTH);
         self.scroll.content_size[0] = metrics.gutter + self.widest + PAD_RIGHT;
         self.scroll.scroll_range_into_view(
@@ -789,14 +749,7 @@ impl CodeEditor {
 
     /// Place the caret with a press, select words or lines with a double or
     /// triple one, and grow the selection while the button is held.
-    fn pointer(
-        &mut self,
-        input: &InputState,
-        inner: Rect,
-        metrics: &Metrics,
-        font: &Option<FontHandle>,
-        list: &mut DrawList,
-    ) {
+    fn pointer(&mut self, input: &InputState, inner: Rect, metrics: &Metrics, list: &mut DrawList) {
         let over = inner.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
         if input.mouse_clicked && !over {
             // A press elsewhere ends any drag of ours.
@@ -804,7 +757,7 @@ impl CodeEditor {
             return;
         }
         if input.mouse_clicked {
-            let at = self.position_at(input.mouse_x, input.mouse_y, inner, metrics, font, list);
+            let at = self.position_at(input.mouse_x, input.mouse_y, inner, metrics);
             let anchor = self.document.selection().anchor;
             let (selection, drag) = match input.mouse_click_count {
                 2 => {
@@ -844,7 +797,7 @@ impl CodeEditor {
         let Some(drag) = self.drag.clone() else {
             return;
         };
-        let at = self.position_at(input.mouse_x, input.mouse_y, inner, metrics, font, list);
+        let at = self.position_at(input.mouse_x, input.mouse_y, inner, metrics);
         let grown = |unit: Range<usize>, around: Range<usize>| {
             if unit.start < around.start {
                 Selection {
@@ -879,24 +832,15 @@ impl CodeEditor {
     }
 
     /// The caret position nearest the point `x`, `y` on the screen.
-    fn position_at(
-        &self,
-        x: f32,
-        y: f32,
-        inner: Rect,
-        metrics: &Metrics,
-        font: &Option<FontHandle>,
-        list: &mut DrawList,
-    ) -> usize {
+    fn position_at(&self, x: f32, y: f32, inner: Rect, metrics: &Metrics) -> usize {
         let offset = self.scroll.offset;
         let into = y - inner.y + offset[1] - PAD_Y;
         let line = ((into / metrics.line_height).floor().max(0.0) as usize)
             .min(self.document.line_count() - 1);
         let across = (x - inner.x + offset[0] - metrics.gutter).max(0.0);
         let text = self.document.line(line);
-        let shown = Shown::new(&text, self.rules.tab_size);
-        let shown_at = byte_at_x(list, metrics, font, &shown.text, across);
-        self.document.line_start(line) + shown.to_line(&text, shown_at)
+        self.document.line_start(line)
+            + byte_at_column(&text, across / metrics.advance, self.rules.tab_size)
     }
 
     /// The strip under the code: Ln and Col, the indent, the language.
@@ -926,7 +870,7 @@ impl CodeEditor {
         );
         let mut position = format!("Ln {}, Col {}", line + 1, column + 1);
         if !selection.is_empty() {
-            let selected = self.document.slice(selection.range()).chars().count();
+            let selected = self.document.chars_in(selection.range());
             position.push_str(&format!(" ({selected} selected)"));
         }
         let parts = [
@@ -947,58 +891,6 @@ impl CodeEditor {
             });
             right -= STATUS_GAP;
         }
-    }
-}
-
-/// How far into `text` its byte `at` is, with the mono font: a grid of the
-/// font's advance for ASCII, measured otherwise.
-fn x_of(
-    list: &mut DrawList,
-    metrics: &Metrics,
-    font: &Option<FontHandle>,
-    text: &str,
-    at: usize,
-) -> f32 {
-    let head = &text[..at.min(text.len())];
-    if head.is_ascii() {
-        head.len() as f32 * metrics.advance
-    } else {
-        list.measure_text_with_font(head, metrics.size, None, font.as_ref())
-            .0
-    }
-}
-
-/// The character boundary of `text` nearest `x` along it.
-fn byte_at_x(
-    list: &mut DrawList,
-    metrics: &Metrics,
-    font: &Option<FontHandle>,
-    text: &str,
-    x: f32,
-) -> usize {
-    if text.is_ascii() {
-        return ((x / metrics.advance).round().max(0.0) as usize).min(text.len());
-    }
-    let boundaries: Vec<usize> = text
-        .char_indices()
-        .map(|(at, _)| at)
-        .chain(std::iter::once(text.len()))
-        .collect();
-    // The first boundary at or past `x`, then whichever of it and the one
-    // before is nearer.
-    let index = boundaries.partition_point(|&at| x_of(list, metrics, font, text, at) < x);
-    if index == 0 {
-        return 0;
-    }
-    if index == boundaries.len() {
-        return text.len();
-    }
-    let after = x_of(list, metrics, font, text, boundaries[index]);
-    let before = x_of(list, metrics, font, text, boundaries[index - 1]);
-    if x - before <= after - x {
-        boundaries[index - 1]
-    } else {
-        boundaries[index]
     }
 }
 

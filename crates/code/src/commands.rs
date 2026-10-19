@@ -424,7 +424,8 @@ pub fn move_lines(
         document.len()
     } else {
         let target = target as usize;
-        document.line_start(target) + byte_at_column(&document.line(target), wanted, tab_size)
+        document.line_start(target)
+            + byte_at_column(&document.line(target), wanted as f32, tab_size)
     };
     select(document, selection, to, extend);
 }

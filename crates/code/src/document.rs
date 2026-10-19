@@ -138,6 +138,11 @@ impl Document {
         self.rope.slice(start..end).to_string()
     }
 
+    /// How many characters are in `range`, without copying them.
+    pub fn chars_in(&self, range: Range<usize>) -> usize {
+        self.rope.byte_to_char(range.end) - self.rope.byte_to_char(range.start)
+    }
+
     /// The text in `range`, piece by piece, without copying it.
     pub fn chunks(&self, range: Range<usize>) -> impl Iterator<Item = &str> {
         self.rope.byte_slice(range).chunks()

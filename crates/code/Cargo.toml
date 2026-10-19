@@ -16,6 +16,8 @@ log = "0.4"
 ropey = { version = "1.6", default-features = false, features = ["simd"] }
 # Words and characters as the reader sees them, for the caret's steps.
 unicode-segmentation = "1"
+# Which characters take two columns on the grid.
+unicode-width = "0.2"
 # The parser runtime. One version per program: the crate `links` its C
 # library. agent-ui's outline tool uses 0.27 too.
 tree-sitter = "0.27"

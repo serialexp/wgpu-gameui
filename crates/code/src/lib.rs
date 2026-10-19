@@ -9,7 +9,7 @@ mod editor;
 mod highlight;
 mod language;
 
-pub use columns::{Shown, byte_at_column, column_of};
+pub use columns::{Piece, byte_at_column, column_of, drawn_text, pieces};
 pub use commands::{
     DEFAULT_PAIRS, Motion, Rules, backspace, copied, cut, delete_forward, ends_with_word, indent,
     line_at, move_caret, move_lines, newline, opens_bracket, outdent, paste, select_all, type_text,
