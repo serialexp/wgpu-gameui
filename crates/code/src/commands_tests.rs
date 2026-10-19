@@ -296,6 +296,40 @@ fn delete_takes_the_next_character_or_line_ending() {
 }
 
 #[test]
+fn deleting_by_a_motion_takes_what_it_steps_over() {
+    let mut document = doc("let value‸ = 1;");
+    delete_to(&mut document, Motion::WordLeft);
+    assert_eq!(marked(&document), "let ‸ = 1;");
+    delete_to(&mut document, Motion::WordRight);
+    assert_eq!(marked(&document), "let ‸ 1;");
+    // A selection goes whole, whatever the motion.
+    let mut document = doc("«let» value");
+    delete_to(&mut document, Motion::WordRight);
+    assert_eq!(marked(&document), "‸ value");
+    // Undone in one step.
+    let mut document = doc("one two‸");
+    delete_to(&mut document, Motion::WordLeft);
+    document.undo();
+    assert_eq!(document.text(), "one two");
+}
+
+#[test]
+fn deleting_to_the_line_start_takes_its_indent_and_then_the_line_ending() {
+    let mut document = doc("one\n    two‸ three");
+    delete_to(&mut document, Motion::LineStart);
+    assert_eq!(marked(&document), "one\n‸ three");
+    delete_to(&mut document, Motion::LineStart);
+    assert_eq!(marked(&document), "one‸ three");
+}
+
+#[test]
+fn line_start_is_the_start_however_indented() {
+    let mut document = doc("    two‸");
+    move_caret(&mut document, Motion::LineStart, false);
+    assert_eq!(marked(&document), "‸    two");
+}
+
+#[test]
 fn left_and_right_step_a_character_and_cross_lines() {
     let mut document = doc("a\r\né‸b");
     move_caret(&mut document, Motion::Left, false);

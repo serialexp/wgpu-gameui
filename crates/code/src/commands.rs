@@ -361,6 +361,9 @@ pub enum Motion {
     WordRight,
     /// The line's indent, or its start when already there.
     Home,
+    /// The line's start, however indented, or the end of the line before
+    /// when already there.
+    LineStart,
     End,
     DocumentStart,
     DocumentEnd,
@@ -370,11 +373,38 @@ pub enum Motion {
 /// Right without it collapse a selection to that side.
 pub fn move_caret(document: &mut Document, motion: Motion, extend: bool) {
     let selection = document.selection();
-    let at = selection.head;
     let range = selection.range();
     let target = match motion {
         Motion::Left if !extend && !selection.is_empty() => range.start,
         Motion::Right if !extend && !selection.is_empty() => range.end,
+        _ => target(document, selection.head, motion),
+    };
+    select(document, selection, target, extend);
+}
+
+/// Delete the selection, or else from the caret to where `motion` takes it,
+/// as one step to undo.
+pub fn delete_to(document: &mut Document, motion: Motion) {
+    let selection = document.selection();
+    if !selection.is_empty() {
+        delete(document, selection.range());
+        return;
+    }
+    let at = selection.head;
+    let to = target(document, at, motion);
+    if to != at {
+        let range = at.min(to)..at.max(to);
+        document.edit(
+            vec![change(range.clone(), "")],
+            Selection::caret(range.start),
+            EditKind::Other,
+        );
+    }
+}
+
+/// Where `motion` takes the caret from `at`.
+fn target(document: &Document, at: usize, motion: Motion) -> usize {
+    match motion {
         Motion::Left => previous_position(document, at),
         Motion::Right => next_position(document, at),
         Motion::WordLeft => word_left(document, at),
@@ -390,11 +420,18 @@ pub fn move_caret(document: &mut Document, motion: Motion, extend: bool) {
                 line_start + indent
             }
         }
+        Motion::LineStart => {
+            let line_start = document.line_start(document.line_of(at));
+            if at == line_start {
+                previous_position(document, at)
+            } else {
+                line_start
+            }
+        }
         Motion::End => document.line_end(document.line_of(at)),
         Motion::DocumentStart => 0,
         Motion::DocumentEnd => document.len(),
-    };
-    select(document, selection, target, extend);
+    }
 }
 
 /// Move `lines` lines down (up when negative), keeping to `column`: the

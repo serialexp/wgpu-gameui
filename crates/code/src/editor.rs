@@ -39,6 +39,9 @@ const STATUS_PAD: f32 = 9.0;
 const STATUS_GAP: f32 = 12.0;
 /// Columns drawn beyond each side of what can be seen.
 const MARGIN: usize = 16;
+/// How fast a drag held past an edge scrolls: this many times the distance
+/// past it, a second.
+const DRAG_SCROLL_RATE: f32 = 20.0;
 
 /// The editor's own colours, beside the syntax inks: Forge's `--code-*`
 /// tokens.
@@ -138,8 +141,13 @@ pub struct CodeEditor {
     drag: Option<Drag>,
     /// Bring the caret into view at the next draw.
     reveal: bool,
-    /// The widest line drawn so far, for how far it scrolls sideways.
+    /// Lines to scroll by at the next draw, for Page Up and Down.
+    paged: isize,
+    /// The widest line drawn since the text last changed, for how far it
+    /// scrolls sideways: scrolling never narrows it, an edit may.
     widest: f32,
+    /// The text's version `widest` was measured for.
+    widest_version: u64,
     colours: Option<Colours>,
     clipboard_get: Option<ClipboardGet>,
     clipboard_set: Option<ClipboardSet>,
@@ -174,7 +182,9 @@ impl CodeEditor {
             column: None,
             drag: None,
             reveal: false,
+            paged: 0,
             widest: 0.0,
+            widest_version: 0,
             colours: None,
             clipboard_get: None,
             clipboard_set: None,
@@ -371,6 +381,7 @@ impl CodeEditor {
                 page
             };
             self.move_lines(lines, shift);
+            self.paged = lines;
             vertical = true;
         } else if input.key_home || input.key_end {
             let motion = match (input.key_home, input.ctrl_pressed && !mac) {
@@ -390,9 +401,21 @@ impl CodeEditor {
         } else if input.enter_pressed && editable {
             commands::newline(&mut self.document, &self.rules);
         } else if input.backspace_pressed && editable {
-            commands::backspace(&mut self.document, &self.rules);
+            if command {
+                commands::delete_to(&mut self.document, Motion::LineStart);
+            } else if word {
+                commands::delete_to(&mut self.document, Motion::WordLeft);
+            } else {
+                commands::backspace(&mut self.document, &self.rules);
+            }
         } else if input.key_delete && editable {
-            commands::delete_forward(&mut self.document);
+            if command {
+                commands::delete_to(&mut self.document, Motion::End);
+            } else if word {
+                commands::delete_to(&mut self.document, Motion::WordRight);
+            } else {
+                commands::delete_forward(&mut self.document);
+            }
         } else if !input.text_input.is_empty() && !input.ctrl_pressed && editable {
             for typed in input.text_input.chars() {
                 let mut buffer = [0; 4];
@@ -471,10 +494,19 @@ impl CodeEditor {
     ) {
         let line_count = self.document.line_count();
         let tab_size = self.rules.tab_size;
+        if self.widest_version != self.document.version() {
+            // The text changed: as wide as what is in view now.
+            self.widest = 0.0;
+            self.widest_version = self.document.version();
+        }
         self.scroll.content_size = [
             metrics.gutter + self.widest + PAD_RIGHT,
             line_count as f32 * metrics.line_height + 2.0 * PAD_Y,
         ];
+        let paged = std::mem::take(&mut self.paged);
+        if paged != 0 {
+            self.scroll.scroll_by(1, paged as f32 * metrics.line_height);
+        }
         if std::mem::take(&mut self.reveal) {
             self.reveal_caret(body, metrics);
         }
@@ -484,7 +516,10 @@ impl CodeEditor {
         let inner = begun.inner;
         let offset = self.scroll.offset;
 
-        if inner.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed {
+        if inner.contains(input.mouse_x, input.mouse_y)
+            && !input.mouse_consumed
+            && input.mouse_x >= inner.x + metrics.gutter
+        {
             cx.request_cursor(CursorIcon::Text);
         }
         self.pointer(&input, inner, metrics, cx.draw_list);
@@ -492,8 +527,9 @@ impl CodeEditor {
         // The lines in view.
         let top = offset[1] - PAD_Y;
         let first = ((top / metrics.line_height).floor().max(0.0) as usize).min(line_count - 1);
-        let last = (((top + inner.height) / metrics.line_height).ceil().max(0.0) as usize)
-            .min(line_count - 1);
+        // The last line starting above the view's bottom edge.
+        let last = (((top + inner.height) / metrics.line_height).ceil().max(1.0) as usize - 1)
+            .clamp(first, line_count - 1);
         let lines = first..last + 1;
         let spans = self.colours(lines.clone());
         let selection = self.document.selection();
@@ -788,6 +824,9 @@ impl CodeEditor {
             self.document.set_selection(selection);
             self.drag = Some(drag);
             self.column = None;
+            // A line half out of view comes into it, at the next frame.
+            self.reveal = true;
+            list.repaint_after(0.0);
             return;
         }
         if !input.mouse_down {
@@ -817,16 +856,23 @@ impl CodeEditor {
             Drag::Lines(line) => grown(commands::line_at(&self.document, at), line),
         };
         self.document.set_selection(selection);
-        // Held above or below the view: scroll towards it.
-        let beyond = if input.mouse_y < inner.y {
-            input.mouse_y - inner.y
-        } else if input.mouse_y > inner.bottom() {
-            input.mouse_y - inner.bottom()
-        } else {
-            0.0
+        // Held past an edge of the code: scroll towards it, by how far past
+        // and for how long.
+        let beyond = |at: f32, start: f32, end: f32| {
+            if at < start {
+                at - start
+            } else if at > end {
+                at - end
+            } else {
+                0.0
+            }
         };
-        if beyond != 0.0 {
-            self.scroll.scroll_by(1, beyond);
+        let across = beyond(input.mouse_x, inner.x + metrics.gutter, inner.right());
+        let down = beyond(input.mouse_y, inner.y, inner.bottom());
+        if across != 0.0 || down != 0.0 {
+            let dt = input.frame_dt.clamp(0.0, wgpu_gameui::MAX_DT);
+            self.scroll.scroll_by(0, across * DRAG_SCROLL_RATE * dt);
+            self.scroll.scroll_by(1, down * DRAG_SCROLL_RATE * dt);
             list.repaint_after(0.0);
         }
     }

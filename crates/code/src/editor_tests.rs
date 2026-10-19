@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use wgpu_gameui::{FocusState, Theme};
+use wgpu_gameui::{CursorState, FocusState, Theme};
 
 use super::*;
 
@@ -21,6 +21,7 @@ struct Rig {
     theme: Theme,
     focus: FocusState,
     list: DrawList,
+    cursor: CursorState,
     clipboard: Rc<RefCell<String>>,
 }
 
@@ -41,6 +42,7 @@ impl Rig {
             theme: Theme::default(),
             focus: FocusState::new(),
             list: DrawList::new(),
+            cursor: CursorState::new(),
             clipboard,
         }
     }
@@ -49,6 +51,7 @@ impl Rig {
     fn frame(&mut self, input: &InputState) -> CodeEditorOutput {
         self.list = DrawList::new();
         self.focus.begin_frame(input);
+        self.cursor.begin_frame();
         let mut cx = DrawContext::new(
             &mut self.list,
             &mut self.focus,
@@ -56,7 +59,8 @@ impl Rig {
             input,
             800.0,
             600.0,
-        );
+        )
+        .with_cursor(&mut self.cursor);
         let output = self.editor.draw(ID, RECT, &mut cx);
         self.focus.register(NEXT);
         self.focus.end_frame(None);
@@ -91,6 +95,31 @@ impl Rig {
         };
         input.keys.key_event(Key::Char(letter), true);
         self.frame(&input)
+    }
+
+    /// A frame with `key` pressed and `modifiers` held.
+    fn press(&mut self, key: Key, modifiers: impl FnOnce(&mut InputState)) -> CodeEditorOutput {
+        let mut input = away();
+        modifiers(&mut input);
+        input.keys.key_event(key, true);
+        self.frame(&input)
+    }
+
+    /// A frame holding the button down at `x`, `y`, `dt` seconds after the
+    /// last.
+    fn hold(&mut self, x: f32, y: f32, dt: f32) {
+        self.frame(&InputState {
+            mouse_x: x,
+            mouse_y: y,
+            mouse_down: true,
+            frame_dt: dt,
+            ..InputState::default()
+        });
+    }
+
+    /// The width it scrolls across.
+    fn content_width(&self) -> f32 {
+        self.editor.scroll.content_size[0]
     }
 
     /// The screen point inside `column` of `line`, unscrolled.
@@ -768,4 +797,187 @@ fn the_ime_is_asked_for_only_while_editable() {
     assert!(rig.focus.ime_request().is_some());
     let rig = Rig::with(CodeEditor::new("x", Language::Plain).read_only(true)).focused();
     assert!(rig.focus.ime_request().is_none());
+}
+
+#[test]
+fn deleting_a_long_line_gives_its_width_back() {
+    let long = "x".repeat(500);
+    let mut rig = Rig::new(&format!("short\n{long}"), Language::Plain).focused();
+    let advance = rig.editor.drawn.advance;
+    assert!(rig.content_width() > 500.0 * advance);
+    rig.click(1, 3.0, 3);
+    rig.frame(&InputState {
+        backspace_pressed: true,
+        ..away()
+    });
+    rig.idle();
+    assert!(
+        rig.content_width() < 100.0 * advance,
+        "{} after the edit",
+        rig.content_width()
+    );
+}
+
+#[test]
+fn scrolling_past_a_long_line_keeps_its_width() {
+    let text = format!("{}\n{}", "x".repeat(500), numbered(1_000));
+    let mut rig = Rig::new(&text, Language::Plain);
+    rig.idle();
+    let width = rig.content_width();
+    rig.editor.scroll.snap_to(1, 5_000.0);
+    rig.idle();
+    assert!(!rig.editor.drawn.lines.contains(&0), "scrolled away");
+    assert_eq!(rig.content_width(), width);
+}
+
+#[test]
+fn dragging_past_an_edge_scrolls_towards_it() {
+    let long = "x".repeat(500);
+    let text = format!("{long}\n{}", numbered(1_000));
+    let mut rig = Rig::new(&text, Language::Plain);
+    rig.idle();
+    rig.click(0, 1.0, 1);
+    rig.hold(RECT.width + 30.0, rig.at(0, 0.0).1, 0.1);
+    assert!(rig.editor.scroll.target[0] > 0.0, "sideways");
+    assert_eq!(rig.editor.scroll.target[1], 0.0);
+    rig.hold(rig.at(0, 1.0).0, RECT.height + 30.0, 0.1);
+    assert!(rig.editor.scroll.target[1] > 0.0, "down");
+}
+
+#[test]
+fn a_drag_scrolls_by_the_time_held_not_the_frames_drawn() {
+    let scrolled = |frames: usize| {
+        let mut rig = Rig::new(&numbered(1_000), Language::Plain);
+        rig.idle();
+        rig.click(0, 1.0, 1);
+        let x = rig.at(0, 1.0).0;
+        for _ in 0..frames {
+            rig.hold(x, RECT.height + 30.0, 0.2 / frames as f32);
+        }
+        rig.editor.scroll.target[1]
+    };
+    let (slow, fast) = (scrolled(2), scrolled(4));
+    assert!(slow > 0.0);
+    assert!(
+        (slow - fast).abs() < 0.01,
+        "{slow} at 10 Hz, {fast} at 20 Hz"
+    );
+}
+
+#[test]
+fn page_down_scrolls_the_view_with_the_caret() {
+    let mut rig = Rig::new(&numbered(500), Language::Rust).focused();
+    rig.press(Key::PageDown, |_| {});
+    let line = rig.editor.document().line_of(rig.selection().head);
+    let height = rig.editor.drawn.line_height;
+    let target = rig.editor.scroll.target[1];
+    assert!(
+        (target - line as f32 * height).abs() < 0.01,
+        "{target} for line {line}"
+    );
+    rig.press(Key::PageUp, |_| {});
+    assert_eq!(rig.editor.scroll.target[1], 0.0);
+    assert_eq!(rig.selection(), Selection::caret(0));
+}
+
+#[test]
+fn a_click_on_a_half_hidden_line_brings_it_into_view() {
+    let mut rig = Rig::new(&numbered(1_000), Language::Plain);
+    rig.idle();
+    // Just above the bottom of the view, on a line it cuts through.
+    let (x, _) = rig.at(0, 1.0);
+    let y = RECT.height - STATUS_HEIGHT - 2.0;
+    let height = rig.editor.drawn.line_height;
+    let line = ((y - rig.editor.drawn.origin[1]) / height).floor();
+    assert!(
+        rig.editor.drawn.origin[1] + (line + 1.0) * height > y + 2.0,
+        "cut"
+    );
+    rig.frame(&InputState {
+        mouse_x: x,
+        mouse_y: y,
+        mouse_down: true,
+        mouse_clicked: true,
+        mouse_click_count: 1,
+        ..InputState::default()
+    });
+    rig.idle();
+    assert!(rig.editor.scroll.target[1] > 0.0);
+}
+
+#[test]
+fn no_line_below_the_view_is_drawn() {
+    let mut rig = Rig::new(&numbered(1_000), Language::Plain);
+    rig.idle();
+    let bottom = RECT.height - STATUS_HEIGHT;
+    let drawn = &rig.editor.drawn;
+    let last = drawn.lines.end - 1;
+    let top = drawn.origin[1] + last as f32 * drawn.line_height;
+    assert!(top < bottom, "line {last} starts at {top}, below {bottom}");
+    assert!(top + drawn.line_height >= bottom, "and reaches the bottom");
+}
+
+/// Holds the key that moves and deletes by words: Option on macOS, Ctrl
+/// elsewhere.
+fn by_words(input: &mut InputState) {
+    if cfg!(target_os = "macos") {
+        input.alt_down = true;
+    } else {
+        input.ctrl_pressed = true;
+    }
+}
+
+#[test]
+fn a_word_is_deleted_either_side_of_the_caret() {
+    let mut rig = Rig::new("let value = one;", Language::Plain).focused();
+    rig.click(0, 9.0, 1);
+    let mut input = away();
+    by_words(&mut input);
+    input.backspace_pressed = true;
+    assert!(rig.frame(&input).changed);
+    assert_eq!(rig.editor.text(), "let  = one;");
+    let mut input = away();
+    by_words(&mut input);
+    input.key_delete = true;
+    rig.frame(&input);
+    assert_eq!(rig.editor.text(), "let  one;");
+    // A selection goes whole, as with a plain Backspace.
+    rig.click(0, 0.0, 2);
+    let mut input = away();
+    by_words(&mut input);
+    input.backspace_pressed = true;
+    rig.frame(&input);
+    assert_eq!(rig.editor.text(), "  one;");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn cmd_backspace_deletes_to_the_start_of_the_line() {
+    let mut rig = Rig::new("one\n    two three", Language::Plain).focused();
+    rig.click(1, 7.0, 1);
+    rig.frame(&InputState {
+        ctrl_pressed: true,
+        backspace_pressed: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "one\n three");
+}
+
+#[test]
+fn the_pointer_is_a_text_cursor_over_the_code_and_not_the_numbers() {
+    let mut rig = Rig::new("one", Language::Plain);
+    rig.idle();
+    let (x, y) = rig.at(0, 1.0);
+    rig.frame(&InputState {
+        mouse_x: x,
+        mouse_y: y,
+        ..InputState::default()
+    });
+    assert_eq!(rig.cursor.resolve(), CursorIcon::Text);
+    rig.frame(&InputState {
+        mouse_x: RECT.x + 4.0,
+        mouse_y: y,
+        ..InputState::default()
+    });
+    assert_eq!(rig.cursor.resolve(), CursorIcon::Default);
 }

@@ -34,9 +34,10 @@ the parser runtime and the grammars stay out of programs that only want the core
 - Injections (code in Markdown fences, script in HTML)
 - IME composition text (preedit) drawn at the caret; the editor asks for the IME and takes
   committed text, but doesn't show what is being composed
-- Word delete (Alt-Backspace on macOS, Ctrl-Backspace elsewhere) and line moves (Alt-Up/Down)
-- How far it scrolls sideways is the widest line drawn so far; it doesn't shrink when that line
-  is edited shorter or scrolled away
+- Line moves (Alt-Up/Down)
+- How far it scrolls sideways is the widest line drawn since the last edit: a long line out of
+  view doesn't count until it is scrolled to (counting every line would cost a pass over the
+  file per edit)
 - WGSL: the only grammar on crates.io (`tree-sitter-wgsl` 0.0.6) is built on Tree-sitter 0.20,
   and the runtime `links`, so one program can hold only one version of it
 
