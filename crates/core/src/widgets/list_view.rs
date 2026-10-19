@@ -47,7 +47,7 @@ use crate::style::{Ink, TextSize};
 use crate::text::{TextAlign, TextBlock, TextStyleRange, Underline};
 use crate::{InputState, StyleKey, StyleResolver};
 
-use super::{DrawList, Icon, List, ListItem, ListState, Thumb};
+use super::{DrawList, Icon, List, ListItem, ListState, SelectionMode, Thumb};
 
 /// Space before the glyph (or label) and after the meta (`padding: 0 14px 0 9px`).
 const PAD_LEFT: f32 = 9.0;
@@ -59,6 +59,8 @@ const GLYPH: f32 = 10.0;
 /// A thumb's side in a one-line and a two-line row.
 const THUMB: f32 = 14.0;
 const THUMB_TWO_LINE: f32 = 26.0;
+/// Side of a row's action key, the square its icon sits centred in.
+const ACTION_KEY: f32 = 16.0;
 /// How much taller a two-line row is than a one-line row (34 px against 22).
 const TWO_LINE_EXTRA: f32 = 12.0;
 /// In a two-line row, the centres of the label and the sub line below the
@@ -91,6 +93,10 @@ pub struct ListRow<'a> {
     pub mono: bool,
     /// Dim the row; it never hovers, selects or opens.
     pub disabled: bool,
+    /// A ghost icon key at the row's right end (a visibility eye, a pin).
+    /// Clicking it reports [`ListViewOutput::action`] and leaves the
+    /// selection alone.
+    pub action: Option<PhosphorIcon>,
 }
 
 impl<'a> ListRow<'a> {
@@ -144,6 +150,13 @@ impl<'a> ListRow<'a> {
         self.disabled = disabled;
         self
     }
+
+    /// Add an icon key at the row's right end.
+    #[must_use]
+    pub fn action(mut self, icon: PhosphorIcon) -> Self {
+        self.action = Some(icon);
+        self
+    }
 }
 
 /// What the user did with a [`ListView`] this frame.
@@ -159,6 +172,12 @@ pub struct ListViewOutput {
     pub hovered: Option<usize>,
     /// Whether the pointer is over the rows (for scroll routing).
     pub mouse_over_content: bool,
+    /// The row clicked this frame, its action key aside. In a
+    /// [multi-select](ListView::multi_select) view the caller applies the
+    /// click (with the input's `Ctrl`/`Shift`) to its own selection.
+    pub clicked: Option<usize>,
+    /// The row whose [action key](ListRow::action) was clicked this frame.
+    pub action: Option<usize>,
 }
 
 /// A dense selectable list. See the [module docs](self).
@@ -168,6 +187,7 @@ pub struct ListView<'a> {
     highlight: &'a str,
     empty: &'a str,
     focused: bool,
+    multi: bool,
 }
 
 /// Where a row's texts sit vertically: the label's centre and, in two-line
@@ -184,6 +204,7 @@ impl Default for ListView<'_> {
             highlight: "",
             empty: "Nothing here",
             focused: false,
+            multi: false,
         }
     }
 }
@@ -221,6 +242,17 @@ impl<'a> ListView<'a> {
     #[must_use]
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self
+    }
+
+    /// Multi-select: `Ctrl`+click toggles a row and `Shift`+click ranges,
+    /// as [`SelectionMode::Multi`](super::SelectionMode::Multi). The caller
+    /// owns the selection: mirror it into the state with
+    /// [`ListState::sync_selection_multi`] before each draw (the `selected`
+    /// argument is then ignored) and apply [`ListViewOutput::clicked`].
+    #[must_use]
+    pub fn multi_select(mut self, multi: bool) -> Self {
+        self.multi = multi;
         self
     }
 
@@ -293,12 +325,33 @@ impl<'a> ListView<'a> {
         F: Fn(usize) -> ListRow<'r>,
     {
         list.push_debug_scope_rect("ListView", rect);
-        state.sync_selection(selected.filter(|&i| i < count && !row(i).disabled));
+        if !self.multi {
+            state.sync_selection(selected.filter(|&i| i < count && !row(i).disabled));
+        }
         let is_disabled = |i: usize| row(i).disabled;
+        // An action key takes its click before the list sees it, so the row
+        // under it is neither selected nor reported clicked.
+        let row_h = self.row_height(style);
+        let action = self.action_under_pointer(rect, row_h, count, state, input, &row);
+        let mut shielded;
+        let input = if action.is_some() {
+            shielded = input.clone();
+            shielded.mouse_clicked = false;
+            shielded.mouse_double_clicked = false;
+            &mut shielded
+        } else {
+            input
+        };
+        let pointer_x = input.mouse_x;
         let out = List::new()
-            .with_item_height(self.row_height(style))
+            .with_item_height(row_h)
             .with_zebra(true)
             .focused(self.focused)
+            .selection(if self.multi {
+                SelectionMode::Multi
+            } else {
+                SelectionMode::Single
+            })
             .disabled(&is_disabled)
             // The design's list scrolls under a floating thumb; the rows'
             // 14 px right padding keeps text clear of it.
@@ -311,7 +364,7 @@ impl<'a> ListView<'a> {
                 style,
                 input,
                 |list, cell, item| {
-                    self.draw_row(list, style, cell, item, &row(item.index));
+                    self.draw_row(list, style, cell, item, &row(item.index), pointer_x);
                 },
             );
         if count == 0 {
@@ -321,11 +374,59 @@ impl<'a> ListView<'a> {
 
         let now = state.single_selected();
         ListViewOutput {
-            select: now.filter(|_| now != selected),
+            select: if self.multi {
+                None
+            } else {
+                now.filter(|_| now != selected)
+            },
             open: out.activated,
             hovered: out.hovered,
             mouse_over_content: out.mouse_over_content,
+            clicked: out.clicked,
+            action,
         }
+    }
+
+    /// The action key's column in a row `cell`: a square as tall as the
+    /// glyph's key, inside the row's right padding.
+    fn action_rect(cell: Rect) -> Rect {
+        let x = cell.x + cell.width - PAD_RIGHT - ACTION_KEY;
+        Rect::new(
+            x,
+            cell.y + (cell.height - ACTION_KEY) * 0.5,
+            ACTION_KEY,
+            ACTION_KEY,
+        )
+    }
+
+    /// The row whose action key a click lands on this frame. Rows sit at the
+    /// list's last scroll offset; the key's hit area spans its row's height.
+    fn action_under_pointer<'r>(
+        &self,
+        rect: Rect,
+        row_h: f32,
+        count: usize,
+        state: &ListState,
+        input: &InputState,
+        row: &impl Fn(usize) -> ListRow<'r>,
+    ) -> Option<usize> {
+        if !input.mouse_clicked
+            || input.mouse_consumed
+            || row_h <= 0.0
+            || !rect.contains(input.mouse_x, input.mouse_y)
+        {
+            return None;
+        }
+        let key = Self::action_rect(Rect::new(rect.x, 0.0, rect.width, row_h));
+        if input.mouse_x < key.x || input.mouse_x >= key.right() {
+            return None;
+        }
+        let index = ((input.mouse_y - rect.y + state.offset()) / row_h).floor();
+        let index = (index >= 0.0)
+            .then_some(index as usize)
+            .filter(|&i| i < count)?;
+        let hit = row(index);
+        (hit.action.is_some() && !hit.disabled).then_some(index)
     }
 
     fn lines(&self, cell: Rect) -> Lines {
@@ -349,6 +450,7 @@ impl<'a> ListView<'a> {
         cell: Rect,
         item: ListItem,
         row: &ListRow,
+        pointer_x: f32,
     ) {
         let off = item.disabled;
         let on_accent = item.selected && item.focused;
@@ -407,6 +509,23 @@ impl<'a> ListView<'a> {
         }
 
         let mut right = cell.x + cell.width - PAD_RIGHT;
+        if let Some(icon) = row.action {
+            let key = Self::action_rect(cell);
+            let hot = item.hovered && pointer_x >= key.x && pointer_x < key.right();
+            let tint = if off {
+                s.ink(Ink::DisabledGlyph)
+            } else if on_accent {
+                s.color(StyleKey::OnAccent)
+            } else if hot {
+                s.ink(Ink::Value)
+            } else {
+                s.ink(Ink::Muted)
+            };
+            Icon::new(icon)
+                .tint(tint)
+                .draw(key.inset((ACTION_KEY - GLYPH) * 0.5), list);
+            right = key.x - GAP;
+        }
         let meta_size = s.text_size(TextSize::Meta);
         let mono = theme.mono_font.clone();
         let mono_baseline = meta_size * list.font_vmetrics(mono.as_ref()).baseline_ratio;
@@ -818,5 +937,96 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn row_centre(i: usize) -> f32 {
+        let h = ListView::new().row_height(&StyleResolver::new(&Theme::default()));
+        RECT.y + h * (i as f32 + 0.5)
+    }
+
+    fn click(x: f32, y: f32) -> InputState {
+        InputState {
+            mouse_clicked: true,
+            mouse_down: true,
+            ..at(x, y)
+        }
+    }
+
+    #[test]
+    fn an_action_key_click_reports_the_row_and_leaves_the_selection() {
+        let rows = [ListRow::new("a").action(PhosphorIcon::Eye); 3];
+        let key_x = RECT.right() - PAD_RIGHT - ACTION_KEY * 0.5;
+        let mut state = ListState::new();
+        let (list, out) = frame(
+            ListView::new(),
+            &rows,
+            Some(0),
+            &mut state,
+            &mut click(key_x, row_centre(1)),
+        );
+        assert_eq!(out.action, Some(1));
+        assert_eq!((out.clicked, out.select), (None, None));
+        assert!(state.is_selected(0) && !state.is_selected(1));
+        assert!(!list.texts.is_empty());
+
+        let (_, out) = frame(
+            ListView::new(),
+            &rows,
+            Some(0),
+            &mut state,
+            &mut click(40.0, row_centre(1)),
+        );
+        assert_eq!(out.action, None);
+        assert_eq!((out.clicked, out.select), (Some(1), Some(1)));
+    }
+
+    #[test]
+    fn rows_without_an_action_select_across_their_whole_width() {
+        let rows = [ListRow::new("a"); 3];
+        let key_x = RECT.right() - PAD_RIGHT - ACTION_KEY * 0.5;
+        let mut state = ListState::new();
+        let (_, out) = frame(
+            ListView::new(),
+            &rows,
+            None,
+            &mut state,
+            &mut click(key_x, row_centre(2)),
+        );
+        assert_eq!((out.action, out.select), (None, Some(2)));
+    }
+
+    #[test]
+    fn a_multi_select_view_mirrors_the_callers_set_and_reports_clicks() {
+        let rows = [ListRow::new("a"); 4];
+        let view = ListView::new().multi_select(true);
+        let mut state = ListState::new();
+        state.sync_selection_multi([0, 2]);
+        let mut input = at(40.0, -50.0);
+        frame(view, &rows, None, &mut state, &mut input);
+        assert!(state.is_selected(0) && state.is_selected(2) && !state.is_selected(1));
+
+        let mut ctrl = click(40.0, row_centre(3));
+        ctrl.ctrl_pressed = true;
+        let (_, out) = frame(view, &rows, None, &mut state, &mut ctrl);
+        assert_eq!((out.clicked, out.select), (Some(3), None));
+        assert_eq!(state.selected_count(), 3, "Ctrl toggles row 3 in");
+
+        // The caller kept its own set; mirroring it undoes the list's toggle.
+        state.sync_selection_multi([0, 2]);
+        assert_eq!(state.selected().collect::<Vec<_>>(), [0, 2]);
+    }
+
+    #[test]
+    fn mirroring_an_equal_multi_selection_keeps_the_anchor() {
+        let mut state = ListState::new();
+        state.select_one(2);
+        state.sync_selection_multi([2]);
+        assert_eq!(state.cursor(), Some(2));
+        state.sync_selection_multi([1, 3]);
+        assert_eq!(
+            state.cursor(),
+            Some(1),
+            "a dropped cursor moves to the first selected"
+        );
     }
 }

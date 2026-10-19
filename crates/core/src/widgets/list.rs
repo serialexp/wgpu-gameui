@@ -586,6 +586,32 @@ impl ListState {
             }
         }
     }
+
+    /// Make the selection exactly `items`, for a caller that owns a
+    /// multi-selection (a set of its own, kept by index). The anchor and the
+    /// cursor stay put while they still point at a selected item, so a later
+    /// `Shift`-click still ranges from the row it ranged from. A no-op, with
+    /// no allocation, when the selection already matches.
+    pub fn sync_selection_multi<I>(&mut self, items: I)
+    where
+        I: IntoIterator<Item = usize>,
+        I::IntoIter: Clone,
+    {
+        let items = items.into_iter();
+        let same = items.clone().count() == self.selected.len()
+            && items.clone().all(|i| self.selected.contains(&i));
+        if same {
+            return;
+        }
+        self.selected.clear();
+        self.selected.extend(items);
+        if self.anchor.is_some_and(|a| !self.selected.contains(&a)) {
+            self.anchor = self.selected.first().copied();
+        }
+        if self.cursor.is_some_and(|c| !self.selected.contains(&c)) {
+            self.cursor = self.anchor;
+        }
+    }
 }
 
 /// Per-item info handed to the content closure so it can style by state.
