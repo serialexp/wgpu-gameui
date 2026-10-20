@@ -582,4 +582,49 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_press_that_closes_a_dialog_does_not_press_the_key_under_it() {
+        // Frame 1 presses on a dialog that the press closes; the button
+        // stays down over the key and is let go there.
+        let frames = [
+            (inside(false, false), false),
+            (inside(true, true), true),
+            (inside(true, false), false),
+            (
+                InputState {
+                    mouse_released: true,
+                    ..inside(false, false)
+                },
+                false,
+            ),
+        ];
+        let theme = Theme::default();
+        for key in [Pressable::new(), Pressable::new().focusable(7)] {
+            let mut layers = crate::LayerStack::new();
+            let mut focus = FocusState::new();
+            let mut scene = crate::InteractionScene::new();
+            for (frame, (input, dialog)) in frames.iter().enumerate() {
+                layers.clear();
+                scene.begin_frame(input);
+                if *dialog {
+                    layers.push_modal(Rect::new(0.0, 0.0, 800.0, 600.0));
+                    layers.pop_layer();
+                }
+                let base = layers.input_for_base(input);
+                let mut ctx =
+                    DrawContext::new(layers.base_mut(), &mut focus, &theme, &base, 800.0, 600.0)
+                        .with_interactions(&mut scene);
+                let mut pressed = false;
+                let response = key.draw(RECT, &mut ctx, |state, _| pressed = state.pressed);
+                scene.end_frame();
+                if frame > 0 {
+                    assert!(
+                        !(pressed || response.pressed || response.clicked),
+                        "frame {frame}, {key:?}: the press was the dialog's, {response:?}"
+                    );
+                }
+            }
+        }
+    }
 }

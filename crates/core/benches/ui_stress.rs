@@ -35,6 +35,9 @@
 //!   idle and hovered), the scatter (14 to 10k readings) and the waffle (100
 //!   to 10k cells) drawn and rendered, to find how much data a chart can
 //!   take a frame. Each case's shape counts are printed once.
+//! - `layer_dispatch` — a frame of a `LayerStack` with 1 to 10k layers
+//!   (modals, popups and tooltips) under a held press: pushing them, then
+//!   resolving the input the base and every layer sees. CPU only.
 //! - `strokes_build` / `strokes_render` — a chart line of 1k and 10k points
 //!   as one polyline (solid, dashed, and a wide translucent halo): cutting it
 //!   into segment records, and its frame **waiting for the GPU**, so the
@@ -1175,6 +1178,55 @@ fn bench_list_virtual(c: &mut Criterion) {
     group.finish();
 }
 
+/// CPU-only cost of a frame's layer dispatch: clear the stack, push `count`
+/// layers (a modal under popups and tooltips), and resolve the input the base
+/// and every layer sees while a press that began on the modal is held. Each
+/// layer asks once, as a host drawing every layer would.
+fn bench_layer_dispatch(c: &mut Criterion) {
+    // Shared, as a host's is: a stack without one gives every layer it
+    // pushes a font system of its own, which scans the system's fonts.
+    let font_system = wgpu_gameui::shared_font_system();
+    let mut group = c.benchmark_group("layer_dispatch");
+    for &count in &[1usize, 10, 100, 1_000, 10_000] {
+        let mut layers = LayerStack::with_font_system(font_system.clone());
+        let press = InputState {
+            mouse_x: 400.0,
+            mouse_y: 300.0,
+            mouse_down: true,
+            mouse_clicked: true,
+            ..InputState::default()
+        };
+        let held = InputState {
+            mouse_clicked: false,
+            ..press.clone()
+        };
+        let frame = |layers: &mut LayerStack, input: &InputState| {
+            layers.clear();
+            for i in 0..count {
+                let at = (i % 64) as f32 * 12.0;
+                let rect = Rect::new(at, at, 200.0, 120.0);
+                match i % 3 {
+                    _ if i == 0 => layers.push_modal(Rect::new(0.0, 0.0, W as f32, H as f32)),
+                    1 => layers.push_popup(rect),
+                    _ => layers.push_tooltip(rect),
+                };
+                layers.pop_layer();
+            }
+            let mut consumed = usize::from(layers.input_for_base(input).mouse_consumed);
+            for index in 0..count {
+                consumed += usize::from(layers.input_for_layer(index, input).mouse_consumed);
+            }
+            consumed
+        };
+        frame(&mut layers, &press);
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, _| {
+            b.iter(|| std::hint::black_box(frame(&mut layers, &held)));
+        });
+    }
+    group.finish();
+}
+
 /// CPU-only cost of drawing a `Table` with a fixed column layout and `count`
 /// rows, each with a few cells. Measures header + row chrome + scroll overhead.
 fn bench_table(c: &mut Criterion) {
@@ -2073,6 +2125,7 @@ fn bench_batching(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_layer_dispatch,
     bench_drawlist_build,
     bench_shadow_build,
     bench_shadow_render,

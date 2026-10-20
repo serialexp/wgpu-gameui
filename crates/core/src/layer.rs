@@ -54,6 +54,19 @@
 //! rect; clicks outside the popup pass through to lower layers.
 //!
 //! Tooltips never block input — they're purely visual.
+//!
+//! ## A press stays where it began
+//!
+//! A press belongs to the layer it landed on until the button is released.
+//! Until then every layer below that one sees the pointer as consumed, even
+//! once that layer has closed: a click that closes a dialog does not press
+//! the button under it as the button is held. The stack keeps this across
+//! [`clear`](LayerStack::clear), so reuse one stack from frame to frame (as
+//! the renderer expects anyway); a stack made new each frame forgets it.
+//! The layer is remembered by its place in the stack, so one pushed into
+//! the same place while the button is still held gets the press as usual.
+
+use std::cell::Cell;
 
 use crate::InputState;
 use crate::layout::Rect;
@@ -96,6 +109,14 @@ pub struct LayerStack {
     /// The text selection every list paints (see
     /// [`set_text_highlight`](Self::set_text_highlight)).
     text_highlight: Option<crate::TextHighlight>,
+    /// The depth (0 the base, `i + 1` layer `i`) the held press landed on,
+    /// from its press frame until the frame after its release. Kept across
+    /// [`clear`](Self::clear); set while resolving input, which takes `&self`.
+    press: Cell<Option<usize>>,
+    /// The depth that takes the pointer at a point, for this frame's layers:
+    /// every layer's input resolves against it, so a frame scans the stack
+    /// once however many layers ask. Forgotten when a layer is pushed.
+    top: Cell<Option<([f32; 2], usize)>>,
 }
 
 impl Default for LayerStack {
@@ -113,6 +134,8 @@ impl LayerStack {
             active: Vec::new(),
             font_system: None,
             text_highlight: None,
+            press: Cell::new(None),
+            top: Cell::new(None),
         }
     }
 
@@ -125,14 +148,18 @@ impl LayerStack {
             active: Vec::new(),
             font_system: Some(font_system),
             text_highlight: None,
+            press: Cell::new(None),
+            top: Cell::new(None),
         }
     }
 
-    /// Reset all layers but keep allocated capacity.
+    /// Reset all layers but keep allocated capacity, and the layer a held
+    /// press began on.
     pub fn clear(&mut self) {
         self.base.clear();
         self.layers.clear();
         self.active.clear();
+        self.top.set(None);
     }
 
     /// The earliest [`DrawList::repaint_after`] any layer was asked for this
@@ -170,6 +197,8 @@ impl LayerStack {
     /// Mutable access to all layers (in render order). Useful for drawing
     /// into a specific layer's `list` after dispatching `input_for_layer`.
     pub fn layers_mut(&mut self) -> &mut [Layer] {
+        // A caller may move or retype a layer through this.
+        self.top.set(None);
         &mut self.layers
     }
 
@@ -213,6 +242,7 @@ impl LayerStack {
         });
         let idx = self.layers.len() - 1;
         self.active.push(idx);
+        self.top.set(None);
         idx
     }
 
@@ -226,6 +256,7 @@ impl LayerStack {
         });
         let idx = self.layers.len() - 1;
         self.active.push(idx);
+        self.top.set(None);
         idx
     }
 
@@ -239,6 +270,7 @@ impl LayerStack {
         });
         let idx = self.layers.len() - 1;
         self.active.push(idx);
+        self.top.set(None);
         idx
     }
 
@@ -260,45 +292,76 @@ impl LayerStack {
     /// Resolve the input state that a layer at `index` should see, taking
     /// into account higher-z modals/popups that may have captured the cursor.
     ///
-    /// Layers higher in the stack are checked first. A higher-z **modal**
-    /// always consumes input for everything below it. A higher-z **popup**
-    /// consumes input only when the cursor is inside its rect. **Tooltips**
-    /// never consume input.
+    /// A higher-z **modal** always consumes input for everything below it. A
+    /// higher-z **popup** consumes input only when the cursor is inside its
+    /// rect. **Tooltips** never consume input. And while the button is held,
+    /// the layers below the one the press landed on see it consumed (see
+    /// [the module docs](self)).
     pub fn input_for_layer(&self, index: usize, base: &InputState) -> InputState {
-        for higher in self.layers.iter().skip(index + 1) {
-            match higher.kind {
-                LayerKind::Modal => return base.consumed(),
-                LayerKind::Popup => {
-                    if higher.rect.contains(base.mouse_x, base.mouse_y) {
-                        return base.consumed();
-                    }
-                }
-                LayerKind::Tooltip => {}
-            }
-        }
-        base.clone()
+        self.input_at_depth(index + 1, base)
     }
 
     /// Resolve the input state the base layer should see.
     pub fn input_for_base(&self, base: &InputState) -> InputState {
-        if self.blocks_base_at(base.mouse_x, base.mouse_y) {
+        self.input_at_depth(0, base)
+    }
+
+    fn input_at_depth(&self, depth: usize, base: &InputState) -> InputState {
+        if depth < self.reach(base) {
             base.consumed()
         } else {
             base.clone()
         }
     }
 
+    /// The lowest depth `input` reaches: the one that takes the pointer
+    /// now, or the one its held press landed on if that is higher. Updates
+    /// the press: a press edge lands on what takes the pointer, and a frame
+    /// with the button up (after its release frame) lets it go. Input a
+    /// layer already consumed has lost its edges, so it leaves the press be.
+    fn reach(&self, input: &InputState) -> usize {
+        let top = self.top_at(input.mouse_x, input.mouse_y);
+        let press = if input.mouse_consumed {
+            self.press.get()
+        } else if input.mouse_clicked {
+            Some(top)
+        } else if input.mouse_down || input.mouse_released {
+            self.press.get()
+        } else {
+            None
+        };
+        self.press.set(press);
+        press.map_or(top, |press| press.max(top))
+    }
+
+    /// The depth that takes the pointer at (`x`, `y`): the topmost modal or
+    /// popup holding the point, or the base (0).
+    fn top_at(&self, x: f32, y: f32) -> usize {
+        if let Some((at, depth)) = self.top.get()
+            && at == [x, y]
+        {
+            return depth;
+        }
+        let depth = self
+            .layers
+            .iter()
+            .rposition(|layer| match layer.kind {
+                LayerKind::Modal => true,
+                LayerKind::Popup => layer.rect.contains(x, y),
+                LayerKind::Tooltip => false,
+            })
+            .map_or(0, |index| index + 1);
+        self.top.set(Some(([x, y], depth)));
+        depth
+    }
+
     /// Whether a layer above the base keeps the pointer at (`x`, `y`) from
     /// it: any modal, or a popup whose rect holds the point. What
-    /// [`input_for_base`](Self::input_for_base) decides, for a host asking
-    /// between frames about a press the base layer would act on there and
-    /// then (the window's title bar starting a drag).
+    /// [`input_for_base`](Self::input_for_base) decides for a new press, for
+    /// a host asking between frames about one the base layer would act on
+    /// there and then (the window's title bar starting a drag).
     pub fn blocks_base_at(&self, x: f32, y: f32) -> bool {
-        self.layers.iter().any(|layer| match layer.kind {
-            LayerKind::Modal => true,
-            LayerKind::Popup => layer.rect.contains(x, y),
-            LayerKind::Tooltip => false,
-        })
+        self.top_at(x, y) > 0
     }
 }
 
@@ -482,6 +545,170 @@ mod tests {
         assert!(!modal_view.scroll_consumed);
 
         s.pop_layer();
+    }
+
+    /// The button held at (`x`, `y`) after its press frame.
+    fn held_at(x: f32, y: f32) -> InputState {
+        InputState {
+            mouse_x: x,
+            mouse_y: y,
+            mouse_down: true,
+            ..InputState::default()
+        }
+    }
+
+    /// The button let go at (`x`, `y`) this frame.
+    fn released_at(x: f32, y: f32) -> InputState {
+        InputState {
+            mouse_x: x,
+            mouse_y: y,
+            mouse_released: true,
+            ..InputState::default()
+        }
+    }
+
+    /// The button up at (`x`, `y`).
+    fn up_at(x: f32, y: f32) -> InputState {
+        InputState {
+            mouse_x: x,
+            mouse_y: y,
+            ..InputState::default()
+        }
+    }
+
+    #[test]
+    fn a_press_on_a_dialog_it_closes_stays_from_the_base_until_released() {
+        let mut s = LayerStack::new();
+        s.push_modal(Rect::new(0.0, 0.0, 100.0, 100.0));
+        s.pop_layer();
+        assert!(s.input_for_base(&input_at(20.0, 20.0)).mouse_consumed);
+
+        // The press closed the dialog; the button stays down over the base.
+        s.clear();
+        let held = s.input_for_base(&held_at(20.0, 20.0));
+        assert!(held.mouse_consumed, "the press is still the dialog's");
+        s.clear();
+        let released = s.input_for_base(&released_at(20.0, 20.0));
+        assert!(released.mouse_consumed && !released.mouse_released);
+
+        // The next press is the base's.
+        s.clear();
+        assert!(!s.input_for_base(&up_at(20.0, 20.0)).mouse_consumed);
+        s.clear();
+        let press = s.input_for_base(&input_at(20.0, 20.0));
+        assert!(!press.mouse_consumed && press.mouse_clicked);
+    }
+
+    #[test]
+    fn a_press_and_release_in_one_frame_is_let_go_the_frame_after() {
+        let mut s = LayerStack::new();
+        s.push_popup(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.pop_layer();
+        let click = InputState {
+            mouse_released: true,
+            ..input_at(5.0, 5.0)
+        };
+        assert!(s.input_for_base(&click).mouse_consumed);
+        s.clear();
+        assert!(!s.input_for_base(&up_at(5.0, 5.0)).mouse_consumed);
+    }
+
+    #[test]
+    fn a_press_on_a_popup_over_a_dialog_stays_from_the_dialog_once_the_popup_closes() {
+        let mut s = LayerStack::new();
+        let dialog = s.push_modal(Rect::new(0.0, 0.0, 400.0, 400.0));
+        s.pop_layer();
+        s.push_popup(Rect::new(10.0, 10.0, 50.0, 50.0));
+        s.pop_layer();
+        assert!(
+            !s.input_for_layer(dialog, &input_at(20.0, 20.0))
+                .mouse_clicked
+        );
+
+        s.clear();
+        let dialog = s.push_modal(Rect::new(0.0, 0.0, 400.0, 400.0));
+        s.pop_layer();
+        assert!(
+            s.input_for_layer(dialog, &held_at(20.0, 20.0))
+                .mouse_consumed
+        );
+        assert!(s.input_for_base(&held_at(20.0, 20.0)).mouse_consumed);
+    }
+
+    #[test]
+    fn a_press_on_the_base_is_not_taken_by_moving_out_from_under_a_popup() {
+        // The base keeps its own press; the popup takes the pointer only
+        // while it is over it, as before.
+        let mut s = LayerStack::new();
+        s.push_popup(Rect::new(100.0, 100.0, 50.0, 50.0));
+        s.pop_layer();
+        assert!(s.input_for_base(&input_at(0.0, 0.0)).mouse_clicked);
+        s.clear();
+        s.push_popup(Rect::new(100.0, 100.0, 50.0, 50.0));
+        s.pop_layer();
+        assert!(s.input_for_base(&held_at(120.0, 120.0)).mouse_consumed);
+        assert!(!s.input_for_base(&held_at(0.0, 0.0)).mouse_consumed);
+    }
+
+    #[test]
+    fn input_a_layer_already_consumed_leaves_the_press_be() {
+        let mut s = LayerStack::new();
+        s.push_modal(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.pop_layer();
+        let _ = s.input_for_base(&input_at(5.0, 5.0));
+        s.clear();
+        // A consumed release has lost its edge and looks like the button up.
+        let _ = s.input_for_base(&released_at(5.0, 5.0).consumed());
+        assert!(s.input_for_base(&released_at(5.0, 5.0)).mouse_consumed);
+    }
+
+    #[test]
+    fn a_layer_moved_after_its_push_is_dispatched_where_it_is_now() {
+        let mut s = LayerStack::new();
+        let popup = s.push_popup(Rect::new(0.0, 0.0, 10.0, 10.0));
+        s.pop_layer();
+        assert!(s.input_for_base(&up_at(5.0, 5.0)).mouse_consumed);
+        s.layers_mut()[popup].rect = Rect::new(50.0, 50.0, 10.0, 10.0);
+        assert!(!s.input_for_base(&up_at(5.0, 5.0)).mouse_consumed);
+    }
+
+    /// The input every layer sees by the rule itself: a layer is consumed
+    /// when any modal is above it, or a popup above it holds the point.
+    fn naive_consumed(s: &LayerStack, depth: usize, x: f32, y: f32) -> bool {
+        s.layers()[depth..].iter().any(|layer| match layer.kind {
+            LayerKind::Modal => true,
+            LayerKind::Popup => layer.rect.contains(x, y),
+            LayerKind::Tooltip => false,
+        })
+    }
+
+    #[test]
+    fn two_thousand_layers_dispatch_as_the_rule_says() {
+        let mut s = LayerStack::new();
+        for i in 0..2_000 {
+            let at = (i % 97) as f32 * 10.0;
+            let rect = Rect::new(at, at, 40.0, 40.0);
+            match i % 5 {
+                0 if i % 500 == 0 => s.push_modal(rect),
+                0 | 1 => s.push_tooltip(rect),
+                _ => s.push_popup(rect),
+            };
+            s.pop_layer();
+        }
+        for (x, y) in [(0.0, 0.0), (15.0, 15.0), (500.0, 505.0), (5_000.0, 5_000.0)] {
+            let input = up_at(x, y);
+            assert_eq!(
+                s.input_for_base(&input).mouse_consumed,
+                naive_consumed(&s, 0, x, y)
+            );
+            for index in 0..s.layers().len() {
+                assert_eq!(
+                    s.input_for_layer(index, &input).mouse_consumed,
+                    naive_consumed(&s, index + 1, x, y),
+                    "layer {index} at ({x}, {y})"
+                );
+            }
+        }
     }
 
     #[test]

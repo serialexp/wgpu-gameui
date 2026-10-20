@@ -615,3 +615,11 @@ sharp at any size, list selection and gamepad navigation.
       `FORGE_COMPONENTS` doesn't list them, so the index's "85 of 91"
       doesn't count them as missing. Add a `Graph` category with the five
       names, and build them when an editor needs them.
+- [ ] **P2 — A `LayerStack::new()` scans the system fonts for every layer it
+      pushes.** Without a shared font system, `make_list` gives each layer a
+      `DrawList::new()`, whose `TextMeasurer::default()` builds a
+      `FontSystem` of its own: about 0.15 ms a layer on Bart's Mac, every
+      frame (seen in the `layer_dispatch` bench before it shared one). Hosts
+      with a renderer pass `with_font_system`; tests and font-less hosts pay
+      it. Share one lazily made system across the stack's layers, or make
+      `new()` take the process-wide `shared_font_system()`.
