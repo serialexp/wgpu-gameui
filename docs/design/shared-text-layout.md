@@ -1,0 +1,270 @@
+# One text layout for drawing, caret and hit testing
+
+**Status:** Accepted
+**Last updated:** 2026-10-21
+
+## Implementation status
+
+Tracking the gap between this design and what's on the main branch.
+
+### Done
+
+(nothing yet)
+
+### Outstanding
+
+- [ ] Phase 0: a count of every cosmic-text shaping pass (`LayoutStats::passes`), the cache's own and the caret functions' and `ellipsis_cut`'s
+- [ ] Phase 0: bench cases for a focused `TextInput` (single-line; multi-line at 10, 500 and 5,000 lines): an idle frame, a keystroke, a click, each a whole frame including the renderer's text preparation, each printing the frame's `passes`
+- [ ] Phase 0: tests pinning today's caret behaviour that Phase 1 must keep: single-line positions on LTR text, soft-wrap boundaries, empty text and a trailing newline, a ligature, mixed bidi, a mask, an IME composition
+- [ ] Phase 1: one normalisation of a block (spans joined into `content`, the transform's scale) shared by `DrawList::text` and the caret calls
+- [ ] Phase 1: `ShapedLayout` keeps what the caret needs: each glyph's cell x without its pen offset, each line's left and right edge, no glyph for the direction mark
+- [ ] Phase 1: caret positions and visual glyphs worked out from a `ShapedLayout` the first time they're asked for, counted in the cache's bytes
+- [ ] Phase 1: `DrawList::caret_layout` / `visual_layout` take the block that is drawn; `text_cursor_positions`, `text_caret_layout`, `text_visual_layout` and their `DrawList` wrappers go
+- [ ] Phase 1: `TextInput` takes every caret, click, selection, scroll and IME position from the layout of the string it draws (value, mask or composition)
+- [ ] Phase 1: a multi-line field composing with the IME places its caret and IME rect on the composition's own line (an existing bug: it uses the first line today)
+- [ ] Phase 1: `text_select.rs` hit testing uses the cell x rather than the pen x
+- [ ] Phase 1: tests: the caret sits on the drawn glyphs for a field with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted
+- [ ] Phase 2: paragraphs shaped and kept one by one (only if the numbers after Phase 1 call for it; see "Phase 2 is conditional")
+- [ ] Phase 3: `ellipsis_cut` reads the cut from a cached layout under a fixed cut spec instead of shaping the content again
+- [ ] Close TODO.md entries: "Caret, cursor and visual layouts shape on their own", the gpui entry "One text layout for drawing, caret and hit testing", and (with Phase 3) "Ellipsis shapes the full text twice"
+
+## Why this exists
+
+Text that is drawn goes through one cache: `SharedFontSystem::layout` (`crates/core/src/shaping.rs`)
+shapes a string once per `LayoutSpec` (font, size, line height, width, wrap, alignment, direction,
+faces, letter spacing) and keeps the `ShapedLayout` until the memory budget pushes it out.
+Selectable text (`text_select.rs`) already hit-tests through that cache.
+
+`TextInput` doesn't. It places its caret, maps clicks to characters, draws selections, scrolls to
+the caret and tells the IME where the caret is through three other functions in `text.rs`:
+`text_cursor_positions` (single-line positions), `text_caret_layout` (positions with line
+geometry, for multi-line) and `text_visual_layout` (cells in visual order, for right-to-left text).
+Each builds its own cosmic-text `Buffer` on every call, with no cache, and the cache's counters
+don't see them. In one frame of a non-empty focused field:
+
+- Multi-line: two fresh shapes of the whole text on top of the drawn layout, `nav_layout` before
+  input (`widgets/text_input.rs` ~1052) and `render_layout` after (~1228), plus one more while
+  composing (~1455). That is every frame the field draws, including the ones where only the caret
+  blinks. agent-ui's composer is such a field (`UiContext::text_area`, `main_view.rs`
+  `draw_composer`).
+- Single-line, unmasked, not composing: three, `text_visual_layout` for moving the caret
+  (~1073) and for the selection and caret (~1318), and `text_cursor_positions` for scrolling to
+  the caret (~1261). A mask leaves out the first; composing leaves out the second and adds one
+  for the composition (~1455). A click (~1113), a drag (~1178) and a word pick (~516, as well as
+  the click's) each add one more.
+- An empty field shapes nothing (the functions return early).
+- Typing in a long text reshapes all of it: the drawn layout is keyed on the whole string, so
+  each keystroke misses the cache, and the fresh shapes above come on top.
+
+The `DrawList` wrappers don't lay text out the way it is drawn. They pass the default sans face
+and a line height of `font_size * 1.25` (the free functions take a family and a line height, but
+the wrappers fill in those defaults) and no weight, style, letter spacing, faces or alignment;
+`text_cursor_positions` also has no direction mark and an unlimited width. `TextInput` draws its
+block with the same face, size and line height, so for left-to-right text the caret matches the
+glyphs today. For a field with a set right-to-left direction the single-line positions already
+differ from what is drawn (the visual layout, which does take the direction, covers the caret and
+selection there). And nothing ties the two together: a field given its own font, letter spacing
+or centred text would draw its caret off the glyphs.
+
+gpui shapes a string once and uses that layout to draw it, place the caret and map a click to a
+character, and caches per line, so typing in a long field reshapes only the edited line (TODO.md,
+"Learned from gpui"). This doc is the contract for doing the same here.
+
+## Goals
+
+- One layout per string and spec, used for drawing, the caret, hit testing, selection, scrolling
+  and the IME caret rect, so they can't disagree.
+- A focused field makes no shaping pass on a frame where its text and settings didn't change, and
+  one per edit, while the cache has room for the frame's text.
+- The caret and visual data worked out once per layout, not once per call.
+- Today's editing behaviour kept, pinned by tests written before the change.
+- Tests that count shaping passes, never time.
+- If the numbers after Phase 1 show it matters: an edit in a long text reshapes only the
+  paragraph it touches.
+
+## Non-goals
+
+- `CodeEditor` (`crates/code`). It draws one block per piece of a line in view (`columns.rs`
+  `pieces`), each its own cache entry, and places its caret by column arithmetic on the mono
+  advance. Nothing here changes it.
+- New editing behaviour. A caret inside a ligature, boundary affinity at a soft wrap, and the
+  caret's edge in multi-line right-to-left text stay as they are (see "Behaviour kept").
+- Caret calls for vertical text. No widget edits vertical text; the new calls return an empty
+  layout for a vertical block.
+- The single-line caret band's height (`line_height * 1.1`, centred on the field). That is
+  drawing geometry, not shaping.
+- `TextBlock`'s three heap allocations (TODO P1, its own entry). The field builds its block before
+  input as well as after, one more per focused frame, which that entry would make free.
+
+## Domain model
+
+### Today
+
+- `LayoutSpec<'a>` (`shaping.rs`): everything that decides a layout apart from the string;
+  `LayoutSpec::of_block(&TextBlock)` is the spec a block is drawn with. `LayoutKey` is its hashable
+  form.
+- `ShapedLayout`: `glyphs: Vec<ShapedGlyph>` (font, glyph id, `rel_x` including the pen offset,
+  `rel_y`, `byte_start`, `byte_end`, `advance`, `rtl`), `lines: Vec<ShapedLine>` (`top`, `height`,
+  `baseline`, glyph range, `byte_start`), `shown` (bytes before an ellipsis), `size`, and
+  `ink: OnceCell<…>`, worked out the first time `measure_block_ink` asks. The direction mark's
+  glyph is kept, with its byte range saturated to `0..0` (~660).
+- `LayoutCache` inside `SharedFontSystem`: a map from `LayoutKey` to a map from content to
+  `CachedLayout`, with a byte budget counted when an entry is inserted, and least-recently-used
+  eviction. `layout_stats()` reports hits, misses (`shaped`), layouts kept and bytes.
+- `DrawList::text` (`widgets/draw_list.rs` ~2670) changes a block before it is drawn: span texts
+  are joined into `content` (~2680), and under a scale transform the font size, line height and
+  width are multiplied by the scale (~2813). The renderer (`text_prep.rs` ~131) looks each block up
+  with the font system locked for the whole pass.
+- Caret types (`text.rs`, public): `CaretPos { byte, x, line, line_top, line_height }`,
+  `VisualGlyph { byte_start, byte_end, x, w, line, line_top, line_height, rtl }`, and the helpers
+  that read them: `caret_for_byte`, `byte_at_point`, `byte_under_point`,
+  `byte_on_adjacent_line`, `selection_rects`, `visual_caret_neighbor`, `visual_caret_pos`. The
+  helpers take slices, so they don't care where the data came from.
+- Callers of the three layout functions: only `TextInput` and its tests. agent-ui calls none.
+
+### New
+
+- **One normalisation.** The span joining and the transform scale move out of `DrawList::text`
+  into one function both it and the caret calls use, so the caret is looked up under exactly the
+  spec the renderer will use. The caret calls return coordinates in the block's own (unscaled)
+  space, divided back by the scale, as the widget expects.
+- **`ShapedLayout` keeps what the caret needs.**
+  - `ShapedGlyph::cell_x`: the cell's left edge without the pen offset (`glyph.x` plus the line's
+    offset). `rel_x` includes `x_offset`, which moves combining marks off their cell; the caret
+    functions use `glyph.x`.
+  - `ShapedLine::left` and `right`: the line's edges in block coordinates, alignment offset
+    included. A line's first caret is at its left edge (its right for a right-to-left line) and
+    its end caret at the other, not at 0 and `line_w` as today. An empty line's caret is where its
+    alignment puts it: the left for start, the middle for centred, the right for end.
+  - No glyph for the direction mark: `shape_layout` drops it rather than saturating its bytes.
+- **Caret data worked out once.** `carets: OnceCell<Arc<[CaretPos]>>` and
+  `visual: OnceCell<Arc<[VisualGlyph]>>` beside `ink`, built from `glyphs` and `lines` by the rules
+  the free functions use now (see "Behaviour kept"). Their bytes are added to the entry's and the
+  cache's count when they are built. An `Arc` a widget still holds after its entry is evicted
+  isn't counted; a widget holds at most this frame's.
+- **`DrawList::caret_layout(&TextBlock) -> Arc<[CaretPos]>` and
+  `visual_layout(&TextBlock) -> Arc<[VisualGlyph]>`.** They normalise the block, lock the font
+  system, look the layout up (shaping it if it isn't kept, the entry the renderer will then hit),
+  clone the `Arc` out and unlock, so the lock isn't held while the widget works.
+- **Single-line callers.** `text_cursor_positions`' `(byte, x)` table isn't `CaretPos` with the line
+  dropped: it keeps only increasing bytes and ends runs differently. Its five callers move to
+  `CaretPos` and the existing helpers (`byte_at_point`, `caret_for_byte`) one by one, with the
+  Phase 0 tests pinning their results on left-to-right text first.
+- **`TextInput` and its three strings.** A field draws one of: its value, its masked value, or the
+  composition (value with the preedit). It asks for the caret layout of the string it draws, and
+  maps bytes back with the mappings it has (`display_to_value_byte`, `value_to_display_byte`, the
+  composition's caret byte). An empty value draws its placeholder, but its caret layout is that of
+  the empty value (no shaping), so navigation never walks the placeholder.
+- **Before and after input.** The field builds its block before input and after. Before input it
+  holds the string and settings of last frame, so when nothing changed between frames (no new
+  value set from outside, same width, style and direction) it is last frame's drawn entry and
+  costs no shaping pass. After input it is the block that is drawn.
+- **Eviction.** Other blocks can evict the entry between the field's lookup and the render. That
+  costs a shaping pass, not a wrong caret: the `Arc` the field holds was made from the same spec
+  and string. The "no pass on an idle frame" goal holds while the frame's text fits the budget;
+  a test checks the caret is still right with a budget too small to keep anything.
+
+### Behaviour kept
+
+Shared glyphs don't change these, and Phase 0's tests pin them:
+
+- Carets stand at cluster edges. Multi-line logical movement can step a character into a
+  ligature's cluster (`text_input.rs` ~618), and `caret_for_byte` then rounds forward to the
+  cluster's end (`text.rs` ~2614). Kept as is.
+- A soft wrap gives the same byte twice, the end of one line and the start of the next;
+  `caret_for_byte` takes the first.
+- Ellipsized text: caret data covers the shown bytes only, clamped to `shown` (the ellipsis's own
+  glyphs have bytes past the content).
+
+### Phase 2 is conditional
+
+Phase 1 removes all shaping from idle frames and all but one pass per edit. What's left is the
+one pass over the whole text per keystroke. Whether that matters depends on how long real texts
+get, so Phase 0's bench measures 10, 500 and 5,000 lines, and Phase 2 happens only if the
+5,000-line keystroke still costs too much after Phase 1 (Bart to decide on the numbers).
+
+If it goes ahead: cosmic-text 0.19.0 (`Cargo.lock`) lays out each paragraph on its own
+(`Buffer::line_layout` hands each `BufferLine` its own text, attributes and alignment), so
+shaping paragraphs one by one with the same inputs gives the same glyphs. `shape_layout` would
+split the content, look up or shape each paragraph under the spec (face ranges cut to it and
+shifted to its start), and stack the results. Points to settle then:
+
+- Splitting must follow cosmic-text's `LineIter`, which ends a paragraph at CRLF, CR and LFCR as
+  well as LF. The existing `\n`-only scans for line starts (in `shape_layout` and
+  `text_caret_layout`) get those wrong today; Phase 0 adds a test, and the fix goes in with Phase 1.
+- Empty paragraphs and the empty line after a final newline are kept.
+- Only the first paragraph gets the direction mark, as today ("later lines auto-detect").
+  Marking each would be a change in behaviour.
+- Stacking still copies and rebases every glyph per edit, and each whole-string version holds a
+  copy. Paragraph caching saves the shaping, not all of an edit's cost; keeping the paragraphs as
+  a list, without a stacked copy, would save the rest, at the cost of every reader walking a list.
+- Many small entries cost more fixed overhead each (`LAYOUT_OVERHEAD`); the budget may need to count
+  them differently.
+- Vertical and ellipsized text are one stack or one line, so they keep the whole-string path.
+
+## Phasing
+
+1. **Phase 0, measure and pin:** the pass counter, the bench cases, and the tests of today's caret
+   behaviour, all before any change (see Outstanding).
+2. **Phase 1, one layout:** normalisation, the `ShapedLayout` fields, the derived data, the
+   `DrawList` calls, `TextInput` moved over (with the multi-line composition fix), `text_select`
+   on cell x, and the tests in Outstanding. The match with the drawn glyphs is checked by comparing
+   each caret position with the glyph cells of the same block's layout. The existing `text_input.rs`
+   caret tests (`caret_layout` ~2472 and the navigation tests after it) move to the new call and
+   must pass unchanged.
+3. **Phase 2, paragraphs:** only if the numbers after Phase 1 call for it.
+4. **Phase 3, ellipsis:** today `ellipsis_cut` (`text.rs` ~3127) shapes the content with no
+   wrap, no width and start alignment, and measures the ellipsis apart (~3172). It would look that
+   layout up in the cache under a fixed cut spec (the block's font, size and spacing; no wrap, no
+   width, start alignment) and read the cut from its cells, keeping the ellipsis's width reserved
+   as now. Toggling the block's own `ellipsize` wouldn't do: that keeps the block's wrap, width
+   and alignment.
+
+## Open questions for review
+
+1. **Hand out `Arc<[…]>`, or run a closure under the lock?** `Arc` costs one allocation per
+   layout the first time it's asked for and an atomic increment per call, and frees the lock at
+   once. A `with_caret_layout(&block, |carets| …)` costs nothing extra, but holds the font system
+   lock (not reentrant) while the widget runs its navigation, so nothing in it may measure.
+   Proposed: `Arc`.
+
+   > **2026-10-21, Bart:** `Arc`, a shared copy.
+2. **Keep `CaretPos` and `VisualGlyph` as they are, or merge them?** They overlap (both have the
+   byte, x, line and line box). Merging would be a bigger public change to `text.rs`'s helpers for
+   little gain. Proposed: keep both.
+
+   > **2026-10-21, Bart:** keep both.
+3. **Phase 2 threshold.** What keystroke cost at 5,000 lines is acceptable after Phase 1? To
+   decide once Phase 0 and Phase 1 have numbers.
+
+   > **2026-10-21, Bart:** decided after the numbers.
+
+## Review notes
+
+> **2026-10-21, Codex review of the first draft.** Points taken in: the cache's miss counter can't
+> show the caret functions' shaping (Phase 0 now counts every pass); `cell_x` and a width weren't
+> enough (direction mark glyph, aligned line ends, the single-line table's own rules); the caret
+> must be looked up after the same normalisation `DrawList::text` applies (spans, scale); the
+> before-input hit holds only when nothing changed, and the value, mask and composition need
+> their own byte mappings (and an empty value must not navigate the placeholder); eviction and
+> the derived arrays' bytes; the multi-line composition caret bug; `LineIter`'s line endings,
+> empty paragraphs and the first-paragraph mark for Phase 2; ligatures, ellipsis clamping and
+> vertical text stated; `text_select` on pen x; Phase 3's cut spec; and corrections to the
+> per-frame counts, the wrappers' defaults, the right-to-left mismatch today and `CodeEditor`
+> drawing pieces, not lines.
+
+## References
+
+- `crates/core/src/shaping.rs`: `LayoutSpec`, `LayoutCache`, `shape_layout`, `ShapedLayout`
+- `crates/core/src/text.rs`: `text_cursor_positions` (~2374), `CaretPos`, `text_caret_layout`
+  (~2475), the caret helpers (~2614–2700), `VisualGlyph`, `text_visual_layout` (~2757),
+  `selection_rects`, `visual_caret_neighbor`, `ellipsis_cut` (~3127)
+- `crates/core/src/widgets/draw_list.rs`: `DrawList::text` (~2670), the caret wrappers (~937,
+  ~1026, ~1046)
+- `crates/core/src/text_prep.rs`: the renderer's text pass (~131)
+- `crates/core/src/widgets/text_input.rs`: the call sites listed in "Why this exists"
+- `crates/core/src/text_select.rs`: hit testing on the shared cache (~613, pen x at ~644)
+- cosmic-text 0.19.0: `Buffer::line_layout`, `BufferLine`, `LineIter`
+- TODO.md: "Caret, cursor and visual layouts shape on their own", "Ellipsis shapes the full text
+  twice", "A `TextBlock` costs 3 heap allocations", and the gpui entry
+- `docs/design/measured-row-heights.md`, the List work this follows in form
