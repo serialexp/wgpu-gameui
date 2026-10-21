@@ -13,14 +13,14 @@ Tracking the gap between this design and what's on the main branch.
 - [x] Phase 0: the `focused_text_input` bench group, numbers below (2026-10-21)
 - [x] Phase 0: tests pinning today's caret behaviour (2026-10-21; `widgets/text_input_layout_tests.rs`: clicks and the caret against the drawn glyphs, right-to-left edges, a password, an IME composition, both kinds of soft wrap, a final newline, a combining cluster for the ligature case)
 - [x] Line starts follow cosmic-text's `LineIter` (CR, CRLF, LFCR), in `shape_layout`, `text_caret_layout` and `text_visual_layout` (2026-10-21, `text::line_starts`, ahead of Phase 1)
-- [x] Phase 1: one normalisation of a block (spans joined into `content`, the transform's scale) shared by `DrawList::text` and the caret calls (2026-10-21; `span_content`, `scaled_spec` and `DrawList::text_scale` in `widgets/draw_list.rs`)
-- [x] Phase 1: `ShapedLayout` keeps what the caret needs: each glyph's cell x without its pen offset, each line's left and right edge, no glyph for the direction mark (2026-10-21; `ShapedGlyph::cell_x`, `ShapedLine::left` / `right`)
-- [x] Phase 1: caret positions and visual glyphs worked out from a `ShapedLayout` the first time they're asked for, counted in the cache's bytes (2026-10-21; `text_carets.rs`, `LayoutCache::derived`)
-- [x] Phase 1: `DrawList::caret_layout` / `visual_layout` take the block that is drawn; `text_cursor_positions`, `text_caret_layout`, `text_visual_layout` and their `DrawList` wrappers go (2026-10-21)
-- [x] Phase 1: `TextInput` takes every caret, click, selection, scroll and IME position from the layout of the string it draws (value, mask or composition) (2026-10-21; `FieldText::block` builds both the drawn block and the ones its layouts are read from)
-- [x] Phase 1: a multi-line field composing with the IME places its caret and IME rect on the composition's own line (2026-10-21)
-- [x] Phase 1: `text_select.rs` hit testing uses the cell x rather than the pen x (2026-10-21; underlines too)
-- [x] Phase 1: tests: the caret sits on the drawn glyphs for a block with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted (2026-10-21; `widgets/draw_list_caret_tests.rs`, `widgets/text_input_layout_tests.rs`)
+- [x] Phase 1: one normalisation of a block (spans joined into `content`, the transform's scale) shared by `DrawList::text` and the caret calls (5edf11b, 2026-10-21; `span_content`, `scaled_spec` and `DrawList::text_scale` in `widgets/draw_list.rs`)
+- [x] Phase 1: `ShapedLayout` keeps what the caret needs: each glyph's cell x without its pen offset, each line's left and right edge, no glyph for the direction mark (5edf11b, 2026-10-21; `ShapedGlyph::cell_x`, `ShapedLine::left` / `right`)
+- [x] Phase 1: caret positions and visual glyphs worked out from a `ShapedLayout` the first time they're asked for, counted in the cache's bytes (5edf11b, 2026-10-21; `text_carets.rs`, `LayoutCache::derived`)
+- [x] Phase 1: `DrawList::caret_layout` / `visual_layout` take the block that is drawn; `text_cursor_positions`, `text_caret_layout`, `text_visual_layout` and their `DrawList` wrappers go (5edf11b, 2026-10-21)
+- [x] Phase 1: `TextInput` takes every caret, click, selection, scroll and IME position from the layout of the string it draws (value, mask or composition) (5edf11b, 2026-10-21; `FieldText::block` builds both the drawn block and the ones its layouts are read from)
+- [x] Phase 1: a multi-line field composing with the IME places its caret and IME rect on the composition's own line (5edf11b, 2026-10-21)
+- [x] Phase 1: `text_select.rs` hit testing uses the cell x rather than the pen x (5edf11b, 2026-10-21; underlines too)
+- [x] Phase 1: tests: the caret sits on the drawn glyphs for a block with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted (5edf11b, 2026-10-21; `widgets/draw_list_caret_tests.rs`, `widgets/text_input_layout_tests.rs`)
 
 ### Outstanding
 
