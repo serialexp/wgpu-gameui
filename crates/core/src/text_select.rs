@@ -641,23 +641,23 @@ pub(crate) fn hit_layout(layout: &ShapedLayout, x: f32, y: f32) -> (usize, usize
         };
         (left as usize, right as usize)
     };
-    let Some(leftmost) = glyphs.iter().min_by(|a, b| a.rel_x.total_cmp(&b.rel_x)) else {
+    let Some(leftmost) = glyphs.iter().min_by(|a, b| a.cell_x.total_cmp(&b.cell_x)) else {
         let start = line.byte_start as usize;
         return (start, start);
     };
     let rightmost = glyphs
         .iter()
-        .max_by(|a, b| (a.rel_x + a.advance).total_cmp(&(b.rel_x + b.advance)))
+        .max_by(|a, b| (a.cell_x + a.advance).total_cmp(&(b.cell_x + b.advance)))
         .expect("the line has a glyph");
-    if x < leftmost.rel_x {
+    if x < leftmost.cell_x {
         return (edges(leftmost).0, leftmost.byte_start as usize);
     }
     let over = glyphs
         .iter()
-        .find(|g| x >= g.rel_x && x < g.rel_x + g.advance)
+        .find(|g| x >= g.cell_x && x < g.cell_x + g.advance)
         .unwrap_or(rightmost);
     let (left, right) = edges(over);
-    let caret = if x < over.rel_x + over.advance / 2.0 {
+    let caret = if x < over.cell_x + over.advance / 2.0 {
         left
     } else {
         right
@@ -675,7 +675,7 @@ pub(crate) fn highlight_rects(layout: &ShapedLayout, range: Range<usize>) -> Vec
         let mut spans: Vec<(f32, f32)> = glyphs
             .iter()
             .filter(|g| (g.byte_start as usize) < range.end && (g.byte_end as usize) > range.start)
-            .map(|g| (g.rel_x, g.rel_x + g.advance))
+            .map(|g| (g.cell_x, g.cell_x + g.advance))
             .collect();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut spans = spans.into_iter();
@@ -992,7 +992,7 @@ mod tests {
         let layout = shared.layout(&LayoutSpec::of_block(&block), &block.content);
         let b = &layout.glyphs[1];
         // Right half of "b": caret after it, but "b" is under the pointer.
-        let right_half = b.rel_x + b.advance * 0.75;
+        let right_half = b.cell_x + b.advance * 0.75;
         assert_eq!(hit_layout(layout, right_half, 5.0), (2, 1));
         // Above the text: the first line; below it: the last.
         assert_eq!(hit_layout(layout, -5.0, -50.0).0, 0);

@@ -11,15 +11,16 @@
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cosmic_text::{
     Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight, Wrap, fontdb,
 };
 
 use crate::text::{
-    FaceRange, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, TextAlign, TextBlock, TextDirection,
-    WrapMode, cosmic_align, direction_prefix, ellipsis_cut, face_runs, family_hash,
-    letter_spacing_em, resolve_vmetrics, style_disc, vertical_stack_string,
+    CaretPos, FaceRange, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, TextAlign, TextBlock,
+    TextDirection, VisualGlyph, WrapMode, cosmic_align, direction_prefix, ellipsis_cut, face_runs,
+    family_hash, letter_spacing_em, resolve_vmetrics, style_disc, vertical_stack_string,
 };
 
 /// Roughly how many bytes of layouts [`SharedFontSystem`] keeps before it
@@ -147,6 +148,41 @@ impl SharedFontSystem {
     /// The layout of `content` under `spec`, shaped now if it isn't kept.
     pub(crate) fn layout(&mut self, spec: &LayoutSpec<'_>, content: &str) -> &ShapedLayout {
         self.layout_and_fonts(spec, content).0
+    }
+
+    /// Where carets stand in `content` laid out under `spec`: one per cluster
+    /// boundary, relative to the block's origin. Kept with the layout.
+    pub(crate) fn caret_layout(&mut self, spec: &LayoutSpec<'_>, content: &str) -> Arc<[CaretPos]> {
+        if spec.vertical {
+            return Arc::from([]);
+        }
+        self.layouts.derived(
+            spec,
+            content,
+            &mut self.font_system,
+            |entry| &mut entry.carets,
+            crate::text_carets::caret_positions,
+        )
+    }
+
+    /// `content`'s glyphs laid out under `spec`, in visual order, for
+    /// selections and moving the caret through right-to-left text. Kept with
+    /// the layout.
+    pub(crate) fn visual_layout(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+    ) -> Arc<[VisualGlyph]> {
+        if spec.vertical {
+            return Arc::from([]);
+        }
+        self.layouts.derived(
+            spec,
+            content,
+            &mut self.font_system,
+            |entry| &mut entry.visual,
+            crate::text_carets::visual_glyphs,
+        )
     }
 
     /// [`layout`](Self::layout), with the font system still at hand for the
@@ -321,6 +357,10 @@ pub(crate) struct ShapedGlyph {
     pub glyph_id: u16,
     /// Pen x relative to the block's `x`.
     pub rel_x: f32,
+    /// The cell's left edge relative to the block's `x`: `rel_x` without the
+    /// glyph's pen offset, which moves a combining mark off its cell. Where a
+    /// caret before the glyph stands.
+    pub cell_x: f32,
     /// Baseline y relative to the block's `y`.
     pub rel_y: f32,
     /// Per-glyph font size (usually the block's; cosmic-text reports it per
@@ -332,7 +372,7 @@ pub(crate) struct ShapedGlyph {
     /// Where the glyph's cluster ends in the content: with `byte_start`, the
     /// bytes selecting the glyph selects.
     pub byte_end: u32,
-    /// The glyph's advance: its cell spans `rel_x..rel_x + advance`.
+    /// The glyph's advance: its cell spans `cell_x..cell_x + advance`.
     pub advance: f32,
     /// Whether the glyph runs right to left, so its cell's left edge is its
     /// end rather than its start.
@@ -351,6 +391,11 @@ pub(crate) struct ShapedLine {
     pub glyphs: std::ops::Range<u32>,
     /// Where the line starts in the content; all an empty line has.
     pub byte_start: u32,
+    /// The line's left and right edges relative to the block's `x`, its
+    /// alignment included. An empty line's are both where its alignment puts
+    /// a caret.
+    pub left: f32,
+    pub right: f32,
 }
 
 /// A laid-out string: its glyphs, including outline-less ones such as spaces,
@@ -373,8 +418,13 @@ pub(crate) struct ShapedLayout {
 
 struct CachedLayout {
     layout: ShapedLayout,
+    /// Where carets stand in it, and its glyphs in visual order, worked out
+    /// the first time they're asked for (`text_carets.rs`).
+    carets: Option<Arc<[CaretPos]>>,
+    visual: Option<Arc<[VisualGlyph]>>,
     /// [`LayoutCache::uses`] when this layout was last looked up.
     last_used: u64,
+    /// The layout's bytes and those of what was worked out from it.
     bytes: usize,
 }
 
@@ -418,7 +468,7 @@ impl LayoutCache {
         self.budget = budget;
         self.low_water = low_water(budget);
         if self.bytes > budget {
-            self.evict();
+            self.evict(None);
         }
     }
 
@@ -450,7 +500,7 @@ impl LayoutCache {
                 + layout.lines.len() * std::mem::size_of::<ShapedLine>()
                 + LAYOUT_OVERHEAD;
             if self.bytes + bytes > self.budget {
-                self.evict();
+                self.evict(None);
             }
             self.len += 1;
             self.bytes += bytes;
@@ -458,6 +508,8 @@ impl LayoutCache {
                 content.to_owned(),
                 CachedLayout {
                     layout,
+                    carets: None,
+                    visual: None,
                     last_used: self.uses,
                     bytes,
                 },
@@ -472,8 +524,41 @@ impl LayoutCache {
         &entry.layout
     }
 
-    /// Drop the least recently used layouts down to the low-water mark.
-    fn evict(&mut self) {
+    /// What `slot` of the entry for `content` under `spec` holds, worked out
+    /// by `make` from its layout (shaped now if it isn't kept) the first time
+    /// it's asked for, and counted in the entry's bytes from then on.
+    fn derived<T>(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        font_system: &mut FontSystem,
+        slot: fn(&mut CachedLayout) -> &mut Option<Arc<[T]>>,
+        make: fn(&ShapedLayout) -> Vec<T>,
+    ) -> Arc<[T]> {
+        self.get_or_shape(spec, content, font_system);
+        let entry = self
+            .map
+            .get_mut(&spec.key())
+            .and_then(|inner| inner.get_mut(content))
+            .expect("the layout was just looked up");
+        if let Some(kept) = slot(entry) {
+            return Arc::clone(kept);
+        }
+        let made: Arc<[T]> = make(&entry.layout).into();
+        let bytes = made.len() * std::mem::size_of::<T>();
+        entry.bytes += bytes;
+        *slot(entry) = Some(Arc::clone(&made));
+        self.bytes += bytes;
+        if self.bytes > self.budget {
+            self.evict(Some(self.uses));
+        }
+        made
+    }
+
+    /// Drop the least recently used layouts down to the low-water mark. The
+    /// one last used at `in_use`, if any, stays, as a new layout does when it
+    /// alone is over.
+    fn evict(&mut self, in_use: Option<u64>) {
         let mut uses: Vec<(u64, usize)> = self
             .map
             .values()
@@ -492,7 +577,7 @@ impl LayoutCache {
         let (mut len, mut total) = (0, 0);
         for inner in self.map.values_mut() {
             inner.retain(|_, entry| {
-                let keep = entry.last_used > cutoff;
+                let keep = entry.last_used > cutoff || Some(entry.last_used) == in_use;
                 if keep {
                     len += 1;
                     total += entry.bytes;
@@ -633,6 +718,14 @@ pub(crate) fn shape_layout(
     // separators `vertical_stack_string` inserted.
     let line_starts = crate::text::line_starts(&shaped_text);
 
+    // Where a caret on an empty line stands: where its alignment would start
+    // a line.
+    let empty_line_x = match (spec.align, spec.max_width) {
+        (TextAlign::Center, Some(width)) if !spec.vertical => width / 2.0,
+        (TextAlign::End | TextAlign::Right, Some(width)) if !spec.vertical => width,
+        _ => column_off_x,
+    };
+
     let mut glyphs = Vec::new();
     let mut lines = Vec::new();
     let mut width = 0.0f32;
@@ -658,12 +751,18 @@ pub(crate) fn shape_layout(
         };
         let first = glyphs.len() as u32;
         for glyph in run.glyphs {
+            // The direction mark is no glyph of the content: nothing draws it
+            // and no caret stands at it.
+            if !spec.vertical && line_base + glyph.start < prefix_len {
+                continue;
+            }
             let font_size = glyph.font_size;
             glyphs.push(ShapedGlyph {
                 font_id: glyph.font_id,
                 font_weight: glyph.font_weight,
                 glyph_id: glyph.glyph_id,
                 rel_x: glyph.x + font_size * glyph.x_offset + line_off_x,
+                cell_x: glyph.x + line_off_x,
                 rel_y: run.line_y + glyph.y - font_size * glyph.y_offset,
                 font_size,
                 byte_start: content_byte(glyph.start) as u32,
@@ -672,12 +771,24 @@ pub(crate) fn shape_layout(
                 rtl: glyph.level.is_rtl(),
             });
         }
+        let left = glyphs[first as usize..]
+            .iter()
+            .map(|g| g.cell_x)
+            .reduce(f32::min)
+            .unwrap_or(empty_line_x);
+        let right = if glyphs.len() as u32 > first {
+            left + run.line_w
+        } else {
+            left
+        };
         lines.push(ShapedLine {
             top: run.line_top,
             height: run.line_height,
             baseline: run.line_y,
             glyphs: first..glyphs.len() as u32,
             byte_start: content_byte(0) as u32,
+            left,
+            right,
         });
     }
 
@@ -789,6 +900,26 @@ mod tests {
         let stats = shared.layout_stats();
         assert_eq!((stats.layouts, stats.shaped), (1, 4));
         assert_eq!(shared.kept_layouts("fourth").count(), 1);
+    }
+
+    #[test]
+    fn carets_that_push_the_cache_over_its_budget_evict_older_layouts() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let spec = LayoutSpec::plain(16.0, Some(200.0));
+        shared.layout(&spec, "an older layout");
+        shared.layout(&spec, "the layout in use");
+        let bytes = shared.layout_stats().bytes;
+        shared.set_layout_budget(bytes + 8);
+        let carets = shared.caret_layout(&spec, "the layout in use");
+        let stats = shared.layout_stats();
+        assert_eq!(stats.layouts, 1, "the older one made room");
+        assert_eq!(shared.kept_layouts("the layout in use").count(), 1);
+        assert!(Arc::ptr_eq(
+            &carets,
+            &shared.caret_layout(&spec, "the layout in use")
+        ));
+        assert_eq!(shared.layout_stats().shaped, 2, "and no shaping again");
     }
 
     #[test]

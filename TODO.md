@@ -60,6 +60,15 @@ still open.
       window until Escape. Needs some way to end the wait that isn't a
       timer: the app reporting the window's state after applying the
       change, say, if that can be told apart from macOS's stale reports.
+- [ ] **`out_of_pictures_the_clock_waits_for_them` fails under a full
+      workspace run.** Found 2026-10-21: it passes alone, but in
+      `cargo test --workspace --all-features` it failed in most runs, the
+      clock at 133 ms where it expects picture 3's 66 ms
+      (`crates/media/src/player_tests.rs:367`). Under load the worker
+      seems to decode past the two pictures `Ahead::frames` allows before
+      the test checks, or the clock reads a later picture; a race between
+      the test and the decoding worker, not a timing assert, so it wants
+      the test (or the player) to wait on what the worker did.
 
 ## Video phase 3 follow-ups (review, 2026-10-16)
 
@@ -392,13 +401,31 @@ harden those foundations rather than create parallel replacements.
   block's natural width is shaped by the measurer, and `ellipsis_cut` shapes
   the full content again to find the cut. It could read the width and the
   glyph boundaries from the cached unellipsized layout.
-- [ ] **P2 — Caret, cursor and visual layouts shape on their own.**
+- [x] **P2 — Caret, cursor and visual layouts shape on their own.** Done
+  2026-10-21 (Phase 1 of `docs/design/shared-text-layout.md`): carets and
+  visual glyphs are read from the cached layout a block is drawn with, and
+  the multi-line IME caret is on the composition's line. It was:
   `text_caret_layout`, `text_cursor_positions` and `text_visual_layout` build
   their own `Buffer` every call rather than using the shared layouts; a
   large text input reshapes its whole content for each of them. Planned in
   `docs/design/shared-text-layout.md`, with a bug found on the way: a
   multi-line field composing with the IME puts its caret on the first line.
   (The other, line starts found by `\n` only, is fixed: `text::line_starts`.)
+- [ ] **P3 — No caret affinity at a direction boundary.** Where
+  left-to-right and right-to-left text meet, one byte has two caret stops
+  (the end of one run, the start of the other), and `visual_caret_pos`
+  always draws the leftmost. A click on the other one (found by Codex,
+  2026-10-21: `"abגד"`, a click near x=40 picks byte 2 and the caret is
+  drawn at x=20) puts the right byte in the field but the caret away from
+  the pointer, as arrowing onto it does. The field would keep which stop it
+  stands at with its byte, set by the click or the arrow that put it there.
+- [ ] **P2 — Text places glyphs outside its clip.** `text::append_placements`
+  places, orders and uploads a quad for every glyph of a block and leaves
+  the clip to the shader, so a focused 5,000-line field spends 40 ms a frame
+  on ~250K glyphs to show a screenful (sampled 2026-10-21, see "Phase 1
+  numbers" in `docs/design/shared-text-layout.md`). Skip the lines wholly
+  outside the clip (lines are sorted by `top`, so a binary search finds the
+  first in view).
 - [ ] **P3 — Variable font weights.** The atlas keys glyphs by
   `(font id, glyph id)` and rasterises from the font file, so a variable font
   draws every weight at its default instance. Carry the weight into the
@@ -530,7 +557,9 @@ harden those foundations rather than create parallel replacements.
       reshapes only the edited line. (Related: "Ellipsis shapes the full
       text twice" and "A `TextBlock` costs 3 heap allocations" above; gpui
       keeps short strings inline and shares long ones, which is its answer
-      to the second.)
+      to the second.) 2026-10-21: one layout for all of them is done (Phase 1
+      of `docs/design/shared-text-layout.md`); caching per line is its
+      Phase 2, for Bart to decide on the numbers there.
 - [ ] **P2 — Upload only the changed part of the glyph atlas.**
       `text.rs` `write_pixels` rebuilds the whole atlas pixel buffer
       (`build_pixel_buffer`) and writes the full texture whenever any glyph

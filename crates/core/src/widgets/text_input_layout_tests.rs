@@ -64,8 +64,8 @@ fn drawn(list: &DrawList) -> (Vec<Cell>, Vec<usize>) {
         .iter()
         .map(|g| Cell {
             byte: g.byte_start as usize,
-            left: block.x + g.rel_x,
-            right: block.x + g.rel_x + g.advance,
+            left: block.x + g.cell_x,
+            right: block.x + g.cell_x + g.advance,
         })
         .collect();
     // Where each line, wrapped ones included, starts: its first glyph's byte.
@@ -136,14 +136,39 @@ fn in_right_to_left_text_the_caret_sits_on_the_edge_where_its_byte_begins() {
     let value = "אבג";
     let mut ti = TextInput::new(0.0, 0.0, 400.0, 24.0).with_value(value);
     let mut focus = FocusState::new();
-    let (cells, _) = drawn(&idle(&mut ti, &mut focus));
+    // The glyphs as drawn in the frame placing the caret: a caret at the
+    // field's right edge scrolls it to show all of the caret.
+    let mut caret_and_cells = |byte| {
+        ti.cursor_pos = byte;
+        let list = idle(&mut ti, &mut focus);
+        (focus.ime_request().unwrap().x, drawn(&list).0)
+    };
+    let (x, cells) = caret_and_cells(0);
     let first = cells.iter().find(|c| c.byte == 0).unwrap();
     let last = cells.iter().max_by_key(|c| c.byte).unwrap();
     assert!(first.left > last.left, "drawn right to left: {cells:?}");
-    let (x, _) = ime_at(&mut ti, &mut focus, 0);
     assert_near(x, first.right, "before the first letter: its right edge");
-    let (x, _) = ime_at(&mut ti, &mut focus, value.len());
+    let (x, cells) = caret_and_cells(value.len());
+    let last = cells.iter().max_by_key(|c| c.byte).unwrap();
     assert_near(x, last.left, "after the last letter: its left edge");
+}
+
+#[test]
+fn a_click_just_inside_the_start_of_a_right_to_left_letter_puts_the_caret_before_it() {
+    let value = "אבג";
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 24.0).with_value(value);
+    let mut focus = FocusState::new();
+    for byte in [0, 2, 4] {
+        let (cells, _) = drawn(&idle(&mut ti, &mut focus));
+        let cell = cells.iter().find(|c| c.byte == byte).unwrap();
+        // A right-to-left letter starts at its right edge.
+        click(&mut ti, &mut focus, cell.right - 0.5, 12.0);
+        assert_eq!(ti.cursor_pos, byte, "{cell:?}");
+    }
+    let (cells, _) = drawn(&idle(&mut ti, &mut focus));
+    let last = cells.iter().max_by_key(|c| c.byte).unwrap();
+    click(&mut ti, &mut focus, last.left + 0.5, 12.0);
+    assert_eq!(ti.cursor_pos, value.len(), "past its last letter's end");
 }
 
 #[test]
@@ -180,6 +205,27 @@ fn while_composing_the_caret_sits_in_the_preedit_where_the_ime_asks() {
     let x = focus.ime_request().unwrap().x;
     let y_cell = cells.iter().find(|c| c.byte == 3).unwrap();
     assert_near(x, y_cell.left, "inside the preedit");
+}
+
+#[test]
+fn composing_on_a_later_line_puts_the_caret_and_ime_rect_on_that_line() {
+    let value = "first\nsecond";
+    let mut ti = TextInput::new(0.0, 0.0, 300.0, 120.0)
+        .with_multiline(true)
+        .with_value(value);
+    let mut focus = FocusState::new();
+    let (_, top) = ime_at(&mut ti, &mut focus, 0);
+    let (_, second_top) = ime_at(&mut ti, &mut focus, value.len());
+    assert!(second_top > top, "the second line is lower");
+    let composing = InputState {
+        preedit: "xy".into(),
+        ..Default::default()
+    };
+    let list = frame(&mut ti, &mut focus, &composing);
+    let (cells, _) = drawn(&list);
+    let rect = focus.ime_request().unwrap();
+    assert_eq!(rect.y, second_top, "on the composition's line");
+    assert_near(rect.x, cells.last().unwrap().right, "after the preedit");
 }
 
 #[test]
@@ -250,4 +296,64 @@ fn a_caret_inside_a_cluster_is_drawn_at_the_cluster_end() {
     let (end, _) = ime_at(&mut ti, &mut focus, 3);
     assert!(end > start, "the cluster has width");
     assert_near(inside, end, "rounded forward to the cluster's end");
+}
+
+/// Shaping passes, counting the renderer's lookup of the text drawn: none for
+/// a frame where nothing changed, one for a frame with an edit.
+fn assert_idle_shapes_nothing_and_an_edit_once(mut ti: TextInput) {
+    let mut focus = FocusState::new();
+    let idle = InputState::default();
+    // Every frame of a test draws into a new list, with a font system of its
+    // own: draw into one list throughout, as an app does.
+    let mut list = DrawList::new();
+    let theme = Theme::default();
+    let mut passes = |ti: &mut TextInput, input: &InputState| {
+        let before = crate::text::shaping_passes();
+        list.clear();
+        focus.focus(ID);
+        focus.begin_frame(input);
+        {
+            let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, input, 800.0, 600.0);
+            ti.draw(ID, &mut ctx);
+        }
+        let handle = list.text_measurer.font_system_handle();
+        let mut shared = handle.lock().unwrap();
+        for block in &list.texts {
+            shared.layout(&LayoutSpec::of_block(block), &block.content);
+        }
+        crate::text::shaping_passes() - before
+    };
+    passes(&mut ti, &idle);
+    assert_eq!(passes(&mut ti, &idle), 0, "an idle frame");
+    let typed = InputState {
+        text_input: "x".into(),
+        ..Default::default()
+    };
+    assert_eq!(passes(&mut ti, &typed), 1, "a frame typing a letter");
+    assert_eq!(passes(&mut ti, &idle), 0, "the idle frame after it");
+}
+
+#[test]
+fn a_single_line_field_shapes_nothing_while_idle_and_once_per_edit() {
+    assert_idle_shapes_nothing_and_an_edit_once(
+        TextInput::new(0.0, 0.0, 400.0, 24.0).with_value("hello world"),
+    );
+}
+
+#[test]
+fn a_masked_field_shapes_nothing_while_idle_and_once_per_edit() {
+    assert_idle_shapes_nothing_and_an_edit_once(
+        TextInput::new(0.0, 0.0, 400.0, 24.0)
+            .with_value("hunter2")
+            .with_mask('•'),
+    );
+}
+
+#[test]
+fn a_multi_line_field_shapes_nothing_while_idle_and_once_per_edit() {
+    assert_idle_shapes_nothing_and_an_edit_once(
+        TextInput::new(0.0, 0.0, 300.0, 200.0)
+            .with_multiline(true)
+            .with_value("first line\nsecond line, long enough to wrap in the field"),
+    );
 }

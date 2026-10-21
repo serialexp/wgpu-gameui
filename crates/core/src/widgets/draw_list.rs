@@ -1,5 +1,7 @@
 //! Core drawing types - vertices, draw commands, and the DrawList.
 
+use std::sync::Arc;
+
 use crate::affine::Affine2;
 use crate::chrome::{Background, Edge, EdgeWidths, GradientAxis, QuadStyle};
 use crate::layout::Rect;
@@ -926,28 +928,6 @@ impl DrawList {
         cy - font_size * m.baseline_ratio + font_size * m.x_ratio * 0.5
     }
 
-    /// Compute per-character cursor x-positions for the given text.
-    ///
-    /// Returns a `Vec<(usize, f32)>` mapping byte indices in `text` to their
-    /// x-offset (pixels) from the left edge. Use this for click-to-position
-    /// cursor placement and selection highlight rendering.
-    ///
-    /// `max_width` constrains the layout width (glyphon may wrap). Pass
-    /// `font_size * 0.0` for single-line mode with effectively infinite width.
-    pub fn text_cursor_positions(
-        &mut self,
-        text: &str,
-        font_size: f32,
-        max_width: Option<f32>,
-    ) -> Vec<(usize, f32)> {
-        let handle = self.text_measurer.font_system_handle();
-        let mut shared = handle.lock().expect("FontSystem poisoned");
-        let fs = shared.font_system();
-        let mw = max_width.unwrap_or(f32::MAX / 4.0);
-        let lh = font_size * 1.25;
-        crate::text::text_cursor_positions(fs, text, font_size, lh, mw, None)
-    }
-
     /// Where the underlines of `runs` (byte ranges of `block`'s content, each
     /// with its colour) go: under the glyphs the block is drawn with, faces
     /// and wrapping included, one segment per line a run crosses. Text an
@@ -989,7 +969,7 @@ impl DrawList {
                 else {
                     continue;
                 };
-                let (left, right) = (glyph.rel_x, glyph.rel_x + glyph.advance);
+                let (left, right) = (glyph.cell_x, glyph.cell_x + glyph.advance);
                 match runs_here.iter().position(|&seen| seen == run) {
                     Some(at) => {
                         let segment: &mut UnderlineSegment = &mut segments[first + at];
@@ -1013,49 +993,74 @@ impl DrawList {
         segments
     }
 
-    /// Line-aware caret layout for the given text — the multi-line counterpart of
-    /// [`Self::text_cursor_positions`]. Returns one [`crate::text::CaretPos`] per
-    /// cluster boundary, preserving per-visual-line geometry (line index, top y,
-    /// height) needed for vertical navigation, per-line selection, and
-    /// click-to-place hit testing in a multi-line `TextInput`.
-    ///
-    /// `wrap` controls line breaking (use [`crate::text::WrapMode::None`] for
-    /// single-line, [`crate::text::WrapMode::WordOrGlyph`] for a textarea).
-    /// `max_width` constrains the layout width; pass `None` for effectively
-    /// infinite width (single-line).
-    pub fn text_caret_layout(
-        &mut self,
-        text: &str,
-        font_size: f32,
-        max_width: Option<f32>,
-        wrap: crate::text::WrapMode,
-        direction: crate::text::TextDirection,
-    ) -> Vec<crate::text::CaretPos> {
-        let handle = self.text_measurer.font_system_handle();
-        let mut shared = handle.lock().expect("FontSystem poisoned");
-        let fs = shared.font_system();
-        let mw = max_width.unwrap_or(f32::MAX / 4.0);
-        let lh = font_size * 1.25;
-        crate::text::text_caret_layout(fs, text, font_size, lh, mw, wrap, None, direction)
+    /// Where a caret can stand in `block`, laid out as [`text`](Self::text)
+    /// would draw it now: one [`crate::text::CaretPos`] per cluster boundary,
+    /// with its visual line's geometry, relative to the block's origin. What
+    /// placing the caret, mapping a click to a byte, moving between lines and
+    /// line-relative Home/End read. Kept with the layout the block is drawn
+    /// with, so asking again, or drawing the block, shapes nothing.
+    pub fn caret_layout(&mut self, block: &TextBlock) -> Arc<[crate::text::CaretPos]> {
+        let content = span_content(block);
+        let content = content.as_deref().unwrap_or(&block.content);
+        let scale = self.text_scale();
+        let spec = scaled_spec(block, scale);
+        let carets = self.shared_layouts(|shared| shared.caret_layout(&spec, content));
+        if scale == 1.0 {
+            return carets;
+        }
+        carets
+            .iter()
+            .map(|c| crate::text::CaretPos {
+                x: c.x / scale,
+                line_top: c.line_top / scale,
+                line_height: c.line_height / scale,
+                ..*c
+            })
+            .collect()
     }
 
-    /// Visual-order glyph layout for bidi-aware editing — the source for
-    /// [`crate::text::selection_rects`] and [`crate::text::visual_caret_neighbor`].
-    /// Same shaping parameters as [`Self::text_caret_layout`].
-    pub fn text_visual_layout(
-        &mut self,
-        text: &str,
-        font_size: f32,
-        max_width: Option<f32>,
-        wrap: crate::text::WrapMode,
-        direction: crate::text::TextDirection,
-    ) -> Vec<crate::text::VisualGlyph> {
+    /// `block`'s glyphs in visual order, laid out as [`text`](Self::text)
+    /// would draw it now, relative to the block's origin: what
+    /// [`crate::text::selection_rects`] and
+    /// [`crate::text::visual_caret_neighbor`] read for right-to-left text.
+    /// Kept with the layout, like [`caret_layout`](Self::caret_layout).
+    pub fn visual_layout(&mut self, block: &TextBlock) -> Arc<[crate::text::VisualGlyph]> {
+        let content = span_content(block);
+        let content = content.as_deref().unwrap_or(&block.content);
+        let scale = self.text_scale();
+        let spec = scaled_spec(block, scale);
+        let glyphs = self.shared_layouts(|shared| shared.visual_layout(&spec, content));
+        if scale == 1.0 {
+            return glyphs;
+        }
+        glyphs
+            .iter()
+            .map(|g| crate::text::VisualGlyph {
+                x: g.x / scale,
+                w: g.w / scale,
+                line_top: g.line_top / scale,
+                line_height: g.line_height / scale,
+                ..*g
+            })
+            .collect()
+    }
+
+    /// Run `f` on the font system's kept layouts, locked only while it runs.
+    fn shared_layouts<T>(&self, f: impl FnOnce(&mut crate::shaping::SharedFontSystem) -> T) -> T {
         let handle = self.text_measurer.font_system_handle();
         let mut shared = handle.lock().expect("FontSystem poisoned");
-        let fs = shared.font_system();
-        let mw = max_width.unwrap_or(f32::MAX / 4.0);
-        let lh = font_size * 1.25;
-        crate::text::text_visual_layout(fs, text, font_size, lh, mw, wrap, None, direction)
+        f(&mut shared)
+    }
+
+    /// The scale text drawn now is laid out at: the current transform's
+    /// (the geometric mean of its axes), or 1 when that is 1 or degenerate.
+    fn text_scale(&self) -> f32 {
+        let scale = self.current_transform().uniform_scale();
+        if scale > 0.0 && (scale - 1.0).abs() > 1e-6 {
+            scale
+        } else {
+            1.0
+        }
     }
 
     // ---- Debug scopes ----
@@ -2677,11 +2682,11 @@ impl DrawList {
             self.text_rotation_warned = true;
         }
 
-        // When span mode is active, derive the display content from the
-        // concatenated span texts so the shape cache and cursor-position calls
-        // below all operate on the same string.
-        if !block.spans.is_empty() {
-            block.content = block.spans.iter().map(|s| s.text.as_str()).collect();
+        // When span mode is active, the display content is the concatenated
+        // span texts, so the shape cache and the caret calls all operate on
+        // the same string.
+        if let Some(content) = span_content(&block) {
+            block.content = content;
         }
 
         // Apply tint to the block colour and to per-span colour/underline
@@ -2810,11 +2815,12 @@ impl DrawList {
         // which equals sqrt(|det|). This handles non-uniform axis-aligned
         // scale gracefully (picks the average zoom instead of dropping a
         // dimension).
-        let scale = m.uniform_scale();
-        if scale > 0.0 && (scale - 1.0).abs() > 1e-6 {
+        let scale = self.text_scale();
+        if scale != 1.0 {
             block.font_size *= scale;
             block.line_height *= scale;
             block.max_width *= scale;
+            block.letter_spacing *= scale;
         }
 
         // Only the clips cut the text: the active clip, narrowed by the block's
@@ -3087,6 +3093,27 @@ fn normalize_shadow_radii(mut radii: [f32; 4], width: f32, height: f32) -> [f32;
     }
     radii.map(|radius| radius * factor)
 }
+
+/// The content a block in span mode is drawn with: its spans' texts, joined.
+/// `None` for a block that isn't in span mode, whose content is its own.
+fn span_content(block: &TextBlock) -> Option<String> {
+    (!block.spans.is_empty()).then(|| block.spans.iter().map(|s| s.text.as_str()).collect())
+}
+
+/// The spec `block` is laid out with when drawn at `scale`, as
+/// [`DrawList::text`] scales it.
+fn scaled_spec(block: &TextBlock, scale: f32) -> crate::shaping::LayoutSpec<'_> {
+    let mut spec = crate::shaping::LayoutSpec::of_block(block);
+    spec.font_size *= scale;
+    spec.line_height *= scale;
+    spec.max_width = spec.max_width.map(|width| width * scale);
+    spec.letter_spacing *= scale;
+    spec
+}
+
+#[cfg(test)]
+#[path = "draw_list_caret_tests.rs"]
+mod caret_tests;
 
 #[cfg(test)]
 mod tests {

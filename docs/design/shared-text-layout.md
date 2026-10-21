@@ -13,17 +13,17 @@ Tracking the gap between this design and what's on the main branch.
 - [x] Phase 0: the `focused_text_input` bench group, numbers below (2026-10-21)
 - [x] Phase 0: tests pinning today's caret behaviour (2026-10-21; `widgets/text_input_layout_tests.rs`: clicks and the caret against the drawn glyphs, right-to-left edges, a password, an IME composition, both kinds of soft wrap, a final newline, a combining cluster for the ligature case)
 - [x] Line starts follow cosmic-text's `LineIter` (CR, CRLF, LFCR), in `shape_layout`, `text_caret_layout` and `text_visual_layout` (2026-10-21, `text::line_starts`, ahead of Phase 1)
+- [x] Phase 1: one normalisation of a block (spans joined into `content`, the transform's scale) shared by `DrawList::text` and the caret calls (2026-10-21; `span_content`, `scaled_spec` and `DrawList::text_scale` in `widgets/draw_list.rs`)
+- [x] Phase 1: `ShapedLayout` keeps what the caret needs: each glyph's cell x without its pen offset, each line's left and right edge, no glyph for the direction mark (2026-10-21; `ShapedGlyph::cell_x`, `ShapedLine::left` / `right`)
+- [x] Phase 1: caret positions and visual glyphs worked out from a `ShapedLayout` the first time they're asked for, counted in the cache's bytes (2026-10-21; `text_carets.rs`, `LayoutCache::derived`)
+- [x] Phase 1: `DrawList::caret_layout` / `visual_layout` take the block that is drawn; `text_cursor_positions`, `text_caret_layout`, `text_visual_layout` and their `DrawList` wrappers go (2026-10-21)
+- [x] Phase 1: `TextInput` takes every caret, click, selection, scroll and IME position from the layout of the string it draws (value, mask or composition) (2026-10-21; `FieldText::block` builds both the drawn block and the ones its layouts are read from)
+- [x] Phase 1: a multi-line field composing with the IME places its caret and IME rect on the composition's own line (2026-10-21)
+- [x] Phase 1: `text_select.rs` hit testing uses the cell x rather than the pen x (2026-10-21; underlines too)
+- [x] Phase 1: tests: the caret sits on the drawn glyphs for a block with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted (2026-10-21; `widgets/draw_list_caret_tests.rs`, `widgets/text_input_layout_tests.rs`)
 
 ### Outstanding
 
-- [ ] Phase 1: one normalisation of a block (spans joined into `content`, the transform's scale) shared by `DrawList::text` and the caret calls
-- [ ] Phase 1: `ShapedLayout` keeps what the caret needs: each glyph's cell x without its pen offset, each line's left and right edge, no glyph for the direction mark
-- [ ] Phase 1: caret positions and visual glyphs worked out from a `ShapedLayout` the first time they're asked for, counted in the cache's bytes
-- [ ] Phase 1: `DrawList::caret_layout` / `visual_layout` take the block that is drawn; `text_cursor_positions`, `text_caret_layout`, `text_visual_layout` and their `DrawList` wrappers go
-- [ ] Phase 1: `TextInput` takes every caret, click, selection, scroll and IME position from the layout of the string it draws (value, mask or composition)
-- [ ] Phase 1: a multi-line field composing with the IME places its caret and IME rect on the composition's own line (an existing bug: it uses the first line today)
-- [ ] Phase 1: `text_select.rs` hit testing uses the cell x rather than the pen x
-- [ ] Phase 1: tests: the caret sits on the drawn glyphs for a field with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted
 - [ ] Phase 2: paragraphs shaped and kept one by one (only if the numbers after Phase 1 call for it; see "Phase 2 is conditional")
 - [ ] Phase 3: `ellipsis_cut` reads the cut from a cached layout under a fixed cut spec instead of shaping the content again
 - [ ] Close TODO.md entries: "Caret, cursor and visual layouts shape on their own", the gpui entry "One text layout for drawing, caret and hit testing", and (with Phase 3) "Ellipsis shapes the full text twice"
@@ -155,6 +155,21 @@ character, and caches per line, so typing in a long field reshapes only the edit
   maps bytes back with the mappings it has (`display_to_value_byte`, `value_to_display_byte`, the
   composition's caret byte). An empty value draws its placeholder, but its caret layout is that of
   the empty value (no shaping), so navigation never walks the placeholder.
+
+  > **2026-10-21 update:** the empty value's layout goes through the cache like any other (one
+  > pass the first time, kept after), rather than a fixed caret at 0, so the caret of an empty
+  > centred or right-aligned block stands where its text would start. The derived data lives in
+  > `Option` fields of the cache entry, filled by `LayoutCache::derived`, rather than `OnceCell`s.
+  > A single-line composition's caret takes its edge from the composition's visual layout, as the
+  > value's caret does, so it is right in right-to-left preedit too. Found on the way and fixed:
+  > `DrawList::text` scaled the font size under a zoom but not the letter spacing (pixels), so
+  > zoomed letter-spaced text was set too tight.
+  >
+  > From Codex's review of the change: a single-line field picks a click's byte from its visual
+  > layout (`text::visual_hit`) and scrolls to its caret there, rather than from `CaretPos`, so a
+  > click in right-to-left text lands on the edge the caret is drawn at (the old `(byte, x)` table
+  > had the same fault). An ellipsized line's last caret stands before the ellipsis. Derived data
+  > that takes the cache over its budget evicts older layouts, keeping the one in use.
 - **Before and after input.** The field builds its block before input and after. Before input it
   holds the string and settings of last frame, so when nothing changed between frames (no new
   value set from outside, same width, style and direction) it is last frame's drawn entry and
@@ -180,7 +195,10 @@ Shared glyphs don't change these, and Phase 0's tests pin them:
 ### Phase 2 is conditional
 
 Phase 1 removes all shaping from idle frames and all but one pass per edit. What's left is the
-one pass over the whole text per keystroke. Whether that matters depends on how long real texts
+one pass over the whole text per keystroke.
+
+> **2026-10-21:** after Phase 1 that pass is about 66 ms for 5,000 lines (see "Phase 1
+> numbers"). Bart to decide. Whether that matters depends on how long real texts
 get, so Phase 0's bench measures 10, 500 and 5,000 lines, and Phase 2 happens only if the
 5,000-line keystroke still costs too much after Phase 1 (Bart to decide on the numbers).
 
@@ -216,6 +234,30 @@ shifted to its start), and stack the results. Points to settle then:
 >
 > The idle frame is what the caret's blink costs: a focused 500-line field spends 20 ms on
 > it. Phase 1 is meant to make that column 0 passes.
+
+### Phase 1 numbers
+
+> **2026-10-21:** the same bench after Phase 1, against the Phase 0 baseline.
+>
+> | field | idle frame | edit | click |
+> |---|---|---|---|
+> | one line | 0.18 ms, 0 passes | 0.35 ms, 1 pass | 0.18 ms, 0 passes |
+> | 10 lines | 0.18 ms, 0 passes | 0.36 ms, 1 pass | 0.18 ms, 0 passes |
+> | 500 lines | 3.8 ms, 0 passes | 7.9 ms, 1 pass | 3.9 ms, 0 passes |
+> | 5,000 lines | 39 ms, 0 passes | 210 ms, 2 passes | 42 ms, 0 passes |
+>
+> The passes are counted the first time. Erasing the letter returns to a value still kept, so an
+> edit is one pass, except at 5,000 lines, where the two versions don't both fit the cache. For
+> the same reason the edit's time includes shaping only at 5,000 lines: in Criterion's repeated
+> iterations both versions are kept at the smaller sizes. One 5,000-line keystroke is then about
+> (210 − 2 × 39) / 2 ≈ 66 ms of shaping and deriving, on top of a 39 ms frame.
+>
+> The 39 ms idle frame is no longer layout. A sample of it (macOS `sample`, 8 s) puts about 1.5%
+> in layout lookups and nearly all the rest in the renderer: `text::append_placements` places
+> every one of the ~250K glyphs although the field clips all but a screenful, and their quads
+> are ordered (`draw_box`) and uploaded (`write_buffer`, a quarter of the samples). Culling
+> glyphs outside the clip is its own fix (TODO.md, "Text places glyphs outside its clip"); it
+> isn't Phase 2's to make.
 
 ## Phasing
 

@@ -14,7 +14,6 @@
 //! [`TextBlock`], emits one quad per glyph, lazily generates any unseen glyph into
 //! the atlas, uploads the atlas if it changed, and draws — all in one call.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2395,90 +2394,25 @@ fn face_vratios(data: &[u8]) -> Option<(f32, f32)> {
     Some((x_ratio, cap_ratio))
 }
 
-/// Compute per-character cursor x-positions for the given text.
+/// A place the caret can stand in laid-out text, with its line's geometry:
+/// what click-to-place hit testing, vertical navigation, line-relative
+/// Home/End and per-line selection rectangles read.
+/// [`DrawList::caret_layout`](crate::DrawList::caret_layout) gives one per
+/// cluster boundary of a block, from the layout it is drawn with.
 ///
-/// Returns a `Vec<(usize, f32)>` where each entry maps a byte index in `text`
-/// to its x-offset (in screen pixels) from the left edge. The first entry is
-/// always `(0, 0.0)` and the last is `(text.len(), total_width)`. For a single
-/// line of text, these are monotonically increasing.
+/// `byte` is an **absolute** byte offset into the whole text. `x` is the caret
+/// x from the block's left edge. `line` is the **visual** line ordinal (a soft
+/// wrap produces a new visual line even without a `\n`), top-to-bottom.
+/// `line_top` is the y of the top of that visual line; `line_height` its
+/// height.
 ///
-/// Use this to implement click-to-position (binary-search on the x values) and
-/// to draw the text cursor / selection highlights at the correct x position
-/// for a given byte offset.
-///
-/// `family_name` selects the font; pass `None` for the default sans-serif.
-pub fn text_cursor_positions(
-    font_system: &mut FontSystem,
-    text: &str,
-    font_size: f32,
-    line_height: f32,
-    max_width: f32,
-    family_name: Option<&str>,
-) -> Vec<(usize, f32)> {
-    let mut positions: Vec<(usize, f32)> = Vec::with_capacity(text.len().saturating_add(1));
-    if text.is_empty() {
-        positions.push((0, 0.0));
-        return positions;
-    }
-
-    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-    buffer.set_size(Some(max_width), None);
-    let family = family_name.map(Family::Name).unwrap_or(Family::SansSerif);
-    buffer.set_text(text, &Attrs::new().family(family), Shaping::Advanced, None);
-    shape_buffer(&mut buffer, font_system);
-
-    // Each cluster boundary (byte index) maps to the glyph's x-position.
-    // We iterate in layout-run order (top-to-bottom for multi-line) and
-    // record the x for each glyph's start. The last position is the total
-    // width of the longest line.
-    positions.push((0, 0.0));
-
-    for run in buffer.layout_runs() {
-        for glyph in run.glyphs.iter() {
-            let start_idx = glyph.start;
-            // Only record the first time we see each byte index.
-            if start_idx > positions.last().map(|(i, _)| *i).unwrap_or(0) {
-                positions.push((start_idx, glyph.x));
-            }
-        }
-        // After each run, record the line end position.
-        let line_end_x = run.line_w;
-        // Find the last byte index of this run.
-        if let Some(last_glyph) = run.glyphs.last() {
-            let end_idx = last_glyph.end;
-            if end_idx > positions.last().map(|(i, _)| *i).unwrap_or(0) {
-                positions.push((end_idx, line_end_x));
-            }
-        }
-    }
-
-    // Ensure the final byte index is always present.
-    let last_byte = text.len();
-    if positions.last().map(|(i, _)| *i).unwrap_or(0) < last_byte {
-        // Estimate: use the last position's x plus an average char width.
-        let last_x = positions.last().map(|(_, x)| *x).unwrap_or(0.0);
-        positions.push((last_byte, last_x));
-    }
-
-    positions
-}
-
-/// A caret-addressable position in laid-out text, keeping the **line geometry**
-/// that [`text_cursor_positions`] flattens away. Used for multi-line editing:
-/// vertical navigation, line-relative Home/End, per-line selection rectangles,
-/// and click-to-place hit testing.
-///
-/// `byte` is an **absolute** byte offset into the whole text (cosmic-text's
-/// per-glyph `start`/`end` are relative to their buffer line, so this struct
-/// pre-adds the buffer line's starting byte). `x` is the caret x within the
-/// visual line's left edge. `line` is the **visual** line ordinal (a soft-wrap
-/// produces a new visual line even without a `\n`), top-to-bottom. `line_top`
-/// is the y of the top of that visual line; `line_height` its height.
+/// Where a wrap breaks a word, the byte it breaks at ends one line and starts
+/// the next; [`caret_for_byte`] returns the first (end-of-line) one.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaretPos {
     /// Absolute byte offset into the whole text (buffer-line base pre-added).
     pub byte: usize,
-    /// Caret x relative to the visual line's left edge.
+    /// Caret x from the block's left edge.
     pub x: f32,
     /// Visual line ordinal, top-to-bottom (a soft wrap starts a new visual line).
     pub line: usize,
@@ -2486,157 +2420,6 @@ pub struct CaretPos {
     pub line_top: f32,
     /// Height of this visual line.
     pub line_height: f32,
-}
-
-/// Lay text out and return one [`CaretPos`] per cluster boundary, preserving
-/// per-line geometry (unlike [`text_cursor_positions`], which flattens to
-/// `(byte, x)`). This is the keystone for multi-line `TextInput`.
-///
-/// `wrap` controls line breaking; pass [`WrapMode::None`] for single-line fields
-/// and [`WrapMode::WordOrGlyph`] (the default) for a textarea. `family_name`
-/// selects the font (`None` → default sans-serif).
-///
-/// ## Byte offsets are absolute
-/// cosmic-text reports `glyph.start`/`glyph.end` **relative to the buffer line**
-/// (`LayoutRun.line_i`), so this function precomputes each buffer line's starting
-/// byte (by scanning for `\n`) and adds it: `byte = line_start[line_i] +
-/// glyph.start`. Without this, every line after the first would map to the wrong
-/// position in the source string.
-///
-/// ## Soft-wrap boundaries
-/// A soft wrap (no `\n`) yields the same byte at the end of visual line *i*
-/// (`x = line_w`) and the start of line *i+1* (`x = 0`). Both entries are emitted;
-/// [`caret_for_byte`] returns the first (end-of-line) match — acceptable for v1.
-#[allow(clippy::too_many_arguments)]
-pub fn text_caret_layout(
-    font_system: &mut FontSystem,
-    text: &str,
-    font_size: f32,
-    line_height: f32,
-    max_width: f32,
-    wrap: WrapMode,
-    family_name: Option<&str>,
-    direction: TextDirection,
-) -> Vec<CaretPos> {
-    let mut out: Vec<CaretPos> = Vec::with_capacity(text.len().saturating_add(1));
-    if text.is_empty() {
-        out.push(CaretPos {
-            byte: 0,
-            x: 0.0,
-            line: 0,
-            line_top: 0.0,
-            line_height,
-        });
-        return out;
-    }
-
-    // Optional base-direction mark. A single leading mark shifts every subsequent
-    // byte (including across '\n') by exactly `prefix_len`, so the byte mapping
-    // below stays uniform: `byte = prefixed_line_base + glyph.start - prefix_len`.
-    // (It only pins the *first* line's visual direction; later lines auto-detect.)
-    let prefix = direction_prefix(direction);
-    let prefix_len = prefix.len();
-    let shaped: Cow<str> = if prefix.is_empty() {
-        Cow::Borrowed(text)
-    } else {
-        Cow::Owned(format!("{prefix}{text}"))
-    };
-
-    // Byte offset of the start of each buffer line within the *shaped* (prefixed)
-    // string — cosmic's glyph.start/.end are relative to their buffer line.
-    let line_starts = line_starts(&shaped);
-
-    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-    buffer.set_wrap(wrap.into());
-    buffer.set_size(Some(max_width), None);
-    let family = family_name.map(Family::Name).unwrap_or(Family::SansSerif);
-    buffer.set_text(
-        &shaped,
-        &Attrs::new().family(family),
-        Shaping::Advanced,
-        None,
-    );
-    shape_buffer(&mut buffer, font_system);
-
-    // Map a shaped (prefixed) absolute byte back to the caller's text. The mark
-    // glyph itself sits in `[0, prefix_len)`; skip it.
-    let to_orig = |abs: usize| abs.saturating_sub(prefix_len);
-
-    // Visual line ordinal: layout_runs() yields runs top-to-bottom; each run is
-    // one visual line (a wrapped buffer line produces several consecutive runs).
-    let mut visual_line = 0usize;
-    for run in buffer.layout_runs() {
-        let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
-        let lt = run.line_top;
-        let lh = run.line_height;
-
-        // Leading caret at x=0 for the start of this visual line (covers blank
-        // lines from "\n\n", whose run has no glyphs). Skip the zero-width
-        // direction mark when picking the first real glyph's byte.
-        let first_real = run
-            .glyphs
-            .iter()
-            .find(|g| line_base + g.start >= prefix_len);
-        let line_start_byte = to_orig(line_base + first_real.map(|g| g.start).unwrap_or(0));
-        out.push(CaretPos {
-            byte: line_start_byte,
-            x: 0.0,
-            line: visual_line,
-            line_top: lt,
-            line_height: lh,
-        });
-
-        for g in run.glyphs.iter() {
-            let abs = line_base + g.start;
-            if abs < prefix_len {
-                continue; // the direction mark — not a caret stop
-            }
-            let b = to_orig(abs);
-            // Record the first time we see each byte on this run.
-            if out.last().map(|p| p.byte) != Some(b) {
-                out.push(CaretPos {
-                    byte: b,
-                    x: g.x,
-                    line: visual_line,
-                    line_top: lt,
-                    line_height: lh,
-                });
-            }
-        }
-
-        // Run-end caret (x = line width). For a hard newline this is the byte of
-        // the '\n'; for a soft wrap it duplicates the next line's start byte.
-        if let Some(last) = run.glyphs.last() {
-            let end_b = to_orig(line_base + last.end);
-            if out.last().map(|p| p.byte) != Some(end_b) {
-                out.push(CaretPos {
-                    byte: end_b,
-                    x: run.line_w,
-                    line: visual_line,
-                    line_top: lt,
-                    line_height: lh,
-                });
-            }
-        }
-
-        visual_line += 1;
-    }
-
-    // Ensure the final byte index is always addressable (e.g. text with no
-    // trailing newline whose last run-end already covers it is a no-op).
-    let last_byte = text.len();
-    if out.last().map(|p| p.byte).unwrap_or(0) < last_byte {
-        let lp = *out.last().unwrap();
-        out.push(CaretPos {
-            byte: last_byte,
-            x: lp.x,
-            line: lp.line,
-            line_top: lp.line_top,
-            line_height: lp.line_height,
-        });
-    }
-
-    out
 }
 
 /// The caret position at (or just after) `byte`: the first entry whose byte is
@@ -2747,7 +2530,7 @@ pub struct VisualGlyph {
     pub byte_start: usize,
     /// Logical (ascending) end byte of the cell in the caller's text.
     pub byte_end: usize,
-    /// Visual left edge of the cell (relative to the visual line's left edge).
+    /// Visual left edge of the cell, from the block's left edge.
     pub x: f32,
     /// Visual cell width (always positive, after bidi reordering).
     pub w: f32,
@@ -2775,84 +2558,8 @@ pub struct SelRect {
     pub h: f32,
 }
 
-/// Lay text out and return one [`VisualGlyph`] per shaped glyph, in visual order,
-/// carrying the bidi level and logical byte range of each cell. This is the
-/// keystone for bidi-aware caret movement ([`visual_caret_neighbor`]) and
-/// selection rectangles ([`selection_rects`]); both are pure functions over the
-/// returned slice and need no `FontSystem`.
-///
-/// `direction` forces the base paragraph direction via a leading mark (see
-/// [`TextDirection`]); the mark glyph is filtered out and byte offsets are mapped
-/// back to the caller's text.
-#[allow(clippy::too_many_arguments)]
-pub fn text_visual_layout(
-    font_system: &mut FontSystem,
-    text: &str,
-    font_size: f32,
-    line_height: f32,
-    max_width: f32,
-    wrap: WrapMode,
-    family_name: Option<&str>,
-    direction: TextDirection,
-) -> Vec<VisualGlyph> {
-    let mut out: Vec<VisualGlyph> = Vec::new();
-    if text.is_empty() {
-        return out;
-    }
-
-    let prefix = direction_prefix(direction);
-    let prefix_len = prefix.len();
-    let shaped: Cow<str> = if prefix.is_empty() {
-        Cow::Borrowed(text)
-    } else {
-        Cow::Owned(format!("{prefix}{text}"))
-    };
-
-    let line_starts = line_starts(&shaped);
-
-    let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-    buffer.set_wrap(wrap.into());
-    buffer.set_size(Some(max_width), None);
-    let family = family_name.map(Family::Name).unwrap_or(Family::SansSerif);
-    buffer.set_text(
-        &shaped,
-        &Attrs::new().family(family),
-        Shaping::Advanced,
-        None,
-    );
-    shape_buffer(&mut buffer, font_system);
-
-    let to_orig = |abs: usize| abs.saturating_sub(prefix_len);
-    let mut visual_line = 0usize;
-    for run in buffer.layout_runs() {
-        let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
-        let lt = run.line_top;
-        let lh = run.line_height;
-        for g in run.glyphs.iter() {
-            let abs = line_base + g.start;
-            if abs < prefix_len {
-                continue; // the zero-width direction mark
-            }
-            let a = to_orig(abs);
-            let b = to_orig(line_base + g.end);
-            out.push(VisualGlyph {
-                byte_start: a.min(b),
-                byte_end: a.max(b),
-                x: g.x,
-                w: g.w,
-                line: visual_line,
-                line_top: lt,
-                line_height: lh,
-                rtl: g.level.is_rtl(),
-            });
-        }
-        visual_line += 1;
-    }
-    out
-}
-
 /// Selection-highlight rectangles for the logical byte range `[sel_start, sel_end)`
-/// over a [`text_visual_layout`]. Per visual line, the glyphs whose logical range
+/// over a block's [`visual_layout`](crate::DrawList::visual_layout). Per visual line, the glyphs whose logical range
 /// overlaps the selection are taken at their visual extents `[x, x+w]`, sorted, and
 /// merged into contiguous spans — so a selection that straddles an LTR↔RTL boundary
 /// yields the several disjoint rectangles it visually occupies, not one bogus span.
@@ -2900,7 +2607,7 @@ pub fn selection_rects(glyphs: &[VisualGlyph], sel_start: usize, sel_end: usize)
 
 /// The byte offset the caret lands on when moved one step in the **visual**
 /// direction (`dir < 0` = screen-left, `dir > 0` = screen-right) from `cursor_byte`,
-/// over a [`text_visual_layout`]. Caret stops are the visual edges of each glyph
+/// over a block's [`visual_layout`](crate::DrawList::visual_layout). Caret stops are the visual edges of each glyph
 /// cell, mapped to a byte by the glyph's own bidi level (LTR: `start` at the left
 /// edge, `end` at the right; RTL: the reverse), so Left/Right always move the caret
 /// the way it moves on screen even across direction runs. Wraps to the adjacent
@@ -3015,17 +2722,17 @@ fn caret_stops(glyphs: &[VisualGlyph]) -> Vec<CaretStop> {
 
 /// Edge-correct caret geometry for laid-out text.
 ///
-/// `text_caret_layout`/`text_cursor_positions` place every caret at a glyph
-/// cell's **left** edge (`byte = glyph.start → x = glyph.x`), which is wrong for
-/// RTL glyphs — there the logical-start byte sits at the cell's *right* edge. A
+/// [`CaretPos`] places every caret at a glyph cell's **left** edge
+/// (`byte = glyph.start → x = glyph.x`), which is wrong for RTL glyphs —
+/// there the logical-start byte sits at the cell's *right* edge. A
 /// caret drawn from those tables would land on the wrong side in RTL/bidi text.
 /// This returns the visual position where `byte` *logically begins*, honouring
 /// each glyph's resolved direction, so a rendered caret matches the visual
 /// movement produced by [`visual_caret_neighbor`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VisualCaret {
-    /// Visual x where the byte logically begins (relative to the visual line's
-    /// left edge), edge-corrected for the glyph's direction.
+    /// Visual x where the byte logically begins, from the block's left edge,
+    /// edge-corrected for the glyph's direction.
     pub x: f32,
     /// Visual line ordinal the caret sits on, top-to-bottom.
     pub line: usize,
@@ -3035,12 +2742,44 @@ pub struct VisualCaret {
     pub line_height: f32,
 }
 
+/// Hit-test `x` against the first visual line of `glyphs`: the byte of the
+/// caret stop nearest `x`, each glyph's edges mapped to bytes by its direction
+/// as [`visual_caret_pos`] maps them, and the byte of the character under `x`
+/// (the nearest end's, beyond the text). `None` for no glyphs. What a
+/// single-line field picks a click's byte from.
+pub(crate) fn visual_hit(glyphs: &[VisualGlyph], x: f32) -> Option<(usize, usize)> {
+    let line = glyphs.first()?.line;
+    let on_line = || glyphs.iter().filter(move |g| g.line == line);
+    let edges = |g: &VisualGlyph| {
+        if g.rtl {
+            (g.byte_end, g.byte_start)
+        } else {
+            (g.byte_start, g.byte_end)
+        }
+    };
+    let leftmost = on_line().min_by(|a, b| a.x.total_cmp(&b.x))?;
+    let rightmost = on_line().max_by(|a, b| (a.x + a.w).total_cmp(&(b.x + b.w)))?;
+    if x < leftmost.x {
+        return Some((edges(leftmost).0, leftmost.byte_start));
+    }
+    let over = on_line()
+        .find(|g| x >= g.x && x < g.x + g.w)
+        .unwrap_or(rightmost);
+    let (left, right) = edges(over);
+    let caret = if x < over.x + over.w / 2.0 {
+        left
+    } else {
+        right
+    };
+    Some((caret, over.byte_start))
+}
+
 /// Resolve the edge-correct caret geometry for `byte` against a visual glyph
 /// layout. Returns `None` when the layout is empty or no glyph boundary matches
 /// `byte` (the caller should fall back to a line-start position). When a byte
 /// has two stops (a direction boundary — affinity), the leftmost is chosen
 /// deterministically, consistent with the soft-wrap affinity note on
-/// [`text_caret_layout`].
+/// [`CaretPos`].
 pub fn visual_caret_pos(glyphs: &[VisualGlyph], byte: usize) -> Option<VisualCaret> {
     if glyphs.is_empty() {
         return None;
@@ -3713,8 +3452,7 @@ mod tests {
         WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
         cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
         line_starts, load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
-        shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
-        vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
+        shared_font_system, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     #[cfg(feature = "bundled-font")]
     use super::{MsdfVertex, TextStyleRange};
@@ -4257,24 +3995,42 @@ mod tests {
         assert_eq!(h_none, h_none2);
     }
 
-    // ---- text_caret_layout / caret helpers ----
+    // ---- caret layouts / caret helpers ----
 
-    /// Lay out `text` with a generous width (no wrap unless `\n`) and return the
-    /// caret entries. Uses the shared font system (CPU-only — no GPU needed).
-    fn caret_layout(text: &str, wrap: WrapMode, max_width: f32) -> Vec<CaretPos> {
-        let fsh = shared_font_system();
-        let mut shared = fsh.lock().unwrap();
-        let fs = shared.font_system();
-        text_caret_layout(
-            fs,
-            text,
-            16.0,
-            20.0,
-            max_width,
+    /// 16px text on 20px lines, `max_width` wide, wrapping by `wrap`.
+    fn caret_spec(wrap: WrapMode, max_width: f32, direction: TextDirection) -> LayoutSpec<'static> {
+        LayoutSpec {
+            line_height: 20.0,
             wrap,
-            None,
-            TextDirection::Auto,
-        )
+            direction,
+            ..LayoutSpec::plain(16.0, Some(max_width))
+        }
+    }
+
+    /// `text`'s carets as the shared font system keeps them with its layout
+    /// under `spec` (CPU-only — no GPU needed).
+    fn carets_of(spec: &LayoutSpec, text: &str) -> Vec<CaretPos> {
+        shared_font_system()
+            .lock()
+            .unwrap()
+            .caret_layout(spec, text)
+            .to_vec()
+    }
+
+    /// `text`'s glyphs in visual order, as the shared font system keeps them
+    /// with its layout under `spec`.
+    fn visual_of(spec: &LayoutSpec, text: &str) -> Vec<VisualGlyph> {
+        shared_font_system()
+            .lock()
+            .unwrap()
+            .visual_layout(spec, text)
+            .to_vec()
+    }
+
+    /// Lay out `text` `max_width` wide (no wrap unless `\n` with
+    /// `WrapMode::None`) and return the caret entries.
+    fn caret_layout(text: &str, wrap: WrapMode, max_width: f32) -> Vec<CaretPos> {
+        carets_of(&caret_spec(wrap, max_width, TextDirection::Auto), text)
     }
 
     #[test]
@@ -4777,22 +4533,13 @@ mod tests {
     }
 
     #[test]
-    fn text_visual_layout_tags_bidi_levels() {
+    fn visual_layout_tags_bidi_levels() {
         // Real shaping of a Latin+Hebrew string: cosmic assigns bidi levels per
         // glyph regardless of whether a Hebrew face is installed, so the rtl flags
         // are deterministic. 'a' is LTR, the Hebrew letters are RTL.
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        let glyphs = text_visual_layout(
-            guard,
+        let glyphs = visual_of(
+            &caret_spec(WrapMode::None, 400.0, TextDirection::Auto),
             "aאב",
-            16.0,
-            20.0,
-            400.0,
-            WrapMode::None,
-            None,
-            TextDirection::Auto,
         );
         assert!(!glyphs.is_empty(), "shaped some glyphs");
         assert!(glyphs.iter().any(|g| !g.rtl), "the Latin 'a' is LTR");
@@ -4802,22 +4549,10 @@ mod tests {
     }
 
     #[test]
-    fn text_visual_layout_strips_forced_direction_mark() {
+    fn visual_layout_strips_forced_direction_mark() {
         // Forcing a direction prepends a zero-width mark; it must not appear as a
         // glyph nor shift the reported byte offsets.
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        let glyphs = text_visual_layout(
-            guard,
-            "hi",
-            16.0,
-            20.0,
-            400.0,
-            WrapMode::None,
-            None,
-            TextDirection::Rtl,
-        );
+        let glyphs = visual_of(&caret_spec(WrapMode::None, 400.0, TextDirection::Rtl), "hi");
         assert!(
             glyphs.iter().all(|g| g.byte_end <= 2),
             "byte offsets map back to 'hi', not the prefixed string: {glyphs:?}"
@@ -5119,72 +4854,54 @@ mod tests {
         assert_eq!(out, "…");
     }
 
-    // ---- text_cursor_positions tests ----
+    // ---- single-line caret layout ----
 
-    #[test]
-    fn cursor_positions_empty_text() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        let pos = text_cursor_positions(guard, "", 16.0, 20.0, 800.0, None);
-        assert_eq!(pos, &[(0, 0.0)]);
+    /// One line of `text`, 800px wide.
+    fn line_carets(text: &str) -> Vec<CaretPos> {
+        caret_layout(text, WrapMode::None, 800.0)
     }
 
     #[test]
-    fn cursor_positions_has_origin_first() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        let pos = text_cursor_positions(guard, "Hi", 16.0, 20.0, 800.0, None);
-        assert_eq!(pos.first(), Some(&(0, 0.0)));
+    fn single_line_carets_of_empty_text() {
+        let carets = line_carets("");
+        assert_eq!(carets.len(), 1, "{carets:?}");
+        assert_eq!((carets[0].byte, carets[0].x), (0, 0.0));
     }
 
     #[test]
-    fn cursor_positions_last_is_text_len() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
+    fn single_line_carets_start_at_the_origin() {
+        let first = line_carets("Hi")[0];
+        assert_eq!((first.byte, first.x), (0, 0.0));
+    }
+
+    #[test]
+    fn single_line_carets_end_at_the_text_end() {
         let text = "Hello";
-        let pos = text_cursor_positions(guard, text, 16.0, 20.0, 800.0, None);
-        assert_eq!(pos.last().map(|(i, _)| *i), Some(text.len()));
+        assert_eq!(line_carets(text).last().map(|c| c.byte), Some(text.len()));
     }
 
     #[test]
-    fn cursor_positions_monotonically_increasing() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        let text = "The quick brown fox";
-        let pos = text_cursor_positions(guard, text, 16.0, 20.0, 800.0, None);
-        for pair in pos.windows(2) {
-            assert!(
-                pair[0].1 <= pair[1].1,
-                "position regressed: {:?} -> {:?}",
-                pair[0],
-                pair[1]
-            );
-            assert!(
-                pair[0].0 <= pair[1].0,
-                "byte index regressed: {:?} -> {:?}",
-                pair[0],
-                pair[1]
-            );
+    fn single_line_carets_increase_monotonically() {
+        let carets = line_carets("The quick brown fox");
+        for pair in carets.windows(2) {
+            assert!(pair[0].x <= pair[1].x, "x regressed: {pair:?}");
+            assert!(pair[0].byte <= pair[1].byte, "byte regressed: {pair:?}");
         }
     }
 
     #[test]
-    fn cursor_positions_last_matches_measure_width() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
+    fn single_line_carets_end_at_the_measured_width() {
         let text = "Hello World";
         let font_size = 16.0;
-        let max_width = 800.0;
-        let pos = text_cursor_positions(guard, text, font_size, font_size * 1.25, max_width, None);
-
-        let (total_w, _) = shape_layout(guard, &LayoutSpec::plain(font_size, None), text).size;
-        let final_x = pos.last().map(|(_, x)| *x).unwrap_or(0.0);
-        // The final x-position should approximate the measured width.
+        let final_x = line_carets(text).last().map_or(0.0, |c| c.x);
+        let fs = shared_font_system();
+        let mut shared = fs.lock().unwrap();
+        let (total_w, _) = shape_layout(
+            shared.font_system(),
+            &LayoutSpec::plain(font_size, None),
+            text,
+        )
+        .size;
         assert!(
             (final_x - total_w).abs() < 2.0,
             "final x {final_x} differs from measured width {total_w} by >2px"
@@ -5192,36 +4909,11 @@ mod tests {
     }
 
     #[test]
-    fn cursor_positions_multibyte_utf8() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        // "é" is 2 bytes (U+00E9), "あ" is 3 bytes (U+3042).
-        // Positions should be recorded at the correct *byte* boundaries:
+    fn single_line_carets_stand_on_utf8_boundaries() {
+        // "é" is 2 bytes (U+00E9), "あ" is 3 bytes (U+3042):
         //   "éXあ" → bytes: [0..2) = é, [2..3) = X, [3..6) = あ
-        let text = "éXあ";
-        let pos = text_cursor_positions(guard, text, 16.0, 20.0, 800.0, None);
-
-        // We should have a position for byte 0, byte 2 (after é), byte 3 (after X),
-        // and byte 6 (end of あ).
-        let indices: Vec<usize> = pos.iter().map(|(i, _)| *i).collect();
-        assert!(
-            indices.contains(&0),
-            "should have position at byte 0, got {indices:?}"
-        );
-        assert!(
-            indices.contains(&2),
-            "should have position at byte 2 (after é), got {indices:?}"
-        );
-        assert!(
-            indices.contains(&3),
-            "should have position at byte 3 (after X), got {indices:?}"
-        );
-        assert!(
-            indices.contains(&6),
-            "should have position at byte 6 (end), got {indices:?}"
-        );
-        assert_eq!(pos.last().map(|(i, _)| *i), Some(6));
+        let bytes: Vec<usize> = line_carets("éXあ").iter().map(|c| c.byte).collect();
+        assert_eq!(bytes, [0, 2, 3, 6]);
     }
 
     // ----- Shaped-text cache -----
@@ -5484,8 +5176,8 @@ mod tests {
     /// A glyph's `byte_start` must address the **whole block content**, not its
     /// buffer line. cosmic-text reports `glyph.start` relative to the original
     /// text *line*, so the horizontal shaping path must rebase it by the line's
-    /// starting byte — exactly what `text_caret_layout`, `text_visual_layout`,
-    /// and the vertical shaping branch already do. Without the rebase, every
+    /// starting byte — exactly what the caret layouts and the vertical shaping
+    /// branch already do. Without the rebase, every
     /// line after the first resolves style ranges against earlier lines' bytes
     /// and syntax highlighting drifts off the text it describes.
     #[cfg(feature = "bundled-font")]
@@ -6022,33 +5714,12 @@ mod tests {
 
     #[test]
     fn caret_and_visual_layouts_place_bytes_after_a_lone_cr_on_the_next_line() {
-        let handle = shared_font_system();
-        let mut shared = handle.lock().unwrap();
-        let fs = shared.font_system();
         let text = "a\rb";
-        let args = (16.0, 20.0, 400.0, WrapMode::None);
-        let carets = text_caret_layout(
-            fs,
-            text,
-            args.0,
-            args.1,
-            args.2,
-            args.3,
-            None,
-            TextDirection::default(),
-        );
+        let spec = caret_spec(WrapMode::None, 400.0, TextDirection::default());
+        let carets = carets_of(&spec, text);
         let b = carets.iter().find(|c| c.line == 1).expect("a second line");
         assert_eq!(b.byte, 2, "{carets:?}");
-        let visual = text_visual_layout(
-            fs,
-            text,
-            args.0,
-            args.1,
-            args.2,
-            args.3,
-            None,
-            TextDirection::default(),
-        );
+        let visual = visual_of(&spec, text);
         let b = visual.iter().find(|g| g.line == 1).expect("a second line");
         assert_eq!(b.byte_start..b.byte_end, 2..3, "{visual:?}");
     }
