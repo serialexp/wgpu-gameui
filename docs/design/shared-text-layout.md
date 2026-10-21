@@ -258,6 +258,10 @@ shifted to its start), and stack the results. Points to settle then:
 > are ordered (`draw_box`) and uploaded (`write_buffer`, a quarter of the samples). Culling
 > glyphs outside the clip is its own fix (TODO.md, "Text places glyphs outside its clip"); it
 > isn't Phase 2's to make.
+>
+> **2026-10-21 update:** that fix is in (`text_prep::glyphs_in_clip`). Idle frames now take
+> 0.59 ms at 500 lines and 1.3 ms at 5,000; the 5,000-line edit (two frames) is 134 ms, nearly
+> all of it the two shaping passes Phase 2 is for.
 
 ## Phasing
 

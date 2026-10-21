@@ -419,7 +419,11 @@ harden those foundations rather than create parallel replacements.
   drawn at x=20) puts the right byte in the field but the caret away from
   the pointer, as arrowing onto it does. The field would keep which stop it
   stands at with its byte, set by the click or the arrow that put it there.
-- [ ] **P2 — Text places glyphs outside its clip.** `text::append_placements`
+- [x] **P2 — Text places glyphs outside its clip.** Done 2026-10-21:
+  `text_prep::glyphs_in_clip` finds the lines that can reach into a block's
+  clip and `append_placements` skips glyphs that can't; the focused
+  5,000-line field's idle frame went from 39 ms to 1.3 ms. It was:
+  `text::append_placements`
   places, orders and uploads a quad for every glyph of a block and leaves
   the clip to the shader, so a focused 5,000-line field spends 40 ms a frame
   on ~250K glyphs to show a screenful (sampled 2026-10-21, see "Phase 1

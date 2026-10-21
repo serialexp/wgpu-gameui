@@ -1393,6 +1393,7 @@ fn append_placements(
     block: &TextBlock,
     spans: &[TextSpan],
     shaped: &[ShapedGlyph],
+    bounds: Option<[f32; 4]>,
     grid: PixelGrid,
     out: &mut Vec<GlyphPlacement>,
 ) {
@@ -1412,6 +1413,14 @@ fn append_placements(
         .map(|g| (color_to_rgba(g.color), g.radius_px));
 
     for g in shaped {
+        // A glyph that can't reach into the clip isn't placed (see
+        // `text_prep::cull_bounds`): a line in view of a long one, say.
+        if let Some([left, top, right, bottom]) = bounds {
+            let (x, y) = (block.x + g.rel_x, block.y + g.rel_y);
+            if x + g.advance < left || x > right || y < top || y > bottom {
+                continue;
+            }
+        }
         let font_key = resolve_font_key(font_keys, next_font_key, g.font_id);
         let sizing = grid.sizing(g.font_size);
         let tile = match atlas.cached(font_key, g.glyph_id, sizing) {
@@ -5025,6 +5034,93 @@ mod tests {
             assert_eq!(va.uv, vb.uv);
             assert_eq!(va.fill, vb.fill);
         }
+    }
+
+    /// 2,000 lines of 20px, and a 100px clip on lines 50 to 55.
+    #[cfg(feature = "bundled-font")]
+    fn long_block(font: &FontHandle, clip: crate::layout::Rect) -> TextBlock {
+        let content = (0..2_000)
+            .map(|i| format!("line {i}: the quick brown fox"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut block = TextBlock::new(content, 0.0, 0.0)
+            .with_size(16.0)
+            .with_max_width(800.0)
+            .with_font(font.clone());
+        block.clip = Some(clip);
+        block
+    }
+
+    /// Each glyph quad's corners in `vertices`, six vertices a quad.
+    #[cfg(feature = "bundled-font")]
+    fn quads(vertices: &[MsdfVertex]) -> Vec<[[f32; 2]; 6]> {
+        vertices
+            .chunks_exact(6)
+            .map(|quad| std::array::from_fn(|i| quad[i].position))
+            .collect()
+    }
+
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn a_long_block_clipped_to_a_screenful_places_a_screenful() {
+        let (mut r, font) = text_prep();
+        let clip = crate::layout::Rect::new(0.0, 1_000.0, 800.0, 100.0);
+        let all = r.build_vertices(&[long_block(
+            &font,
+            crate::layout::Rect::new(0.0, 0.0, 800.0, 1e6),
+        )]);
+        let shown = r.build_vertices(&[long_block(&font, clip)]);
+        assert!(!shown.is_empty());
+        assert!(
+            shown.len() * 100 < all.len(),
+            "{} vertices of {}",
+            shown.len(),
+            all.len()
+        );
+    }
+
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn a_clipped_block_keeps_every_glyph_its_clip_shows() {
+        let (mut r, font) = text_prep();
+        let clip = crate::layout::Rect::new(30.0, 1_003.0, 120.0, 90.0);
+        let all = quads(&r.build_vertices(&[long_block(
+            &font,
+            crate::layout::Rect::new(0.0, 0.0, 800.0, 1e6),
+        )]));
+        let shown = quads(&r.build_vertices(&[long_block(&font, clip)]));
+        let in_clip: Vec<_> = all
+            .iter()
+            .filter(|quad| {
+                let xs = quad.iter().map(|p| p[0]);
+                let ys = quad.iter().map(|p| p[1]);
+                let (left, right) = (
+                    xs.clone().fold(f32::MAX, f32::min),
+                    xs.fold(f32::MIN, f32::max),
+                );
+                let (top, bottom) = (
+                    ys.clone().fold(f32::MAX, f32::min),
+                    ys.fold(f32::MIN, f32::max),
+                );
+                right > clip.x
+                    && left < clip.x + clip.width
+                    && bottom > clip.y
+                    && top < clip.y + clip.height
+            })
+            .collect();
+        assert!(
+            in_clip.len() > 20,
+            "the clip shows some text: {}",
+            in_clip.len()
+        );
+        for quad in in_clip {
+            assert!(shown.contains(quad), "a glyph in the clip went: {quad:?}");
+        }
+        assert!(
+            shown.len() * 50 < all.len(),
+            "and the rest did: {}",
+            shown.len()
+        );
     }
 
     #[cfg(feature = "bundled-font")]

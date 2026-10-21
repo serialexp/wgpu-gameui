@@ -80,6 +80,56 @@ impl MsdfPrepared {
     }
 }
 
+/// The box a glyph of `block` has to reach into to show: its clip, widened
+/// by how far a glyph draws past its line box and cell (ink above the line or
+/// left of the pen, an italic's overhang) and by the block's effects. `None`
+/// for a block without a clip, all of which can show.
+pub(super) fn cull_bounds(block: &TextBlock) -> Option<[f32; 4]> {
+    let clip = block.clip?;
+    let mut reach = block.font_size.max(block.line_height);
+    if let Some(outline) = &block.outline {
+        reach += outline.width_px;
+    }
+    if let Some(shadow) = &block.shadow {
+        reach += shadow.offset[0].abs().max(shadow.offset[1].abs()) + shadow.softness;
+    }
+    if let Some(glow) = &block.glow {
+        reach += glow.radius_px;
+    }
+    Some([
+        clip.x - reach,
+        clip.y - reach,
+        clip.x + clip.width + reach,
+        clip.y + clip.height + reach,
+    ])
+}
+
+/// The glyphs of `layout` on the lines whose box meets `bounds`
+/// ([`cull_bounds`]). Lines run top to bottom, so the first and last are
+/// found by search, and a long text clipped to a screenful places a
+/// screenful. All of them without bounds, and for vertical text, whose
+/// lines are its stacked clusters rather than rows.
+pub(super) fn glyphs_in_clip(
+    block: &TextBlock,
+    layout: &crate::shaping::ShapedLayout,
+    bounds: Option<[f32; 4]>,
+) -> Range<usize> {
+    let all = 0..layout.glyphs.len();
+    let Some([_, top, _, bottom]) = bounds else {
+        return all;
+    };
+    if block.vertical || layout.lines.is_empty() {
+        return all;
+    }
+    let lines = &layout.lines;
+    let first = lines.partition_point(|line| block.y + line.top + line.height < top);
+    let end = lines.partition_point(|line| block.y + line.top <= bottom);
+    if first >= end {
+        return 0..0;
+    }
+    lines[first].glyphs.start as usize..lines[end - 1].glyphs.end as usize
+}
+
 impl MsdfCpu {
     pub(crate) fn new(font_system: FontSystemHandle) -> Self {
         Self {
@@ -141,6 +191,7 @@ impl MsdfCpu {
             if !block.content.is_empty() {
                 let (layout, fs) =
                     shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
+                let bounds = cull_bounds(block);
                 append_placements(
                     &mut self.atlas,
                     &mut self.font_keys,
@@ -148,7 +199,8 @@ impl MsdfCpu {
                     fs,
                     block,
                     &block.spans,
-                    &layout.glyphs,
+                    &layout.glyphs[glyphs_in_clip(block, layout, bounds)],
+                    bounds,
                     grid,
                     &mut out.placements,
                 );
