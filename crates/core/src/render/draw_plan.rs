@@ -344,9 +344,13 @@ impl DrawPlan {
 
     /// Sort the units into draw order and cut them into batches.
     pub(crate) fn finish(&mut self) {
-        // The paint index makes every key unique, so stability isn't needed.
-        self.units
-            .sort_unstable_by_key(|u| (u.order, u.key, u.paint));
+        // Units of one key all have order 0: they are in draw order already.
+        // Otherwise the paint index makes every key unique, so stability
+        // isn't needed.
+        if !self.order.one_key() {
+            self.units
+                .sort_unstable_by_key(|u| (u.order, u.key, u.paint));
+        }
         let mut start = 0;
         while let Some(first) = self.units.get(start) {
             let key = first.key;

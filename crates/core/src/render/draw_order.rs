@@ -18,6 +18,12 @@
 //! and two summaries that bound what scanning it could find, so a cell that
 //! can't raise the order is skipped. The summaries only make it faster; the
 //! order is the same as [`brute_force_orders`] gives.
+//!
+//! While every unit so far has had one key, none can raise another: they all
+//! get order 0, and their boxes are set aside rather than put in the grid. A
+//! list of one key, such as a polyline's segments, never touches the grid. The
+//! first unit of a second key puts the boxes set aside into the grid, as they
+//! would have been stored, and ordering goes on from there.
 
 use super::draw_box::PixelBox;
 
@@ -49,6 +55,17 @@ struct Entry {
     key: BatchKey,
 }
 
+/// The keys the units ordered so far have had.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Keys {
+    #[default]
+    None,
+    /// All this one: their boxes are in [`DrawOrder::pending`], not the grid.
+    One(BatchKey),
+    /// More than one: every box is in the grid.
+    Many,
+}
+
 #[derive(Clone, Debug, Default)]
 struct Cell {
     /// Into [`DrawOrder::entries`].
@@ -68,6 +85,10 @@ pub(crate) struct DrawOrder {
     cols: u32,
     rows: u32,
     entries: Vec<Entry>,
+    keys: Keys,
+    /// The boxes of the units ordered while they have all had one key, in
+    /// paint order.
+    pending: Vec<PixelBox>,
     stats: OrderStats,
 }
 
@@ -86,7 +107,15 @@ impl DrawOrder {
             self.cells.resize_with(cells, Cell::default);
         }
         self.entries.clear();
+        self.keys = Keys::None;
+        self.pending.clear();
         self.stats = OrderStats::default();
+    }
+
+    /// Whether every unit ordered since [`begin`](Self::begin) has had one
+    /// key: they all have order 0, so paint order is already draw order.
+    pub(crate) fn one_key(&self) -> bool {
+        matches!(self.keys, Keys::None | Keys::One(_))
     }
 
     /// The work done since [`begin`](Self::begin).
@@ -102,6 +131,21 @@ impl DrawOrder {
         if boxes.iter().all(PixelBox::is_empty) {
             return None;
         }
+        self.stats.units_ordered += 1;
+        match self.keys {
+            Keys::None => self.keys = Keys::One(key),
+            Keys::One(one) if one == key => {}
+            Keys::One(one) => {
+                self.store_pending(one);
+                self.keys = Keys::Many;
+            }
+            Keys::Many => {}
+        }
+        if self.keys != Keys::Many {
+            let on_target = boxes.iter().filter(|b| !b.is_empty());
+            self.pending.extend(on_target);
+            return Some(0);
+        }
         let mut order = 0;
         for b in boxes.iter().filter(|b| !b.is_empty()) {
             order = self.highest(*b, key, order);
@@ -109,8 +153,18 @@ impl DrawOrder {
         for b in boxes.iter().filter(|b| !b.is_empty()) {
             self.store(*b, key, order);
         }
-        self.stats.units_ordered += 1;
         Some(order)
+    }
+
+    /// Put the boxes set aside while every unit had `key` into the grid, each
+    /// with order 0, as [`add`](Self::add) would have stored them.
+    fn store_pending(&mut self, key: BatchKey) {
+        let pending = std::mem::take(&mut self.pending);
+        for b in &pending {
+            self.store(*b, key, 0);
+        }
+        self.pending = pending;
+        self.pending.clear();
     }
 
     /// The order a unit of `key` needs to draw after every stored box that

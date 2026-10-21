@@ -220,6 +220,63 @@ fn orders_match_the_brute_force_on_random_layouts() {
     }
 }
 
+#[test]
+fn units_of_one_key_are_ordered_without_the_grid() {
+    let mut rng = Rng(11);
+    let (size, mut units) = random_units(&mut rng);
+    for unit in &mut units {
+        unit.0 = A;
+    }
+    let mut order = DrawOrder::default();
+    order.begin(size);
+    let orders: Vec<_> = units.iter().map(|(k, b)| order.add(*k, b)).collect();
+    assert_eq!(orders, brute_force_orders(&units));
+    assert!(order.one_key());
+    let stats = order.stats();
+    assert_eq!(
+        (stats.cell_visits, stats.overlap_tests),
+        (0, 0),
+        "{stats:?}"
+    );
+    let ordered = orders.iter().filter(|o| o.is_some()).count();
+    assert_eq!(stats.units_ordered as usize, ordered);
+}
+
+#[test]
+fn a_second_key_after_a_run_of_one_is_ordered_over_the_run() {
+    // Units of A over one another, then a B over the first, then an A over
+    // the B: the run is in the grid by the time the B looks.
+    let units = [
+        (A, vec![px(10, 10, 50, 50)]),
+        (A, vec![px(30, 30, 70, 70)]),
+        (A, vec![PixelBox::EMPTY]),
+        (B, vec![px(0, 0, 20, 20)]),
+        (A, vec![px(15, 15, 18, 18)]),
+        (A, vec![px(200, 200, 210, 210)]),
+    ];
+    assert_eq!(
+        order(&units),
+        [Some(0), Some(0), None, Some(1), Some(2), Some(0)]
+    );
+}
+
+#[test]
+fn orders_match_the_brute_force_when_a_long_run_of_one_key_comes_first() {
+    let mut rng = Rng(13);
+    for layout in 0..300 {
+        let (size, mut units) = random_units(&mut rng);
+        let run = rng.below(units.len() as u32 + 1) as usize;
+        let first = units[0].0;
+        for unit in &mut units[..run] {
+            unit.0 = first;
+        }
+        let mut order = DrawOrder::default();
+        order.begin(size);
+        let orders: Vec<_> = units.iter().map(|(k, b)| order.add(*k, b)).collect();
+        assert_eq!(orders, brute_force_orders(&units), "layout {layout}");
+    }
+}
+
 /// `rows` list rows in ten side-by-side columns, as tall as they need to be,
 /// so a longer list changes only the height: each row a background, a label
 /// inside it and an icon at its end, with 2 px between rows and 4 between

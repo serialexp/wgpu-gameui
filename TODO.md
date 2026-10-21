@@ -395,7 +395,10 @@ harden those foundations rather than create parallel replacements.
 - [ ] **P2 — Caret, cursor and visual layouts shape on their own.**
   `text_caret_layout`, `text_cursor_positions` and `text_visual_layout` build
   their own `Buffer` every call rather than using the shared layouts; a
-  large text input reshapes its whole content for each of them.
+  large text input reshapes its whole content for each of them. Planned in
+  `docs/design/shared-text-layout.md`, with two bugs found on the way: a
+  multi-line field composing with the IME puts its caret on the first line,
+  and line starts are found by `\n` only, so CR and CRLF text maps bytes wrong.
 - [ ] **P3 — Variable font weights.** The atlas keys glyphs by
   `(font id, glyph id)` and rasterises from the font file, so a variable font
   draws every weight at its default instance. Carry the weight into the
@@ -498,14 +501,18 @@ harden those foundations rather than create parallel replacements.
       busy machine): about 16 ns per triangle, 0.44 ms against 0.28 ms in
       paint order for one 10k-triangle command. Bart to decide whether that
       is worth the cache.
-- [ ] **P2 — Skip ordering a list of one key.** When every unit of a list
+- [x] **P2 — Skip ordering a list of one key.** Done 2026-10-21: units
+      of one key stay out of the grid until a second key arrives; the
+      polyline encodes in 0.75 ms (was 1.11, paint order 0.48), see the
+      note in `docs/design/draw-call-batching.md`. It was: When every unit of a list
       has the same batch key, ordering can't change anything: the units
       draw as one batch, in paint order. The plan still boxes
       and orders each unit, which costs a 10k-segment polyline about 0.6 ms
       to encode over paint order (`batching/polyline`, 2026-10-16). The
       boxes are still needed to cull; the grid isn't.
-- [ ] **P1 — `List` with measured row heights and an item-anchored scroll
-      position.** `List` only handles fixed row heights. gpui's list keeps
+- [x] **P1 — `List` with measured row heights and an item-anchored scroll
+      position.** Done (739f9bf; agent-ui ed19404), see
+      `docs/design/measured-row-heights.md`. It was: `List` only handles fixed row heights. gpui's list keeps
       its position as "item N, this far into it" instead of a pixel offset,
       so when rows above the view change height nothing moves and nothing
       needs correcting. agent-ui's transcript already measures rows, but

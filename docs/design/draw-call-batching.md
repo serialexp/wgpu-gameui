@@ -1,7 +1,7 @@
 # Draw-call batching
 
 **Status:** Done
-**Last updated:** 2026-10-16
+**Last updated:** 2026-10-21
 
 ## Implementation status
 
@@ -21,10 +21,12 @@ Tracking the gap between this design and what's on the main branch.
 - [x] Phase 5: the renderer uploads and draws from the plan; the paint-order path is the identity plan; `RenderStats` counts real draws, with the new counters (`batches`, `units_ordered`, `order_overlap_tests`, `order_cell_visits`) and their debug report lines; the `paint-order-oracle` feature and its `publish.yml` checks; `render_widget_gallery` turns on `set_check_plan`; the `viewport` contract stated on `render` and `render_layers`; `RenderStats` `#[non_exhaustive]`, committed as breaking; existing tests moved as described (`feat(core)!: draw-call batching`, 2026-10-16; `render/batch_draws.rs`, the renderer in `render/ui_renderer.rs`, `MsdfAtlas` and `upload_vertices` in `text.rs`; see the 2026-10-16 note under Phasing)
 - [x] Phase 6: GPU pixel tests (batch order matches paint order), an allocation test, bench cases reporting batch counts (list rows at scale 1.0 and 1.5, a dense chart, a 10k-point polyline), and bench numbers recorded here; docs promising strict paint order updated; TODO entries closed (`feat(core)!: draw-call batching`, 2026-10-16; `tests/batch_order.rs`, the allocation test in `render/draw_plan_tests.rs`, the `batching` bench group; numbers taken on a busy machine, see the 2026-10-16 notes under Phasing)
 
+- [x] Follow-up: a list of one key isn't ordered through the grid (2026-10-21; `DrawOrder`'s `Keys` and `pending`, see the 2026-10-21 note under Phasing)
+
 ### Outstanding
 
 - [ ] Rerun the `batching` bench times on a quiet machine (deferred: until one is free; the 2026-10-16 times were taken at load average 10 to 25, see TODO.md "Chart benches on a quiet machine")
-- [ ] Follow-ups in TODO.md: the cost of boxing soup per triangle, and skipping the order for a list of one key (deferred: Bart to decide)
+- [ ] Follow-up in TODO.md: the cost of boxing soup per triangle (deferred: Bart to decide)
 
 ## Why this exists
 
@@ -974,6 +976,16 @@ device cleanly, the tests on real lists that need text become GPU tests
    >   when every unit has one key is in TODO.md.
    > - Boxing soup costs about 16 ns per triangle (0.16 ms for 10,000); the
    >   TODO entry has the number.
+
+   > **2026-10-21 update:** while every unit so far has had one key,
+   > `DrawOrder` gives each order 0 and sets its boxes aside instead of
+   > putting them in the grid; the first unit of a second key stores them, as
+   > they would have been stored, and ordering goes on as before. `DrawPlan`
+   > skips the sort for a list of one key, which is in draw order already.
+   > Units are still boxed, to cull them. The polyline case now does no cell
+   > visits (40,742 before) and encodes in 0.75 ms against 1.11 ms (paint
+   > order 0.48 ms; the rest of the gap is the box maths). Same busy machine
+   > caveat as above.
 
 ## Open questions for review
 
