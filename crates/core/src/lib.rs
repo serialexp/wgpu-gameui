@@ -83,7 +83,7 @@ pub use text::{
     TextSpan, TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode, bundled_mono_font,
     byte_at_point, byte_on_adjacent_line, byte_under_point, caret_for_byte, load_font_bytes,
     load_font_file, register_bundled_fonts, resolve_range_color, resolve_span_color,
-    selection_rects, shared_font_system, text_caret_layout, text_cursor_positions,
+    selection_rects, shaping_passes, shared_font_system, text_caret_layout, text_cursor_positions,
     text_visual_layout, vcentered_line_y, visual_caret_neighbor, visual_caret_pos,
 };
 pub use text_select::{TextHighlight, TextKey, TextPoint, TextSelection};

@@ -2758,3 +2758,7 @@ mod tests {
         assert_eq!(field.syntax_rebuilds, 3);
     }
 }
+
+#[cfg(test)]
+#[path = "text_input_layout_tests.rs"]
+mod layout_tests;

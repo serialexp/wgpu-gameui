@@ -38,6 +38,10 @@
 //! - `layer_dispatch` — a frame of a `LayerStack` with 1 to 10k layers
 //!   (modals, popups and tooltips) under a held press: pushing them, then
 //!   resolving the input the base and every layer sees. CPU only.
+//! - `focused_text_input` — a focused field (one line, and 10 to 5,000 lines)
+//!   through the renderer: an idle frame, an edit (a letter typed and taken
+//!   away again) and a click. Each case first prints the cosmic-text shaping
+//!   passes those frames made (`docs/design/shared-text-layout.md`).
 //! - `strokes_build` / `strokes_render` — a chart line of 1k and 10k points
 //!   as one polyline (solid, dashed, and a wide translucent halo): cutting it
 //!   into segment records, and its frame **waiting for the GPU**, so the
@@ -52,7 +56,7 @@ use wgpu_gameui::{
     InteractionScene, KeyboardNav, LayerStack, List, ListItem, ListState, MAX_MENU_DEPTH,
     MeasureBuffer, MeasuredChild, Measurement, Menu, MenuBar, MenuBarState, MenuDrawEnv, MenuItem,
     NumberInput, ScrollState, ScrollView, Slider, StyleResolver, Table, TableCell, TableColumn,
-    TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState,
+    TextBlock, TextInput, TextMeasurer, Theme, UiRenderer, UiState, shaping_passes,
 };
 use wgpu_gameui::{
     Bar, BarChart, BarOverlay, BarSeries, LineChart, LineSeries, ScatterPlot, ScatterPoint, Stroke,
@@ -928,6 +932,96 @@ fn bench_text_input_edit(c: &mut Criterion) {
                     std::hint::black_box(ti.draw(i as u64, &mut ctx));
                 }
             });
+        });
+    }
+    group.finish();
+}
+
+/// A focused `TextInput`, frame by frame through the renderer: an idle frame
+/// (nothing changed, as when only the caret blinks), an edit (a letter typed
+/// at the end, then taken away again: two frames) and a click. Each case first
+/// prints the cosmic-text shaping passes those frames made, which the shared
+/// text layout (`docs/design/shared-text-layout.md`) means to bring to none for
+/// an idle frame and one per edit.
+fn bench_focused_text_input(c: &mut Criterion) {
+    const FIELD: u64 = 1;
+    let mut harness = Harness::new();
+    let theme = Theme::default();
+    let mut list = harness.draw_list();
+    let line = |i: usize| format!("line {i}: the quick brown fox jumps over the lazy dog");
+    let mut cases = vec![(
+        "single_line".to_owned(),
+        TextInput::new(20.0, 20.0, 600.0, 32.0).with_value(line(0)),
+    )];
+    for lines in [10, 500, 5_000] {
+        let value = (0..lines).map(line).collect::<Vec<_>>().join("\n");
+        let field = TextInput::new(20.0, 20.0, 900.0, 700.0)
+            .with_multiline(true)
+            .with_value(value);
+        cases.push((format!("multiline/{lines}"), field));
+    }
+    let idle = InputState::default();
+    let typed = InputState {
+        text_input: "x".into(),
+        ..Default::default()
+    };
+    let erased = InputState {
+        backspace_pressed: true,
+        ..Default::default()
+    };
+    let click = InputState {
+        mouse_x: 120.0,
+        mouse_y: 30.0,
+        mouse_down: true,
+        mouse_clicked: true,
+        mouse_click_count: 1,
+        ..Default::default()
+    };
+
+    let mut group = c.benchmark_group("focused_text_input");
+    group.sample_size(20);
+    for (name, mut field) in cases {
+        let mut focus = FocusState::new();
+        focus.focus(FIELD);
+        let mut frame = |field: &mut TextInput, input: &InputState| {
+            list.clear();
+            focus.begin_frame(input);
+            {
+                let mut ctx =
+                    DrawContext::new(&mut list, &mut focus, &theme, input, W as f32, H as f32);
+                std::hint::black_box(field.draw(FIELD, &mut ctx));
+            }
+            harness.render_frame(&list);
+        };
+        // Warm: the text drawn once, so an idle frame finds it kept.
+        frame(&mut field, &idle);
+        frame(&mut field, &idle);
+        let before = shaping_passes();
+        frame(&mut field, &idle);
+        let idle_passes = shaping_passes() - before;
+        let before = shaping_passes();
+        frame(&mut field, &typed);
+        frame(&mut field, &erased);
+        let edit_passes = shaping_passes() - before;
+        let before = shaping_passes();
+        frame(&mut field, &click);
+        let click_passes = shaping_passes() - before;
+        eprintln!(
+            "focused_text_input/{name}: shaping passes idle={idle_passes} \
+             edit={edit_passes} (two frames) click={click_passes}"
+        );
+
+        group.bench_function(BenchmarkId::new(name.as_str(), "idle"), |b| {
+            b.iter(|| frame(&mut field, &idle))
+        });
+        group.bench_function(BenchmarkId::new(name.as_str(), "edit"), |b| {
+            b.iter(|| {
+                frame(&mut field, &typed);
+                frame(&mut field, &erased);
+            })
+        });
+        group.bench_function(BenchmarkId::new(name.as_str(), "click"), |b| {
+            b.iter(|| frame(&mut field, &click))
         });
     }
     group.finish();
@@ -2142,6 +2236,7 @@ criterion_group!(
     bench_text_shape,
     bench_interactive_widgets,
     bench_text_input_edit,
+    bench_focused_text_input,
     bench_lua_syntax_highlighting,
     bench_scroll_view,
     bench_inspector,

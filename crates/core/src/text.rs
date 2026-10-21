@@ -227,6 +227,42 @@ pub fn bundled_mono_font(fs: &FontSystemHandle) -> Option<FontHandle> {
     }
 }
 
+thread_local! {
+    static SHAPING_PASSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has run cosmic-text's shaping over a buffer,
+/// for the layout cache or any other reason: what tests and benches count to
+/// see how much text work a frame did. Per thread, because widgets measure and
+/// the renderer prepares text on the thread that draws, and so tests running
+/// side by side don't count each other's.
+pub fn shaping_passes() -> u64 {
+    SHAPING_PASSES.with(std::cell::Cell::get)
+}
+
+/// Where each of cosmic-text's buffer lines starts in `text`, which its
+/// glyphs' byte offsets are relative to. Lines end where cosmic-text's
+/// `LineIter` ends them: at LF, CRLF, CR or LFCR. Text that ends in a line
+/// break has an empty line after it, as the buffer does.
+pub(crate) fn line_starts(text: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut ends_in_break = true;
+    for (range, ending) in cosmic_text::LineIter::new(text) {
+        starts.push(range.start);
+        ends_in_break = ending != cosmic_text::LineEnding::None;
+    }
+    if ends_in_break {
+        starts.push(text.len());
+    }
+    starts
+}
+
+/// Shape `buffer` as every caller here does, counted in [`shaping_passes`].
+pub(crate) fn shape_buffer(buffer: &mut Buffer, font_system: &mut FontSystem) {
+    SHAPING_PASSES.with(|passes| passes.set(passes.get() + 1));
+    buffer.shape_until_scroll(font_system, false);
+}
+
 /// Convert gameui's letter spacing (pixels) to cosmic-text's (em of the font size).
 pub(crate) fn letter_spacing_em(pixels: f32, font_size: f32) -> f32 {
     if font_size > 0.0 {
@@ -850,7 +886,7 @@ impl TextRenderer {
             Shaping::Advanced,
             None,
         );
-        buffer.shape_until_scroll(fs, false);
+        shape_buffer(&mut buffer, fs);
         // Glyph ids don't depend on size, so one shaping pass feeds every size.
         let grid = self.pixel_grid();
         let sizings: Vec<GlyphSizing> = std::iter::once(GlyphSizing::Scalable)
@@ -2238,7 +2274,7 @@ pub(crate) fn resolve_vmetrics(
         Shaping::Advanced,
         None,
     );
-    buffer.shape_until_scroll(font_system, false);
+    shape_buffer(&mut buffer, font_system);
 
     // First baseline offset, from cosmic-text's layout of the reference line.
     let mut baseline_ratio = LINE_HEIGHT_RATIO / 2.0;
@@ -2276,7 +2312,7 @@ pub(crate) fn resolve_vmetrics(
         Shaping::Advanced,
         None,
     );
-    cjk_buffer.shape_until_scroll(font_system, false);
+    shape_buffer(&mut cjk_buffer, font_system);
     let mut cjk_line_y = None;
     let mut cjk_font_id = None;
     if let Some(run) = cjk_buffer.layout_runs().next() {
@@ -2389,7 +2425,7 @@ pub fn text_cursor_positions(
     buffer.set_size(Some(max_width), None);
     let family = family_name.map(Family::Name).unwrap_or(Family::SansSerif);
     buffer.set_text(text, &Attrs::new().family(family), Shaping::Advanced, None);
-    buffer.shape_until_scroll(font_system, false);
+    shape_buffer(&mut buffer, font_system);
 
     // Each cluster boundary (byte index) maps to the glyph's x-position.
     // We iterate in layout-run order (top-to-bottom for multi-line) and
@@ -2508,12 +2544,7 @@ pub fn text_caret_layout(
 
     // Byte offset of the start of each buffer line within the *shaped* (prefixed)
     // string — cosmic's glyph.start/.end are relative to their buffer line.
-    let mut line_starts: Vec<usize> = vec![0];
-    for (i, b) in shaped.bytes().enumerate() {
-        if b == b'\n' {
-            line_starts.push(i + 1);
-        }
-    }
+    let line_starts = line_starts(&shaped);
 
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     buffer.set_wrap(wrap.into());
@@ -2525,7 +2556,7 @@ pub fn text_caret_layout(
         Shaping::Advanced,
         None,
     );
-    buffer.shape_until_scroll(font_system, false);
+    shape_buffer(&mut buffer, font_system);
 
     // Map a shaped (prefixed) absolute byte back to the caller's text. The mark
     // glyph itself sits in `[0, prefix_len)`; skip it.
@@ -2777,12 +2808,7 @@ pub fn text_visual_layout(
         Cow::Owned(format!("{prefix}{text}"))
     };
 
-    let mut line_starts: Vec<usize> = vec![0];
-    for (i, b) in shaped.bytes().enumerate() {
-        if b == b'\n' {
-            line_starts.push(i + 1);
-        }
-    }
+    let line_starts = line_starts(&shaped);
 
     let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
     buffer.set_wrap(wrap.into());
@@ -2794,7 +2820,7 @@ pub fn text_visual_layout(
         Shaping::Advanced,
         None,
     );
-    buffer.shape_until_scroll(font_system, false);
+    shape_buffer(&mut buffer, font_system);
 
     let to_orig = |abs: usize| abs.saturating_sub(prefix_len);
     let mut visual_line = 0usize;
@@ -3159,7 +3185,7 @@ pub(crate) fn ellipsis_cut(
         let runs = face_runs(content, 0, content.len(), faces, &base);
         buffer.set_rich_text(runs, &base, Shaping::Advanced, None);
     }
-    buffer.shape_until_scroll(fs, false);
+    shape_buffer(&mut buffer, fs);
 
     let full_w = buffer
         .layout_runs()
@@ -3174,7 +3200,7 @@ pub(crate) fn ellipsis_cut(
     ell.set_wrap(Wrap::None);
     ell.set_size(None, None);
     ell.set_text("…", &attrs(), Shaping::Advanced, None);
-    ell.shape_until_scroll(fs, false);
+    shape_buffer(&mut ell, fs);
     let ellipsis_w = ell.layout_runs().map(|r| r.line_w).fold(0.0_f32, f32::max);
 
     let budget = max_width - ellipsis_w;
@@ -3686,7 +3712,7 @@ mod tests {
         TextAlign, TextBlock, TextDirection, TextMeasurer, TextSpan, Underline, VisualGlyph,
         WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
         cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
-        load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
+        line_starts, load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
         shared_font_system, text_caret_layout, text_cursor_positions, text_visual_layout,
         vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
@@ -5982,6 +6008,49 @@ mod tests {
             max_x < max_width,
             "column stays within max_width (max_x={max_x})"
         );
+    }
+
+    #[test]
+    fn line_starts_follow_every_line_break_cosmic_text_knows() {
+        assert_eq!(line_starts(""), [0]);
+        assert_eq!(line_starts("ab"), [0]);
+        assert_eq!(line_starts("ab\n"), [0, 3]);
+        assert_eq!(line_starts("a\r\nb"), [0, 3]);
+        assert_eq!(line_starts("a\rb\n\rc"), [0, 2, 5]);
+        assert_eq!(line_starts("a\n\nb"), [0, 2, 3]);
+    }
+
+    #[test]
+    fn caret_and_visual_layouts_place_bytes_after_a_lone_cr_on_the_next_line() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let fs = shared.font_system();
+        let text = "a\rb";
+        let args = (16.0, 20.0, 400.0, WrapMode::None);
+        let carets = text_caret_layout(
+            fs,
+            text,
+            args.0,
+            args.1,
+            args.2,
+            args.3,
+            None,
+            TextDirection::default(),
+        );
+        let b = carets.iter().find(|c| c.line == 1).expect("a second line");
+        assert_eq!(b.byte, 2, "{carets:?}");
+        let visual = text_visual_layout(
+            fs,
+            text,
+            args.0,
+            args.1,
+            args.2,
+            args.3,
+            None,
+            TextDirection::default(),
+        );
+        let b = visual.iter().find(|g| g.line == 1).expect("a second line");
+        assert_eq!(b.byte_start..b.byte_end, 2..3, "{visual:?}");
     }
 }
 

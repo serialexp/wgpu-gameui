@@ -1,6 +1,6 @@
 # One text layout for drawing, caret and hit testing
 
-**Status:** Accepted
+**Status:** In progress
 **Last updated:** 2026-10-21
 
 ## Implementation status
@@ -9,13 +9,13 @@ Tracking the gap between this design and what's on the main branch.
 
 ### Done
 
-(nothing yet)
+- [x] Phase 0: a count of every cosmic-text shaping pass, `text::shaping_passes()` (2026-10-21; per thread rather than in `LayoutStats`, since the caret functions get a bare `FontSystem` and tests run side by side; every pass goes through `text::shape_buffer`)
+- [x] Phase 0: the `focused_text_input` bench group, numbers below (2026-10-21)
+- [x] Phase 0: tests pinning today's caret behaviour (2026-10-21; `widgets/text_input_layout_tests.rs`: clicks and the caret against the drawn glyphs, right-to-left edges, a password, an IME composition, both kinds of soft wrap, a final newline, a combining cluster for the ligature case)
+- [x] Line starts follow cosmic-text's `LineIter` (CR, CRLF, LFCR), in `shape_layout`, `text_caret_layout` and `text_visual_layout` (2026-10-21, `text::line_starts`, ahead of Phase 1)
 
 ### Outstanding
 
-- [ ] Phase 0: a count of every cosmic-text shaping pass (`LayoutStats::passes`), the cache's own and the caret functions' and `ellipsis_cut`'s
-- [ ] Phase 0: bench cases for a focused `TextInput` (single-line; multi-line at 10, 500 and 5,000 lines): an idle frame, a keystroke, a click, each a whole frame including the renderer's text preparation, each printing the frame's `passes`
-- [ ] Phase 0: tests pinning today's caret behaviour that Phase 1 must keep: single-line positions on LTR text, soft-wrap boundaries, empty text and a trailing newline, a ligature, mixed bidi, a mask, an IME composition
 - [ ] Phase 1: one normalisation of a block (spans joined into `content`, the transform's scale) shared by `DrawList::text` and the caret calls
 - [ ] Phase 1: `ShapedLayout` keeps what the caret needs: each glyph's cell x without its pen offset, each line's left and right edge, no glyph for the direction mark
 - [ ] Phase 1: caret positions and visual glyphs worked out from a `ShapedLayout` the first time they're asked for, counted in the cache's bytes
@@ -171,8 +171,9 @@ Shared glyphs don't change these, and Phase 0's tests pin them:
 - Carets stand at cluster edges. Multi-line logical movement can step a character into a
   ligature's cluster (`text_input.rs` ~618), and `caret_for_byte` then rounds forward to the
   cluster's end (`text.rs` ~2614). Kept as is.
-- A soft wrap gives the same byte twice, the end of one line and the start of the next;
-  `caret_for_byte` takes the first.
+- Where a wrap breaks a word, its byte is both the end of one line and the start of the next,
+  and `caret_for_byte` takes the end of the first line. Where it wraps after a space, the next
+  letter starts the second line. (Pinned by Phase 0's tests, 2026-10-21.)
 - Ellipsized text: caret data covers the shown bytes only, clamped to `shown` (the ellipsis's own
   glyphs have bytes past the content).
 
@@ -190,8 +191,7 @@ split the content, look up or shape each paragraph under the spec (face ranges c
 shifted to its start), and stack the results. Points to settle then:
 
 - Splitting must follow cosmic-text's `LineIter`, which ends a paragraph at CRLF, CR and LFCR as
-  well as LF. The existing `\n`-only scans for line starts (in `shape_layout` and
-  `text_caret_layout`) get those wrong today; Phase 0 adds a test, and the fix goes in with Phase 1.
+  well as LF (`text::line_starts` does, since 2026-10-21).
 - Empty paragraphs and the empty line after a final newline are kept.
 - Only the first paragraph gets the direction mark, as today ("later lines auto-detect").
   Marking each would be a change in behaviour.
@@ -201,6 +201,21 @@ shifted to its start), and stack the results. Points to settle then:
 - Many small entries cost more fixed overhead each (`LAYOUT_OVERHEAD`); the budget may need to count
   them differently.
 - Vertical and ellipsized text are one stack or one line, so they keep the whole-string path.
+
+### Phase 0 numbers
+
+> **2026-10-21:** `focused_text_input`, through the renderer, on a busy machine. Lines are
+> about 50 characters, none wrapped. An edit is two frames (a letter typed, then erased).
+>
+> | field | idle frame | edit | click |
+> |---|---|---|---|
+> | one line | 0.17 ms, 3 passes | 0.43 ms, 7 passes | 0.26 ms, 4 passes |
+> | 10 lines | 0.63 ms, 2 passes | 0.88 ms, 5 passes | 0.81 ms, 2 passes |
+> | 500 lines | 20 ms, 2 passes | 33 ms, 5 passes | 17 ms, 2 passes |
+> | 5,000 lines | 168 ms, 2 passes | 328 ms, 5 passes | 165 ms, 2 passes |
+>
+> The idle frame is what the caret's blink costs: a focused 500-line field spends 20 ms on
+> it. Phase 1 is meant to make that column 0 passes.
 
 ## Phasing
 

@@ -396,9 +396,9 @@ harden those foundations rather than create parallel replacements.
   `text_caret_layout`, `text_cursor_positions` and `text_visual_layout` build
   their own `Buffer` every call rather than using the shared layouts; a
   large text input reshapes its whole content for each of them. Planned in
-  `docs/design/shared-text-layout.md`, with two bugs found on the way: a
-  multi-line field composing with the IME puts its caret on the first line,
-  and line starts are found by `\n` only, so CR and CRLF text maps bytes wrong.
+  `docs/design/shared-text-layout.md`, with a bug found on the way: a
+  multi-line field composing with the IME puts its caret on the first line.
+  (The other, line starts found by `\n` only, is fixed: `text::line_starts`.)
 - [ ] **P3 — Variable font weights.** The atlas keys glyphs by
   `(font id, glyph id)` and rasterises from the font file, so a variable font
   draws every weight at its default instance. Carry the weight into the

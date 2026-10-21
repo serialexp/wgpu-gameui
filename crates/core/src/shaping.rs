@@ -599,7 +599,7 @@ pub(crate) fn shape_layout(
         let runs = face_runs(&shaped_text, prefix_len, shown, faces, &attrs);
         buffer.set_rich_text(runs, &attrs, Shaping::Advanced, align);
     }
-    buffer.shape_until_scroll(font_system, false);
+    crate::text::shape_buffer(&mut buffer, font_system);
 
     // Vertical: the column is as wide as the widest cluster row; each row is
     // centred within it by shifting its glyphs right by half the slack.
@@ -631,15 +631,7 @@ pub(crate) fn shape_layout(
     // line, and span colours address the whole content, so each shaped line's
     // start byte is added back. Vertical text also subtracts the `line_i`
     // separators `vertical_stack_string` inserted.
-    let line_starts: Vec<usize> = std::iter::once(0)
-        .chain(
-            shaped_text
-                .bytes()
-                .enumerate()
-                .filter(|&(_, byte)| byte == b'\n')
-                .map(|(index, _)| index + 1),
-        )
-        .collect();
+    let line_starts = crate::text::line_starts(&shaped_text);
 
     let mut glyphs = Vec::new();
     let mut lines = Vec::new();
@@ -1026,5 +1018,32 @@ mod tests {
         assert!(bytes_of(&cache, "row 0") > 0, "used again");
         assert_eq!(bytes_of(&cache, "row 1"), 0);
         assert!(bytes_of(&cache, "row 4") > 0);
+    }
+
+    #[test]
+    fn a_shaping_pass_is_counted_for_a_miss_and_not_for_a_hit() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let spec = LayoutSpec::plain(16.0, None);
+        let before = crate::text::shaping_passes();
+        shared.layout(&spec, "counted once");
+        assert_eq!(crate::text::shaping_passes(), before + 1);
+        shared.layout(&spec, "counted once");
+        assert_eq!(crate::text::shaping_passes(), before + 1, "kept: no pass");
+    }
+
+    #[test]
+    fn glyphs_after_any_line_break_cosmic_text_knows_keep_their_bytes() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        // LF, CRLF, CR and LFCR each end a line; the "b" after each is the
+        // last byte of the content.
+        for text in ["a\nb", "a\r\nb", "a\rb", "a\n\rb", "a\r\n\nb"] {
+            let layout = shape_layout(shared.font_system(), &LayoutSpec::plain(16.0, None), text);
+            let b = layout.glyphs.last().expect("a glyph for b");
+            assert_eq!(b.byte_start as usize, text.len() - 1, "{text:?}");
+            let last = layout.lines.last().unwrap();
+            assert_eq!(last.byte_start as usize, text.len() - 1, "{text:?}");
+        }
     }
 }
