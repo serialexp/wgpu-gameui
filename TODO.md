@@ -554,7 +554,7 @@ harden those foundations rather than create parallel replacements.
       running total of row heights (headers and rows differ). Once `List`
       draws from a `RowHeights` (`docs/design/measured-row-heights.md`),
       `GroupList` could share it and its item-anchored scrolling.
-- [ ] **P2 — One text layout for drawing, caret and hit testing.** gpui
+- [x] **P2 — One text layout for drawing, caret and hit testing.** gpui
       shapes a string once and uses that layout to draw it, place the caret
       and map a click to a character. gameui's text widgets shape separately
       for each. gpui also caches per line, so typing in a long field
@@ -563,7 +563,9 @@ harden those foundations rather than create parallel replacements.
       keeps short strings inline and shares long ones, which is its answer
       to the second.) 2026-10-21: one layout for all of them is done (Phase 1
       of `docs/design/shared-text-layout.md`); caching per line is its
-      Phase 2, for Bart to decide on the numbers there.
+      Phase 2, for Bart to decide on the numbers there. 2026-10-21: Phase 2
+      is done as paragraphs taken from the previous layout rather than kept
+      one by one; a 5,000-line keystroke shapes the paragraph typed in.
 - [ ] **P2 — Upload only the changed part of the glyph atlas.**
       `text.rs` `write_pixels` rebuilds the whole atlas pixel buffer
       (`build_pixel_buffer`) and writes the full texture whenever any glyph

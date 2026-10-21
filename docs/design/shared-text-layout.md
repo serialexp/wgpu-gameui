@@ -21,12 +21,13 @@ Tracking the gap between this design and what's on the main branch.
 - [x] Phase 1: a multi-line field composing with the IME places its caret and IME rect on the composition's own line (5edf11b, 2026-10-21)
 - [x] Phase 1: `text_select.rs` hit testing uses the cell x rather than the pen x (5edf11b, 2026-10-21; underlines too)
 - [x] Phase 1: tests: the caret sits on the drawn glyphs for a block with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted (5edf11b, 2026-10-21; `widgets/draw_list_caret_tests.rs`, `widgets/text_input_layout_tests.rs`)
+- [x] Glyphs outside a block's clip are not placed (411f80a, 2026-10-21; `text_prep::glyphs_in_clip`, `cull_bounds`)
+- [x] Phase 2: a long text missing from the cache is laid out from the paragraphs of the long layout last used under the same spec, shaping only the paragraphs it doesn't have, in one pass (2026-10-21; `shaping/paragraphs.rs`, `LayoutCache::reshaped`, `LayoutStats::reshaped`; tests in `shaping/paragraphs_tests.rs` compare the result with the text shaped whole). Shipped differently from the design, see the note under "Phase 2 is conditional"
 
 ### Outstanding
 
-- [ ] Phase 2: paragraphs shaped and kept one by one (only if the numbers after Phase 1 call for it; see "Phase 2 is conditional")
 - [ ] Phase 3: `ellipsis_cut` reads the cut from a cached layout under a fixed cut spec instead of shaping the content again
-- [ ] Close TODO.md entries: "Caret, cursor and visual layouts shape on their own", the gpui entry "One text layout for drawing, caret and hit testing", and (with Phase 3) "Ellipsis shapes the full text twice"
+- [ ] With Phase 3, close the TODO.md entry "Ellipsis shapes the full text twice" ("Caret, cursor and visual layouts shape on their own" and the gpui entry "One text layout for drawing, caret and hit testing" are closed)
 
 ## Why this exists
 
@@ -220,6 +221,24 @@ shifted to its start), and stack the results. Points to settle then:
   them differently.
 - Vertical and ellipsized text are one stack or one line, so they keep the whole-string path.
 
+> **2026-10-21 update:** Bart chose to go ahead, together with the clip culling. It shipped as
+> paragraphs taken from another layout instead of paragraphs kept one by one. Kept one by one,
+> every paragraph would sit in the cache next to the stacked copy each whole string still needs,
+> about twice the glyphs; at 5,000 lines one layout is already some 10 MB of the 16 MiB budget.
+> Instead, when a text isn't kept, `LayoutCache::reshaped` takes the long layout most recently used
+> under the same `LayoutKey` (after an edit, the version before it), finds which of its paragraphs
+> the new text still has (by their text), joins the missing ones with line breaks and shapes them
+> in one pass, then stacks the lot with glyphs and bytes rebased. Nothing is kept twice, and a
+> keystroke shapes the paragraph typed in.
+>
+> What it covers: text of at least `REUSE_MIN_BYTES` (4096 bytes, some 80 lines of 50
+> characters) with a line break; below that, shaping it whole costs about as little. Vertical and
+> ellipsized text keep the whole-string path, as planned, and so does text with face ranges
+> (`LayoutSpec::faces`): those would have to be cut to each paragraph. agent-ui's transcript
+> code spans use faces, so they don't benefit; a field's plain or syntax-coloured value does,
+> since colour doesn't take part in shaping. A forced direction marks the first paragraph only, so
+> the first paragraph comes from a donor's first paragraph unless the direction is `Auto`.
+
 ### Phase 0 numbers
 
 > **2026-10-21:** `focused_text_input`, through the renderer, on a busy machine. Lines are
@@ -262,6 +281,23 @@ shifted to its start), and stack the results. Points to settle then:
 > **2026-10-21 update:** that fix is in (`text_prep::glyphs_in_clip`). Idle frames now take
 > 0.59 ms at 500 lines and 1.3 ms at 5,000; the 5,000-line edit (two frames) is 134 ms, nearly
 > all of it the two shaping passes Phase 2 is for.
+
+### Phase 2 numbers
+
+> **2026-10-21:** the same bench after the clip culling and Phase 2, load average about 8.
+>
+> | field | idle frame | edit | click |
+> |---|---|---|---|
+> | one line | 0.19 ms, 0 passes | 0.38 ms, 1 pass | 0.19 ms, 0 passes |
+> | 10 lines | 0.26 ms, 0 passes | 0.55 ms, 1 pass | 0.26 ms, 0 passes |
+> | 500 lines | 0.61 ms, 0 passes | 1.2 ms, 1 pass | 0.59 ms, 0 passes |
+> | 5,000 lines | 1.3 ms, 0 passes | 6.5 ms, 2 passes | 1.7 ms, 0 passes |
+>
+> At 5,000 lines both passes are of one paragraph: the two versions still don't both fit the
+> cache, so the erase is laid out from the typed version as well. A 5,000-line keystroke is now
+> about (6.5 − 2 × 1.3) / 2 ≈ 2 ms on top of its frame, against 66 ms after Phase 1. Most of
+> what's left of the idle frame is hashing: each lookup hashes the whole content, two or three
+> times, with the standard library's SipHash.
 
 ## Phasing
 

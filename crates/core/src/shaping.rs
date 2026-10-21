@@ -127,6 +127,7 @@ impl SharedFontSystem {
         LayoutStats {
             hits: self.layouts.hits,
             shaped: self.layouts.shaped,
+            reshaped: self.layouts.reshaped,
             layouts: self.layouts.len,
             bytes: self.layouts.bytes,
         }
@@ -206,6 +207,9 @@ pub struct LayoutStats {
     pub hits: u64,
     /// Layouts shaped through cosmic-text, since the font system was made.
     pub shaped: u64,
+    /// Of those, the long texts laid out from the paragraphs of another
+    /// layout, shaping only the paragraphs it didn't have.
+    pub reshaped: u64,
     /// Layouts kept now.
     pub layouts: usize,
     /// Roughly how many bytes the kept layouts take.
@@ -396,6 +400,9 @@ pub(crate) struct ShapedLine {
     /// a caret.
     pub left: f32,
     pub right: f32,
+    /// The line's advance, as cosmic-text reports it: what the layout's
+    /// width is the widest of.
+    pub width: f32,
 }
 
 /// A laid-out string: its glyphs, including outline-less ones such as spaces,
@@ -442,6 +449,7 @@ struct LayoutCache {
     bytes: usize,
     hits: u64,
     shaped: u64,
+    reshaped: u64,
 }
 
 impl Default for LayoutCache {
@@ -461,6 +469,7 @@ impl LayoutCache {
             bytes: 0,
             hits: 0,
             shaped: 0,
+            reshaped: 0,
         }
     }
 
@@ -494,7 +503,13 @@ impl LayoutCache {
             self.hits += 1;
         } else {
             self.shaped += 1;
-            let layout = shape_layout(font_system, spec, content);
+            let layout = match self.reshaped(&key, spec, content, font_system) {
+                Some(layout) => {
+                    self.reshaped += 1;
+                    layout
+                }
+                None => shape_layout(font_system, spec, content),
+            };
             let bytes = content.len()
                 + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
                 + layout.lines.len() * std::mem::size_of::<ShapedLine>()
@@ -522,6 +537,31 @@ impl LayoutCache {
             .expect("the layout was kept or just shaped");
         entry.last_used = self.uses;
         &entry.layout
+    }
+
+    /// `content` laid out under `spec` from the paragraphs of the long layout
+    /// under the same spec used last, shaping only the paragraphs it doesn't
+    /// have: typing in a long field reshapes the paragraph typed in. `None`
+    /// where that doesn't apply (see [`paragraphs::reshape`]): text
+    /// too short to be worth it, set vertically, ellipsized or in faces of
+    /// its own, or no long layout to take paragraphs from.
+    fn reshaped(
+        &self,
+        key: &LayoutKey,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        font_system: &mut FontSystem,
+    ) -> Option<ShapedLayout> {
+        if !paragraphs::reusable(spec, content) {
+            return None;
+        }
+        let (donor, entry) = self
+            .map
+            .get(key)?
+            .iter()
+            .filter(|(donor, _)| paragraphs::is_long(donor))
+            .max_by_key(|(_, entry)| entry.last_used)?;
+        paragraphs::reshape(font_system, spec, content, donor, &entry.layout)
     }
 
     /// What `slot` of the entry for `content` under `spec` holds, worked out
@@ -789,6 +829,7 @@ pub(crate) fn shape_layout(
             byte_start: content_byte(0) as u32,
             left,
             right,
+            width: run.line_w,
         });
     }
 
@@ -805,6 +846,10 @@ pub(crate) fn shape_layout(
         ink: OnceCell::new(),
     }
 }
+
+// Kept beside the cache, which takes a long layout's paragraphs from it, and
+// a child of it for the fields of the layouts it builds.
+mod paragraphs;
 
 #[cfg(test)]
 mod tests {

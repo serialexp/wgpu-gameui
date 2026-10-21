@@ -240,20 +240,29 @@ pub fn shaping_passes() -> u64 {
 }
 
 /// Where each of cosmic-text's buffer lines starts in `text`, which its
-/// glyphs' byte offsets are relative to. Lines end where cosmic-text's
+/// glyphs' byte offsets are relative to (see [`paragraphs`]).
+pub(crate) fn line_starts(text: &str) -> Vec<usize> {
+    paragraphs(text)
+        .into_iter()
+        .map(|range| range.start)
+        .collect()
+}
+
+/// Each of cosmic-text's buffer lines in `text`, without its line break: the
+/// paragraphs it lays out one by one. Lines end where cosmic-text's
 /// `LineIter` ends them: at LF, CRLF, CR or LFCR. Text that ends in a line
 /// break has an empty line after it, as the buffer does.
-pub(crate) fn line_starts(text: &str) -> Vec<usize> {
-    let mut starts = Vec::new();
+pub(crate) fn paragraphs(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
     let mut ends_in_break = true;
     for (range, ending) in cosmic_text::LineIter::new(text) {
-        starts.push(range.start);
+        out.push(range);
         ends_in_break = ending != cosmic_text::LineEnding::None;
     }
     if ends_in_break {
-        starts.push(text.len());
+        out.push(text.len()..text.len());
     }
-    starts
+    out
 }
 
 /// Shape `buffer` as every caller here does, counted in [`shaping_passes`].
