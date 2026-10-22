@@ -19,8 +19,8 @@ use cosmic_text::{
 
 use crate::text::{
     CaretPos, FaceRange, FontHandle, FontVMetrics, LINE_HEIGHT_RATIO, TextAlign, TextBlock,
-    TextDirection, VisualGlyph, WrapMode, cosmic_align, direction_prefix, ellipsis_cut, face_runs,
-    family_hash, letter_spacing_em, resolve_vmetrics, style_disc, vertical_stack_string,
+    TextDirection, VisualGlyph, WrapMode, cosmic_align, direction_prefix, face_runs, family_hash,
+    letter_spacing_em, resolve_vmetrics, style_disc, vertical_stack_string,
 };
 
 /// Roughly how many bytes of layouts [`SharedFontSystem`] keeps before it
@@ -280,6 +280,22 @@ impl<'a> LayoutSpec<'a> {
         }
     }
 
+    /// The width an ellipsized line is cut to, if this spec cuts one.
+    fn cut_width(&self) -> Option<f32> {
+        self.max_width.filter(|_| self.ellipsize && !self.vertical)
+    }
+
+    /// The text laid out unwrapped, as it would be without an ellipsis: what
+    /// an ellipsized block measures as, and where its cut is read from.
+    pub fn natural(&self) -> Self {
+        Self {
+            ellipsize: false,
+            max_width: None,
+            align: TextAlign::Start,
+            ..*self
+        }
+    }
+
     /// The face ranges shaping uses: none for vertical text, which stacks
     /// its clusters in a string of its own.
     fn shaped_faces(&self) -> &'a [FaceRange] {
@@ -515,12 +531,14 @@ impl LayoutCache {
             self.hits += 1;
         } else {
             self.shaped += 1;
-            let layout = match self.reshaped(&key, spec, content, font_system) {
-                Some(layout) => {
-                    self.reshaped += 1;
-                    layout
-                }
-                None => shape_layout(font_system, spec, content),
+            let layout = if let Some(max_width) = spec.cut_width() {
+                let cut = self.ellipsis_cut(spec, content, max_width, font_system);
+                shape_cut_layout(font_system, spec, content, cut)
+            } else if let Some(layout) = self.reshaped(&key, spec, content, font_system) {
+                self.reshaped += 1;
+                layout
+            } else {
+                shape_layout(font_system, spec, content)
             };
             let bytes = content.len()
                 + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
@@ -549,6 +567,38 @@ impl LayoutCache {
             .expect("the layout was kept or just shaped");
         entry.last_used = self.uses;
         entry
+    }
+
+    /// Where `content`, ellipsized under `spec`, is cut to fit `max_width`
+    /// with a '…' after it: `None` when it fits, else the bytes kept. Read
+    /// from the text laid out unwrapped ([`LayoutSpec::natural`], which is
+    /// also what measuring the block looks up) and the ellipsis's width, both
+    /// kept, so cutting a label shapes nothing but the cut line.
+    fn ellipsis_cut(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        max_width: f32,
+        font_system: &mut FontSystem,
+    ) -> Option<usize> {
+        if content.is_empty() || !max_width.is_finite() || max_width <= 0.0 {
+            return None;
+        }
+        let natural = spec.natural();
+        // The ellipsis is in the block's face, not one of its ranges'.
+        let mark = LayoutSpec {
+            faces: &[],
+            ..natural
+        };
+        if self.get_or_shape(&natural, content, font_system).size.0 <= max_width {
+            return None;
+        }
+        let budget = max_width - self.get_or_shape(&mark, "…", font_system).size.0;
+        if budget <= 0.0 {
+            return Some(0);
+        }
+        let whole = self.get_or_shape(&natural, content, font_system);
+        Some(ellipsis::cut(whole, content, budget))
     }
 
     /// `content` laid out under `spec` from the paragraphs of the long layout
@@ -644,32 +694,29 @@ fn low_water(budget: usize) -> usize {
     budget / 4 * 3
 }
 
-/// Shape `content` under `spec` through cosmic-text.
+/// Shape `content` under `spec` through cosmic-text, uncut: an ellipsized
+/// spec lays it out on one line as it is. The cache finds an ellipsized
+/// line's cut ([`LayoutCache::ellipsis_cut`]) and shapes it with
+/// [`shape_cut_layout`].
 pub(crate) fn shape_layout(
     font_system: &mut FontSystem,
     spec: &LayoutSpec<'_>,
     content: &str,
 ) -> ShapedLayout {
+    shape_cut_layout(font_system, spec, content, None)
+}
+
+/// [`shape_layout`], with the first `cut` bytes of `content` shown and a '…'
+/// after them, when `cut` is given: an ellipsized line that doesn't fit.
+fn shape_cut_layout(
+    font_system: &mut FontSystem,
+    spec: &LayoutSpec<'_>,
+    content: &str,
+    cut: Option<usize>,
+) -> ShapedLayout {
     let family = spec.family();
     let faces = spec.shaped_faces();
 
-    // An ellipsized block is one line, cut to `max_width` with a trailing '…'.
-    // Vertical text ignores ellipsis: it stacks the whole content.
-    let cut = match spec.max_width {
-        Some(max_width) if spec.ellipsize && !spec.vertical => ellipsis_cut(
-            font_system,
-            content,
-            spec.font_size,
-            spec.line_height,
-            max_width,
-            family,
-            spec.weight,
-            spec.style,
-            faces,
-            spec.letter_spacing,
-        ),
-        _ => None,
-    };
     let truncated;
     let (content, shown): (&str, usize) = match cut {
         Some(cut) => {
@@ -858,6 +905,9 @@ pub(crate) fn shape_layout(
 // a child of it for the fields of the layouts it builds.
 mod paragraphs;
 
+// Where the cache cuts an ellipsized line, from the layouts it keeps.
+mod ellipsis;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,7 +945,7 @@ mod tests {
 
         // Too long: cut to one line that still fits, from the left edge.
         let long = "a label far too long for the two hundred pixels it is given here";
-        let cut = shape_layout(shared.font_system(), &spec(TextAlign::Center), long);
+        let cut = shared.layout(&spec(TextAlign::Center), long);
         assert!(cut.size.0 <= 200.0 && cut.size.1 < 20.0, "{:?}", cut.size);
         assert!(cut.glyphs[0].rel_x >= 0.0);
     }
@@ -1167,7 +1217,7 @@ mod tests {
                 ellipsize: true,
                 ..LayoutSpec::plain(16.0, Some(150.0))
             };
-            let layout = shape_layout(shared.font_system(), &spec, text);
+            let layout = shared.layout(&spec, text);
             (layout.shown, layout.size.0)
         };
         let (plain_shown, plain_w) = cut(&[], &mut shared);

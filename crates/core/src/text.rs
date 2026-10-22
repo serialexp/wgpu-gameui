@@ -2107,9 +2107,7 @@ impl TextMeasurer {
     pub fn measure_block(&mut self, block: &TextBlock) -> (f32, f32) {
         let mut spec = LayoutSpec::of_block(block);
         if block.ellipsize && !block.vertical {
-            spec.ellipsize = false;
-            spec.max_width = None;
-            spec.align = TextAlign::Start;
+            spec = spec.natural();
         }
         self.measure_spec(&block.content, &spec)
     }
@@ -2882,122 +2880,6 @@ pub(crate) fn face_runs<'s, 'a>(
     runs
 }
 
-/// Truncate `content` to a single line that fits within `max_width`, appending a
-/// trailing `'…'`. Returns `content` unchanged when it already fits.
-///
-/// Shapes with no wrapping and reads the laid-out glyph positions to find the
-/// byte cutoff, so it costs at most two extra shaping passes (the content and the
-/// ellipsis) and only for blocks that actually overflow.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ellipsize_to_width(
-    fs: &mut FontSystem,
-    content: &str,
-    font_size: f32,
-    line_height: f32,
-    max_width: f32,
-    family: Family,
-    weight: Weight,
-    style: Style,
-    letter_spacing: f32,
-) -> String {
-    match ellipsis_cut(
-        fs,
-        content,
-        font_size,
-        line_height,
-        max_width,
-        family,
-        weight,
-        style,
-        &[],
-        letter_spacing,
-    ) {
-        None => content.to_string(),
-        Some(cut) => {
-            let mut s = content[..cut].to_string();
-            s.push('…');
-            s
-        }
-    }
-}
-
-/// Where [`ellipsize_to_width`] cuts `content`: `None` when it fits in
-/// `max_width`, otherwise the length in bytes of the part kept before the
-/// `'…'` (trailing whitespace dropped).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ellipsis_cut(
-    fs: &mut FontSystem,
-    content: &str,
-    font_size: f32,
-    line_height: f32,
-    max_width: f32,
-    family: Family,
-    weight: Weight,
-    style: Style,
-    faces: &[FaceRange],
-    letter_spacing: f32,
-) -> Option<usize> {
-    if content.is_empty() || !max_width.is_finite() || max_width <= 0.0 {
-        return None;
-    }
-    let metrics = Metrics::new(font_size, line_height);
-    let attrs = || {
-        Attrs::new()
-            .family(family)
-            .weight(weight)
-            .style(style)
-            .letter_spacing(letter_spacing_em(letter_spacing, font_size))
-    };
-
-    // Shape the full content on a single line, in its faces.
-    let mut buffer = Buffer::new(fs, metrics);
-    buffer.set_wrap(Wrap::None);
-    buffer.set_size(None, None);
-    if faces.is_empty() {
-        buffer.set_text(content, &attrs(), Shaping::Advanced, None);
-    } else {
-        let base = attrs();
-        let runs = face_runs(content, 0, content.len(), faces, &base);
-        buffer.set_rich_text(runs, &base, Shaping::Advanced, None);
-    }
-    shape_buffer(&mut buffer, fs);
-
-    let full_w = buffer
-        .layout_runs()
-        .map(|r| r.line_w)
-        .fold(0.0_f32, f32::max);
-    if full_w <= max_width {
-        return None;
-    }
-
-    // Width of the ellipsis at this size/family, reserved at the right edge.
-    let mut ell = Buffer::new(fs, metrics);
-    ell.set_wrap(Wrap::None);
-    ell.set_size(None, None);
-    ell.set_text("…", &attrs(), Shaping::Advanced, None);
-    shape_buffer(&mut ell, fs);
-    let ellipsis_w = ell.layout_runs().map(|r| r.line_w).fold(0.0_f32, f32::max);
-
-    let budget = max_width - ellipsis_w;
-    if budget <= 0.0 {
-        return Some(0);
-    }
-
-    // Largest byte offset whose glyph still fits within the budget. Take the max
-    // over all fitting glyphs (shaping/ligatures need not be end-ordered).
-    let mut cut = 0usize;
-    for run in buffer.layout_runs() {
-        for g in run.glyphs {
-            if g.x + g.w <= budget {
-                cut = cut.max(g.end);
-            }
-        }
-    }
-    let cut = cut.min(content.len());
-    Some(content[..cut].trim_end().len())
-}
-
 /// How a [`TextSpan`] is underlined.
 ///
 /// The underline rect is emitted as a coloured soup quad at
@@ -3491,8 +3373,8 @@ mod tests {
         CaretPos, FontHandle, FontVMetrics, GlyphSnap, LINE_HEIGHT_RATIO, PixelGrid, SelRect,
         TextAlign, TextBlock, TextDirection, TextMeasurer, TextSpan, Underline, VisualGlyph,
         WrapMode, byte_at_point, byte_on_adjacent_line, caret_for_byte, color_to_rgba,
-        cosmic_align, direction_prefix, ellipsize_to_width, field_reach, has_cjk, has_lowercase,
-        line_starts, load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
+        cosmic_align, direction_prefix, field_reach, has_cjk, has_lowercase, line_starts,
+        load_font_bytes, resolve_range_color, resolve_span_color, selection_rects,
         shared_font_system, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     #[cfg(feature = "bundled-font")]
@@ -4826,75 +4708,6 @@ mod tests {
         assert_eq!(family, Some("IBM Plex Mono"));
     }
 
-    #[test]
-    fn ellipsize_leaves_fitting_text_unchanged() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        // A wide budget the short string easily fits within.
-        let out = ellipsize_to_width(
-            guard,
-            "short",
-            16.0,
-            20.0,
-            1000.0,
-            Family::SansSerif,
-            Weight::NORMAL,
-            Style::Normal,
-            0.0,
-        );
-        assert_eq!(out, "short");
-    }
-
-    #[test]
-    fn ellipsize_truncates_overflowing_text_with_ellipsis() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        let long = "a_very_long_object_name_that_will_not_fit";
-        let max_width = 80.0;
-        let out = ellipsize_to_width(
-            guard,
-            long,
-            14.0,
-            18.0,
-            max_width,
-            Family::SansSerif,
-            Weight::NORMAL,
-            Style::Normal,
-            0.0,
-        );
-        assert_ne!(out, long, "overflowing text should be truncated");
-        assert!(
-            out.ends_with('…'),
-            "truncated text should end with an ellipsis"
-        );
-        assert!(out.chars().count() < long.chars().count());
-        // The truncated line (incl. the ellipsis) must fit the budget.
-        let (w, _) = shape_layout(guard, &LayoutSpec::plain(14.0, None), &out).size;
-        assert!(w <= max_width, "ellipsized width {w} must fit {max_width}");
-    }
-
-    #[test]
-    fn ellipsize_degenerate_budget_returns_just_ellipsis() {
-        let fs = shared_font_system();
-        let mut shared = fs.lock().unwrap();
-        let guard = shared.font_system();
-        // A budget too small for even one glyph + the ellipsis.
-        let out = ellipsize_to_width(
-            guard,
-            "anything",
-            14.0,
-            18.0,
-            2.0,
-            Family::SansSerif,
-            Weight::NORMAL,
-            Style::Normal,
-            0.0,
-        );
-        assert_eq!(out, "…");
-    }
-
     // ---- single-line caret layout ----
 
     /// One line of `text`, 800px wide.
@@ -5187,9 +5000,11 @@ mod tests {
             bold_variant,
             italic_variant,
         ]);
+        // The ellipsized label also keeps itself unwrapped, which its cut is
+        // read from (and its measure).
         assert_eq!(
             cache_total(&r),
-            9,
+            10,
             "each distinct (content|size|width|align|ellipsize|font|weight|style) is its own entry"
         );
     }

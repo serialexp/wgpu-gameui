@@ -42,15 +42,14 @@ fn a_centred_line_starts_and_ends_its_carets_at_its_drawn_edges() {
 fn the_text_an_ellipsis_cut_off_has_no_carets() {
     let handle = shared_font_system();
     let mut shared = handle.lock().unwrap();
-    let fs = shared.font_system();
     let spec = LayoutSpec {
         ellipsize: true,
         ..spec(WrapMode::None, TextDirection::Auto)
     };
-    let layout = shape_layout(fs, &spec, "a sentence far too long for its line");
+    let layout = shared.layout(&spec, "a sentence far too long for its line");
     let shown = layout.shown as usize;
     assert!(shown > 0 && shown < 30, "cut at {shown}");
-    let carets = caret_positions(&layout);
+    let carets = caret_positions(layout);
     assert_eq!(carets.last().unwrap().byte, shown);
     assert!(carets.iter().all(|c| c.byte <= shown));
     // The last caret is after the last letter kept, before the ellipsis.
@@ -68,5 +67,5 @@ fn the_text_an_ellipsis_cut_off_has_no_carets() {
         "{end} against {}",
         ellipsis.cell_x
     );
-    assert!(visual_glyphs(&layout).iter().all(|g| g.byte_end <= shown));
+    assert!(visual_glyphs(layout).iter().all(|g| g.byte_end <= shown));
 }

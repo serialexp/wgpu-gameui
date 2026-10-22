@@ -1,7 +1,7 @@
 # One text layout for drawing, caret and hit testing
 
-**Status:** In progress
-**Last updated:** 2026-10-21
+**Status:** Done
+**Last updated:** 2026-10-22
 
 ## Implementation status
 
@@ -23,11 +23,13 @@ Tracking the gap between this design and what's on the main branch.
 - [x] Phase 1: tests: the caret sits on the drawn glyphs for a block with its own font, weight, letter spacing and centred text; under a scale transform; an idle focused frame makes no shaping pass and an edit one; still right after the entry is evicted (5edf11b, 2026-10-21; `widgets/draw_list_caret_tests.rs`, `widgets/text_input_layout_tests.rs`)
 - [x] Glyphs outside a block's clip are not placed (411f80a, 2026-10-21; `text_prep::glyphs_in_clip`, `cull_bounds`)
 - [x] Phase 2: a long text missing from the cache is laid out from the paragraphs of the long layout last used under the same spec, shaping only the paragraphs it doesn't have, in one pass (2026-10-21; `shaping/paragraphs.rs`, `LayoutCache::reshaped`, `LayoutStats::reshaped`; tests in `shaping/paragraphs_tests.rs` compare the result with the text shaped whole). Shipped differently from the design, see the note under "Phase 2 is conditional"
+- [x] The caret lookups binary-search the line they need, and a multi-line selection draws only the lines in view (afece08, 2026-10-22; `text::on_line`, `text_lookup_tests.rs`). Not in the design: found profiling the Phase 2 bench, along with SipHash over the whole content on every lookup, now Fx
+- [x] Phase 3: an ellipsized line's cut is read from the cached unwrapped layout (`LayoutSpec::natural`, which measuring the block also looks up) and the cached ellipsis, so cutting shapes only the cut line (2026-10-22; `shaping/ellipsis.rs`, `LayoutCache::ellipsis_cut`, tests in `shaping/ellipsis_tests.rs`)
+- [x] Closed the TODO.md entries "Ellipsis shapes the full text twice", "Caret, cursor and visual layouts shape on their own" and the gpui entry "One text layout for drawing, caret and hit testing" (2026-10-22)
 
 ### Outstanding
 
-- [ ] Phase 3: `ellipsis_cut` reads the cut from a cached layout under a fixed cut spec instead of shaping the content again
-- [ ] With Phase 3, close the TODO.md entry "Ellipsis shapes the full text twice" ("Caret, cursor and visual layouts shape on their own" and the gpui entry "One text layout for drawing, caret and hit testing" are closed)
+Nothing.
 
 ## Why this exists
 
@@ -316,6 +318,15 @@ shifted to its start), and stack the results. Points to settle then:
    width, start alignment) and read the cut from its cells, keeping the ellipsis's width reserved
    as now. Toggling the block's own `ellipsize` wouldn't do: that keeps the block's wrap, width
    and alignment.
+
+   > **2026-10-22 update:** shipped as planned, with the cut spec keeping the block's direction
+   > and faces (it is what `measure_block` already looked up, so measuring and cutting share one
+   > layout), and with a fix found on the way: the cut kept every glyph whose right edge fit,
+   > which for right-to-left text is its end, not its start, so a Hebrew label was "cut" to nearly
+   > all of itself and overflowed. It now keeps whole clusters from the start of the text, in
+   > its own order, while their advances fit. A cut label shapes twice on a miss (the text
+   > unwrapped, then the cut line) instead of four times with its measure, and the ellipsis is
+   > looked up only when the text doesn't fit.
 
 ## Open questions for review
 

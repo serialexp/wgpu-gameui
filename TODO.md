@@ -397,10 +397,12 @@ harden those foundations rather than create parallel replacements.
 - [ ] **P3 — Table row colours.** Table's zebra (`Panel` × 1.1) and hover
   (`ButtonHover`) predate the row tokens; move them to `RowZebra` /
   `RowHover` with a gallery review.
-- [ ] **P2 — Ellipsis shapes the full text twice.** On a miss, an ellipsized
+- [x] **P2 — Ellipsis shapes the full text twice.** Done 2026-10-22 (Phase 3
+  of `docs/design/shared-text-layout.md`): the cut is read from the cached
+  unwrapped layout the measure uses, and a right-to-left label is cut to its
+  start (it kept its end and overflowed). It was: on a miss, an ellipsized
   block's natural width is shaped by the measurer, and `ellipsis_cut` shapes
-  the full content again to find the cut. It could read the width and the
-  glyph boundaries from the cached unellipsized layout.
+  the full content again to find the cut.
 - [x] **P2 — Caret, cursor and visual layouts shape on their own.** Done
   2026-10-21 (Phase 1 of `docs/design/shared-text-layout.md`): carets and
   visual glyphs are read from the cached layout a block is drawn with, and
@@ -430,11 +432,16 @@ harden those foundations rather than create parallel replacements.
   numbers" in `docs/design/shared-text-layout.md`). Skip the lines wholly
   outside the clip (lines are sorted by `top`, so a binary search finds the
   first in view).
-- [ ] **P3 — An idle frame of one focused field uploads a lot.** A sample of
-  the focused 5,000-line field's idle frame (2026-10-21, with the clip
-  culling in) still has `Queue::write_buffer` copying about a sixth of the
-  frame's samples, for a screenful of glyphs. Find which buffer it is and
-  whether it uploads more than the frame drew.
+- [ ] **P3 — A glyph uploads six fat vertices.** A sample of the focused
+  5,000-line field's idle frame (2026-10-21, with the clip culling in) has
+  `Queue::write_buffer` copying about a sixth of the frame's samples. It
+  uploads only what the frame draws (`RenderStats::buffer_bytes_uploaded`:
+  about 1 MB at 500 lines and at 5,000, for a screenful), but each glyph is
+  six `MsdfVertex`es of 88 bytes, of which only position and uv differ: 528
+  bytes a glyph. One instance a glyph (its rect, uv rect, fill, clip,
+  outline) would be about a sixth of that, and a sixth of the vertex
+  building in `append_placements`. Changes the MSDF pipeline and shader;
+  for Bart to decide.
 - [ ] **P3 — Variable font weights.** The atlas keys glyphs by
   `(font id, glyph id)` and rasterises from the font file, so a variable font
   draws every weight at its default instance. Carry the weight into the
