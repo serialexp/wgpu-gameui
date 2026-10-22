@@ -13,7 +13,8 @@
 //!   sub line under it, and on the right a compact hue [`Badge`](crate::Badge) over a meta text (an
 //!   age). An item that asks the user something says what in amber sans in
 //!   the sub line's place. While hovered, the meta gives way to a ghost `⋯`
-//!   key that asks for the item's menu. The selected item wears the accent.
+//!   key that asks for the item's menu. The selected item wears the held accent
+//!   chip, dark enough that its status dot still reads.
 //! - **More** ([`GroupMore`], 23 px): a quiet mono "… 3 older" row with a
 //!   meta on the right. Clicking it asks to show what it hides.
 //!
@@ -95,9 +96,6 @@ const KEY_SIZE: f32 = 15.0;
 const KEY_OVERHANG: f32 = 3.0;
 /// Width of a "more" row's leading `…` column.
 const MORE_MARK_W: f32 = 6.0;
-/// Top and bottom lines on the selected item (`--row-select-inset`).
-const SELECT_TOP: [f32; 4] = [1.0, 1.0, 1.0, 0.28];
-const SELECT_BOTTOM: [f32; 4] = [0.0, 0.0, 0.0, 0.25];
 /// The carve under header names (`--carve`).
 const CARVE_ALPHA: u8 = 128;
 /// A header's asking count: its dot, the dot's glow, and the gap to the
@@ -908,10 +906,9 @@ fn draw_header(list: &mut DrawList, s: &StyleResolver, h: &GroupHeader, p: RowPa
 
 fn draw_item(list: &mut DrawList, s: &StyleResolver, item: &GroupItem, p: RowPaint) {
     let r = p.rect;
+    let chrome = s.group_list();
     if p.selected {
-        list.quad(r.x, r.y, r.width, r.height, s.color(StyleKey::Accent));
-        list.quad(r.x, r.y, r.width, 1.0, SELECT_TOP);
-        list.quad(r.x, r.y + ITEM_BODY - 1.0, r.width, 1.0, SELECT_BOTTOM);
+        chrome.paint_selected(list, r, r.height - ITEM_BODY);
     } else if p.hovered || p.cursor {
         list.quad(r.x, r.y, r.width, r.height, s.color(StyleKey::RowHover));
     }
@@ -927,7 +924,7 @@ fn draw_item(list: &mut DrawList, s: &StyleResolver, item: &GroupItem, p: RowPai
     let text_x = left + STATUS_DOT_SIZE + ITEM_GAP;
     let right = r.right() - ITEM_PAD_RIGHT;
     let (title_ink, sub_ink) = if p.selected {
-        (s.color(StyleKey::OnAccent), s.ink(Ink::OnAccentSecond))
+        (chrome.selected_ink, chrome.selected_sub_ink)
     } else if item.dim {
         (s.ink(Ink::Body2), s.ink(Ink::Caption))
     } else {
@@ -938,10 +935,13 @@ fn draw_item(list: &mut DrawList, s: &StyleResolver, item: &GroupItem, p: RowPai
     let meta_size = s.text_size(TextSize::Meta);
     let mut column = 0.0f32;
     if let Some((text, hue)) = item.chip {
-        let chip = Badge::new(BadgeTone::Hue(hue))
-            .compact()
-            .on_accent(p.selected)
-            .draw_right(list, s, right, r.y + CHIP_TOP, text);
+        let chip = Badge::new(BadgeTone::Hue(hue)).compact().draw_right(
+            list,
+            s,
+            right,
+            r.y + CHIP_TOP,
+            text,
+        );
         column = column.max(chip.width);
     }
     const { assert!(CHIP_TOP + BADGE_COMPACT_HEIGHT < META_CY) };
@@ -1055,7 +1055,7 @@ fn draw_more(list: &mut DrawList, s: &StyleResolver, m: &GroupMore, p: RowPaint)
 mod tests {
     use super::*;
     use crate::Theme;
-    use crate::color::text_color;
+    use crate::color::{HUE_ACCENT, oklch, text_color};
 
     const RECT: Rect = Rect {
         x: 0.0,
@@ -1355,9 +1355,8 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_item_wears_the_accent_and_on_accent_ink() {
+    fn the_selected_item_wears_the_held_accent_chip_and_its_ink() {
         let rows = rows();
-        let theme = Theme::default();
         let (list, _) = frame(
             &rows,
             GroupList::new(),
@@ -1365,14 +1364,21 @@ mod tests {
             &mut GroupListState::new(),
             &mut at(-1.0, -1.0),
         );
+        let chip = (0..list.chrome_instance_count())
+            .filter_map(|i| list.chrome_instance(i))
+            .find(|q| q.bg == oklch(0.42, 0.07, HUE_ACCENT, 1.0));
+        assert_eq!(
+            chip.map(|q| q.bg2),
+            Some(oklch(0.52, 0.09, HUE_ACCENT, 1.0)),
+            "the fill runs from the chip's top to its bottom"
+        );
         assert_eq!(
             text(&list, "Session context menu").color,
-            text_color(theme.on_accent)
+            text_color(oklch(0.93, 0.08, HUE_ACCENT, 1.0))
         );
-        let s = StyleResolver::new(&theme);
         assert_eq!(
             text(&list, "@merry-tiger · 447 msgs").color,
-            text_color(s.ink(Ink::OnAccentSecond))
+            text_color(oklch(0.84, 0.05, HUE_ACCENT, 1.0))
         );
     }
 

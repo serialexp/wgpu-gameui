@@ -1,6 +1,7 @@
 //! Fixed-size values for composable surface backgrounds, borders, and edge lines.
 
 use crate::DrawList;
+use crate::color::HUE_ACCENT;
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 
@@ -266,6 +267,30 @@ pub struct GroupListChrome {
     pub toolbar_rule: EdgeStyle,
     /// Light line just below the toolbar rule (`--rule-hi`).
     pub toolbar_highlight: EdgeStyle,
+    /// Selected item fill: the held accent chip (`--accent-chip-top` to
+    /// `--accent-chip-bottom`), dark enough that status dots read on it.
+    pub selected: Background,
+    /// Light line just inside a selected item's top edge.
+    pub selected_highlight: EdgeStyle,
+    /// Dark line just inside a selected item's bottom edge, above its rule.
+    pub selected_shade: EdgeStyle,
+    /// Title ink on a selected item (`--accent-chip-ink`).
+    pub selected_ink: [f32; 4],
+    /// Sub-line and meta ink on a selected item.
+    pub selected_sub_ink: [f32; 4],
+}
+
+impl GroupListChrome {
+    /// Paint a selected row over `rect`: [`Self::selected`], then its light
+    /// top line and its dark bottom line, which sits just above the row's
+    /// bottom `rule` px (where its rule goes; `0` for a row without one).
+    pub fn paint_selected(&self, list: &mut DrawList, rect: Rect, rule: f32) {
+        list.paint_quad_background(rect, self.selected, CornerRadii::uniform(0.0));
+        let (hi, shade) = (self.selected_highlight, self.selected_shade);
+        list.quad(rect.x, rect.y, rect.width, hi.thickness, hi.color);
+        let bottom = rect.bottom() - rule - shade.thickness;
+        list.quad(rect.x, bottom, rect.width, shade.thickness, shade.color);
+    }
 }
 
 /// Chrome of a [`Timeline`](crate::Timeline): its opaque ruler and label
@@ -832,6 +857,15 @@ impl Default for ChromeTheme {
                     toolbar: Background::Solid([0.0, 0.0, 0.0, 0.25]),
                     toolbar_rule: edge([0.0, 0.0, 0.0, 0.6]),
                     toolbar_highlight: edge([1.0, 1.0, 1.0, 0.06]),
+                    selected: Background::LinearGradient {
+                        start: oklch(0.42, 0.07, HUE_ACCENT, 1.0),
+                        end: oklch(0.52, 0.09, HUE_ACCENT, 1.0),
+                        axis: GradientAxis::Vertical,
+                    },
+                    selected_highlight: edge(oklch(0.62, 0.09, HUE_ACCENT, 0.6)),
+                    selected_shade: edge(oklch(0.3, 0.06, HUE_ACCENT, 1.0)),
+                    selected_ink: oklch(0.93, 0.08, HUE_ACCENT, 1.0),
+                    selected_sub_ink: oklch(0.84, 0.05, HUE_ACCENT, 1.0),
                 }
             },
             timeline: {
@@ -1254,6 +1288,11 @@ impl Visit for GroupListChrome {
             toolbar,
             toolbar_rule,
             toolbar_highlight,
+            selected,
+            selected_highlight,
+            selected_shade,
+            selected_ink,
+            selected_sub_ink,
         } = self;
         header.visit(v);
         header_highlight.visit(v);
@@ -1262,6 +1301,11 @@ impl Visit for GroupListChrome {
         toolbar.visit(v);
         toolbar_rule.visit(v);
         toolbar_highlight.visit(v);
+        selected.visit(v);
+        selected_highlight.visit(v);
+        selected_shade.visit(v);
+        selected_ink.visit(v);
+        selected_sub_ink.visit(v);
     }
 }
 
