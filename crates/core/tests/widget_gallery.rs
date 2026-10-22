@@ -3057,8 +3057,10 @@ fn render_widget_gallery() {
         {
             flow.section(list, Category::Foundations, "Icons", "Phosphor, MSDF");
 
-            // The full curated set at a single readable size.
-            for &icon in PhosphorIcon::ALL {
+            // A sample spread across the whole set at a single readable size:
+            // all of Phosphor's icons would make the section several pages tall.
+            let every = PhosphorIcon::ALL.len().div_ceil(64);
+            for &icon in PhosphorIcon::ALL.iter().step_by(every) {
                 let r = flow.cell(list, icon.name(), 32.0, 32.0);
                 Icon::new(icon).draw(r, list);
             }
