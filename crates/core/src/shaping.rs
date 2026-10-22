@@ -436,9 +436,10 @@ struct CachedLayout {
 }
 
 /// Layouts keyed by spec, then content, so a lookup borrows the content as
-/// `&str` and allocates nothing.
+/// `&str` and allocates nothing. A lookup hashes the whole content, so the
+/// inner maps hash with Fx rather than SipHash.
 struct LayoutCache {
-    map: HashMap<LayoutKey, HashMap<String, CachedLayout>>,
+    map: HashMap<LayoutKey, HashMap<String, CachedLayout, rustc_hash::FxBuildHasher>>,
     /// The bytes kept before the least recently used layouts go
     /// ([`LAYOUT_BUDGET`]), and what eviction trims down to.
     budget: usize,
@@ -493,6 +494,17 @@ impl LayoutCache {
         content: &str,
         font_system: &mut FontSystem,
     ) -> &ShapedLayout {
+        &self.entry(spec, content, font_system).layout
+    }
+
+    /// The entry for `content` under `spec`, its layout shaped now if it
+    /// isn't kept, marked as just used.
+    fn entry(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        font_system: &mut FontSystem,
+    ) -> &mut CachedLayout {
         let key = spec.key();
         self.uses += 1;
         let kept = self
@@ -536,7 +548,7 @@ impl LayoutCache {
             .and_then(|inner| inner.get_mut(content))
             .expect("the layout was kept or just shaped");
         entry.last_used = self.uses;
-        &entry.layout
+        entry
     }
 
     /// `content` laid out under `spec` from the paragraphs of the long layout
@@ -575,12 +587,7 @@ impl LayoutCache {
         slot: fn(&mut CachedLayout) -> &mut Option<Arc<[T]>>,
         make: fn(&ShapedLayout) -> Vec<T>,
     ) -> Arc<[T]> {
-        self.get_or_shape(spec, content, font_system);
-        let entry = self
-            .map
-            .get_mut(&spec.key())
-            .and_then(|inner| inner.get_mut(content))
-            .expect("the layout was just looked up");
+        let entry = self.entry(spec, content, font_system);
         if let Some(kept) = slot(entry) {
             return Arc::clone(kept);
         }

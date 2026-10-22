@@ -33,6 +33,10 @@ ttf-parser = "0.25"
 # TrueType/PostScript interpreter and the autohinter, blue zones and all) and is
 # already in the tree transitively via cosmic-text. See `render::glyph_msdf`.
 skrifa = "0.44"
+# A fast hasher for the layout cache, which hashes a text's whole content on
+# every lookup: SipHash over a 250 KB field was most of an idle frame. Already
+# in the tree transitively via cosmic-text.
+rustc-hash = "2"
 nalgebra = "0.34"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # The IBM Plex font files live under assets/fonts/ibm-plex/ and are embedded

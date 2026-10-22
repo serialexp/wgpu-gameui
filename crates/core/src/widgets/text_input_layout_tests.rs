@@ -357,3 +357,36 @@ fn a_multi_line_field_shapes_nothing_while_idle_and_once_per_edit() {
             .with_value("first line\nsecond line, long enough to wrap in the field"),
     );
 }
+
+#[test]
+fn a_selection_over_a_long_field_draws_only_the_lines_in_view() {
+    let value = (0..2_000)
+        .map(|i| format!("line {i} of the field"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let len = value.len();
+    let mut ti = TextInput::new(0.0, 0.0, 300.0, 200.0)
+        .with_multiline(true)
+        .with_value(value);
+    let mut focus = FocusState::new();
+    // The caret at the end, so the field scrolls to its last lines.
+    ti.cursor_pos = len;
+    ti.selection_start = None;
+    let plain = idle(&mut ti, &mut focus).prim_counts().chrome_instances;
+    ti.selection_start = Some(0);
+    let mut list = idle(&mut ti, &mut focus);
+    let selected = list.prim_counts().chrome_instances;
+    let block = list
+        .texts
+        .iter()
+        .find(|block| !block.content.is_empty())
+        .expect("the field drew its text")
+        .clone();
+    let line_height = list.caret_layout(&block)[0].line_height;
+    let in_view = (200.0 / line_height).ceil() as usize + 1;
+    let drawn = selected - plain;
+    assert!(
+        (1..=in_view).contains(&drawn),
+        "{drawn} selection rects for at most {in_view} lines in view"
+    );
+}

@@ -430,6 +430,11 @@ harden those foundations rather than create parallel replacements.
   numbers" in `docs/design/shared-text-layout.md`). Skip the lines wholly
   outside the clip (lines are sorted by `top`, so a binary search finds the
   first in view).
+- [ ] **P3 — An idle frame of one focused field uploads a lot.** A sample of
+  the focused 5,000-line field's idle frame (2026-10-21, with the clip
+  culling in) still has `Queue::write_buffer` copying about a sixth of the
+  frame's samples, for a screenful of glyphs. Find which buffer it is and
+  whether it uploads more than the frame drew.
 - [ ] **P3 — Variable font weights.** The atlas keys glyphs by
   `(font id, glyph id)` and rasterises from the font file, so a variable font
   draws every weight at its default instance. Carry the weight into the

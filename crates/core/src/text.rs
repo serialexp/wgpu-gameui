@@ -2440,11 +2440,30 @@ pub struct CaretPos {
     pub line_height: f32,
 }
 
+/// The entries of `layout` on visual line `line`, given each entry's line: a
+/// caret or visual layout keeps its entries line by line, top to bottom.
+pub(crate) fn on_line<T>(layout: &[T], line: usize, line_of: fn(&T) -> usize) -> &[T] {
+    let start = layout.partition_point(|e| line_of(e) < line);
+    let len = layout[start..].partition_point(|e| line_of(e) == line);
+    &layout[start..start + len]
+}
+
 /// The caret position at (or just after) `byte`: the first entry whose byte is
 /// `>= byte`, falling back to the last entry. Valid cursor positions always have
 /// an exact match because every cluster boundary is recorded.
 pub fn caret_for_byte(layout: &[CaretPos], byte: usize) -> CaretPos {
-    layout
+    // A layout keeps its lines in order, and they hold ascending runs of the
+    // text, so every caret of a line before the first one reaching `byte` is
+    // before it. Only within a line, where right-to-left text keeps its
+    // carets in visual order, are the bytes out of order: find that line,
+    // then the caret on it.
+    let reaches = |p: &CaretPos| {
+        on_line(layout, p.line, |q| q.line)
+            .iter()
+            .any(|q| q.byte >= byte)
+    };
+    let line_start = layout.partition_point(|p| !reaches(p));
+    layout[line_start..]
         .iter()
         .copied()
         .find(|p| p.byte >= byte)
@@ -2473,16 +2492,17 @@ pub fn byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
     } else if y >= last.line_top + last.line_height {
         last.line
     } else {
+        // Lines are kept top to bottom, so the first caret whose line ends
+        // below `y` is on the line holding it, if any does.
         layout
-            .iter()
-            .find(|p| y >= p.line_top && y < p.line_top + p.line_height)
-            .map(|p| p.line)
-            .unwrap_or(last.line)
+            .get(layout.partition_point(|p| p.line_top + p.line_height <= y))
+            .filter(|p| y >= p.line_top)
+            .map_or(last.line, |p| p.line)
     };
 
     let mut best_byte = 0usize;
     let mut best_dx = f32::MAX;
-    for p in layout.iter().filter(|p| p.line == target_line) {
+    for p in on_line(layout, target_line, |p| p.line) {
         let dx = (p.x - x).abs();
         if dx < best_dx {
             best_dx = dx;
@@ -2498,12 +2518,11 @@ pub fn byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
 /// character. What a double-click picks its word around.
 pub fn byte_under_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
     let caret = byte_at_point(layout, x, y);
-    let line = caret_for_byte(layout, caret).line;
-    layout
-        .iter()
-        .filter(|p| p.line == line && p.x <= x)
+    let line = on_line(layout, caret_for_byte(layout, caret).line, |p| p.line);
+    line.iter()
+        .filter(|p| p.x <= x)
         .max_by(|a, b| a.x.total_cmp(&b.x))
-        .or_else(|| layout.iter().find(|p| p.line == line))
+        .or_else(|| line.first())
         .map_or(0, |p| p.byte)
 }
 
@@ -2525,7 +2544,7 @@ pub fn byte_on_adjacent_line(layout: &[CaretPos], byte: usize, dir: i32, desired
 
     let mut best_byte = byte;
     let mut best_dx = f32::MAX;
-    for p in layout.iter().filter(|p| p.line == target) {
+    for p in on_line(layout, target, |p| p.line) {
         let dx = (p.x - desired_x).abs();
         if dx < best_dx {
             best_dx = dx;
@@ -2586,12 +2605,12 @@ pub fn selection_rects(glyphs: &[VisualGlyph], sel_start: usize, sel_end: usize)
     if sel_start >= sel_end || glyphs.is_empty() {
         return out;
     }
-    let max_line = glyphs.iter().map(|g| g.line).max().unwrap_or(0);
     const EPS: f32 = 0.5; // merge near-touching advances into one rect
-    for line in 0..=max_line {
-        let mut spans: Vec<(f32, f32, f32, f32)> = glyphs
+    // The glyphs are kept line by line.
+    for line in glyphs.chunk_by(|a, b| a.line == b.line) {
+        let mut spans: Vec<(f32, f32, f32, f32)> = line
             .iter()
-            .filter(|g| g.line == line && g.byte_start < sel_end && g.byte_end > sel_start)
+            .filter(|g| g.byte_start < sel_end && g.byte_end > sel_start)
             .map(|g| (g.x, g.x + g.w, g.line_top, g.line_height))
             .collect();
         if spans.is_empty() {
@@ -3461,6 +3480,10 @@ impl TextBlock {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "text_lookup_tests.rs"]
+mod lookup_tests;
 
 #[cfg(test)]
 mod tests {

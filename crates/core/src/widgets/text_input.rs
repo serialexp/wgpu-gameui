@@ -11,7 +11,7 @@ use crate::TextUnit;
 use crate::layout::Rect;
 use crate::text::{
     CaretPos, TextBlock, TextSpan, Underline, VisualGlyph, WrapMode, byte_at_point,
-    byte_on_adjacent_line, byte_under_point, caret_for_byte, selection_rects,
+    byte_on_adjacent_line, byte_under_point, caret_for_byte, on_line, selection_rects,
     visual_caret_neighbor, visual_caret_pos, visual_hit,
 };
 #[cfg(feature = "syntax-highlighting")]
@@ -128,25 +128,16 @@ fn line_bounds(layout: &[CaretPos], byte: usize) -> (usize, usize) {
     if layout.is_empty() {
         return (byte, byte);
     }
-    let line = caret_for_byte(layout, byte).line;
-    let mut lo = usize::MAX;
-    let mut hi = 0usize;
-    for p in layout.iter().filter(|p| p.line == line) {
-        lo = lo.min(p.byte);
-        hi = hi.max(p.byte);
-    }
-    if lo == usize::MAX {
-        (byte, byte)
-    } else {
-        (lo, hi)
-    }
+    let line = on_line(layout, caret_for_byte(layout, byte).line, |p| p.line);
+    let bytes = || line.iter().map(|p| p.byte);
+    bytes().min().zip(bytes().max()).unwrap_or((byte, byte))
 }
 
 /// The `(first_byte, last_byte)` byte range of a specific visual `line`.
 fn line_byte_range(layout: &[CaretPos], line: usize) -> (usize, usize) {
     let mut lo = usize::MAX;
     let mut hi = 0usize;
-    for p in layout.iter().filter(|p| p.line == line) {
+    for p in on_line(layout, line, |p| p.line) {
         lo = lo.min(p.byte);
         hi = hi.max(p.byte);
     }
@@ -157,7 +148,7 @@ fn line_byte_range(layout: &[CaretPos], line: usize) -> (usize, usize) {
 /// last caret x on that line.
 fn line_x_for_byte(layout: &[CaretPos], line: usize, byte: usize) -> f32 {
     let mut last = 0.0;
-    for p in layout.iter().filter(|p| p.line == line) {
+    for p in on_line(layout, line, |p| p.line) {
         if p.byte >= byte {
             return p.x;
         }
@@ -1292,8 +1283,21 @@ impl TextInput {
                 self.selection_range().filter(|(start, end)| start < end)
             {
                 if multiline {
-                    let start_line = caret_for_byte(&render_layout, sel_start).line;
-                    let end_line = caret_for_byte(&render_layout, sel_end).line;
+                    // The selected lines in view: the first ending below the
+                    // top of the field, through the last starting above its
+                    // bottom.
+                    let above = |p: &CaretPos| p.line_top + p.line_height <= scroll;
+                    let first_shown = render_layout
+                        .get(render_layout.partition_point(above))
+                        .map_or(usize::MAX, |p| p.line);
+                    let last_shown = render_layout
+                        .partition_point(|p| p.line_top < scroll + inner_rect.height)
+                        .checked_sub(1)
+                        .map_or(0, |i| render_layout[i].line);
+                    let start_line = caret_for_byte(&render_layout, sel_start)
+                        .line
+                        .max(first_shown);
+                    let end_line = caret_for_byte(&render_layout, sel_end).line.min(last_shown);
                     for line in start_line..=end_line {
                         let (line_lo, line_hi) = line_byte_range(&render_layout, line);
                         let a = sel_start.max(line_lo);
@@ -1309,11 +1313,9 @@ impl TextInput {
                         } else {
                             line_x_for_byte(&render_layout, line, b)
                         };
-                        let lt = render_layout
-                            .iter()
-                            .find(|p| p.line == line)
-                            .map(|p| p.line_top)
-                            .unwrap_or(0.0);
+                        let lt = on_line(&render_layout, line, |p| p.line)
+                            .first()
+                            .map_or(0.0, |p| p.line_top);
                         list.quad(
                             text_x + x1,
                             text_top - scroll + lt,
