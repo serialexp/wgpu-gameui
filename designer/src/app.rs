@@ -433,7 +433,7 @@ impl Designer {
 
         self.menu.end_frame(&mut self.focus);
         self.dropdowns.end_frame(&mut self.focus);
-        self.scene.end_frame();
+        self.scene.end_frame(layers.layers());
         self.focus.end_frame(dialog_layer);
 
         if let Some(item) = activated {

@@ -207,10 +207,6 @@ pub struct UiState {
     /// Whether the tree's single Tab stop has been registered this frame (so it
     /// joins the Tab ring exactly once even across many tree rows).
     tree_focus_registered: bool,
-    /// The topmost modal layer [`block_under_layer`](Self::block_under_layer)
-    /// was told about this frame: [`end_frame`](Self::end_frame) keeps Tab
-    /// inside it. Reset by [`begin_frame`](Self::begin_frame).
-    top_modal: Option<usize>,
     /// Hover/press color-transition clock for animated verbs. Ticked once per
     /// frame by [`begin_frame`](Self::begin_frame) with the caller-supplied `dt`;
     /// a `dt` of `0.0` or `theme.animation_duration == 0` (the default) keeps
@@ -345,7 +341,6 @@ impl UiState {
         self.item_gap = theme.spacing;
         self.next_auto_id = 0;
         self.tree_focus_registered = false;
-        self.top_modal = None;
         self.app_deadlines.clear();
         // One sanitized clock for every timed source this frame: the animation
         // easing, toast aging, and tooltip hover-delay. Ticking here (rather
@@ -398,22 +393,30 @@ impl UiState {
     }
 
     /// Per-frame teardown: resolve tree arrow-navigation (gated on the tree
-    /// holding focus), hand each popup's pointer claim to focus, then resolve
-    /// focus/Tab navigation against the widgets registered this frame. Call after
-    /// building the frame's verbs.
+    /// holding focus), hand each popup's pointer claim to focus, resolve
+    /// focus/Tab navigation against the widgets registered this frame, and
+    /// end the interaction scene's frame. Call after building the frame's
+    /// verbs, with every layer the frame pushed ([`LayerStack::layers`]), or
+    /// `&[]` for a host that draws into one list: each keeps the pointer from
+    /// what is under it (see [`InteractionScene::end_frame`]), and while a
+    /// modal is up, Tab stays among its focusables (widgets drawn with its
+    /// index as their [`active_layer`](crate::DrawContext::active_layer)).
     ///
     /// Order matters here too: the dropdown reports its row claim to
     /// [`FocusState`] **before** focus resolves click-elsewhere blur, so choosing
     /// an option does not blur the widget the option acts on.
-    pub fn end_frame(&mut self) -> crate::frame_result::UiFrameResult {
+    pub fn end_frame(&mut self, layers: &[crate::Layer]) -> crate::frame_result::UiFrameResult {
         // Resolve tree nav before Tab moves focus, using this frame's focus owner.
         let tree_focused = self.focus.is_focused(TREE_FOCUS_ID);
         self.tree.end_frame(tree_focused);
         // Dismiss the open dropdown on Escape or click-outside; a claimed row
         // click is handed to focus first so it does not blur.
         self.dropdowns.end_frame(&mut self.focus);
-        self.focus.end_frame(self.top_modal);
-        self.interactions.end_frame();
+        let top_modal = layers
+            .iter()
+            .rposition(|layer| layer.kind == LayerKind::Modal);
+        self.focus.end_frame(top_modal);
+        self.interactions.end_frame(layers);
         // Aggregate every timed source into the host-facing result: an
         // in-flight transition, a visible toast, a pending tooltip hover, a
         // gliding scroll, or an app-registered deadline each keep the frame loop
@@ -485,42 +488,7 @@ impl UiState {
     /// Returns the layer index to pass to
     /// [`draw_dropdown_layer`](Self::draw_dropdown_layer).
     pub fn push_dropdown_layer(&mut self, layers: &mut LayerStack) -> Option<usize> {
-        let popup = self.dropdowns.push_open_layer(layers);
-        if let Some(index) = popup {
-            self.block_under_layer(layers, index);
-        }
-        popup
-    }
-
-    /// Tell the interaction scene and the Tab ring about `layers`' layer
-    /// `index`, the way [`LayerStack::input_for_layer`] routes input: a
-    /// modal takes the pointer from every layer below it, a popup only over
-    /// its rect, and a tooltip from none. While a modal is up, Tab stays
-    /// among its focusables (widgets drawn with its index as their
-    /// [`active_layer`](crate::DrawContext::active_layer)).
-    ///
-    /// [`UiContext::interactive_layer`], [`UiContext::modal_begin`] /
-    /// [`popup_begin`](UiContext::popup_begin) and
-    /// [`push_dropdown_layer`](Self::push_dropdown_layer) call this
-    /// themselves; a host that draws into a layer some other way (a dialog
-    /// over its own list, the toast layer) calls it once per frame, any time
-    /// before [`end_frame`](Self::end_frame). Telling it twice changes
-    /// nothing. A layer that shapes its own blocking — the [`MenuBar`](crate::MenuBar)'s
-    /// viewport layer, which leaves the bar itself live — is not one to tell.
-    pub fn block_under_layer(&mut self, layers: &LayerStack, index: usize) {
-        let Some(layer) = layers.layers().get(index) else {
-            debug_assert!(false, "UiState::block_under_layer: no layer {index}");
-            return;
-        };
-        let scene_layer = index as u32 + 1;
-        match layer.kind {
-            LayerKind::Modal => {
-                self.interactions.block(scene_layer, None);
-                self.top_modal = self.top_modal.max(Some(index));
-            }
-            LayerKind::Popup => self.interactions.block(scene_layer, Some(layer.rect)),
-            LayerKind::Tooltip => {}
-        }
+        self.dropdowns.push_open_layer(layers)
     }
 
     /// Draw the open dropdown's floating option list into the popup layer pushed
@@ -766,8 +734,8 @@ impl<'a> UiContext<'a> {
     /// drawing into `layers`' layer `index`, which the host pushed — a
     /// dialog's modal, a popover's popup. Its widgets are hit-tested and
     /// Tab-ordered as that layer's: the layer keeps the pointer from those
-    /// below it ([`UiState::block_under_layer`]), and while it is the top
-    /// modal, Tab stays among its widgets. `input` is the layer's own,
+    /// below it, and while it is the top modal, Tab stays among its widgets
+    /// (both once the frame ends with the layer, [`UiState::end_frame`]). `input` is the layer's own,
     /// [`LayerStack::input_for_layer`]. Several contexts may draw into the
     /// same layer in one frame.
     pub fn interactive_layer(
@@ -777,13 +745,11 @@ impl<'a> UiContext<'a> {
         state: &'a mut UiState,
         theme: &'a Theme,
     ) -> Self {
-        state.block_under_layer(layers, index);
         Self::interactive(&mut layers.layers_mut()[index].list, input, state, theme).on_layer(index)
     }
 
     /// Draw as layer `index`'s widgets: for a context built over that
-    /// layer's own list (`&mut layers.layers_mut()[index].list`), which the
-    /// host tells [`UiState::block_under_layer`] about.
+    /// layer's own list (`&mut layers.layers_mut()[index].list`).
     /// [`interactive_layer`](Self::interactive_layer) is both in one call.
     /// Without it, the widgets count as the base list's: below the layer's
     /// blocker, where they take no pointer.
@@ -1529,6 +1495,25 @@ impl<'a> UiContext<'a> {
         self.backend.list_mut()
     }
 
+    /// Whether `rect`, in the current local space (where [`list`](Self::list)
+    /// draws), is hovered, pressed or clicked this frame, registering it as
+    /// `id` in the hit scene: whatever is drawn over it, on this layer or a
+    /// higher one, keeps the pointer from it. Inside a disabled scope it still
+    /// covers what lies under it, but answers idle. See
+    /// [`Sensor::sense`](crate::Sensor::sense).
+    pub fn sense(&mut self, id: impl Into<crate::WidgetId>, rect: Rect) -> crate::Response {
+        let Some((input, _)) = self.interactive_refs() else {
+            return crate::Response::default();
+        };
+        let layer = self.drawing_layers.last().copied();
+        let enabled = !self.input_disabled;
+        let scene = self
+            .state
+            .as_deref_mut()
+            .map(|state| &mut state.interactions);
+        crate::Sensor::new(scene, input, layer).sense(self.backend.list_mut(), id, rect, enabled)
+    }
+
     // ------------------------------------------------------------------
     // Non-interactive themed verbs (no input/state, theme for colours)
     // ------------------------------------------------------------------
@@ -1873,17 +1858,19 @@ impl<'a> UiContext<'a> {
         let width = w.unwrap_or(height);
         let face = (height - styles.scalar(StyleKey::Travel)).max(0.0);
         self.icon_key_in(IconKey::new(icon, face), width, height)
+            .clicked
     }
 
     /// Draw an [`IconKey`] with a `size` px face ([`IconKey::HEADER`],
-    /// [`IconKey::STATUS`] or [`IconKey::TOOLBAR`]) in `tone`, and report
-    /// whether it was clicked (or activated from the keyboard while focused).
-    /// The key joins the Tab ring. Auto-advances by the key's height (the face
-    /// plus the key travel).
+    /// [`IconKey::STATUS`] or [`IconKey::TOOLBAR`]) in `tone`, and answer for
+    /// it: `clicked` when it was clicked (or activated from the keyboard while
+    /// focused), `hovered` while it has the pointer (for its tooltip). The key
+    /// joins the Tab ring. Auto-advances by the key's height (the face plus
+    /// the key travel).
     #[cfg(feature = "phosphor-icons")]
-    pub fn icon_key(&mut self, icon: PhosphorIcon, size: f32, tone: Tone) -> bool {
+    pub fn icon_key(&mut self, icon: PhosphorIcon, size: f32, tone: Tone) -> crate::Response {
         let Some((_, theme)) = self.interactive_refs() else {
-            return false;
+            return crate::Response::default();
         };
         let key = IconKey::new(icon, size).tone(tone);
         let styles = StyleResolver::with_overlay(
@@ -1895,12 +1882,12 @@ impl<'a> UiContext<'a> {
     }
 
     /// Place `key` in a `width`×`height` cell of the flow, draw it with an
-    /// automatic focus id, and advance.
+    /// automatic focus id, advance, and answer for it.
     #[cfg(feature = "phosphor-icons")]
-    fn icon_key_in(&mut self, key: IconKey, width: f32, height: f32) -> bool {
+    fn icon_key_in(&mut self, key: IconKey, width: f32, height: f32) -> crate::Response {
         let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
-            None => return false,
+            None => return crate::Response::default(),
         };
         let world = self.place_rect(width, height);
         let inv = self.backend.list_mut().current_transform().inverse();
@@ -1910,7 +1897,7 @@ impl<'a> UiContext<'a> {
             .as_mut()
             .map(|s| s.auto_id())
             .expect("icon keys require interactive state");
-        let clicked = {
+        let response = {
             let list = self.backend.list_mut();
             let state = self
                 .state
@@ -1929,10 +1916,10 @@ impl<'a> UiContext<'a> {
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
                 .with_animations(anim)
                 .with_interactions(interactions);
-            key.focusable(fid).draw(local, &mut ctx).clicked
+            key.focusable(fid).draw(local, &mut ctx)
         };
         self.advance(height);
-        clicked
+        response
     }
 
     /// Reserve an interactive `w`×`h` region in the layout flow and report its
@@ -3604,9 +3591,6 @@ impl<'a> UiContext<'a> {
                 let index = s.push_modal(rect);
                 self.open_layer_kinds.push(LayerKind::Modal);
                 self.drawing_layers.push(index);
-                if let Some(state) = self.state.as_mut() {
-                    state.block_under_layer(s, index);
-                }
             }
         }
     }
@@ -3633,9 +3617,6 @@ impl<'a> UiContext<'a> {
                 let index = s.push_popup(rect);
                 self.open_layer_kinds.push(LayerKind::Popup);
                 self.drawing_layers.push(index);
-                if let Some(state) = self.state.as_mut() {
-                    state.block_under_layer(s, index);
-                }
             }
         }
     }
@@ -3957,39 +3938,45 @@ mod tests {
     #[test]
     fn enabled_scope_re_enables_inside_disabled() {
         let theme = Theme::default();
-        let input = click_at(10.0, 10.0);
-        let mut state = UiState::new();
-        let mut list = DrawList::new();
-        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-        // An enabled_scope(true) inside a disabled scope re-enables its body...
-        let mut clicked = false;
-        ui.disabled_scope(|ui| {
-            ui.enabled_scope(true, |ui| {
-                clicked = ui.text_button("OK", Some(100.0), Some(30.0));
-            });
-            assert!(
-                clicked,
-                "enabled_scope(true) re-enables inside a disabled scope"
-            );
-            // ...and restores the disabled state for siblings after it.
-            let also_clicked = ui.text_button("OK2", Some(100.0), Some(30.0));
-            assert!(
-                !also_clicked,
-                "disabled state is restored after the inner scope"
-            );
-        });
+        // An enabled_scope(true) inside a disabled scope re-enables its body,
+        // and restores the disabled state for siblings after it. The scope
+        // restores the cursor, so the sibling is moved below the first
+        // button; drawn on top of it, being disabled, it would cover it.
+        let clicks = |y: f32| {
+            after_a_frame(&theme, click_at(10.0, y), |ui| {
+                let mut clicks = (false, false);
+                ui.disabled_scope(|ui| {
+                    ui.enabled_scope(true, |ui| {
+                        clicks.0 = ui.text_button("OK", Some(100.0), Some(30.0));
+                    });
+                    ui.advance_cursor(40.0);
+                    clicks.1 = ui.text_button("OK2", Some(100.0), Some(30.0));
+                });
+                clicks
+            })
+            .0
+        };
+        assert_eq!(
+            clicks(10.0),
+            (true, false),
+            "enabled_scope(true) re-enables inside a disabled scope"
+        );
+        assert_eq!(
+            clicks(50.0),
+            (false, false),
+            "disabled state is restored after the inner scope"
+        );
     }
 
     #[test]
     fn enabled_scope_true_runs_normally_outside_any_scope() {
         let theme = Theme::default();
-        let input = click_at(10.0, 10.0);
-        let mut state = UiState::new();
-        let mut list = DrawList::new();
-        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-        let mut clicked = false;
-        ui.enabled_scope(true, |ui| {
-            clicked = ui.text_button("OK", Some(100.0), Some(30.0));
+        let (clicked, _) = after_a_frame(&theme, click_at(10.0, 10.0), |ui| {
+            let mut clicked = false;
+            ui.enabled_scope(true, |ui| {
+                clicked = ui.text_button("OK", Some(100.0), Some(30.0));
+            });
+            clicked
         });
         assert!(clicked, "enabled_scope(true) is a no-op pass-through");
     }
@@ -4023,7 +4010,7 @@ mod tests {
                 over = ui.button(button, Some(100.0), Some(30.0));
             });
             drop(ui);
-            state.end_frame();
+            state.end_frame(&[]);
             clicks = (bottom, over);
         }
         clicks
@@ -4079,7 +4066,7 @@ mod tests {
             if drawn == Drawn::AfterBase {
                 over = draw_layer(&mut layers, &mut state);
             }
-            state.end_frame();
+            state.end_frame(layers.layers());
             clicks = (under, over);
         }
         clicks
@@ -4156,7 +4143,7 @@ mod tests {
                 ui.modal_end();
                 clicks = (under, over);
             }
-            state.end_frame();
+            state.end_frame(layers.layers());
             if frame == 1 {
                 assert!(!clicks.0, "the button behind the dialog takes no click");
             }
@@ -4179,9 +4166,8 @@ mod tests {
             let mut layers = LayerStack::new();
             let index = layers.push_modal(DIALOG);
             layers.pop_layer();
-            // A dialog with nothing in it draws no context: the host says
-            // which layer it pushed.
-            state.block_under_layer(&layers, index);
+            // A dialog with nothing in it draws no context: ending the
+            // frame with its layer is what keeps Tab inside it.
             let base_input = layers.input_for_base(&input);
             let layer_input = layers.input_for_layer(index, &input);
             {
@@ -4199,7 +4185,7 @@ mod tests {
                 );
                 ui.text_button("In the dialog", Some(100.0), Some(30.0));
             }
-            state.end_frame();
+            state.end_frame(layers.layers());
             focused.push(state.focus.focused());
         }
         focused
@@ -4230,9 +4216,8 @@ mod tests {
         for _ in 0..2 {
             UiContext::interactive_layer(&mut layers, index, &input, &mut state, &theme);
         }
-        state.block_under_layer(&layers, index);
+        state.end_frame(layers.layers());
         assert_eq!(state.interactions.duplicate_ids().count(), 0);
-        state.end_frame();
     }
 
     #[test]
@@ -4259,7 +4244,7 @@ mod tests {
             );
             ui.text_button("Last", Some(100.0), Some(30.0));
             drop(ui);
-            state.end_frame();
+            state.end_frame(&[]);
             focused.push(state.focus.focused());
         }
         assert_eq!(focused, [Some(AUTO_ID_BASE), Some(AUTO_ID_BASE + 3)]);
@@ -5003,6 +4988,82 @@ mod tests {
         i
     }
 
+    /// Draws `draw` for a frame with the pointer resting where `input` has
+    /// it, so the interaction scene has seen the widgets (one seen for the
+    /// first time doesn't take the pointer), then for a frame with `input`.
+    /// Returns what the second draw returned, and its draw list.
+    fn after_a_frame<R>(
+        theme: &Theme,
+        input: InputState,
+        mut draw: impl FnMut(&mut UiContext) -> R,
+    ) -> (R, DrawList) {
+        let mut state = UiState::new();
+        let mut resting = InputState {
+            mouse_x: input.mouse_x,
+            mouse_y: input.mouse_y,
+            ..InputState::default()
+        };
+        state.begin_frame(&mut resting, theme, 0.0, &crate::KeyboardNav);
+        let mut list = DrawList::new();
+        draw(&mut UiContext::interactive(
+            &mut list, &resting, &mut state, theme,
+        ));
+        state.end_frame(&[]);
+        let mut input = input;
+        state.begin_frame(&mut input, theme, 0.0, &crate::KeyboardNav);
+        let mut list = DrawList::new();
+        let out = draw(&mut UiContext::interactive(
+            &mut list, &input, &mut state, theme,
+        ));
+        state.end_frame(&[]);
+        (out, list)
+    }
+
+    #[test]
+    fn sense_answers_in_local_space_and_what_is_drawn_later_covers_it() {
+        let theme = Theme::default();
+        let back = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let sensed = |x: f32, y: f32| {
+            after_a_frame(
+                &theme,
+                InputState {
+                    mouse_x: x,
+                    mouse_y: y,
+                    mouse_clicked: true,
+                    mouse_down: true,
+                    ..InputState::default()
+                },
+                |ui| {
+                    ui.push();
+                    ui.translate(100.0, 50.0);
+                    let under = ui.sense(1, back);
+                    let over = ui.sense(2, Rect::new(20.0, 0.0, 20.0, 20.0));
+                    let mut disabled = crate::Response::default();
+                    ui.disabled_scope(|ui| {
+                        disabled = ui.sense(3, Rect::new(0.0, 30.0, 40.0, 20.0))
+                    });
+                    ui.pop();
+                    (under, over, disabled)
+                },
+            )
+            .0
+        };
+        // Moved by the translate: (110, 60) is inside the back rect.
+        let (under, over, _) = sensed(110.0, 60.0);
+        assert!(under.hovered && under.clicked, "{under:?}");
+        assert!(!over.hovered);
+        // Where the later one lies over it, the later one has the pointer.
+        let (under, over, _) = sensed(130.0, 60.0);
+        assert!(!under.hovered, "{under:?}");
+        assert!(over.hovered && over.clicked, "{over:?}");
+        // Unmoved, the pointer is nowhere near.
+        let (under, _, _) = sensed(10.0, 10.0);
+        assert!(!under.hovered);
+        // A disabled scope answers idle.
+        let (_, _, disabled) = sensed(110.0, 90.0);
+        assert!(!disabled.hovered && !disabled.clicked, "{disabled:?}");
+    }
+
     #[test]
     fn draw_only_ctx_has_no_interactive_fields() {
         let mut list = DrawList::new();
@@ -5196,12 +5257,10 @@ mod tests {
     #[test]
     fn icon_button_draws_vector_icon_and_uses_square_default() {
         let theme = Theme::default();
-        let input = click_at(10.0, 10.0);
-        let mut state = UiState::new();
-        let mut list = DrawList::new();
-        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-        assert!(ui.icon_button(PhosphorIcon::X, None, None));
-        drop(ui);
+        let (clicked, list) = after_a_frame(&theme, click_at(10.0, 10.0), |ui| {
+            ui.icon_button(PhosphorIcon::X, None, None)
+        });
+        assert!(clicked);
         assert_eq!(
             list.chrome_instance(0).unwrap().rect[2],
             theme.button_height
@@ -5219,15 +5278,16 @@ mod tests {
     fn icon_key_takes_the_face_plus_travel_and_clicks() {
         let theme = Theme::default();
         let travel = theme.get(StyleKey::Travel).unwrap().as_scalar().unwrap();
-        let input = click_at(8.0, 8.0);
-        let mut state = UiState::new();
-        let gap = state.item_gap;
-        let mut list = DrawList::new();
-        let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-        assert!(ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost));
-        assert_eq!(ui.cursor()[1], IconKey::HEADER + travel + gap);
-        assert!(!ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost));
-        drop(ui);
+        let gap = theme.spacing;
+        let ((first, below, second), list) = after_a_frame(&theme, click_at(8.0, 8.0), |ui| {
+            let first = ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost);
+            let below = ui.cursor()[1];
+            let second = ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost);
+            (first, below, second)
+        });
+        assert!(first.clicked && first.hovered, "{first:?}");
+        assert_eq!(below, IconKey::HEADER + travel + gap);
+        assert!(!second.clicked && !second.hovered, "{second:?}");
         assert_eq!(list.icons_msdf.len(), 2);
     }
 
@@ -5255,13 +5315,8 @@ mod tests {
             (t.x + 4.0, t.y + t.font_size * 0.5)
         };
 
-        let clicked = |x: f32, y: f32| {
-            let input = click_at(x, y);
-            let mut state = UiState::new();
-            let mut list = DrawList::new();
-            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-            ui.empty_state(&es, h)
-        };
+        let clicked =
+            |x: f32, y: f32| after_a_frame(&theme, click_at(x, y), |ui| ui.empty_state(&es, h)).0;
         assert!(clicked(label.0, label.1), "a click on the key");
         assert!(!clicked(4.0, 4.0), "a click on the box");
     }
@@ -5269,33 +5324,24 @@ mod tests {
     #[test]
     fn text_button_reports_click_inside_and_not_outside() {
         let theme = Theme::default();
-        // Inside.
-        {
-            let input = click_at(10.0, 10.0);
-            let mut state = UiState::new();
-            let mut list = DrawList::new();
-            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-            assert!(ui.text_button("OK", Some(100.0), Some(30.0)));
-        }
-        // Outside.
-        {
-            let input = click_at(500.0, 500.0);
-            let mut state = UiState::new();
-            let mut list = DrawList::new();
-            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-            assert!(!ui.text_button("OK", Some(100.0), Some(30.0)));
-        }
+        let clicked = |x: f32, y: f32| {
+            after_a_frame(&theme, click_at(x, y), |ui| {
+                ui.text_button("OK", Some(100.0), Some(30.0))
+            })
+            .0
+        };
+        assert!(clicked(10.0, 10.0), "inside");
+        assert!(!clicked(500.0, 500.0), "outside");
     }
 
     #[test]
     fn a_built_button_keeps_its_tone_and_a_disabled_one_never_clicks() {
         let theme = Theme::default();
         let clicked = |button: Button| {
-            let input = click_at(10.0, 10.0);
-            let mut state = UiState::new();
-            let mut list = DrawList::new();
-            let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
-            ui.button(button, Some(100.0), Some(30.0))
+            after_a_frame(&theme, click_at(10.0, 10.0), |ui| {
+                ui.button(button.clone(), Some(100.0), Some(30.0))
+            })
+            .0
         };
         assert!(clicked(Button::new("Send").tone(Tone::Accent)));
         assert!(!clicked(
@@ -5353,7 +5399,7 @@ mod tests {
             list.chrome_instance(1).unwrap().bg,
             crate::widgets::sheen_over(theme.button, theme.face_top)
         );
-        state.end_frame();
+        state.end_frame(&[]);
 
         // Frame 2: hover the same (call-order-stable) button at dt < duration →
         // the label color is strictly between `text` and its hover target.
@@ -5369,7 +5415,7 @@ mod tests {
             ui.text_button("OK", Some(100.0), Some(30.0));
         }
         let label: Vec<[f32; 4]> = list.vertices.iter().map(|v| v.color).collect();
-        state.end_frame();
+        state.end_frame(&[]);
 
         // The label white must not be brighter than the hover target while
         // easing (it approaches it), and must differ from the settled idle text.
@@ -5453,7 +5499,7 @@ mod tests {
                         _ => ui.text_area(1, buffer, "", Some(150.0), 3),
                     }
                 };
-                state.end_frame();
+                state.end_frame(&[]);
                 changed
             };
             frame(&mut InputState::default(), &mut state, &mut buffer);
@@ -5488,7 +5534,7 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &input1, &mut state, &theme);
             ui.text_input(1, &mut buffer, "", Some(150.0));
         }
-        state.end_frame();
+        state.end_frame(&[]);
         // Frame 2: type a character while focused.
         let mut input2 = InputState::default();
         input2.text_input = "c".to_string();
@@ -5498,7 +5544,7 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &input2, &mut state, &theme);
             ui.text_input(1, &mut buffer, "", Some(150.0))
         };
-        state.end_frame();
+        state.end_frame(&[]);
         assert!(changed, "typing should report a change");
         assert_eq!(buffer.len(), 3);
         assert!(buffer.contains('c'));
@@ -5517,7 +5563,7 @@ mod tests {
                 let mut ui = UiContext::interactive(&mut list, input, state, &theme);
                 ui.search_field(3, buffer, "Filter", Some(200.0))
             };
-            state.end_frame();
+            state.end_frame(&[]);
             (changed, list)
         };
         // A click on the text focuses the field; typing then edits the buffer.
@@ -5552,7 +5598,7 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &input1, &mut state, &theme);
             ui.password_input(1, &mut buffer, "", Some(150.0));
         }
-        state.end_frame();
+        state.end_frame(&[]);
         // Frame 2: type a character while focused; the rendered glyphs are bullets.
         let mut input2 = InputState::default();
         input2.text_input = "x".to_string();
@@ -5570,7 +5616,7 @@ mod tests {
                 .unwrap_or_default();
             (changed, drawn)
         };
-        state.end_frame();
+        state.end_frame(&[]);
         assert!(changed, "typing should report a change");
         assert_eq!(
             buffer.chars().count(),
@@ -5750,7 +5796,7 @@ mod tests {
             "the open list claimed the cancel edge at frame-top, so focus never sees it"
         );
 
-        state.end_frame();
+        state.end_frame(&[]);
 
         assert!(!state.dropdowns.is_open(1), "Escape closes the open list");
         assert!(
@@ -5775,7 +5821,7 @@ mod tests {
         state.focus.focus(7);
         state.focus.register(7);
         state.fullscreen.request(3);
-        assert_eq!(state.end_frame().fullscreen, Some(true));
+        assert_eq!(state.end_frame(&[]).fullscreen, Some(true));
         state
             .dropdowns
             .open_for_test(1, Rect::new(10.0, 10.0, 120.0, 28.0), &["1×", "2×"], 0);
@@ -5785,7 +5831,7 @@ mod tests {
         state.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
         state.focus.register(7);
         assert!(state.owns_fullscreen(3, &input));
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         assert!(!state.dropdowns.is_open(1));
         assert_eq!(frame.fullscreen, None, "still full screen");
 
@@ -5794,7 +5840,7 @@ mod tests {
         state.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
         state.focus.register(7);
         assert!(!state.owns_fullscreen(3, &input));
-        assert_eq!(state.end_frame().fullscreen, Some(false));
+        assert_eq!(state.end_frame(&[]).fullscreen, Some(false));
         assert!(
             state.focus.is_focused(7),
             "neither Escape blurred the field"
@@ -5862,7 +5908,7 @@ mod tests {
                     |i| ListRow::new(names[i]),
                 )
             };
-            state.end_frame();
+            state.end_frame(&[]);
             if let Some(i) = out.select {
                 *selected = Some(i);
             }
@@ -5904,7 +5950,7 @@ mod tests {
             let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
             ui.virtual_list(List::new(), 200, &mut list_state, 120.0, |_, _, _| {});
         }
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
 
         assert!(list_state.is_gliding(), "the notch aimed a target");
         assert!(frame.needs_repaint, "glide must request repaint: {frame:?}");

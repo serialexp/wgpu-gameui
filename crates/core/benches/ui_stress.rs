@@ -1533,7 +1533,7 @@ fn bench_recursive_menu(c: &mut Criterion) {
         );
     }
     state.end_frame(&mut focus);
-    interactions.end_frame();
+    interactions.end_frame(layers.layers());
     focus.end_frame(None);
     input.end_frame();
     assert_eq!(state.open_menu(), Some(0));
@@ -1575,7 +1575,7 @@ fn bench_recursive_menu(c: &mut Criterion) {
         };
         let activated = state.draw_open_layers(&mut layers, slots, RECURSIVE_BENCH_MENUS, &mut env);
         state.end_frame(&mut focus);
-        interactions.end_frame();
+        interactions.end_frame(layers.layers());
         focus.end_frame(None);
         input.end_frame();
         std::hint::black_box((activated, &layers));

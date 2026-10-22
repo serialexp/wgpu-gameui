@@ -8,15 +8,9 @@
 
 use crate::color::rgb8;
 use crate::layout::Rect;
-use crate::{
-    Affine2, CornerRadii, DrawContext, Edge, HitShape, InteractionScene, LayerStack, PointerPolicy,
-    Stroke, StyleKey, SurfacePainter,
-};
+use crate::{CornerRadii, DrawContext, Edge, LayerStack, Stroke, StyleKey, SurfacePainter};
 
-use super::model::{
-    ActivatedItem, Menu, MenuBarId, MenuItem, blocker_region_id, column_blocker_id, row_path_id,
-};
-use super::placement;
+use super::model::{ActivatedItem, Menu, MenuBarId, MenuItem, column_blocker_id, row_path_id};
 use super::state::{MenuBarState, MenuDrawEnv, MenuLayers, activation_id_for_path};
 
 /// Check-mark stroke width, as a fraction of the row height.
@@ -24,38 +18,6 @@ const CHECK_STROKE: f32 = 0.10;
 /// Half-extent of the submenu chevron, as a fraction of the row height. Matches
 /// the gutter reserved by the geometry pass.
 const CHEVRON: f32 = 0.18;
-
-/// Register the viewport blocker as scene regions at the blocker layer.
-///
-/// `InteractionScene` dispatches among *registered regions* only, so a popup
-/// layer alone does not stop a scene-backed base widget from winning pointer
-/// dispatch underneath the chain. These regions are the scene half of the
-/// blocker, and they exclude the bar strip so the bar's hover-to-switch stays
-/// live.
-fn register_viewport_blocker(
-    scene: &mut InteractionScene,
-    bar: MenuBarId,
-    layer: usize,
-    viewport: Rect,
-    bar_rect: Rect,
-) {
-    let mut regions = [Rect::new(0.0, 0.0, 0.0, 0.0); 4];
-    let count = placement::blocker_regions(viewport, bar_rect, &mut regions);
-    // `OrderKey.layer` is the popup layer's index + 1, matching what
-    // `DrawContext::interact` derives from `active_layer`.
-    let scene_layer = layer as u32 + 1;
-    for (index, region) in regions[..count].iter().enumerate() {
-        scene.register(
-            blocker_region_id(bar, index),
-            HitShape::Rect(*region),
-            Affine2::IDENTITY,
-            None,
-            scene_layer,
-            true,
-            PointerPolicy::Target,
-        );
-    }
-}
 
 /// Drive the open chain, and return the item it activated, if any.
 ///
@@ -147,21 +109,6 @@ pub(super) fn draw_columns<'a>(
     // stays reachable, and putting the buffer back is what lets the next frame's
     // measurement reuse its capacity.
     let mut columns = std::mem::take(&mut state.columns);
-
-    // The bar's rect from this frame if it was drawn, else the promoted one.
-    let bar_rect = if state.bar_rect.is_empty() {
-        geom.bar_rect
-    } else {
-        state.bar_rect
-    };
-    let viewport = if state.viewport.is_empty() {
-        geom.viewport
-    } else {
-        state.viewport
-    };
-    if let Some(slots) = slots {
-        register_viewport_blocker(env.interactions, bar, slots.blocker, viewport, bar_rect);
-    }
 
     let mut hovered_row: Option<(usize, usize)> = None;
     let mut clicked_row: Option<(usize, usize)> = None;

@@ -3562,7 +3562,7 @@ fn render_widget_gallery() {
             let stack_h = list.current_transform().ty - r.y;
             list.pop_transform();
             flow.reserve(stack_h);
-            vstate.end_frame();
+            vstate.end_frame(&[]);
         }
 
         // enabled_scope(): an enabled block beside a disabled_scope block — same
@@ -3585,7 +3585,7 @@ fn render_widget_gallery() {
                 });
             }
             list.pop_transform();
-            estate.end_frame();
+            estate.end_frame(&[]);
         }
 
         // ---- Non-interactive themed verbs --------------------------------
@@ -3679,7 +3679,7 @@ fn render_widget_gallery() {
                     ui.translate(r.x, r.y);
                     let _ = ui.tabs(&["Tab A", "Tab B", "Tab C"], 0);
                 }
-                vstate.end_frame();
+                vstate.end_frame(&[]);
             }
             list.pop_transform();
         }
@@ -3720,7 +3720,7 @@ fn render_widget_gallery() {
                     };
                     let _ = ui.color_picker(100, &mut hsva, Some(200.0));
                 }
-                vstate.end_frame();
+                vstate.end_frame(&[]);
             }
             list.pop_transform();
         }
@@ -3736,7 +3736,7 @@ fn render_widget_gallery() {
                     ui.translate(r.x, r.y);
                     let _ = ui.drag_handle(200, Some(200.0), 24.0);
                 }
-                vstate.end_frame();
+                vstate.end_frame(&[]);
             }
             list.pop_transform();
         }
@@ -3765,7 +3765,7 @@ fn render_widget_gallery() {
                     ui.pop();
                     ui.scroll_end();
                 }
-                vstate.end_frame();
+                vstate.end_frame(&[]);
             }
             list.pop_transform();
         }
@@ -3781,7 +3781,7 @@ fn render_widget_gallery() {
                     ui.translate(r.x, r.y);
                     ui.dropdown(300, &["Alpha", "Beta", "Gamma"], 0, Some(160.0));
                 }
-                vstate.end_frame();
+                vstate.end_frame(&[]);
             }
             list.pop_transform();
         }

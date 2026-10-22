@@ -405,13 +405,18 @@ The app fills an `InputState` struct (mouse position/buttons, scroll delta,
 keyboard edges, text input, IME preedit, and a device-agnostic `NavInput` for
 keyboard/gamepad navigation). The library never reads devices. Layer-aware
 input dispatch (`LayerStack::input_for_base` / `input_for_layer`) sets
-`mouse_consumed` so lower layers don't fire through popups/modals, and
-`UiState::block_under_layer` tells the retained hit scene the same, so a
-widget under a modal or popup takes no click there either. Draw a layer you
-pushed with `UiContext::interactive_layer` (or `.on_layer(index)` over its
-list), which does both and hit-tests its widgets above the layers below. Tab
-focus cycles through registered `FocusId`s; while a modal is up, only through
-the modal's.
+`mouse_consumed` so lower layers don't fire through popups/modals. Ending
+the frame with the layers (`UiState::end_frame(layers.layers())`, or
+`InteractionScene::end_frame` without a `UiState`) tells the retained hit
+scene the same, so a widget under a modal or popup takes no click there
+either, and keeps Tab inside the top modal. Draw a layer you pushed with
+`UiContext::interactive_layer` (or `.on_layer(index)` over its list), which
+hit-tests its widgets above the layers below. Ask whether an element is
+hovered, pressed or clicked with `DrawContext::sense(id, rect)` or
+`UiContext::sense` (or `Sensor::sense` with only a draw list in hand) rather
+than testing the pointer by hand;
+see `docs/design/pointer-sense.md`. Tab focus cycles through registered
+`FocusId`s; while a modal is up, only through the modal's.
 
 ---
 

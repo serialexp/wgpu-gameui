@@ -182,30 +182,14 @@ impl Pressable {
         }
         ctx.push_debug_scope_rect(self.name.as_deref().unwrap_or("Pressable"), rect);
 
-        // With a retained scene, a focusable key's id identifies its hit
-        // region and the previous frame's topmost winner decides; otherwise
-        // (and on the first frame) it is an immediate rect test. Either way a
-        // pointer a higher layer took (`mouse_consumed`) is not ours.
+        // A focusable key's id identifies its hit region in the scene; a key
+        // without one tests the pointer directly.
         let input = ctx.input;
-        let retained = self
-            .focus_id
-            .filter(|_| ctx.has_interactions())
-            .map(|id| ctx.interact(WidgetId(id), rect, self.enabled))
-            .filter(|response| response.resolved)
-            .map(|response| response.for_input(input));
-        let hovered = retained.as_ref().map_or_else(
-            || self.enabled && !input.mouse_consumed && rect.contains(input.mouse_x, input.mouse_y),
-            |response| response.hovered,
-        );
+        let sensed = ctx.sense_as(self.focus_id.map(WidgetId), rect, self.enabled);
+        let (hovered, pressed, clicked) = (sensed.hovered, sensed.pressed, sensed.clicked);
         if hovered {
             ctx.request_cursor(CursorIcon::Pointer);
         }
-        let pressed = retained
-            .as_ref()
-            .map_or(hovered && input.mouse_down, |r| r.pressed);
-        let clicked = retained
-            .as_ref()
-            .map_or(hovered && input.mouse_clicked, |r| r.clicked);
         let down = self.enabled && (pressed || self.held);
 
         let s = ctx.styles();
@@ -270,21 +254,10 @@ impl Pressable {
         }
 
         ctx.pop_debug_scope();
-        let mut response = retained.unwrap_or_else(|| Response {
-            id: self.focus_id.map(WidgetId),
-            rect,
-            resolved: false,
-            hovered,
-            pressed,
-            clicked,
-            released: hovered && input.mouse_released,
-            held: hovered && input.mouse_held,
-            double_clicked: hovered && input.mouse_double_clicked,
-            local_pos: hovered.then_some([input.mouse_x - rect.x, input.mouse_y - rect.y]),
-            scroll_delta: 0.0,
-        });
-        response.clicked = activated;
-        response
+        Response {
+            clicked: activated,
+            ..sensed
+        }
     }
 }
 
@@ -563,7 +536,7 @@ mod tests {
                 let response = Pressable::new()
                     .focusable(7)
                     .draw(RECT, &mut ctx, |_, _| {});
-                scene.end_frame();
+                scene.end_frame(layers.layers());
                 response
             })
             .collect()
@@ -617,7 +590,7 @@ mod tests {
                         .with_interactions(&mut scene);
                 let mut pressed = false;
                 let response = key.draw(RECT, &mut ctx, |state, _| pressed = state.pressed);
-                scene.end_frame();
+                scene.end_frame(layers.layers());
                 if frame > 0 {
                     assert!(
                         !(pressed || response.pressed || response.clicked),

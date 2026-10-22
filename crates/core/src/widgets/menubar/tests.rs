@@ -11,9 +11,9 @@ use crate::{
 use super::MAX_MENU_DEPTH;
 use super::model::{
     AccelPlatform, Accelerator, Key, MenuTrigger, Modifiers, SubmenuSide, bar_label_id,
-    blocker_region_id, column_blocker_id, row_id,
+    column_blocker_id, row_id,
 };
-use super::placement::{blocker_regions, place_popup, place_submenu};
+use super::placement::{place_popup, place_submenu};
 
 const BAR: u64 = 0x5EED;
 const W: f32 = 800.0;
@@ -255,6 +255,10 @@ struct Rig {
     layers: LayerStack,
     /// The bar's [`MenuBar::leading_inset`].
     inset: f32,
+    /// A scene widget the rig registers in the base layer after the bar,
+    /// standing for the app's content, and what the scene answered for it.
+    base_target: Option<Rect>,
+    base_hit: crate::Response,
 }
 
 impl Rig {
@@ -267,6 +271,8 @@ impl Rig {
             focus: FocusState::new(),
             layers: LayerStack::new(),
             inset: 0.0,
+            base_target: None,
+            base_hit: crate::Response::default(),
         }
     }
 
@@ -298,9 +304,15 @@ impl Rig {
                 H,
             )
             .with_interactions(&mut self.scene);
-            bar()
+            let output = bar()
                 .leading_inset(self.inset)
-                .draw(strip(), &mut self.state, &mut ctx)
+                .draw(strip(), &mut self.state, &mut ctx);
+            if let Some(rect) = self.base_target {
+                // `interact`, not `sense`: the scene's own verdict, apart
+                // from the consumed flag the layer stack also sets.
+                self.base_hit = ctx.interact(crate::WidgetId(0xC0_47E7), rect, true);
+            }
+            output
         };
         let activated = {
             let mut env = MenuDrawEnv {
@@ -319,7 +331,7 @@ impl Rig {
                 .map(|item| item.id)
         };
         self.state.end_frame(&mut self.focus);
-        self.scene.end_frame();
+        self.scene.end_frame(self.layers.layers());
         self.focus.end_frame(None);
         self.input.end_frame();
         (output, activated)
@@ -440,65 +452,6 @@ fn a_column_taller_than_the_viewport_is_pinned_to_its_top() {
     let anchor = Rect::new(20.0, 60.0, 40.0, 20.0);
     let (rect, _) = place_popup(anchor, [120.0, 5000.0], viewport(), SubmenuSide::Auto);
     assert_eq!(rect.y, 0.0, "neither side fits, so the top edge is pinned");
-}
-
-#[test]
-fn a_top_docked_full_width_strip_leaves_one_blocker_region() {
-    // A strip hugging the viewport's top edge has nothing above it, and the
-    // zero-height band is dropped rather than registered as an empty region.
-    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
-    let bar = Rect::new(0.0, 0.0, 400.0, 26.0);
-    let mut out = [Rect::new(0.0, 0.0, 0.0, 0.0); 4];
-    let count = blocker_regions(viewport, bar, &mut out);
-    assert_eq!(count, 1, "everything below the strip");
-    for region in &out[..count] {
-        assert!(
-            region.intersection(bar).is_none(),
-            "no region may cover the strip: {region:?}"
-        );
-    }
-    assert_eq!(out[0], Rect::new(0.0, bar.bottom(), 400.0, 274.0));
-}
-
-#[test]
-fn a_floating_strip_leaves_three_blocker_regions_that_tile_the_viewport() {
-    // Top-docked and floating: below the strip, plus the bands either side of it
-    // within its own row.
-    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
-    let bar = Rect::new(100.0, 0.0, 200.0, 26.0);
-    let mut out = [Rect::new(0.0, 0.0, 0.0, 0.0); 4];
-    let count = blocker_regions(viewport, bar, &mut out);
-    assert_eq!(count, 3, "a floating strip has open space either side");
-    let mut covered = 0.0;
-    for region in &out[..count] {
-        assert!(region.intersection(bar).is_none(), "{region:?}");
-        covered += region.width * region.height;
-    }
-    assert_eq!(
-        covered,
-        viewport.width * viewport.height - bar.width * bar.height
-    );
-}
-
-#[test]
-fn a_mid_viewport_strip_leaves_a_region_above_and_below_it() {
-    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
-    let bar = Rect::new(0.0, 100.0, 400.0, 26.0);
-    let mut out = [Rect::new(0.0, 0.0, 0.0, 0.0); 4];
-    let count = blocker_regions(viewport, bar, &mut out);
-    assert_eq!(count, 2, "above and below a full-width strip");
-    assert!(out[0].bottom() <= bar.y, "{:?}", out[0]);
-    assert!(out[1].y >= bar.bottom(), "{:?}", out[1]);
-}
-
-#[test]
-fn a_strip_outside_the_viewport_blocks_the_whole_viewport() {
-    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
-    let bar = Rect::new(0.0, 400.0, 400.0, 26.0);
-    let mut out = [Rect::new(0.0, 0.0, 0.0, 0.0); 4];
-    let count = blocker_regions(viewport, bar, &mut out);
-    assert_eq!(count, 1);
-    assert_eq!(out[0], viewport);
 }
 
 // --------------------------------------------------------------------- model
@@ -646,8 +599,6 @@ fn widget_ids_are_distinct_across_the_id_families() {
         row_id(BAR, 0, None, 1, 0),
         row_id(BAR, 1, None, 0, 0),
         row_id(BAR, 0, None, 0, 1),
-        blocker_region_id(BAR, 0),
-        blocker_region_id(BAR, 1),
         column_blocker_id(BAR, 0, &[], 0),
     ];
     for (i, a) in ids.iter().enumerate() {
@@ -1160,7 +1111,7 @@ fn a_tall_column_scrolls_to_keep_the_highlight_visible() {
             state.draw_open_layers(&mut layers, slots, SHORT, &mut env);
         }
         state.end_frame(&mut focus);
-        scene.end_frame();
+        scene.end_frame(layers.layers());
         focus.end_frame(None);
         layers.clear();
         input.end_frame();
@@ -1534,40 +1485,39 @@ fn an_idle_bar_leaves_clicks_elsewhere_to_focus() {
 }
 
 #[test]
-fn the_viewport_blocker_excludes_the_bar_strip() {
+fn an_open_menu_blocks_everything_under_it_but_the_bar() {
     let mut rig = Rig::new();
+    // A scene widget under the bar's whole viewport, as the app's content.
+    rig.base_target = Some(Rect::new(0.0, 0.0, W, H));
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
     let strip = strip();
 
-    // Outside the strip, a blocker region owns the pointer: that is what makes an
-    // outside press vanish instead of reaching the widget underneath.
+    // Outside the strip and the column, the viewport layer's blocker keeps the
+    // pointer from the content: an outside press must not reach it.
     rig.move_pointer(500.0, 300.0);
     rig.step();
-    let blocked = (0..4).any(|index| {
-        rig.scene
-            .candidates()
-            .contains(&blocker_region_id(BAR, index))
-    });
-    assert!(blocked, "the blocker covers the viewport outside the strip");
+    assert_eq!(rig.scene.winner(), None, "{:?}", rig.scene.candidates());
+    assert!(!rig.base_hit.hovered, "{:?}", rig.base_hit);
 
-    // Inside the strip, no blocker region may cover it: the labels have to stay
-    // live for hover-to-switch.
+    // On the strip the labels sit above that blocker, so they stay live for
+    // hover-to-switch.
     rig.move_pointer(strip.x + 5.0, strip.y + 2.0);
     rig.step();
-    assert!(
-        !(0..4).any(|index| rig
-            .scene
-            .candidates()
-            .contains(&blocker_region_id(BAR, index))),
-        "no blocker region covers the strip: {:?}",
+    assert_eq!(
+        rig.scene.winner(),
+        Some(bar_label_id(BAR, 0)),
+        "the strip's own label wins there: {:?}",
         rig.scene.candidates()
     );
-    assert_eq!(
-        rig.scene.candidates().first().copied(),
-        Some(bar_label_id(BAR, 0)),
-        "the strip's own label wins there"
-    );
+    assert!(!rig.base_hit.hovered, "{:?}", rig.base_hit);
+
+    // Closed, the content has the pointer again.
+    rig.state.close();
+    rig.move_pointer(500.0, 300.0);
+    rig.step();
+    rig.step();
+    assert!(rig.base_hit.hovered, "{:?}", rig.base_hit);
 }
 
 #[test]
@@ -1677,7 +1627,7 @@ fn the_max_depth_chain_keeps_every_levels_geometry_buffer_across_frames() {
         rig.state
             .draw_open_layers(&mut rig.layers, slots, DEEP, &mut env);
         rig.state.end_frame(&mut rig.focus);
-        rig.scene.end_frame();
+        rig.scene.end_frame(rig.layers.layers());
         rig.focus.end_frame(None);
         rig.input.end_frame();
     };

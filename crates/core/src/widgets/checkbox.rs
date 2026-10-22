@@ -153,26 +153,15 @@ impl Checkbox {
         ctx: &mut DrawContext,
     ) -> crate::Response {
         ctx.push_debug_scope_rect(crate::widgets::scope_name("Checkbox", label), rect);
-        // Honor layer capture (`mouse_consumed`) on both paths.
-        let input = ctx.input;
-        let retained = self
-            .focus_id
-            .filter(|_| ctx.has_interactions())
-            .map(|id| ctx.interact(crate::WidgetId(id), rect, true))
-            .filter(|response| response.resolved)
-            .map(|response| response.for_input(input));
+        // A focusable checkbox's id identifies its hit region in the scene;
+        // one without tests the pointer directly.
+        let sensed = ctx.sense_as(self.focus_id.map(crate::WidgetId), rect, true);
         let s = ctx.styles();
-        let hovered = retained.as_ref().map_or_else(
-            || rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed,
-            |response| response.hovered,
-        );
+        let (hovered, clicked) = (sensed.hovered, sensed.clicked);
         if hovered {
             ctx.request_cursor(crate::CursorIcon::Pointer);
         }
-        let clicked = retained
-            .as_ref()
-            .map_or(hovered && input.mouse_clicked, |response| response.clicked);
-        let key_activate = input.nav.confirm;
+        let key_activate = ctx.input.nav.confirm;
 
         // Checkbox box (square, fitted to rect height).
         let size = rect.height;
@@ -270,21 +259,10 @@ impl Checkbox {
         }
 
         ctx.pop_debug_scope();
-        let mut response = retained.unwrap_or_else(|| crate::Response {
-            id: self.focus_id.map(crate::WidgetId),
-            rect,
-            resolved: false,
-            hovered,
-            pressed: hovered && input.mouse_down,
-            clicked,
-            released: hovered && input.mouse_released,
-            held: hovered && input.mouse_held,
-            double_clicked: hovered && input.mouse_double_clicked,
-            local_pos: hovered.then_some([input.mouse_x - rect.x, input.mouse_y - rect.y]),
-            scroll_delta: 0.0,
-        });
-        response.clicked = toggled;
-        response
+        crate::Response {
+            clicked: toggled,
+            ..sensed
+        }
     }
 }
 
@@ -732,7 +710,7 @@ mod tests {
                     .focusable(9)
                     .draw_response(false, "Snap", row, &mut ctx);
                 clicks.push((response.resolved, response.clicked, response.hovered));
-                scene.end_frame();
+                scene.end_frame(layers.layers());
             }
             clicks
         };

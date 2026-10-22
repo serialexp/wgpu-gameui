@@ -50,9 +50,10 @@
 //! [`end_frame`](FocusState::end_frame) — Tab cycling is then scoped to that
 //! layer's ring exclusively, preventing Tab from reaching base-layer widgets
 //! while a modal is open. [`UiState`](crate::UiState) does both for widgets
-//! drawn on a layer it was told about
-//! ([`block_under_layer`](crate::UiState::block_under_layer)). Click-to-focus already respects `mouse_consumed`,
-//! so a modal won't mis-focus a base-layer widget on click either.
+//! drawn on a layer, finding the top modal in the layers handed to
+//! [`UiState::end_frame`](crate::UiState::end_frame). Click-to-focus already
+//! respects `mouse_consumed`, so a modal won't mis-focus a base-layer widget
+//! on click either.
 
 use crate::InputState;
 use crate::layout::Rect;

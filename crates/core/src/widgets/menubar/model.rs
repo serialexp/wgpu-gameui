@@ -548,8 +548,6 @@ pub(crate) enum Seed {
     BarLabel = 1,
     /// A menu row's hit region.
     Row = 2,
-    /// The viewport blocker, registered as scene regions.
-    BlockerRegion = 3,
     /// One column's own full-rect blocker region.
     ColumnBlocker = 4,
     /// An item's derived activation id.
@@ -628,14 +626,6 @@ pub(crate) fn row_path_id(
     acc = hash_u64(acc, item_index as u64);
     acc = hash_u64(acc, level as u64);
     WidgetId(acc)
-}
-
-/// The [`WidgetId`] of the `index`-th viewport-blocker region.
-pub(crate) fn blocker_region_id(bar: MenuBarId, index: usize) -> WidgetId {
-    WidgetId(hash_u64(
-        hash_u64(FNV_BASIS ^ Seed::BlockerRegion as u64, bar),
-        index as u64,
-    ))
 }
 
 /// The [`WidgetId`] of one column's own blocker region.

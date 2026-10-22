@@ -974,13 +974,13 @@ mod tests {
             ..InputState::default()
         };
         ui.begin_frame(&mut input, &theme, 0.0, &crate::ManualNav);
-        ui.end_frame();
+        ui.end_frame(&[]);
         let mut copy = InputState {
             key_copy: true,
             ..InputState::default()
         };
         ui.begin_frame(&mut copy, &theme, 0.0, &crate::ManualNav);
-        ui.end_frame();
+        ui.end_frame(&[]);
         assert_eq!(*copied.borrow(), "hello");
     }
 

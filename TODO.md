@@ -641,17 +641,17 @@ sharp at any size, list selection and gamepad navigation.
 
 ## agent-ui follow-up from the layer blockers (2026-10-08)
 
-- [ ] **P3 — Popovers could use `UiState::block_under_layer`.** agent-ui's
+- [ ] **P3 — Popovers are now the top modal (decide).** agent-ui's
       `usage_popovers.rs`, `task_popover.rs` and `drop_up.rs` (the status
       bar's frame and connection details) push a screen-sized modal layer
       and register a hand-made enabled backdrop on it
       (`cx.interact(BACKDROP_ID, screen, true)`) so a click outside closes
-      them. They already block clicks correctly. Moving them to
-      `block_under_layer` would also mark them as the top modal, confining
-      Tab inside the popover (and doing nothing when it has no focusables)
-      — a behaviour change for Bart to decide on, so they were left as
-      they are. The outside-click-closes behaviour would still need its own
-      check, since the blocker is disabled and reports no click.
+      them. Since every pushed layer blocks the scene on its own
+      (`UiState::end_frame(layers)`, 2026-10-22, pointer-sense phase 2),
+      they are also the top modal, which keeps Tab inside the popover (and
+      does nothing when it has no focusables). Bart to decide: keep that, or
+      push them as popup layers, which block the pointer but leave Tab
+      alone.
 
 ## Timeline and viewport gizmos follow-ups (found 2026-10-11)
 

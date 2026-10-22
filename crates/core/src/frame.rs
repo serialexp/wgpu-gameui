@@ -9,7 +9,7 @@
 //!     let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
 //!     ui.text_button("OK", None, None);
 //! }                                                // ctx drops (balance checks)
-//! state.end_frame();                              // resolve Tab / tree nav
+//! state.end_frame(&[]);                           // resolve Tab / tree nav
 //! ```
 //!
 //! Forgetting the trailing [`UiState::end_frame`] silently breaks Tab/focus and
@@ -128,7 +128,7 @@ impl<'a> Frame<'a> {
             let mut ui = UiContext::interactive(list, self.input, &mut *self.state, self.theme);
             build(&mut ui)
         };
-        let frame = self.state.end_frame();
+        let frame = self.state.end_frame(&[]);
         (result, frame)
     }
 
@@ -148,7 +148,7 @@ impl<'a> Frame<'a> {
                 UiContext::interactive_layers(layers, self.input, &mut *self.state, self.theme);
             build(&mut ui)
         };
-        let frame = self.state.end_frame();
+        let frame = self.state.end_frame(layers.layers());
         (result, frame)
     }
 }
@@ -326,14 +326,14 @@ mod tests {
         state
             .anim
             .animate_color(7, crate::AnimSlot::Bg, red, 0.05, crate::Easing::Linear);
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         assert_eq!(frame, crate::UiFrameResult::IDLE);
         // Frame 2: retarget mid-flight — now in flight for the duration.
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
         state
             .anim
             .animate_color(7, crate::AnimSlot::Bg, blue, 0.05, crate::Easing::Linear);
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         assert!(
             frame.needs_repaint,
             "an in-flight transition must request repaint, got {frame:?}"
@@ -349,7 +349,7 @@ mod tests {
         state
             .anim
             .animate_color(7, crate::AnimSlot::Bg, blue, 0.05, crate::Easing::Linear);
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         assert!(
             !frame.needs_repaint && frame.next_deadline.is_none(),
             "settled transition must not keep the loop awake, got {frame:?}"
@@ -418,7 +418,7 @@ mod tests {
         let mut state = UiState::new();
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
         state.toasts.push(crate::Toast::info("hi").with_ttl(2.0));
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         // No fade by default, ttl 2.0: the next visible change is expiry.
         assert!(frame.needs_repaint);
         let deadline = frame.next_deadline.expect("visible toast has a deadline");
@@ -432,7 +432,7 @@ mod tests {
         state.toasts = crate::ToastStack::new().with_fade(0.4);
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
         state.toasts.push(crate::Toast::info("hi").with_ttl(2.0));
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         let deadline = frame.next_deadline.expect("visible toast has a deadline");
         assert!(
             (deadline - 1.6).abs() < 1e-4,
@@ -458,7 +458,7 @@ mod tests {
             crate::TooltipContent::text("hi"),
         );
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         assert!(frame.needs_repaint);
         let deadline = frame.next_deadline.expect("pending hover has a deadline");
         // The tick counted the first frame of hover: 400ms - 16ms remain.
@@ -515,13 +515,13 @@ mod tests {
         // Frame 1: show a toast.
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
         state.toasts.push(crate::Toast::info("hi").with_ttl(2.0));
-        state.end_frame();
+        state.end_frame(&[]);
         // Frame 2: a backgrounded host resumes with a 5s delta. Clamped to
         // MAX_DT (0.1), the toast ages only 0.1s of its 2s ttl (it was pushed
         // after frame 1's tick, so frame 2's tick is its first), leaving its
         // expiry 1.9s out instead of the toast having expired instantly.
         state.begin_frame(&mut input, &theme, 5.0, &KeyboardNav);
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         let deadline = frame
             .next_deadline
             .expect("toast survives a clamped resume");
@@ -538,7 +538,7 @@ mod tests {
         let mut state = UiState::new();
         state.begin_frame(&mut input, &theme, 0.016, &KeyboardNav);
         state.toasts.push(crate::Toast::info("hi").with_ttl(1.0));
-        let first = state.end_frame().next_deadline.unwrap();
+        let first = state.end_frame(&[]).next_deadline.unwrap();
         // A host that only builds at the deadline ticks the clocks on the
         // 60 Hz ticks in between, and hands the frame only the last tick's
         // time; the toast is a second old there, not a clamped 0.1s.
@@ -552,7 +552,7 @@ mod tests {
             first - 0.016 * ticks as f32,
             &KeyboardNav,
         );
-        let frame = state.end_frame();
+        let frame = state.end_frame(&[]);
         assert!(
             frame.next_deadline.is_none_or(|d| d < first * 0.1),
             "the toast ran its course: {frame:?}"

@@ -114,6 +114,7 @@ mod nav;
 mod preset;
 pub mod projection;
 pub mod render;
+mod sense;
 mod shadow;
 mod style;
 mod theme;
@@ -173,6 +174,7 @@ pub use render::{
 pub use render::{
     IconFontId, IconGlyph, PhosphorIcon, icon_font_id, icon_glyph, register_icon_font,
 };
+pub use sense::Sensor;
 pub use shadow::{BoxShadow, CornerRadii, ShadowInstance};
 pub use style::{
     Ink, StyleKey, StyleOverlay, StyleResolver, StyleShape, StyleValue, TextSize, Tracking,

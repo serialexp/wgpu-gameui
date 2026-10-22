@@ -27,7 +27,6 @@ const BACKDROP_PAD: f32 = 12.0;
 /// let layer = modal.is_open().then(|| { let i = layers.push_modal(screen); layers.pop_layer(); i });
 /// // ... base UI with layers.input_for_base(&input) ...
 /// if let Some(i) = layer {
-///     ui_state.block_under_layer(&layers, i); // with a `UiState`: also does the Tab end
 ///     let input = layers.input_for_layer(i, &input);
 ///     let mut ctx = DrawContext::new(&mut layers.layers_mut()[i].list, &mut focus, &theme, &input, w, h)
 ///         .with_layer(i);
@@ -35,6 +34,8 @@ const BACKDROP_PAD: f32 = 12.0;
 ///     if out.dismissed || out.sheet.clicked.is_some() { modal.close(ctx.focus); }
 /// }
 /// focus.end_frame(layer); // Tab stays inside the modal
+/// // with a `UiState`, `ui_state.end_frame(layers.layers())` does that and
+/// // blocks the scene under the modal
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ModalState {

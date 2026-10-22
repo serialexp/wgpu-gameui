@@ -709,7 +709,7 @@ mod tests {
             Button::new("Back").focusable(1).draw(rect(), &mut ctx);
             Button::new("Front").focusable(2).draw(rect(), &mut ctx);
         }
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         let input = input_at(50.0, 25.0, true, true);
         scene.begin_frame(&input);

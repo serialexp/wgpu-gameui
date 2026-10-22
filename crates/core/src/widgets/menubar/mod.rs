@@ -15,8 +15,9 @@
 //!   [`InputState`](crate::InputState): a tap landing entirely between two
 //!   rendered frames would be invisible to held-only state.
 //! * **The bar must stay live while a chain is open.** Hovering a different
-//!   label has to switch menus, so the blocker that swallows outside presses
-//!   deliberately leaves a hole for the strip.
+//!   label has to switch menus, so while a chain is open the labels are
+//!   registered on the viewport-wide layer that swallows outside presses,
+//!   above its blocker.
 //!
 //! ## Two-phase, like the dropdown
 //!
@@ -35,6 +36,7 @@
 //! // after the base scope, draw the chain and read the single activation channel:
 //! if let Some(item) = menu.draw_open_layers(&mut layers, slots, MENUS, &mut env) { /* … */ }
 //! menu.end_frame(&mut focus);                     // before FocusState::end_frame
+//! ui_state.end_frame(layers.layers());            // blocks the scene under each layer
 //! ```
 //!
 //! Consequences, accepted and tested: a menu that opens this frame shows its
@@ -46,8 +48,9 @@
 //! Bar labels and rows resolve through retained interaction dispatch, not through
 //! raw hit tests. That is not a style choice: while a chain is open the base
 //! layer's input is *consumed*, and a scene response ignores
-//! [`InputState::mouse_consumed`](crate::InputState::mouse_consumed) — which is
-//! precisely what keeps hover-to-switch working under the blocker. Attach a scene
+//! [`InputState::mouse_consumed`](crate::InputState::mouse_consumed); the labels
+//! sit on the viewport layer above its blocker, which is precisely what keeps
+//! hover-to-switch working while everything else under the chain is blocked. Attach a scene
 //! with [`DrawContext::with_interactions`]; without one the bar and its rows draw
 //! but have **no** pointer support (Alt arming and keyboard navigation still
 //! work).
@@ -77,7 +80,7 @@ pub use model::{
     AccelPlatform, Accelerator, ActivatedItem, Key, Menu, MenuBarId, MenuItem, MenuItemId,
     MenuTrigger, Modifiers, SubmenuSide,
 };
-pub use placement::{blocker_regions, place_popup, place_submenu};
+pub use placement::{place_popup, place_submenu};
 pub use state::{MAX_MENU_DEPTH, MenuBarState, MenuDrawEnv, MenuLayers};
 
 use crate::color::rgb8;
@@ -262,8 +265,16 @@ impl<'a> MenuBar<'a> {
         // visited is equivalent to collecting them first — and it keeps the pass
         // allocation-free. The press is resolved before the hover, or opening a
         // menu on press would be undone by hover-to-switch in the same frame.
+        //
+        // While a chain is open the labels are registered on the viewport
+        // blocker's layer, above its blocker: the scene blocks everything
+        // under the chain but the bar. They resolve without the consumed
+        // check (`interact`, not `sense`), because the bar draws with the base
+        // layer's input, which that same blocker took.
         let mut label_x = state.label_start;
         let mut hovered_menu = None;
+        let drawn_on = ctx.active_layer;
+        ctx.active_layer = state.blocker_layer.or(drawn_on);
         for (index, menu) in self.menus.iter().enumerate() {
             let label_rect = Rect::new(label_x, strip.y, state.label_pool[index], strip.height);
             label_x = label_rect.right() + MENU_TITLE_GAP;
@@ -291,6 +302,7 @@ impl<'a> MenuBar<'a> {
                 }
             }
         }
+        ctx.active_layer = drawn_on;
         state.hovered_menu = hovered_menu;
 
         // Bar-level keyboard. Uses the highlight resolved above, so a highlight

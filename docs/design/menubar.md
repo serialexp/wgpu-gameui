@@ -2,7 +2,7 @@
 
 Status: partial — phases 1–3 plus recursive context menus landed; phases 2b and 4+ outstanding
 Owner: Bart
-Last updated: 2026-09-21
+Last updated: 2026-10-22
 
 ## Implementation status
 
@@ -909,6 +909,14 @@ pub fn place_popup(
   `MenuBarState`, and `draw_open_layers` — which runs later in the same frame —
   reads it; the promoted rect from the previous frame is the fallback for a
   frame in which the host did not draw the bar.
+
+> **2026-10-22 update:** the four blocker regions and `blocker_regions` are
+> gone. Every pushed layer now blocks the scene under it on its own when the
+> frame ends with the layers (`InteractionScene::end_frame(&[Layer])`,
+> `docs/design/pointer-sense.md` phase 2), so the viewport popup blocks the
+> whole viewport. The bar labels are registered on that viewport layer while
+> a chain is open (`MenuBarState::blocker_layer`), above its blocker, which
+> keeps hover-to-switch working without a hole for the strip.
 - Layers in effect: base/bar rows `0`, blocker regions `first + 1`, column `L`
   rows and blocker `first + 2 + L` — so columns beat the blocker, and the blocker
   beats everything in the base layer outside the strip.

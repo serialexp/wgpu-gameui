@@ -6,12 +6,25 @@
 //! saw — while collecting the next frame's regions.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
-use crate::{Affine2, InputState, layout::Rect};
+use crate::{Affine2, InputState, Layer, LayerKind, layout::Rect};
 
 /// Stable identity for an interactive widget within one UI surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WidgetId(pub u64);
+
+impl WidgetId {
+    /// An id made from `key`'s hash, the same for the same key from frame to
+    /// frame: for elements with no id of their own, like the parts of a list
+    /// row (`("transcript", scope, row_id, Part::Toggle)`). The key should
+    /// include whatever tells two copies of the same view apart.
+    pub fn hashed(key: &impl Hash) -> Self {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
 
 impl From<u64> for WidgetId {
     fn from(value: u64) -> Self {
@@ -158,12 +171,13 @@ impl Response {
     /// pointer state when `input` is
     /// [consumed](InputState::mouse_consumed).
     ///
-    /// The scene picks a winner from geometry alone, and a modal or popup
-    /// layer registers no geometry of its own, so the widget under one still
-    /// wins there. The layer stack's verdict arrives as the consumed flag on
-    /// the widget's input; a clickable that resolves through the scene
-    /// passes its response through here to honour it, as the immediate path
-    /// does. Identity, bounds and `resolved` are kept.
+    /// The scene answers from the previous frame's layout, so a modal or
+    /// popup that opens this frame has no blocker in it yet, and the widget
+    /// under it would still win for that one frame. The layer stack's
+    /// verdict arrives as the consumed flag on the widget's input; a
+    /// clickable that resolves through the scene passes its response through
+    /// here to honour it, as the immediate path does. Identity, bounds and
+    /// `resolved` are kept.
     pub fn for_input(self, input: &InputState) -> Self {
         if !input.mouse_consumed {
             return self;
@@ -196,6 +210,8 @@ fn blocker_id(layer: u32) -> WidgetId {
 pub struct InteractionScene {
     previous: Vec<HitRegion>,
     current: Vec<HitRegion>,
+    /// The ids in `current`, so registering doesn't scan it.
+    registered: HashSet<WidgetId>,
     responses: HashMap<WidgetId, Response>,
     candidates: Vec<WidgetId>,
     winner: Option<WidgetId>,
@@ -215,6 +231,7 @@ impl InteractionScene {
     /// collecting replacement geometry.
     pub fn begin_frame(&mut self, input: &InputState) {
         self.current.clear();
+        self.registered.clear();
         self.responses.clear();
         self.candidates.clear();
         self.duplicate_ids.clear();
@@ -308,7 +325,7 @@ impl InteractionScene {
         enabled: bool,
         pointer_policy: PointerPolicy,
     ) -> Response {
-        if self.current.iter().any(|region| region.id == id) {
+        if !self.registered.insert(id) {
             self.duplicate_ids.insert(id);
         }
         let response = self
@@ -337,9 +354,9 @@ impl InteractionScene {
     /// under everything drawn on `layer` itself, whenever that is drawn, so
     /// the layer's own widgets still take the pointer. Blocking a layer
     /// again in the same frame changes nothing.
-    pub fn block(&mut self, layer: u32, area: Option<Rect>) {
+    fn block(&mut self, layer: u32, area: Option<Rect>) {
         let id = blocker_id(layer);
-        if self.current.iter().any(|region| region.id == id) {
+        if !self.registered.insert(id) {
             return;
         }
         self.current.push(HitRegion {
@@ -353,10 +370,33 @@ impl InteractionScene {
         });
     }
 
-    /// Complete collection and retain this frame's regions for next-frame input.
-    pub fn end_frame(&mut self) {
+    /// Complete collection and retain this frame's regions for next-frame
+    /// input. `layers` are the frame's [`LayerStack`](crate::LayerStack)
+    /// layers ([`LayerStack::layers`](crate::LayerStack::layers), or `&[]`
+    /// for a single list), and each keeps the pointer from what is under it
+    /// the way [`LayerStack::input_for_layer`](crate::LayerStack::input_for_layer)
+    /// routes input: a modal from every layer below it, a popup only over its
+    /// rect, and a tooltip from none. That holds from the next frame, which
+    /// answers from this one's geometry; until then a layer's verdict reaches
+    /// widgets as [`InputState::mouse_consumed`], which they honour through
+    /// [`Response::for_input`].
+    pub fn end_frame(&mut self, layers: &[Layer]) {
+        for (index, layer) in layers.iter().enumerate() {
+            let scene_layer = crate::sense::scene_layer(Some(index));
+            match layer.kind {
+                LayerKind::Modal => self.block(scene_layer, None),
+                LayerKind::Popup => self.block(scene_layer, Some(layer.rect)),
+                LayerKind::Tooltip => {}
+            }
+        }
         std::mem::swap(&mut self.previous, &mut self.current);
         self.current.clear();
+        self.registered.clear();
+    }
+
+    /// Whether `id` was registered in the frame being collected.
+    pub fn is_registered(&self, id: WidgetId) -> bool {
+        self.registered.contains(&id)
     }
 
     /// IDs under the pointer, topmost first, including pass-through regions.
@@ -398,7 +438,7 @@ mod tests {
         scene.begin_frame(&InputState::default());
         region(&mut scene, 1, Rect::new(0.0, 0.0, 20.0, 20.0), 0);
         region(&mut scene, 2, Rect::new(0.0, 0.0, 20.0, 20.0), 0);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         let input = InputState {
             mouse_x: 5.0,
@@ -427,7 +467,7 @@ mod tests {
             true,
             PointerPolicy::Target,
         );
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         scene.begin_frame(&InputState {
             mouse_x: 20.0,
@@ -456,7 +496,7 @@ mod tests {
             true,
             PointerPolicy::Target,
         );
-        scene.end_frame();
+        scene.end_frame(&[]);
         scene.begin_frame(&InputState::default());
         assert_eq!(scene.winner(), None);
     }
@@ -476,7 +516,7 @@ mod tests {
             PointerPolicy::PassThrough,
         );
         region(&mut scene, 3, Rect::new(0.0, 0.0, 10.0, 10.0), 1);
-        scene.end_frame();
+        scene.end_frame(&[]);
         scene.begin_frame(&InputState {
             mouse_x: 2.0,
             mouse_y: 2.0,
@@ -491,7 +531,7 @@ mod tests {
         let mut scene = InteractionScene::new();
         scene.begin_frame(&InputState::default());
         region(&mut scene, 9, Rect::new(0.0, 0.0, 10.0, 10.0), 0);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         scene.begin_frame(&InputState {
             mouse_x: 2.0,
@@ -501,7 +541,7 @@ mod tests {
             ..Default::default()
         });
         assert!(region(&mut scene, 9, Rect::new(0.0, 0.0, 10.0, 10.0), 0).clicked);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         scene.begin_frame(&InputState {
             mouse_x: 30.0,
@@ -513,7 +553,7 @@ mod tests {
         let held = region(&mut scene, 9, Rect::new(0.0, 0.0, 10.0, 10.0), 0);
         assert!(held.pressed && held.held);
         assert!(!held.hovered);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         scene.begin_frame(&InputState {
             mouse_x: 30.0,
@@ -548,7 +588,7 @@ mod tests {
         scene.begin_frame(&InputState::default());
         region_enabled(&mut scene, 1, rect, true);
         region_enabled(&mut scene, 2, rect, false);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         scene.begin_frame(&InputState {
             mouse_x: 2.0,
@@ -584,7 +624,7 @@ mod tests {
         let mut scene = InteractionScene::new();
         scene.begin_frame(&InputState::default());
         region_enabled(&mut scene, 9, rect, true);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         let press = InputState {
             mouse_x: 2.0,
@@ -595,7 +635,7 @@ mod tests {
         };
         scene.begin_frame(&press);
         assert!(region_enabled(&mut scene, 9, rect, false).clicked);
-        scene.end_frame();
+        scene.end_frame(&[]);
 
         scene.begin_frame(&InputState {
             mouse_x: 2.0,

@@ -257,6 +257,11 @@ pub struct MenuBarState {
     /// [`FocusState::claim_click`] so the item can act on the widget that was
     /// focused (Copy/Paste must not blur their target).
     pub(super) click_claimed: bool,
+    /// The viewport blocker's layer index, while
+    /// [`push_open_layers`](Self::push_open_layers) has pushed one this frame:
+    /// the bar's labels register their hit regions on it, above its blocker,
+    /// so they stay live while everything under the chain is blocked.
+    pub(super) blocker_layer: Option<usize>,
     /// Geometry promoted from the previous frame, used to push and paint this
     /// frame's popup layers.
     pub(super) geom: Option<MenuGeom>,
@@ -341,6 +346,7 @@ impl MenuBarState {
             hovered_item: None,
             pointer_moved: false,
             click_claimed: false,
+            blocker_layer: None,
             geom: None,
             columns: Vec::new(),
             next_geom: None,
@@ -537,6 +543,7 @@ impl MenuBarState {
         }
         self.was_open = self.open;
         self.click_claimed = false;
+        self.blocker_layer = None;
         self.hovered_menu = None;
         self.hovered_item = None;
 
@@ -634,10 +641,12 @@ impl MenuBarState {
     /// (its geometry is only known after the bar draws) — the same one-frame
     /// popup latency [`crate::DropdownState`] has.
     pub fn push_open_layers(&mut self, layers: &mut LayerStack) -> Option<MenuLayers> {
+        self.blocker_layer = None;
         self.open?;
         let geom = self.geom.as_ref()?;
         let blocker = layers.push_popup(geom.viewport);
         layers.pop_layer();
+        self.blocker_layer = Some(blocker);
         for column in &self.columns {
             let index = layers.push_popup(column.rect);
             layers.pop_layer();

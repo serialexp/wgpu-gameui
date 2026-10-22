@@ -120,7 +120,7 @@ pub use asset_grid::{AssetGrid, AssetGridOutput};
 pub use badge::{BADGE_COMPACT_HEIGHT, BADGE_HEIGHT, Badge, BadgeTone, keycap};
 pub use band::toolbar_band;
 pub use banner::{Banner, Severity};
-pub use bar_chart::{Bar, BarChart, BarChartOutput, BarOverlay, BarSeries, BarTooltip};
+pub use bar_chart::{Bar, BarChart, BarChartOutput, BarOverlay, BarSeries, BarTooltip, BarTrend};
 pub use binding::{Binding, KeyCode, PadButton};
 pub use breadcrumb::{Breadcrumb, Pager, PagerOutput};
 pub use busy::{dots, skeleton, spinner};
@@ -215,7 +215,7 @@ pub use menu_screens::{MenuList, MenuListOutput, draw_scrim};
 pub use menubar::{
     AccelPlatform, Accelerator, ActivatedItem, Key, MAX_MENU_DEPTH, Menu, MenuBar, MenuBarId,
     MenuBarOutput, MenuBarState, MenuDrawEnv, MenuItem, MenuItemId, MenuLayers, MenuTrigger,
-    Modifiers, SubmenuSide, blocker_regions, place_popup,
+    Modifiers, SubmenuSide, place_popup,
 };
 pub use meter::{
     BarSegment, INLINE_METER_HEIGHT, MINI_METER_WARN, MINI_METER_WIDTH, MeterFill, inline_meter,
@@ -490,7 +490,7 @@ impl<'a> DrawContext<'a> {
         let id = id.into();
         let transform = self.draw_list.current_transform();
         let clip = self.draw_list.current_clip();
-        let layer = self.active_layer.map_or(0, |index| index as u32 + 1);
+        let layer = crate::sense::scene_layer(self.active_layer);
         match self.interactions.as_deref_mut() {
             Some(scene) => scene.register(
                 id,
@@ -503,6 +503,61 @@ impl<'a> DrawContext<'a> {
             ),
             None => crate::Response::idle(id, rect),
         }
+    }
+
+    /// Register `rect` (in this context's local space) as `id` and answer
+    /// whether it is hovered, pressed or released this frame, the way
+    /// [`Sensor::sense`](crate::Sensor::sense) does: from the scene when one is
+    /// attached, honouring layer capture ([`InputState::mouse_consumed`]) and
+    /// [`enabled`](Self::enabled). [`input`](Self::input) is taken to be in
+    /// the same local space as `rect`, as every widget drawn through a context
+    /// assumes. Use this rather than testing `input.mouse_x` by hand.
+    pub fn sense(
+        &mut self,
+        id: impl Into<crate::WidgetId>,
+        rect: crate::layout::Rect,
+    ) -> crate::Response {
+        self.sense_as(Some(id.into()), rect, true)
+    }
+
+    /// [`sense`](Self::sense) for an element with an enabled state of its
+    /// own: it takes input only if it and the context are enabled. Disabled,
+    /// it still keeps the pointer from what lies under it.
+    pub fn sense_enabled(
+        &mut self,
+        id: impl Into<crate::WidgetId>,
+        rect: crate::layout::Rect,
+        enabled: bool,
+    ) -> crate::Response {
+        self.sense_as(Some(id.into()), rect, enabled)
+    }
+
+    /// [`sense_enabled`](Self::sense_enabled), for widgets that may have no
+    /// stable id: those always test the pointer directly.
+    pub(crate) fn sense_as(
+        &mut self,
+        id: Option<crate::WidgetId>,
+        rect: crate::layout::Rect,
+        enabled: bool,
+    ) -> crate::Response {
+        let transform = self.draw_list.current_transform();
+        let local = [self.input.mouse_x, self.input.mouse_y];
+        crate::sense::resolve(
+            self.interactions.as_deref_mut(),
+            self.input,
+            crate::sense::Pointer {
+                local: Some(local),
+                world: transform.transform_point(local),
+            },
+            crate::sense::Placement {
+                transform,
+                clip: self.draw_list.current_clip(),
+                layer: crate::sense::scene_layer(self.active_layer),
+            },
+            id,
+            rect,
+            enabled && self.enabled,
+        )
     }
 
     /// Whether this context has retained interaction dispatch attached.

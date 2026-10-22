@@ -1,9 +1,8 @@
-//! Pure popup placement and blocker geometry.
+//! Pure popup placement.
 //!
 //! Both functions are total and side-effect free, so the behaviour that is
 //! hardest to eyeball — flipping at an edge, keeping a column inside an inset
-//! viewport, and punching a hole for the bar strip in the blocker — is unit
-//! testable without a GPU or a frame.
+//! viewport — is unit testable without a GPU or a frame.
 
 use crate::layout::Rect;
 
@@ -106,62 +105,4 @@ pub fn place_submenu(
     let x = preferred_x.min(viewport.right() - width).max(viewport.x);
     let y = parent_row.y.min(viewport.bottom() - height).max(viewport.y);
     (Rect::new(x, y, width, height), effective)
-}
-
-/// Split the viewport minus the bar strip into up to four rects, returning how
-/// many were written.
-///
-/// The open chain's blocker must cover everything *except* the strip: a single
-/// full-viewport blocker region would rank above the base layer and kill the bar
-/// labels, which have to stay live for hover-to-switch. A strip that spans the
-/// viewport's full width needs two rects (above and below it, one of which
-/// collapses when the strip is docked against an edge); a floating strip needs
-/// four, because the band it occupies has open space on both sides of it. Regions
-/// with no area are dropped rather than returned, so the count is the number of
-/// rects actually written.
-///
-/// The regions tile exactly: every point of `viewport` is either inside the strip
-/// or inside exactly one returned rect, and none of them overlap the strip.
-pub fn blocker_regions(viewport: Rect, bar: Rect, out: &mut [Rect; 4]) -> usize {
-    let Some(strip) = bar.intersection(viewport) else {
-        // No strip to spare (or an empty viewport): block the lot.
-        out[0] = viewport;
-        return if viewport.is_empty() { 0 } else { 1 };
-    };
-    if viewport.is_empty() {
-        return 0;
-    }
-
-    let mut count = 0;
-    // Above the strip.
-    if strip.y > viewport.y {
-        out[count] = Rect::new(viewport.x, viewport.y, viewport.width, strip.y - viewport.y);
-        count += 1;
-    }
-    // Below the strip.
-    if strip.bottom() < viewport.bottom() {
-        out[count] = Rect::new(
-            viewport.x,
-            strip.bottom(),
-            viewport.width,
-            viewport.bottom() - strip.bottom(),
-        );
-        count += 1;
-    }
-    // Left of the strip, within its band.
-    if strip.x > viewport.x {
-        out[count] = Rect::new(viewport.x, strip.y, strip.x - viewport.x, strip.height);
-        count += 1;
-    }
-    // Right of the strip, within its band.
-    if strip.right() < viewport.right() {
-        out[count] = Rect::new(
-            strip.right(),
-            strip.y,
-            viewport.right() - strip.right(),
-            strip.height,
-        );
-        count += 1;
-    }
-    count
 }
