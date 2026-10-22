@@ -413,7 +413,12 @@ harden those foundations rather than create parallel replacements.
   `docs/design/shared-text-layout.md`, with a bug found on the way: a
   multi-line field composing with the IME puts its caret on the first line.
   (The other, line starts found by `\n` only, is fixed: `text::line_starts`.)
-- [ ] **P3 — No caret affinity at a direction boundary.** Where
+- [x] **P3 — No caret affinity at a direction boundary.** Done 2026-10-22:
+  a single-line field keeps the x of the stop its caret stands at, set by
+  the click, drag or Left/Right that put it there, and draws the caret and
+  starts the next arrow from it (`TextInput::caret_at`). Multi-line fields
+  still draw a logical caret (see the design doc's "Behaviour kept"). It
+  was: Where
   left-to-right and right-to-left text meet, one byte has two caret stops
   (the end of one run, the start of the other), and `visual_caret_pos`
   always draws the leftmost. A click on the other one (found by Codex,

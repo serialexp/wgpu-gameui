@@ -213,6 +213,12 @@ pub struct TextInput {
     /// caret's x on the first vertical move and cleared by any horizontal
     /// move/edit, so a run of Up/Down keeps the original column.
     desired_caret_x: Option<f32>,
+    /// The caret's byte and the x of the stop it stands at, in the display's
+    /// visual layout, as the click or Left/Right that put it there found them:
+    /// at a direction boundary a byte has two stops (the end of one run, the
+    /// start of the other), and the byte alone doesn't say which. Kept for
+    /// that byte only; any other caret is drawn at its leftmost stop.
+    caret_at: Option<(usize, f32)>,
     /// Password masking: when `Some(ch)`, every value character is *displayed*
     /// (and measured) as `ch`, while `value` keeps the real plaintext. Masking
     /// implies single-line behaviour (a `multiline` flag is ignored while masked)
@@ -276,6 +282,7 @@ impl Default for TextInput {
             drag_selection_anchor: None,
             drag_unit: None,
             desired_caret_x: None,
+            caret_at: None,
             mask: None,
             direction: crate::TextDirection::Auto,
             well: true,
@@ -487,7 +494,7 @@ impl TextInput {
             byte_under_point(nav_layout, local[0], local[1] + self.scroll_offset)
         } else {
             let x = local[0] + self.horizontal_scroll_offset;
-            self.display_to_value_byte(visual_hit(pick_vis, x).map_or(0, |(_, under)| under))
+            self.display_to_value_byte(visual_hit(pick_vis, x).map_or(0, |hit| hit.under))
         }
     }
 
@@ -572,6 +579,22 @@ impl TextInput {
         }
     }
 
+    /// Move the caret one stop `dir` across the screen from the stop it is
+    /// drawn at, and keep the stop it lands on.
+    fn step_visually(&mut self, vis: &[VisualGlyph], dir: i32) {
+        let (byte, x) = visual_caret_neighbor(vis, self.cursor_pos, dir, self.caret_x());
+        self.cursor_pos = byte;
+        self.caret_at = x.map(|x| (byte, x));
+    }
+
+    /// The x of the stop the caret stands at, if a click or an arrow put it
+    /// on one (`caret_at`).
+    fn caret_x(&self) -> Option<f32> {
+        self.caret_at
+            .filter(|&(byte, _)| byte == self.cursor_pos)
+            .map(|(_, x)| x)
+    }
+
     /// Move the cursor one step to the **visual left**.
     ///
     /// When a visual glyph layout is available (`vis` non-empty — focused,
@@ -583,7 +606,7 @@ impl TextInput {
     /// and correct for the LTR/masked case where visual == logical.
     fn cursor_left(&mut self, vis: &[VisualGlyph]) {
         if !vis.is_empty() {
-            self.cursor_pos = visual_caret_neighbor(vis, self.cursor_pos, -1);
+            self.step_visually(vis, -1);
             return;
         }
         if self.cursor_pos > 0 {
@@ -602,7 +625,7 @@ impl TextInput {
     /// [`cursor_left`]: Self::cursor_left
     fn cursor_right(&mut self, vis: &[VisualGlyph]) {
         if !vis.is_empty() {
-            self.cursor_pos = visual_caret_neighbor(vis, self.cursor_pos, 1);
+            self.step_visually(vis, 1);
             return;
         }
         if self.cursor_pos < self.value.len() {
@@ -1059,6 +1082,8 @@ impl TextInput {
         // ---- Click-to-position ----
         let pre_click_anchor = self.selection_start.unwrap_or(self.cursor_pos);
         if clicked && focused {
+            // The single-line stop picked, kept if the caret ends on it.
+            let mut picked = None;
             if multiline {
                 // Hit-test against the laid-out lines, accounting for the scroll
                 // offset and top-left text origin.
@@ -1083,9 +1108,9 @@ impl TextInput {
                     let local_x = click_x - text_left + self.horizontal_scroll_offset;
                     // Pick from the masked display, then map the picked display
                     // byte back to a real value byte.
-                    let byte_pos = self.display_to_value_byte(
-                        visual_hit(&pick_vis, local_x).map_or(0, |(caret, _)| caret),
-                    );
+                    let hit = visual_hit(&pick_vis, local_x);
+                    let byte_pos = self.display_to_value_byte(hit.map_or(0, |hit| hit.caret));
+                    picked = hit.map(|hit| (byte_pos, hit.caret_x));
                     if input.shift_pressed {
                         // Extend selection.
                         if self.selection_start.is_none() {
@@ -1132,12 +1157,14 @@ impl TextInput {
                 self.desired_caret_x = None;
                 (unit, range)
             });
+            self.caret_at = picked.filter(|&(byte, _)| byte == self.cursor_pos);
         }
 
         // Continue a primary-button selection after the press, including while
         // the pointer is outside the field. The retained anchor makes reverse
         // drags stable and lets the viewport scroll independently of the pointer.
         if focused && self.drag_selection_anchor.is_some() && input.mouse_down && !clicked {
+            let mut picked = None;
             let byte_pos = if multiline {
                 let local_x = input.mouse_x - text_x;
                 let local_y = input.mouse_y - text_top + self.scroll_offset;
@@ -1145,9 +1172,10 @@ impl TextInput {
             } else {
                 let local_x =
                     (input.mouse_x - text_x + self.horizontal_scroll_offset).clamp(0.0, f32::MAX);
-                self.display_to_value_byte(
-                    visual_hit(&pick_vis, local_x).map_or(0, |(caret, _)| caret),
-                )
+                let hit = visual_hit(&pick_vis, local_x);
+                let byte_pos = self.display_to_value_byte(hit.map_or(0, |hit| hit.caret));
+                picked = hit.map(|hit| (byte_pos, hit.caret_x));
+                byte_pos
             };
             let (anchor, cursor) = match self.drag_unit.clone() {
                 Some((_, origin)) if self.mask.is_some() => (origin.start, origin.end),
@@ -1165,6 +1193,7 @@ impl TextInput {
             self.selection_start = Some(anchor);
             self.cursor_pos = cursor;
             self.desired_caret_x = None;
+            self.caret_at = picked.filter(|&(byte, _)| byte == self.cursor_pos);
         }
         if !input.mouse_down {
             self.drag_selection_anchor = None;
@@ -1231,7 +1260,8 @@ impl TextInput {
             }
         } else if !multiline {
             let caret_byte = self.value_to_display_byte(self.cursor_pos);
-            let caret_x = visual_caret_pos(&line_vis, caret_byte).map_or(0.0, |c| c.x);
+            let caret_x =
+                visual_caret_pos(&line_vis, caret_byte, self.caret_x()).map_or(0.0, |c| c.x);
             let content_w = line_vis.iter().map(|g| g.x + g.w).fold(0.0, f32::max);
             // A focused field scrolls far enough to show all of the caret.
             let caret_room = if focused { CARET_WIDTH } else { 0.0 };
@@ -1371,7 +1401,8 @@ impl TextInput {
             if !multiline {
                 // Single-line, on the edge where its byte begins, as the
                 // value's caret is below.
-                if let Some(edge) = visual_caret_pos(&list.visual_layout(&text), *caret_byte) {
+                if let Some(edge) = visual_caret_pos(&list.visual_layout(&text), *caret_byte, None)
+                {
                     caret.x = edge.x;
                 }
             }
@@ -1416,7 +1447,7 @@ impl TextInput {
                     // RTL cell. `line_vis` is over the display, so the value byte
                     // is mapped first (identity unmasked; masked = LTR).
                     let caret_disp = self.value_to_display_byte(self.cursor_pos);
-                    visual_caret_pos(&line_vis, caret_disp)
+                    visual_caret_pos(&line_vis, caret_disp, self.caret_x())
                         .map(|c| draw_text_x + c.x)
                         .unwrap_or(draw_text_x)
                 };

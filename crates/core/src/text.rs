@@ -2649,31 +2649,31 @@ pub fn selection_rects(glyphs: &[VisualGlyph], sel_start: usize, sel_end: usize)
 /// visual line's extreme at a line end. Returns `cursor_byte` unchanged when there
 /// is nowhere to go.
 ///
-/// Caret **affinity** at a direction boundary (one screen x mapping to two byte
-/// positions) is resolved deterministically — leftmost occurrence for a left move,
-/// rightmost for a right move — rather than tracked as cursor state; pixel-perfect
-/// affinity is a documented v1 limitation.
-pub fn visual_caret_neighbor(glyphs: &[VisualGlyph], cursor_byte: usize, dir: i32) -> usize {
+/// Where a direction boundary gives a byte two stops (the end of one run, the
+/// start of the other), the move starts from the one at `at`, the x the caret
+/// is drawn at, when given; otherwise from the leftmost for a left move and
+/// the rightmost for a right move. Returns the byte and the x of the stop
+/// moved to, which the caret is drawn at ([`visual_caret_pos`]); `None` for
+/// the x when there is nowhere to go.
+pub fn visual_caret_neighbor(
+    glyphs: &[VisualGlyph],
+    cursor_byte: usize,
+    dir: i32,
+    at: Option<f32>,
+) -> (usize, Option<f32>) {
     if glyphs.is_empty() || dir == 0 {
-        return cursor_byte;
+        return (cursor_byte, None);
     }
     let stops = caret_stops(glyphs);
 
-    // Current caret position: among stops for this byte, take the leftmost for a
-    // left move and the rightmost for a right move (affinity tie-break).
-    let cur = if dir < 0 {
-        stops
-            .iter()
-            .filter(|s| s.byte == cursor_byte)
-            .min_by(|a, b| a.x.total_cmp(&b.x))
-    } else {
-        stops
-            .iter()
-            .filter(|s| s.byte == cursor_byte)
-            .max_by(|a, b| a.x.total_cmp(&b.x))
+    let of_byte = || stops.iter().filter(|s| s.byte == cursor_byte);
+    let cur = match at {
+        Some(at) => of_byte().min_by(|a, b| (a.x - at).abs().total_cmp(&(b.x - at).abs())),
+        None if dir < 0 => of_byte().min_by(|a, b| a.x.total_cmp(&b.x)),
+        None => of_byte().max_by(|a, b| a.x.total_cmp(&b.x)),
     };
     let Some(&CaretStop { x: cur_x, line, .. }) = cur else {
-        return cursor_byte;
+        return (cursor_byte, None);
     };
     const EPS: f32 = 0.01;
 
@@ -2690,13 +2690,13 @@ pub fn visual_caret_neighbor(glyphs: &[VisualGlyph], cursor_byte: usize, dir: i3
             .min_by(|a, b| a.x.total_cmp(&b.x))
     };
     if let Some(s) = same_line {
-        return s.byte;
+        return (s.byte, Some(s.x));
     }
 
     // Off the end of the line: wrap to the adjacent visual line's extreme.
     let target = line as i32 + dir.signum();
     if target < 0 {
-        return cursor_byte;
+        return (cursor_byte, None);
     }
     let target = target as usize;
     let wrapped = if dir < 0 {
@@ -2710,7 +2710,7 @@ pub fn visual_caret_neighbor(glyphs: &[VisualGlyph], cursor_byte: usize, dir: i3
             .filter(|s| s.line == target)
             .min_by(|a, b| a.x.total_cmp(&b.x))
     };
-    wrapped.map(|s| s.byte).unwrap_or(cursor_byte)
+    wrapped.map_or((cursor_byte, None), |s| (s.byte, Some(s.x)))
 }
 
 /// A direction-aware caret stop: the byte that begins at visual position `x` on
@@ -2780,9 +2780,9 @@ pub struct VisualCaret {
 /// Hit-test `x` against the first visual line of `glyphs`: the byte of the
 /// caret stop nearest `x`, each glyph's edges mapped to bytes by its direction
 /// as [`visual_caret_pos`] maps them, and the byte of the character under `x`
-/// (the nearest end's, beyond the text). `None` for no glyphs. What a
-/// single-line field picks a click's byte from.
-pub(crate) fn visual_hit(glyphs: &[VisualGlyph], x: f32) -> Option<(usize, usize)> {
+/// (the nearest end's, beyond the text), with the x of that stop. `None` for
+/// no glyphs. What a single-line field picks a click's byte from.
+pub(crate) fn visual_hit(glyphs: &[VisualGlyph], x: f32) -> Option<VisualHit> {
     let line = glyphs.first()?.line;
     let on_line = || glyphs.iter().filter(move |g| g.line == line);
     let edges = |g: &VisualGlyph| {
@@ -2795,41 +2795,65 @@ pub(crate) fn visual_hit(glyphs: &[VisualGlyph], x: f32) -> Option<(usize, usize
     let leftmost = on_line().min_by(|a, b| a.x.total_cmp(&b.x))?;
     let rightmost = on_line().max_by(|a, b| (a.x + a.w).total_cmp(&(b.x + b.w)))?;
     if x < leftmost.x {
-        return Some((edges(leftmost).0, leftmost.byte_start));
+        return Some(VisualHit {
+            caret: edges(leftmost).0,
+            caret_x: leftmost.x,
+            under: leftmost.byte_start,
+        });
     }
     let over = on_line()
         .find(|g| x >= g.x && x < g.x + g.w)
         .unwrap_or(rightmost);
     let (left, right) = edges(over);
-    let caret = if x < over.x + over.w / 2.0 {
-        left
+    let (caret, caret_x) = if x < over.x + over.w / 2.0 {
+        (left, over.x)
     } else {
-        right
+        (right, over.x + over.w)
     };
-    Some((caret, over.byte_start))
+    Some(VisualHit {
+        caret,
+        caret_x,
+        under: over.byte_start,
+    })
+}
+
+/// What [`visual_hit`] found under a point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VisualHit {
+    /// The byte of the caret stop nearest the point.
+    pub caret: usize,
+    /// That stop's x: where the caret is drawn, which a byte at a direction
+    /// boundary doesn't say alone.
+    pub caret_x: f32,
+    /// The byte of the character under the point.
+    pub under: usize,
 }
 
 /// Resolve the edge-correct caret geometry for `byte` against a visual glyph
 /// layout. Returns `None` when the layout is empty or no glyph boundary matches
 /// `byte` (the caller should fall back to a line-start position). When a byte
-/// has two stops (a direction boundary — affinity), the leftmost is chosen
-/// deterministically, consistent with the soft-wrap affinity note on
-/// [`CaretPos`].
-pub fn visual_caret_pos(glyphs: &[VisualGlyph], byte: usize) -> Option<VisualCaret> {
+/// has two stops (a direction boundary), the one nearest `near` is chosen:
+/// the x a click or an arrow put the caret at. Without it, the leftmost.
+pub fn visual_caret_pos(
+    glyphs: &[VisualGlyph],
+    byte: usize,
+    near: Option<f32>,
+) -> Option<VisualCaret> {
     if glyphs.is_empty() {
         return None;
     }
     let stops = caret_stops(glyphs);
-    stops
-        .iter()
-        .filter(|s| s.byte == byte)
-        .min_by(|a, b| a.x.total_cmp(&b.x))
-        .map(|s| VisualCaret {
-            x: s.x,
-            line: s.line,
-            line_top: s.line_top,
-            line_height: s.line_height,
-        })
+    let of_byte = stops.iter().filter(|s| s.byte == byte);
+    match near {
+        Some(near) => of_byte.min_by(|a, b| (a.x - near).abs().total_cmp(&(b.x - near).abs())),
+        None => of_byte.min_by(|a, b| a.x.total_cmp(&b.x)),
+    }
+    .map(|s| VisualCaret {
+        x: s.x,
+        line: s.line,
+        line_top: s.line_top,
+        line_height: s.line_height,
+    })
 }
 
 /// The runs `text` is shaped in when parts of it are in other faces: each of
@@ -4421,17 +4445,22 @@ mod tests {
         assert!(selection_rects(&[], 0, 5).is_empty(), "no glyphs");
     }
 
+    /// The byte one visual step from `byte`, with no stop to start from.
+    fn step(line: &[VisualGlyph], byte: usize, dir: i32) -> usize {
+        visual_caret_neighbor(line, byte, dir, None).0
+    }
+
     #[test]
     fn visual_caret_moves_left_to_right_on_screen() {
         let line = bidi_line();
         // LTR portion: stepping right increases byte (0→1→2 at x 0,10,20).
-        assert_eq!(visual_caret_neighbor(&line, 0, 1), 1, "a→b");
-        assert_eq!(visual_caret_neighbor(&line, 1, 1), 2, "b→ab/RTL seam");
+        assert_eq!(step(&line, 0, 1), 1, "a→b");
+        assert_eq!(step(&line, 1, 1), 2, "b→ab/RTL seam");
         // RTL interior: stepping right *decreases* logical byte (visual right in an
         // RTL run is logically backward): ד-left=6 → ג-left=4.
-        assert_eq!(visual_caret_neighbor(&line, 6, 1), 4, "ד→ג moving right");
+        assert_eq!(step(&line, 6, 1), 4, "ד→ג moving right");
         // Leftward is the mirror.
-        assert_eq!(visual_caret_neighbor(&line, 1, -1), 0, "b→a moving left");
+        assert_eq!(step(&line, 1, -1), 0, "b→a moving left");
     }
 
     #[test]
@@ -4447,12 +4476,12 @@ mod tests {
             rtl: false,
         };
         let line = vec![vg(0, 1, 0.0), vg(1, 2, 10.0), vg(2, 3, 20.0)]; // "abc"
-        assert_eq!(visual_caret_neighbor(&line, 0, 1), 1);
-        assert_eq!(visual_caret_neighbor(&line, 1, 1), 2);
-        assert_eq!(visual_caret_neighbor(&line, 2, -1), 1);
+        assert_eq!(step(&line, 0, 1), 1);
+        assert_eq!(step(&line, 1, 1), 2);
+        assert_eq!(step(&line, 2, -1), 1);
         // No-op at the visual extremes (single line, nowhere to wrap).
-        assert_eq!(visual_caret_neighbor(&line, 0, -1), 0);
-        assert_eq!(visual_caret_neighbor(&line, 3, 1), 3);
+        assert_eq!(step(&line, 0, -1), 0);
+        assert_eq!(step(&line, 3, 1), 3);
     }
 
     #[test]

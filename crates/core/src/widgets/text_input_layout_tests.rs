@@ -390,3 +390,68 @@ fn a_selection_over_a_long_field_draws_only_the_lines_in_view() {
         "{drawn} selection rects for at most {in_view} lines in view"
     );
 }
+
+/// "ab", then "גד" right to left: byte 2 has two caret stops, the end of "b"
+/// and the start of "ג", which is the right end of the line.
+const MIXED: &str = "abגד";
+
+fn caret_x(ti: &mut TextInput, focus: &mut FocusState) -> f32 {
+    idle(ti, focus);
+    focus
+        .ime_request()
+        .expect("a focused field asks for the IME")
+        .x
+}
+
+#[test]
+fn a_click_on_either_stop_of_a_direction_boundary_puts_the_caret_there() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 24.0).with_value(MIXED);
+    let mut focus = FocusState::new();
+    let (cells, _) = drawn(&idle(&mut ti, &mut focus));
+    let gimel = *cells.iter().find(|c| c.byte == 2).unwrap();
+    let b = *cells.iter().find(|c| c.byte == 1).unwrap();
+    assert!(gimel.left > b.right, "ג is drawn right of b: {cells:?}");
+
+    click(&mut ti, &mut focus, gimel.right - 0.5, 12.0);
+    assert_eq!(ti.cursor_pos, 2);
+    assert_near(
+        caret_x(&mut ti, &mut focus),
+        gimel.right,
+        "at the start of ג",
+    );
+
+    click(&mut ti, &mut focus, b.right - 0.5, 12.0);
+    assert_eq!(ti.cursor_pos, 2);
+    assert_near(caret_x(&mut ti, &mut focus), b.right, "at the end of b");
+}
+
+#[test]
+fn an_arrow_onto_a_direction_boundary_keeps_the_stop_it_moved_to() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 24.0).with_value(MIXED);
+    let mut focus = FocusState::new();
+    let (cells, _) = drawn(&idle(&mut ti, &mut focus));
+    let gimel = *cells.iter().find(|c| c.byte == 2).unwrap();
+    let right = InputState {
+        key_right: true,
+        ..Default::default()
+    };
+    let left = InputState {
+        key_left: true,
+        ..Default::default()
+    };
+    // Between ג and ד, then right: onto the start of ג, the line's right end.
+    ti.cursor_pos = 4;
+    frame(&mut ti, &mut focus, &right);
+    assert_eq!(ti.cursor_pos, 2);
+    assert_near(
+        caret_x(&mut ti, &mut focus),
+        gimel.right,
+        "at the start of ג",
+    );
+    // And left again: back between ג and ד, not from the end of b.
+    frame(&mut ti, &mut focus, &left);
+    assert_eq!(
+        ti.cursor_pos, 4,
+        "one step left of where the caret was drawn"
+    );
+}
