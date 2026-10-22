@@ -26,6 +26,12 @@
 //! centres, broken where a bar has no value. Its legend entry fades the
 //! bars, and a series' fades it.
 //!
+//! A trend ([`BarChart::trend`]) is a fitted line on the bars' own axis,
+//! one value a bar: solid and haloed over the bars it was fitted to, dashed
+//! and faint over the rest (a window still running), clipped to the plot.
+//! It has a legend entry and a label at the plot's top right ("trend +4.2%
+//! / week"); the caller does the fitting.
+//!
 //! Like [`Waffle`](super::Waffle), the widget only paints and reports what
 //! the pointer is over: the caller feeds the hovered bar back (and may share
 //! it with a table of the same rows), and paints the tooltip last, above
@@ -35,10 +41,11 @@ use crate::InputState;
 use crate::layout::Rect;
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 
-use super::DrawList;
+use super::{DrawList, Stroke};
 use super::chart::{
     self, AxisSide, CHART_HEIGHT, DASH, DASH_GAP, DOT, DOT_RING, DOT_SPACING, EDGE_ROOM,
-    LABEL_SPACING, LEGEND_DASH, LEGEND_GAP, LEGEND_LINE, NOW_TICK, PAD, SERIES_FADED, SWATCH_GAP,
+    LABEL_SPACING, LEGEND_DASH, LEGEND_GAP, LEGEND_LINE, LINE_WIDTH, NOW_TICK, PAD, SERIES_FADED,
+    SWATCH_GAP,
     TIP_PAD_X, TIP_ROW, TIP_ROW_GAP, TIP_SWATCH_GAP, TIP_VALUE_GAP, TIP_ZERO, X_LABELS, nice_max,
 };
 
@@ -90,6 +97,21 @@ const TIP_RULE_LIT: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
 const OVERLAY_HALO: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
 const OVERLAY_LABELS: f32 = 0.85;
 const RIGHT_AXIS: &str = "RIGHT AXIS";
+/// The trend: a line over a wider dark halo where it was fitted, a faint
+/// dash where it is carried on.
+const TREND_HALO: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
+const TREND_HALO_WIDTH: f32 = 4.0;
+const TREND_PROJECTED: f32 = 0.6;
+const TREND_DASH: f32 = 3.0;
+/// The trend's label: a dark pill at the plot's top right, poking over it.
+const TREND_PILL: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
+const TREND_PILL_SHADE: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
+const TREND_PILL_LIT: [f32; 4] = [1.0, 1.0, 1.0, 0.04];
+const TREND_PILL_HEIGHT: f32 = 15.0;
+const TREND_PILL_PAD: f32 = 5.0;
+const TREND_PILL_RAISE: f32 = 2.0;
+/// The trend's legend swatch: a 2px line along the top of the square.
+const TREND_SWATCH_LINE: f32 = 2.0;
 
 /// One series of a [`BarChart`]: a layer of every bar, and a legend entry.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,6 +178,22 @@ impl BarOverlay<'_> {
             .flatten()
             .filter(|v| v.is_finite())
     }
+}
+
+/// A fitted line over a [`BarChart`]'s bars, on their own axis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarTrend<'a> {
+    /// The line's value at each bar's centre, oldest first; one per bar.
+    pub values: &'a [f64],
+    /// How many bars, from the first, it was fitted to: solid over those,
+    /// dashed over the rest.
+    pub fitted: usize,
+    /// Its legend entry ("linear trend").
+    pub legend: &'a str,
+    /// The label at the plot's top right ("trend +4.2% / week"), and its
+    /// colour.
+    pub label: &'a str,
+    pub label_color: [f32; 4],
 }
 
 /// What a [`BarChart`] did this frame.
@@ -276,6 +314,7 @@ pub struct BarChart<'a> {
     hovered_series: Option<usize>,
     overlay: Option<BarOverlay<'a>>,
     hovered_overlay: bool,
+    trend: Option<BarTrend<'a>>,
     legend: bool,
     reference_label: &'a str,
     empty_label: &'a str,
@@ -300,6 +339,7 @@ impl<'a> BarChart<'a> {
             hovered_series: None,
             overlay: None,
             hovered_overlay: false,
+            trend: None,
             legend: true,
             reference_label: "cap (estimated)",
             empty_label: "No usage in this range",
@@ -346,6 +386,12 @@ impl<'a> BarChart<'a> {
         self
     }
 
+    /// A fitted line over the bars, on their axis.
+    pub fn trend(mut self, trend: BarTrend<'a>) -> Self {
+        self.trend = Some(trend);
+        self
+    }
+
     /// Whether to draw the legend under the plot.
     pub fn legend(mut self, legend: bool) -> Self {
         self.legend = legend;
@@ -368,6 +414,13 @@ impl<'a> BarChart<'a> {
     /// The overlay, unless there are no bars for it to run over.
     fn shown_overlay(&self) -> Option<&BarOverlay<'a>> {
         self.overlay.as_ref().filter(|_| !self.bars.is_empty())
+    }
+
+    /// The trend, when it has a value for every bar.
+    fn shown_trend(&self) -> Option<&BarTrend<'a>> {
+        self.trend
+            .as_ref()
+            .filter(|trend| !self.bars.is_empty() && trend.values.len() == self.bars.len())
     }
 
     fn layout(&self, width: f32, list: &mut DrawList, s: &StyleResolver) -> Layout {
@@ -554,6 +607,11 @@ impl<'a> BarChart<'a> {
             self.draw_bar(bar, left, base, scale, &layout, list, s);
             list.pop_tint();
         }
+        if let Some(trend) = self.shown_trend() {
+            let plot_width = width - layout.gutter - layout.right_gutter;
+            let plot = Rect::new(x + layout.gutter, base - self.height, plot_width, self.height);
+            self.draw_trend(trend, plot, scale, list, s);
+        }
         if let Some(overlay) = self.shown_overlay() {
             self.draw_overlay(overlay, x + layout.gutter, base, &layout, lit, list, s);
         }
@@ -569,7 +627,7 @@ impl<'a> BarChart<'a> {
                     match entry {
                         LegendEntry::Series(index) => hovered_series = Some(index),
                         LegendEntry::Overlay => hovered_overlay = true,
-                        LegendEntry::Reference | LegendEntry::Current => {}
+                        LegendEntry::Reference | LegendEntry::Current | LegendEntry::Trend => {}
                     }
                 }
                 self.draw_legend_entry(entry, r, list, s);
@@ -618,6 +676,63 @@ impl<'a> BarChart<'a> {
             let ticks = &layout.overlay_ticks;
             chart::draw_axis_labels(list, s, plot, AxisSide::Right, ticks, Some(color));
         }
+    }
+
+    /// The trend through each bar's centre in `plot`, `scale` pixels a unit
+    /// up from its bottom: haloed over the fitted bars, dashed and faint on
+    /// to the rest, clipped to the plot. Bars sharing a slot keep their own
+    /// place along it. Then its label, at the plot's top right.
+    fn draw_trend(
+        &self,
+        trend: &BarTrend<'_>,
+        plot: Rect,
+        scale: f64,
+        list: &mut DrawList,
+        s: &StyleResolver,
+    ) {
+        let n = trend.values.len();
+        let step = plot.width / n as f32;
+        let point = |i: usize| {
+            let at = (trend.values[i].max(0.0) * scale) as f32;
+            [plot.x + (i as f32 + 0.5) * step, plot.bottom() - at]
+        };
+        let fitted = trend.fitted.min(n);
+        let ink = s.ink(Ink::Title);
+        list.push_clip(plot);
+        if fitted >= 2 {
+            let points: Vec<[f32; 2]> = (0..fitted).map(point).collect();
+            list.stroke_polyline(&points, &Stroke::new(TREND_HALO_WIDTH), TREND_HALO);
+            list.stroke_polyline(&points, &Stroke::new(LINE_WIDTH), ink);
+        }
+        if fitted >= 1 && fitted < n {
+            let points: Vec<[f32; 2]> = (fitted - 1..n).map(point).collect();
+            let mut faint = ink;
+            faint[3] *= TREND_PROJECTED;
+            let dash = Stroke::new(LINE_WIDTH).dashed(TREND_DASH, TREND_DASH);
+            list.stroke_polyline(&points, &dash, faint);
+        }
+        list.pop_clip();
+
+        if trend.label.is_empty() {
+            return;
+        }
+        let block = s.mono_block(trend.label, 0.0, 0.0, TextSize::Meta, Ink::Row);
+        let (w, _) = list.measure_block(&block);
+        let pill = Rect::new(
+            plot.right() - w - TREND_PILL_PAD * 2.0,
+            plot.y - TREND_PILL_RAISE,
+            w + TREND_PILL_PAD * 2.0,
+            TREND_PILL_HEIGHT,
+        );
+        list.rounded_rect(pill, 1.0, TREND_PILL);
+        list.quad(pill.x, pill.y, pill.width, 1.0, TREND_PILL_SHADE);
+        list.quad(pill.x, pill.bottom(), pill.width, 1.0, TREND_PILL_LIT);
+        let size = s.text_size(TextSize::Meta);
+        let y = crate::text::vcentered_line_y(pill.y, pill.height, size);
+        let block = s
+            .mono_block(trend.label, pill.x + TREND_PILL_PAD, y, TextSize::Meta, Ink::Row)
+            .with_color_f32(trend.label_color);
+        list.text(block);
     }
 
     /// The overlay's line through the bar centres from `origin` (the plot's
@@ -842,11 +957,13 @@ impl<'a> BarChart<'a> {
         let has_reference = self.bars.iter().any(|bar| bar.reference.is_some());
         let has_current = self.bars.iter().any(|bar| bar.current);
         let has_overlay = self.shown_overlay().is_some();
+        let has_trend = self.shown_trend().is_some();
         let entries: Vec<(LegendEntry, f32)> = (0..self.series.len())
             .map(LegendEntry::Series)
             .chain(has_overlay.then_some(LegendEntry::Overlay))
             .chain(has_reference.then_some(LegendEntry::Reference))
             .chain(has_current.then_some(LegendEntry::Current))
+            .chain(has_trend.then_some(LegendEntry::Trend))
             .map(|entry| (entry, self.legend_entry_width(entry, list, s)))
             .collect();
         chart::legend_rows(list, width, layout.gutter, entries, place)
@@ -878,6 +995,10 @@ impl<'a> BarChart<'a> {
             }
             LegendEntry::Reference => LEGEND_DASH + SWATCH_GAP + text(list, self.reference_label),
             LegendEntry::Current => LEGEND_SWATCH + SWATCH_GAP + text(list, "current window"),
+            LegendEntry::Trend => {
+                let label = self.trend.as_ref().map_or("", |trend| trend.legend);
+                LEGEND_SWATCH + SWATCH_GAP + text(list, label)
+            }
         }
     }
 
@@ -958,6 +1079,13 @@ impl<'a> BarChart<'a> {
                 list.quad(x, y, swatch.width, swatch.height, s.ink(Ink::Glyph));
                 list.hatch(swatch, HATCH_STEP, HATCH);
                 let label = "current window";
+                list.text(s.sans_block(label, label_x, text_y, TextSize::Row, Ink::Second));
+            }
+            LegendEntry::Trend => {
+                let Some(trend) = &self.trend else { return };
+                let ink = s.ink(Ink::Title);
+                list.quad(swatch.x, swatch.y, swatch.width, TREND_SWATCH_LINE, ink);
+                let label = trend.legend;
                 list.text(s.sans_block(label, label_x, text_y, TextSize::Row, Ink::Second));
             }
         }
@@ -1131,13 +1259,14 @@ impl<'a> BarChart<'a> {
 }
 
 /// An entry of the legend: a series, the overlay, the reference line, the
-/// current bar.
+/// current bar, the trend.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum LegendEntry {
     Series(usize),
     Overlay,
     Reference,
     Current,
+    Trend,
 }
 
 /// Fill `rect` the way `series` is painted: solid, or (estimated) faint
