@@ -14,7 +14,10 @@
 //     for soft drop-shadows / glow. Shadow and glow are emitted as separate,
 //     offset, behind quads by the CPU side (see text.rs) using these same fields.
 //
-// Per-vertex scissor clipping matches the other UI pipelines (ui.wgsl).
+// Each quad is an instance of the shared unit quad, like the other instanced
+// UI pipelines: one record carries its corners, atlas rect, colours, clip and
+// effect, and the vertex shader picks the corner. Scissor clipping matches
+// those pipelines (ui.wgsl).
 //
 // Crisp edges (softness 0) are corrected for their colour so light text on a
 // dark background looks as heavy as dark text on a light one; see
@@ -36,17 +39,21 @@ struct Uniforms {
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_sampler: sampler;
 
+// `MsdfInstance` in text.rs, after the base mesh's corner.
 struct VsIn {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) fill: vec4<f32>,
-    @location(3) clip: vec4<f32>,
-    @location(4) clip_enabled: f32,
-    // Distance-ramp width of the field in *atlas* texels (constant per atlas).
-    @location(5) px_range: f32,
+    // The unit-quad corner in [0,1]².
+    @location(0) corner: vec2<f32>,
+    // World-space corners: top-left, top-right / bottom-right, bottom-left.
+    @location(1) c_tl_tr: vec4<f32>,
+    @location(2) c_br_bl: vec4<f32>,
+    // The tile's atlas rect [u0, v0, u1, v1].
+    @location(3) uv_rect: vec4<f32>,
+    @location(4) fill: vec4<f32>,
+    @location(5) clip: vec4<f32>,
     @location(6) outline: vec4<f32>,
-    @location(7) outline_width: f32,
-    @location(8) softness: f32,
+    // [clip_enabled, px_range, outline_width, softness]; `px_range` is the
+    // field's distance-ramp width in *atlas* texels (constant per atlas).
+    @location(7) params: vec4<f32>,
 };
 
 struct VsOut {
@@ -65,16 +72,22 @@ struct VsOut {
 @vertex
 fn vs_msdf(in: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip_position = uniforms.view_proj * vec4<f32>(in.position, 0.0, 1.0);
-    out.uv = in.uv;
+    let u = in.corner.x;
+    let v = in.corner.y;
+    // Bilinear interp of the four (possibly rotated/sheared) corners.
+    let top = mix(in.c_tl_tr.xy, in.c_tl_tr.zw, u);
+    let bot = mix(in.c_br_bl.zw, in.c_br_bl.xy, u);
+    let world = mix(top, bot, v);
+    out.clip_position = uniforms.view_proj * vec4<f32>(world, 0.0, 1.0);
+    out.uv = mix(in.uv_rect.xy, in.uv_rect.zw, in.corner);
     out.fill = in.fill;
     out.clip = in.clip;
-    out.clip_enabled = in.clip_enabled;
-    out.frag_pos = in.position;
-    out.px_range = in.px_range;
+    out.clip_enabled = in.params.x;
+    out.frag_pos = world;
+    out.px_range = in.params.y;
     out.outline = in.outline;
-    out.outline_width = in.outline_width;
-    out.softness = in.softness;
+    out.outline_width = in.params.z;
+    out.softness = in.params.w;
     return out;
 }
 

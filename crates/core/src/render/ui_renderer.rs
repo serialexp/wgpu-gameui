@@ -246,8 +246,9 @@ const COLOR_VERTEX_ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array
     3 => Float32,
 ];
 
-/// Base unit-quad vertex (one attribute: the corner in `[0,1]²`).
-const CHROME_BASE_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![
+/// Base unit-quad vertex (one attribute: the corner in `[0,1]²`), shared by
+/// every instanced pipeline, the MSDF text one included.
+pub(crate) const QUAD_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![
     0 => Float32x2,
 ];
 
@@ -267,10 +268,10 @@ const CIRCLE_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_ar
     4 => Float32x4, // params (clip_enabled, _, _, _)
 ];
 
-/// Unit-quad corners (TL, TR, BR, BL) for the chrome base mesh.
-const CHROME_BASE_VERTS: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+/// Unit-quad corners (TL, TR, BR, BL) for the instanced pipelines' base mesh.
+pub(crate) const QUAD_VERTS: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 /// Two triangles for the unit quad above.
-const CHROME_BASE_INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
+pub(crate) const QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 3, 0];
 
 /// Per-instance nine-slice record — matches `vs_nine_slice` in `ui.wgsl`.
 ///
@@ -738,7 +739,7 @@ impl UiRenderer {
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &CHROME_BASE_ATTRIBS,
+                        attributes: &QUAD_ATTRIBS,
                     },
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<AnalyticInstance>()
@@ -779,7 +780,7 @@ impl UiRenderer {
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &CHROME_BASE_ATTRIBS,
+                        attributes: &QUAD_ATTRIBS,
                     },
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<CircleInstance>() as wgpu::BufferAddress,
@@ -826,7 +827,7 @@ impl UiRenderer {
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &CHROME_BASE_ATTRIBS,
+                        attributes: &QUAD_ATTRIBS,
                     },
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<NineSliceInstance>()
@@ -856,12 +857,12 @@ impl UiRenderer {
 
         let chrome_base_vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ui chrome base vbo"),
-            contents: bytemuck::cast_slice(&CHROME_BASE_VERTS),
+            contents: bytemuck::cast_slice(&QUAD_VERTS),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let chrome_base_ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ui chrome base ibo"),
-            contents: bytemuck::cast_slice(&CHROME_BASE_INDICES),
+            contents: bytemuck::cast_slice(&QUAD_INDICES),
             usage: wgpu::BufferUsages::INDEX,
         });
 
@@ -2093,14 +2094,14 @@ impl UiRenderer {
             &mut self.nine_insts,
             bytemuck::cast_slice(&draws.nine_slices),
         );
-        let text = self.text_renderer.upload_vertices(
+        let text = self.text_renderer.upload_instances(
             device,
             queue,
             &self.batch_draws.text,
             MsdfAtlas::Glyphs,
         );
         #[cfg(feature = "phosphor-icons")]
-        let icons = self.text_renderer.upload_vertices(
+        let icons = self.text_renderer.upload_instances(
             device,
             queue,
             &self.batch_draws.icons,
@@ -2121,7 +2122,7 @@ impl UiRenderer {
 
     /// Draw one list's batches, in draw order, into the list's pass.
     fn draw_batches(&mut self, pass: &mut wgpu::RenderPass<'_>, upload: &BatchUpload) {
-        let quad = 0..CHROME_BASE_INDICES.len() as u32;
+        let quad = 0..QUAD_INDICES.len() as u32;
         // Taken for the loop, so drawing can note small textures; put back after.
         let draws = std::mem::take(&mut self.batch_draws.draws);
         for draw in &draws {
@@ -2215,7 +2216,7 @@ impl UiRenderer {
                     let run = upload
                         .text
                         .as_ref()
-                        .expect("text batches uploaded their vertices");
+                        .expect("text batches uploaded their instances");
                     self.text_renderer.draw_prepared_range(pass, run, range);
                     self.frame_stats.text_runs += 1;
                 }
@@ -2224,7 +2225,7 @@ impl UiRenderer {
                     let run = upload
                         .icons
                         .as_ref()
-                        .expect("icon batches uploaded their vertices");
+                        .expect("icon batches uploaded their instances");
                     self.text_renderer.draw_prepared_range(pass, run, range);
                     self.frame_stats.icon_runs += 1;
                 }
@@ -2339,7 +2340,7 @@ impl UiRenderer {
         pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
         pass.set_vertex_buffer(1, run.buffer.slice(run.offset..));
         pass.set_index_buffer(self.chrome_base_ibo.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..CHROME_BASE_INDICES.len() as u32, 0, 0..run.count);
+        pass.draw_indexed(0..QUAD_INDICES.len() as u32, 0, 0..run.count);
     }
 
     /// Draw an uploaded icon or nine-slice run in a pass of its own (the
@@ -2477,7 +2478,7 @@ fn create_icon_pipeline(
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &CHROME_BASE_ATTRIBS,
+                    attributes: &QUAD_ATTRIBS,
                 },
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<IconInstance>() as wgpu::BufferAddress,

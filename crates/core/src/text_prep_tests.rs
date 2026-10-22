@@ -52,19 +52,19 @@ fn a_command_without_shadows_or_glows_is_a_unit_per_block() {
     let blocks: Vec<_> = out.text_units.iter().map(|u| u.blocks.clone()).collect();
     assert_eq!(blocks, [0..1, 1..2, 2..3]);
     // The units follow one another and make up the command.
-    let total = out.text_vertices.len() as u32;
-    assert_eq!(out.text_units[0].vertices.start, 0);
+    let total = out.text_instances.len() as u32;
+    assert_eq!(out.text_units[0].instances.start, 0);
     for pair in out.text_units.windows(2) {
-        assert_eq!(pair[0].vertices.end, pair[1].vertices.start);
+        assert_eq!(pair[0].instances.end, pair[1].instances.start);
     }
-    assert_eq!(out.text_units[2].vertices.end, total);
+    assert_eq!(out.text_units[2].instances.end, total);
     assert_eq!(out.text_commands, Vec::from_iter(once(0..total)));
-    // Each block draws only its fill, six vertices a glyph.
+    // Each block draws only its fill, one instance a glyph.
     for (i, text) in texts.iter().enumerate() {
         let [shadow, glow, fill] = &out.block_sweeps[i];
         assert_eq!((len(shadow), len(glow)), (0, 0));
-        assert_eq!(fill, &out.text_units[i].vertices);
-        assert_eq!(len(fill), 6 * text.content.chars().count() as u32);
+        assert_eq!(fill, &out.text_units[i].instances);
+        assert_eq!(len(fill), text.content.chars().count() as u32);
     }
 }
 
@@ -81,19 +81,19 @@ fn a_command_with_a_shadow_or_glow_is_one_unit_drawn_in_three_sweeps() {
 
     assert_eq!(out.text_units.len(), 1);
     assert_eq!(out.text_units[0].blocks, 0..3);
-    let total = out.text_vertices.len() as u32;
-    assert_eq!(out.text_units[0].vertices, 0..total);
+    let total = out.text_instances.len() as u32;
+    assert_eq!(out.text_units[0].instances, 0..total);
     assert_eq!(out.text_commands, Vec::from_iter(once(0..total)));
 
     let [lit, plain, dark] = [0, 1, 2].map(|i| out.block_sweeps[i].clone());
     // Only the blocks with an effect draw its sweep.
-    assert_eq!((len(&lit[0]), len(&lit[1])), (0, 18));
+    assert_eq!((len(&lit[0]), len(&lit[1])), (0, 3));
     assert_eq!((len(&plain[0]), len(&plain[1])), (0, 0));
-    assert_eq!((len(&dark[0]), len(&dark[1])), (24, 0));
+    assert_eq!((len(&dark[0]), len(&dark[1])), (4, 0));
     // Every shadow, then every glow, then every fill, each in block order.
-    assert_eq!(dark[0], 0..24);
-    assert_eq!(lit[1], 24..42);
-    assert_eq!(lit[2].start, 42);
+    assert_eq!(dark[0], 0..4);
+    assert_eq!(lit[1], 4..7);
+    assert_eq!(lit[2].start, 7);
     assert_eq!(lit[2].end, plain[2].start);
     assert_eq!(plain[2].end, dark[2].start);
     assert_eq!(dark[2].end, total);
@@ -113,22 +113,22 @@ fn each_command_forms_its_own_units_in_paint_order() {
 
     let blocks: Vec<_> = out.text_units.iter().map(|u| u.blocks.clone()).collect();
     assert_eq!(blocks, [0..1, 1..2, 2..4]);
-    let total = out.text_vertices.len() as u32;
-    assert_eq!(out.text_commands, [0..12, 12..total]);
-    // A glyph's glow and fill: twelve vertices for "c", none for "".
-    assert_eq!(total, 24);
+    let total = out.text_instances.len() as u32;
+    assert_eq!(out.text_commands, [0..2, 2..total]);
+    // A glyph's glow and fill: two instances for "c", none for "".
+    assert_eq!(total, 4);
     assert!(out.block_sweeps[3].iter().all(|r| r.is_empty()));
-    assert_eq!(out.block_vertices(3).map(<[_]>::len).sum::<usize>(), 0);
+    assert_eq!(out.block_instances(3).map(<[_]>::len).sum::<usize>(), 0);
 
     // Preparing again starts afresh.
     cpu.prepare_texts(&mut out, grid(), &texts[..1], once(0..1));
     assert_eq!(out.text_units.len(), 1);
-    assert_eq!(out.text_commands, Vec::from_iter(once(0..6)));
+    assert_eq!(out.text_commands, Vec::from_iter(once(0..1)));
     assert_eq!(out.block_sweeps.len(), 1);
 }
 
 #[test]
-fn a_text_command_after_an_empty_one_has_its_own_vertices() {
+fn a_text_command_after_an_empty_one_has_its_own_instances() {
     let (mut cpu, font) = cpu(None);
     let mut out = MsdfPrepared::default();
     let texts = [
@@ -138,10 +138,10 @@ fn a_text_command_after_an_empty_one_has_its_own_vertices() {
     ];
     cpu.prepare_texts(&mut out, grid(), &texts, [0..1, 1..2, 2..3]);
     let sizes: Vec<_> = out.text_commands.iter().map(|r| r.len()).collect();
-    assert_eq!(sizes, [6, 0, 12]);
+    assert_eq!(sizes, [1, 0, 2]);
     // The third command is "BC"'s quads, below the others.
-    let third = &out.text_vertices[out.text_commands[2].start as usize..];
-    assert!(third.iter().all(|v| v.position[1] > 60.0));
+    let third = &out.text_instances[out.text_commands[2].start as usize..];
+    assert!(third.iter().flat_map(|q| q.corners).all(|c| c[1] > 60.0));
 }
 
 #[test]
@@ -166,17 +166,17 @@ fn a_later_unit_that_grows_the_atlas_leaves_earlier_ones_built_against_its_final
         final_size > early_size,
         "the late unit grows the atlas: {early_size} then {final_size}"
     );
-    let first = out.text_units[0].vertices.clone();
-    let first = out.text_vertices[first.start as usize..first.end as usize].to_vec();
+    let first = out.text_units[0].instances.clone();
+    let first = out.text_instances[first.start as usize..first.end as usize].to_vec();
     // Built against the small atlas, the early unit's UVs would be these.
-    assert_ne!(first, alone_out.text_vertices);
+    assert_ne!(first, alone_out.text_instances);
 
     // The atlas is final now, so preparing again builds every unit against
     // the same size, and nothing comes out different.
-    let built = out.text_vertices.clone();
+    let built = out.text_instances.clone();
     both.prepare_texts(&mut out, grid(), &texts, [0..1, 1..2]);
     assert_eq!(both.atlas.width(), final_size);
-    assert_eq!(out.text_vertices, built);
+    assert_eq!(out.text_instances, built);
 }
 
 #[cfg(feature = "phosphor-icons")]
@@ -198,14 +198,14 @@ mod icons {
     }
 
     #[test]
-    fn each_icon_has_its_six_vertices_in_icon_order() {
+    fn each_icon_has_its_instance_in_icon_order() {
         let (mut cpu, _) = cpu(None);
         let mut out = MsdfPrepared::default();
         let drawn = icons(&[PhosphorIcon::Plus, PhosphorIcon::Check, PhosphorIcon::X]);
         cpu.prepare_icons(&mut out, &drawn);
-        assert_eq!(out.icon_starts, [0, 6, 12, 18]);
-        assert_eq!(out.icon_range(1..3), 6..18);
-        assert_eq!(out.icon_vertices.len(), 18);
+        assert_eq!(out.icon_starts, [0, 1, 2, 3]);
+        assert_eq!(out.icon_range(1..3), 1..3);
+        assert_eq!(out.icon_instances.len(), 3);
     }
 
     #[test]
@@ -226,11 +226,11 @@ mod icons {
             final_size > early_size,
             "the later icons grow the atlas: {early_size} then {final_size}"
         );
-        assert_ne!(out.icon_vertices[..6], alone_out.icon_vertices[..]);
+        assert_ne!(out.icon_instances[..1], alone_out.icon_instances[..]);
 
-        let built = out.icon_vertices.clone();
+        let built = out.icon_instances.clone();
         many.prepare_icons(&mut out, &drawn);
         assert_eq!(many.icon_atlas.width(), final_size);
-        assert_eq!(out.icon_vertices, built);
+        assert_eq!(out.icon_instances, built);
     }
 }

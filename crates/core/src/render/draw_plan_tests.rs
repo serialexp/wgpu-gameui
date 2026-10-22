@@ -436,7 +436,7 @@ mod lists {
         draws.fill(&plan, &list, &lists.prepared);
         draws.push_soup(&[]);
         draws.push_soup(&[0, 1, 2]);
-        let text = lists.prepared.text_vertices.len() as u32;
+        let text = lists.prepared.text_instances.len() as u32;
         assert!(text > 0);
         let draw = |kind, range, small_texture| BatchDraw {
             kind,

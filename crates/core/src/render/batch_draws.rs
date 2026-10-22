@@ -8,7 +8,7 @@ use std::ops::Range;
 use super::draw_plan::{DrawPlan, UnitRef};
 use super::textures::{Binding, Resolved, SpriteId};
 use super::ui_renderer::{IconInstance, NineSliceInstance, icon_instance, nine_slice_instance};
-use crate::text::{MsdfPrepared, MsdfVertex};
+use crate::text::{MsdfInstance, MsdfPrepared};
 use crate::widgets::{AnalyticInstance, CircleInstance, DrawList, PaintCmd};
 
 /// The pipeline a draw uses, and what it samples.
@@ -48,9 +48,9 @@ pub(crate) struct BatchDraws {
     pub(crate) circles: Vec<CircleInstance>,
     pub(crate) sprites: Vec<IconInstance>,
     pub(crate) nine_slices: Vec<NineSliceInstance>,
-    pub(crate) text: Vec<MsdfVertex>,
+    pub(crate) text: Vec<MsdfInstance>,
     #[cfg(feature = "phosphor-icons")]
-    pub(crate) icons: Vec<MsdfVertex>,
+    pub(crate) icons: Vec<MsdfInstance>,
     pub(crate) draws: Vec<BatchDraw>,
 }
 
@@ -168,16 +168,16 @@ impl BatchDraws {
                 ));
             }
             UnitRef::Text(i) => {
-                let range = prepared.text_units[i as usize].vertices.clone();
+                let range = prepared.text_units[i as usize].instances.clone();
                 self.text.extend_from_slice(
-                    &prepared.text_vertices[range.start as usize..range.end as usize],
+                    &prepared.text_instances[range.start as usize..range.end as usize],
                 );
             }
             #[cfg(feature = "phosphor-icons")]
             UnitRef::IconMsdf(i) => {
                 let range = prepared.icon_range(i..i + 1);
                 self.icons.extend_from_slice(
-                    &prepared.icon_vertices[range.start as usize..range.end as usize],
+                    &prepared.icon_instances[range.start as usize..range.end as usize],
                 );
             }
         }

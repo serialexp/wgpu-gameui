@@ -437,7 +437,11 @@ harden those foundations rather than create parallel replacements.
   numbers" in `docs/design/shared-text-layout.md`). Skip the lines wholly
   outside the clip (lines are sorted by `top`, so a binary search finds the
   first in view).
-- [ ] **P3 — A glyph uploads six fat vertices.** A sample of the focused
+- [x] **P3 — A glyph uploads six fat vertices.** Done 2026-10-22: MSDF
+  text and icons draw as instances of the shared unit quad, like the other
+  instanced pipelines. A glyph is one `MsdfInstance` of 112 bytes (its four
+  corners, uv rect, fill, clip, outline and effect), and `ui_msdf.wgsl`
+  places the corner. It was: A sample of the focused
   5,000-line field's idle frame (2026-10-21, with the clip culling in) has
   `Queue::write_buffer` copying about a sixth of the frame's samples. It
   uploads only what the frame draws (`RenderStats::buffer_bytes_uploaded`:

@@ -18,8 +18,9 @@
 //! Every bound is also widened by [`float_margin`], for the error of the f32
 //! steps a position goes through on its way to the target.
 
+use super::QUAD_INDICES;
 use crate::layout::Rect;
-use crate::text::{MsdfPrepared, MsdfVertex};
+use crate::text::{MsdfInstance, MsdfPrepared};
 use crate::widgets::{
     ANALYTIC_KIND_CHROME, ANALYTIC_KIND_SEGMENT, ANALYTIC_KIND_SHADOW, ANALYTIC_KIND_STRIPES,
     AnalyticInstance, CircleInstance, IconDraw, NineSliceDraw, Vertex,
@@ -479,17 +480,20 @@ pub(crate) fn soup(target: &Target, vertices: &[Vertex], indices: &[u32]) -> Pix
     out
 }
 
-/// MSDF quads, text glyphs or icons: as soup, each triangle's box cut by
-/// the clips its vertices carry. The MSDF shader draws its quads exactly as
-/// given.
-pub(crate) fn msdf(target: &Target, vertices: &[MsdfVertex]) -> PixelBox {
+/// MSDF quads, text glyphs or icons: each quad's two triangles, as the base
+/// mesh splits it, their boxes cut by the quad's clip. The MSDF shader draws
+/// its quads exactly as given.
+pub(crate) fn msdf(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
     let mut out = PixelBox::EMPTY;
-    for tri in vertices.chunks_exact(3) {
-        let corner = |v: &MsdfVertex| (v.position, v.clip, v.clip_enabled);
-        out = out.union(&triangle(
-            target,
-            [corner(&tri[0]), corner(&tri[1]), corner(&tri[2])],
-        ));
+    for quad in instances {
+        let clip_on = if quad.clip_enabled() { 1.0 } else { 0.0 };
+        for tri in QUAD_INDICES.chunks_exact(3) {
+            let corner = |i: u16| (quad.corners[i as usize], quad.clip, clip_on);
+            out = out.union(&triangle(
+                target,
+                [corner(tri[0]), corner(tri[1]), corner(tri[2])],
+            ));
+        }
     }
     out
 }
@@ -498,9 +502,9 @@ pub(crate) fn msdf(target: &Target, vertices: &[MsdfVertex]) -> PixelBox {
 /// glow, fill and outline).
 pub(crate) fn text_block(target: &Target, prepared: &MsdfPrepared, block: usize) -> PixelBox {
     prepared
-        .block_vertices(block)
-        .fold(PixelBox::EMPTY, |b, vertices| {
-            b.union(&msdf(target, vertices))
+        .block_instances(block)
+        .fold(PixelBox::EMPTY, |b, instances| {
+            b.union(&msdf(target, instances))
         })
 }
 
@@ -510,7 +514,7 @@ pub(crate) fn icon_msdf(target: &Target, prepared: &MsdfPrepared, icon: u32) -> 
     let range = prepared.icon_range(icon..icon + 1);
     msdf(
         target,
-        &prepared.icon_vertices[range.start as usize..range.end as usize],
+        &prepared.icon_instances[range.start as usize..range.end as usize],
     )
 }
 

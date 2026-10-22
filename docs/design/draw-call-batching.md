@@ -1,7 +1,7 @@
 # Draw-call batching
 
 **Status:** Done
-**Last updated:** 2026-10-21
+**Last updated:** 2026-10-22
 
 ## Implementation status
 
@@ -709,6 +709,12 @@ device cleanly, the tests on real lists that need text become GPU tests
    > outline, shadow, glow, scaled) and icons (plain, turned); it fails when
    > a block's box leaves out its shadow and glow sweeps. Pixels are
    > unchanged: every existing test passes.
+
+   > **2026-10-22 update:** the six vertices a glyph or icon became one
+   > `MsdfInstance` of the shared unit quad, as the other instanced
+   > families draw (`upload_vertices` is now `upload_instances`). The
+   > ranges above count instances; units, sweeps and batches are
+   > unchanged.
 
    > **2026-10-16 update, after review:** the review found no change in
    > behaviour, except one fix it confirmed: icons drawn on a path without a

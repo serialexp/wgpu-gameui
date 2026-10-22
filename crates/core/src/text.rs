@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
 use unicode_segmentation::UnicodeSegmentation;
+use wgpu::util::DeviceExt;
 
 use crate::RenderStats;
 use crate::layout::Rect;
@@ -30,6 +31,7 @@ use crate::render::{
     FrameArena, GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, TextContrast, UniformArena,
     ortho_matrix,
 };
+use crate::render::{QUAD_ATTRIBS, QUAD_INDICES, QUAD_VERTS};
 use crate::shaping::{LayoutSpec, ShapedGlyph, SharedFontSystem};
 #[cfg(feature = "phosphor-icons")]
 use crate::widgets::IconMsdf;
@@ -470,34 +472,49 @@ pub fn load_font_bytes(fs: &FontSystemHandle, bytes: &[u8]) -> Result<FontHandle
         .ok_or_else(|| "loaded font exposes no family name".to_string())
 }
 
+/// One MSDF quad, a glyph or an icon — matches `vs_msdf` in `ui_msdf.wgsl`.
+/// Drawn as an instance of the shared unit quad, like the other instanced
+/// pipelines: the vertex shader places the quad's corner from `corners` and
+/// its atlas texel from `uv_rect`, so a glyph uploads one record rather than
+/// six vertices repeating the same colour, clip and effect.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub(crate) struct MsdfVertex {
-    pub(crate) position: [f32; 2],
-    uv: [f32; 2],
+pub(crate) struct MsdfInstance {
+    /// The quad's world-space corners: top-left, top-right, bottom-right,
+    /// bottom-left. All four, so an icon's transform can rotate or shear it.
+    pub(crate) corners: [[f32; 2]; 4],
+    /// The tile's atlas rect `[u0, v0, u1, v1]`.
+    uv_rect: [f32; 4],
     fill: [f32; 4],
+    /// Clip rect `[x, y, w, h]` (ignored unless `params[0] > 0.5`).
     pub(crate) clip: [f32; 4],
-    pub(crate) clip_enabled: f32,
-    /// Distance-ramp width of the field in atlas texels (constant per atlas).
-    px_range: f32,
     /// Outline/glow color composited under the fill (a == 0 disables).
     outline: [f32; 4],
-    /// Outline width in screen px (glyph grown outward by this much).
-    outline_width: f32,
-    /// Extra AA spread in screen px (soft shadows / glow); 0 = crisp.
-    softness: f32,
+    /// `[clip_enabled, px_range, outline_width, softness]`: whether `clip`
+    /// applies; the field's distance-ramp width in atlas texels (constant per
+    /// atlas); the outline width in screen px (the glyph grown outward by
+    /// this much); extra AA spread in screen px (soft shadows / glow, 0 is
+    /// crisp).
+    params: [f32; 4],
 }
 
-const MSDF_VERTEX_ATTRIBS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
-    0 => Float32x2,
-    1 => Float32x2,
-    2 => Float32x4,
-    3 => Float32x4,
-    4 => Float32,
-    5 => Float32,
-    6 => Float32x4,
-    7 => Float32,
-    8 => Float32,
+impl MsdfInstance {
+    /// Whether [`clip`](Self::clip) applies.
+    pub(crate) fn clip_enabled(&self) -> bool {
+        self.params[0] > 0.5
+    }
+}
+
+/// Per-instance MSDF attributes — matches [`MsdfInstance`] / `vs_msdf`
+/// (location 0 is the base-mesh corner).
+const MSDF_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+    1 => Float32x4, // corners: top-left, top-right
+    2 => Float32x4, // corners: bottom-right, bottom-left
+    3 => Float32x4, // uv_rect
+    4 => Float32x4, // fill
+    5 => Float32x4, // clip
+    6 => Float32x4, // outline
+    7 => Float32x4, // params
 ];
 
 /// Which atlas an MSDF upload samples.
@@ -508,14 +525,14 @@ pub(crate) enum MsdfAtlas {
     Icons,
 }
 
-/// One MSDF run (text or icons) uploaded for drawing: its vertices sit in
-/// `vbo` at `offset`, and the bind groups it samples were captured at upload.
-/// Drawn with [`TextRenderer::draw_prepared`] inside a render pass the caller
-/// owns, so a whole paint stream can share one pass.
+/// One MSDF run (text or icons) uploaded for drawing: its instances sit in
+/// `instances` at `offset`, and the bind groups it samples were captured at
+/// upload. Drawn with [`TextRenderer::draw_prepared`] inside a render pass the
+/// caller owns, so a whole paint stream can share one pass.
 pub(crate) struct PreparedMsdf {
-    vbo: wgpu::Buffer,
+    buffer: wgpu::Buffer,
     offset: u64,
-    vertices: u32,
+    instances: u32,
     atlas: wgpu::BindGroup,
     uniform: wgpu::BindGroup,
     uniform_offset: u32,
@@ -537,7 +554,7 @@ pub struct TextRenderer {
 
     // The icon atlas's GPU mirror (the icon atlas has its own ref_px and is
     // never evicted). Shares the atlas bind-group layout and the MSDF pipeline
-    // with text; only the bound texture (and vertex slice) differ.
+    // with text; only the bound texture (and instance slice) differ.
     #[cfg(feature = "phosphor-icons")]
     icon_gpu: MsdfTextureGpu,
 
@@ -553,14 +570,17 @@ pub struct TextRenderer {
     view_origin: [f32; 2],
 
     pipeline: wgpu::RenderPipeline,
+    /// The unit quad every MSDF instance is drawn as (see [`MsdfInstance`]).
+    quad_vbo: wgpu::Buffer,
+    quad_ibo: wgpu::Buffer,
 
-    /// This frame's vertices, run after run, so the text passes of one submit
-    /// (e.g. base layer + tooltip layer) read their own and not the last
-    /// written. Reset by [`begin_frame`](Self::begin_frame).
-    vbo: FrameArena,
-    /// Buffers `vbo` replaced as it grew, kept for the renderer's lifetime:
-    /// encoded or submitted passes may still read them.
-    retired_vbos: Vec<wgpu::Buffer>,
+    /// This frame's instances, run after run, so the text passes of one
+    /// submit (e.g. base layer + tooltip layer) read their own and not the
+    /// last written. Reset by [`begin_frame`](Self::begin_frame).
+    instances: FrameArena,
+    /// Buffers `instances` replaced as it grew, kept for the renderer's
+    /// lifetime: encoded or submitted passes may still read them.
+    retired_buffers: Vec<wgpu::Buffer>,
     /// Buffer writes and growth since [`take_upload_stats`](Self::take_upload_stats)
     /// last asked: only the buffer counters are used.
     upload_stats: RenderStats,
@@ -610,7 +630,7 @@ impl TextRenderer {
 
         // Uniform (group 0): ortho projection, matching the main UI pipelines,
         // plus the text contrast the fragment shader applies. One arena slot per
-        // pass, for the same reason as the vertex buffer below: several passes
+        // pass, for the same reason as the instance buffer below: several passes
         // share one submit, and a shared slot would let a later pass's values
         // reach the GPU first.
         let uniform = UniformArena::new(
@@ -643,11 +663,18 @@ impl TextRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_msdf"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MsdfVertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &MSDF_VERTEX_ATTRIBS,
-                }],
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &QUAD_ATTRIBS,
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<MsdfInstance>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &MSDF_INSTANCE_ATTRIBS,
+                    },
+                ],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -667,11 +694,21 @@ impl TextRenderer {
             cache: None,
         });
 
-        let vbo = FrameArena::new(
+        let quad_vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("msdf quad vbo"),
+            contents: bytemuck::cast_slice(&QUAD_VERTS),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let quad_ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("msdf quad ibo"),
+            contents: bytemuck::cast_slice(&QUAD_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let instances = FrameArena::new(
             device,
-            "msdf text vbo",
+            "msdf instances",
             wgpu::BufferUsages::VERTEX,
-            (4096 * std::mem::size_of::<MsdfVertex>()) as u64,
+            (1024 * std::mem::size_of::<MsdfInstance>()) as u64,
         );
 
         Self {
@@ -685,8 +722,10 @@ impl TextRenderer {
             uniform_offset: 0,
             view_origin: [0.0, 0.0],
             pipeline,
-            vbo,
-            retired_vbos: Vec::new(),
+            quad_vbo,
+            quad_ibo,
+            instances,
+            retired_buffers: Vec::new(),
             upload_stats: RenderStats::default(),
             width: 1.0,
             height: 1.0,
@@ -826,21 +865,21 @@ impl TextRenderer {
         (self.cpu.atlas.width(), self.cpu.atlas.height())
     }
 
-    /// Reset this frame's bump cursors — the vertex buffer and the uniform slots.
+    /// Reset this frame's bump cursors — the instance buffer and the uniform slots.
     /// Called once per frame (from [`UiRenderer::begin_frame`](crate::UiRenderer::begin_frame)),
     /// *not* once per pass: passes within one submission must keep their own regions,
     /// and only the frame boundary makes those regions reusable.
     pub fn begin_frame(&mut self) {
-        self.vbo.reset();
+        self.instances.reset();
         self.upload_stats = RenderStats::default();
         self.uniform.reset();
         self.uniform_offset = 0;
     }
 
-    /// Bytes of per-frame GPU scratch this renderer is holding: vertex data plus
+    /// Bytes of per-frame GPU scratch this renderer is holding: instances plus
     /// uniform slots. Part of `UiRenderer`'s frame-arena accounting.
     pub(crate) fn frame_arena_bytes(&self) -> u64 {
-        self.vbo.used() + self.uniform.bytes_used()
+        self.instances.used() + self.uniform.bytes_used()
     }
 
     /// Drop the text layouts and font metrics shared with the measurers,
@@ -953,7 +992,7 @@ impl TextRenderer {
 
     /// Prepare a list's text for drawing as `commands`, each a range of
     /// `texts` drawn as one paint command, and upload the glyph atlas it grew.
-    /// Every glyph is placed before any vertex is built, so every command's
+    /// Every glyph is placed before any quad is built, so every command's
     /// UVs use the atlas's final size; each command is then uploaded with
     /// [`upload_text_command`](Self::upload_text_command).
     pub(crate) fn prepare_texts(
@@ -993,7 +1032,7 @@ impl TextRenderer {
     /// [`render`](Self::render) but builds each quad by fitting-and-centering the
     /// icon's glyph tile into its rect (see `fit_centered`), and binds the icon
     /// atlas instead of the glyph atlas. Shares the pipeline, ortho uniform, and
-    /// vertex buffer (bump-allocated) with text.
+    /// instance buffer (bump-allocated) with text.
     #[cfg(feature = "phosphor-icons")]
     pub fn render_icons(
         &mut self,
@@ -1023,14 +1062,14 @@ impl TextRenderer {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_icon_render").entered();
         let range = self.prepared.icon_range(icons);
-        let vertices = &self.prepared.icon_vertices[range.start as usize..range.end as usize];
-        let offset = Self::write_vertices(
-            &mut self.vbo,
-            &mut self.retired_vbos,
+        let instances = &self.prepared.icon_instances[range.start as usize..range.end as usize];
+        let offset = Self::write_instances(
+            &mut self.instances,
+            &mut self.retired_buffers,
             &mut self.upload_stats,
             device,
             queue,
-            vertices,
+            instances,
         );
         self.run(offset, range.len(), MsdfAtlas::Icons)
     }
@@ -1046,92 +1085,94 @@ impl TextRenderer {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_text_render").entered();
         let range = self.prepared.text_commands[index].clone();
-        let vertices = &self.prepared.text_vertices[range.start as usize..range.end as usize];
-        let offset = Self::write_vertices(
-            &mut self.vbo,
-            &mut self.retired_vbos,
+        let instances = &self.prepared.text_instances[range.start as usize..range.end as usize];
+        let offset = Self::write_instances(
+            &mut self.instances,
+            &mut self.retired_buffers,
             &mut self.upload_stats,
             device,
             queue,
-            vertices,
+            instances,
         );
         self.run(offset, range.len(), MsdfAtlas::Glyphs)
     }
 
-    /// Upload `vertices`, a list's text or icon vertices in the order its
+    /// Upload `instances`, a list's text or icon quads in the order its
     /// batches draw them, sampling `atlas`. `None` when there are none.
-    pub(crate) fn upload_vertices(
+    pub(crate) fn upload_instances(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        vertices: &[MsdfVertex],
+        instances: &[MsdfInstance],
         atlas: MsdfAtlas,
     ) -> Option<PreparedMsdf> {
-        let offset = Self::write_vertices(
-            &mut self.vbo,
-            &mut self.retired_vbos,
+        let offset = Self::write_instances(
+            &mut self.instances,
+            &mut self.retired_buffers,
             &mut self.upload_stats,
             device,
             queue,
-            vertices,
+            instances,
         );
-        self.run(offset, vertices.len(), atlas)
+        self.run(offset, instances.len(), atlas)
     }
 
-    /// Write `vertices` into `vbo` after this frame's earlier runs (so a run
-    /// doesn't alias one uploaded earlier in the same submit, which would read
-    /// the last write at draw time), returning where they went; nothing when
-    /// empty. Takes the fields it writes rather than `self`, so vertices kept
-    /// in `prepared` can be written without a copy.
-    fn write_vertices(
-        vbo: &mut FrameArena,
+    /// Write `instances` into `buffer` after this frame's earlier runs (so a
+    /// run doesn't alias one uploaded earlier in the same submit, which would
+    /// read the last write at draw time), returning where they went; nothing
+    /// when empty. Takes the fields it writes rather than `self`, so instances
+    /// kept in `prepared` can be written without a copy.
+    fn write_instances(
+        buffer: &mut FrameArena,
         retired: &mut Vec<wgpu::Buffer>,
         stats: &mut RenderStats,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        vertices: &[MsdfVertex],
+        instances: &[MsdfInstance],
     ) -> Option<u64> {
-        (!vertices.is_empty()).then(|| {
-            vbo.write(
+        (!instances.is_empty()).then(|| {
+            buffer.write(
                 device,
                 queue,
-                bytemuck::cast_slice(vertices),
+                bytemuck::cast_slice(instances),
                 retired,
                 stats,
             )
         })
     }
 
-    /// The run of `vertices` vertices written at `offset`, sampling `atlas`.
-    fn run(&self, offset: Option<u64>, vertices: usize, atlas: MsdfAtlas) -> Option<PreparedMsdf> {
+    /// The run of `instances` instances written at `offset`, sampling `atlas`.
+    fn run(&self, offset: Option<u64>, instances: usize, atlas: MsdfAtlas) -> Option<PreparedMsdf> {
         let atlas = match atlas {
             MsdfAtlas::Glyphs => &self.glyph_gpu.bind_group,
             #[cfg(feature = "phosphor-icons")]
             MsdfAtlas::Icons => &self.icon_gpu.bind_group,
         };
         Some(PreparedMsdf {
-            vbo: self.vbo.buffer().clone(),
+            buffer: self.instances.buffer().clone(),
             offset: offset?,
-            vertices: vertices as u32,
+            instances: instances as u32,
             atlas: atlas.clone(),
             uniform: self.uniform.bind_group().clone(),
             uniform_offset: self.uniform_offset as u32,
         })
     }
 
-    /// Draw vertices `vertices` of an uploaded run into `pass`.
+    /// Draw instances `instances` of an uploaded run into `pass`.
     pub(crate) fn draw_prepared_range(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         run: &PreparedMsdf,
-        vertices: std::ops::Range<u32>,
+        instances: std::ops::Range<u32>,
     ) {
-        debug_assert!(vertices.end <= run.vertices, "{vertices:?} past the run");
+        debug_assert!(instances.end <= run.instances, "{instances:?} past the run");
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &run.uniform, &[run.uniform_offset]);
         pass.set_bind_group(1, &run.atlas, &[]);
-        pass.set_vertex_buffer(0, run.vbo.slice(run.offset..));
-        pass.draw(vertices, 0..1);
+        pass.set_vertex_buffer(0, self.quad_vbo.slice(..));
+        pass.set_vertex_buffer(1, run.buffer.slice(run.offset..));
+        pass.set_index_buffer(self.quad_ibo.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..QUAD_INDICES.len() as u32, 0, instances);
     }
 
     /// The buffer writes made, and how often a buffer grew, since this was
@@ -1143,13 +1184,9 @@ impl TextRenderer {
 
     /// Draw an uploaded run into `pass`. Everything it binds was captured at
     /// upload, so runs uploaded earlier in the frame stay drawable after the
-    /// vertex buffer grows.
+    /// instance buffer grows.
     pub(crate) fn draw_prepared(&self, pass: &mut wgpu::RenderPass<'_>, run: &PreparedMsdf) {
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &run.uniform, &[run.uniform_offset]);
-        pass.set_bind_group(1, &run.atlas, &[]);
-        pass.set_vertex_buffer(0, run.vbo.slice(run.offset..));
-        pass.draw(0..run.vertices, 0..1);
+        self.draw_prepared_range(pass, run, 0..run.instances);
     }
 
     /// (Re)upload the atlas pixels to the GPU if the CPU atlas changed. Recreates
@@ -1511,9 +1548,9 @@ struct QuadStyle {
     offset: [f32; 2],
 }
 
-/// Emit two triangles (6 verts) for one glyph's MSDF tile with the given style.
+/// Emit one glyph's MSDF tile with the given style.
 fn push_glyph_quad(
-    out: &mut Vec<MsdfVertex>,
+    out: &mut Vec<MsdfInstance>,
     p: &GlyphPlacement,
     atlas_w: u32,
     atlas_h: u32,
@@ -1529,33 +1566,19 @@ fn push_glyph_quad(
     let y0 = p.baseline_y - m.top_em * font_size + oy;
     let y1 = p.baseline_y - m.bottom_em * font_size + oy;
 
-    let uv = p.tile.region.uv(atlas_w, atlas_h);
-    let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
-
-    let (clip_rect, clip_on) = match p.clip {
+    let (clip, clip_on) = match p.clip {
         Some(c) => (c, 1.0),
         None => ([0.0; 4], 0.0),
     };
 
-    let v = |x: f32, y: f32, u: f32, vv: f32| MsdfVertex {
-        position: [x, y],
-        uv: [u, vv],
+    out.push(MsdfInstance {
+        corners: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+        uv_rect: p.tile.region.uv(atlas_w, atlas_h),
         fill: style.fill,
-        clip: clip_rect,
-        clip_enabled: clip_on,
-        px_range,
+        clip,
         outline: style.outline,
-        outline_width: style.outline_width,
-        softness: style.softness,
-    };
-
-    // TL, TR, BR / TL, BR, BL
-    out.push(v(x0, y0, u0, v0));
-    out.push(v(x1, y0, u1, v0));
-    out.push(v(x1, y1, u1, v1));
-    out.push(v(x0, y0, u0, v0));
-    out.push(v(x1, y1, u1, v1));
-    out.push(v(x0, y1, u0, v1));
+        params: [clip_on, px_range, style.outline_width, style.softness],
+    });
 }
 
 /// Place a glyph tile of EM extent `w_em` x `h_em`, centered inside `rect`,
@@ -1591,12 +1614,12 @@ fn fit_centered(rect: Rect, w_em: f32, h_em: f32) -> (f32, f32, f32, f32) {
     )
 }
 
-/// Emit two triangles (6 verts) for one icon, fitting-and-centering its glyph
-/// tile into the icon's local rect and transforming the resulting corners by the
-/// icon's affine (so rotation/scale work — unlike the axis-aligned text path).
+/// Emit one icon, fitting-and-centering its glyph tile into the icon's local
+/// rect and transforming the resulting corners by the icon's affine (so
+/// rotation/scale work — unlike the axis-aligned text path).
 #[cfg(feature = "phosphor-icons")]
 fn push_icon_quad(
-    out: &mut Vec<MsdfVertex>,
+    out: &mut Vec<MsdfInstance>,
     tile: &GlyphTile,
     icon: &IconMsdf,
     atlas_w: u32,
@@ -1611,39 +1634,20 @@ fn push_icon_quad(
     }
     let (x0, y0, x1, y1) = fit_centered(icon.local, w_em, h_em);
 
-    let uv = tile.region.uv(atlas_w, atlas_h);
-    let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
-
-    let (clip_rect, clip_on) = match icon.clip {
+    let (clip, clip_on) = match icon.clip {
         Some(c) => ([c.x, c.y, c.width, c.height], 1.0),
         None => ([0.0; 4], 0.0),
     };
 
     let t = &icon.transform;
-    let tl = t.transform_point([x0, y0]);
-    let tr = t.transform_point([x1, y0]);
-    let br = t.transform_point([x1, y1]);
-    let bl = t.transform_point([x0, y1]);
-
-    let v = |pos: [f32; 2], u: f32, vv: f32| MsdfVertex {
-        position: pos,
-        uv: [u, vv],
+    out.push(MsdfInstance {
+        corners: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|c| t.transform_point(c)),
+        uv_rect: tile.region.uv(atlas_w, atlas_h),
         fill: icon.tint,
-        clip: clip_rect,
-        clip_enabled: clip_on,
-        px_range,
+        clip,
         outline: [0.0; 4],
-        outline_width: 0.0,
-        softness: 0.0,
-    };
-
-    // TL, TR, BR / TL, BR, BL
-    out.push(v(tl, u0, v0));
-    out.push(v(tr, u1, v0));
-    out.push(v(br, u1, v1));
-    out.push(v(tl, u0, v0));
-    out.push(v(br, u1, v1));
-    out.push(v(bl, u0, v1));
+        params: [clip_on, px_range, 0.0, 0.0],
+    });
 }
 
 /// The bind-group layout (group 1) for an MSDF atlas: a filterable 2D texture +
@@ -3402,7 +3406,7 @@ mod tests {
         shared_font_system, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     #[cfg(feature = "bundled-font")]
-    use super::{MsdfVertex, TextStyleRange};
+    use super::{MsdfInstance, TextStyleRange};
     use crate::render::{GlyphSizing, MAX_HINTED_PX};
     use crate::shaping::{LayoutSpec, LayoutStats, shape_layout};
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
@@ -4811,9 +4815,9 @@ mod tests {
 
     #[cfg(feature = "bundled-font")]
     impl Prep {
-        /// The vertices drawing `blocks` as one command uploads, placed as a
+        /// The instances drawing `blocks` as one command uploads, placed as a
         /// new renderer places them.
-        fn build_vertices(&mut self, blocks: &[TextBlock]) -> Vec<MsdfVertex> {
+        fn build_instances(&mut self, blocks: &[TextBlock]) -> Vec<MsdfInstance> {
             let grid = PixelGrid {
                 snap: GlyphSnap::default(),
                 scale: 1.0,
@@ -4826,7 +4830,7 @@ mod tests {
                 blocks,
                 std::iter::once(0..blocks.len() as u32),
             );
-            self.prepared.text_vertices.clone()
+            self.prepared.text_instances.clone()
         }
 
         fn clear_shape_cache(&mut self) {
@@ -4858,9 +4862,9 @@ mod tests {
     }
 
     #[cfg(feature = "bundled-font")]
-    /// Reinterpret a vertex slice as raw bytes, to compare vertices bit for
-    /// bit.
-    fn vbytes(v: &[MsdfVertex]) -> &[u8] {
+    /// Reinterpret an instance slice as raw bytes, to compare instances bit
+    /// for bit.
+    fn vbytes(v: &[MsdfInstance]) -> &[u8] {
         bytemuck::cast_slice(v)
     }
 
@@ -4878,12 +4882,12 @@ mod tests {
         let blocks = [label("Cached label", &font)];
 
         // Cold: shapes and records exactly one entry.
-        let cold = r.build_vertices(&blocks);
+        let cold = r.build_instances(&blocks);
         assert_eq!(cache_total(&r), 1, "one shaping entry recorded");
         assert!(!cold.is_empty(), "non-empty glyph geometry");
 
         // Warm: served from the cache, byte-identical output, still one entry.
-        let warm = r.build_vertices(&blocks);
+        let warm = r.build_instances(&blocks);
         assert_eq!(cache_total(&r), 1, "warm frame adds no new entries");
         assert_eq!(vbytes(&cold), vbytes(&warm), "cache must not change pixels");
     }
@@ -4892,20 +4896,22 @@ mod tests {
     #[test]
     fn moving_block_reuses_cache_and_shifts() {
         let (mut r, font) = text_prep();
-        let a = r.build_vertices(&[label("Move me", &font)]);
+        let a = r.build_instances(&[label("Move me", &font)]);
         let mut moved = label("Move me", &font);
         moved.x += 100.0;
         moved.y += 50.0;
-        let b = r.build_vertices(&[moved]);
+        let b = r.build_instances(&[moved]);
 
         // Same key + content => still a single cache entry (a hit, not a re-shape).
         assert_eq!(cache_total(&r), 1, "moved block reuses the cached layout");
         assert_eq!(a.len(), b.len());
         for (va, vb) in a.iter().zip(b.iter()) {
-            assert!((vb.position[0] - va.position[0] - 100.0).abs() < 1e-3);
-            assert!((vb.position[1] - va.position[1] - 50.0).abs() < 1e-3);
+            for (ca, cb) in va.corners.iter().zip(vb.corners) {
+                assert!((cb[0] - ca[0] - 100.0).abs() < 1e-3);
+                assert!((cb[1] - ca[1] - 50.0).abs() < 1e-3);
+            }
             // Everything but position is unchanged: compare uv + fill.
-            assert_eq!(va.uv, vb.uv);
+            assert_eq!(va.uv_rect, vb.uv_rect);
             assert_eq!(va.fill, vb.fill);
         }
     }
@@ -4925,13 +4931,10 @@ mod tests {
         block
     }
 
-    /// Each glyph quad's corners in `vertices`, six vertices a quad.
+    /// Each glyph quad's corners in `instances`.
     #[cfg(feature = "bundled-font")]
-    fn quads(vertices: &[MsdfVertex]) -> Vec<[[f32; 2]; 6]> {
-        vertices
-            .chunks_exact(6)
-            .map(|quad| std::array::from_fn(|i| quad[i].position))
-            .collect()
+    fn quads(instances: &[MsdfInstance]) -> Vec<[[f32; 2]; 4]> {
+        instances.iter().map(|quad| quad.corners).collect()
     }
 
     #[cfg(feature = "bundled-font")]
@@ -4939,15 +4942,15 @@ mod tests {
     fn a_long_block_clipped_to_a_screenful_places_a_screenful() {
         let (mut r, font) = text_prep();
         let clip = crate::layout::Rect::new(0.0, 1_000.0, 800.0, 100.0);
-        let all = r.build_vertices(&[long_block(
+        let all = r.build_instances(&[long_block(
             &font,
             crate::layout::Rect::new(0.0, 0.0, 800.0, 1e6),
         )]);
-        let shown = r.build_vertices(&[long_block(&font, clip)]);
+        let shown = r.build_instances(&[long_block(&font, clip)]);
         assert!(!shown.is_empty());
         assert!(
             shown.len() * 100 < all.len(),
-            "{} vertices of {}",
+            "{} instances of {}",
             shown.len(),
             all.len()
         );
@@ -4958,11 +4961,11 @@ mod tests {
     fn a_clipped_block_keeps_every_glyph_its_clip_shows() {
         let (mut r, font) = text_prep();
         let clip = crate::layout::Rect::new(30.0, 1_003.0, 120.0, 90.0);
-        let all = quads(&r.build_vertices(&[long_block(
+        let all = quads(&r.build_instances(&[long_block(
             &font,
             crate::layout::Rect::new(0.0, 0.0, 800.0, 1e6),
         )]));
-        let shown = quads(&r.build_vertices(&[long_block(&font, clip)]));
+        let shown = quads(&r.build_instances(&[long_block(&font, clip)]));
         let in_clip: Vec<_> = all
             .iter()
             .filter(|quad| {
@@ -5018,7 +5021,7 @@ mod tests {
         let bold_variant = label("Same", &font).bold();
         let italic_variant = label("Same", &font).italic();
 
-        r.build_vertices(&[
+        r.build_instances(&[
             base,
             bigger,
             narrower,
@@ -5046,7 +5049,7 @@ mod tests {
         let auto = label("dir", &font);
         let ltr = label("dir", &font).with_direction(TextDirection::Ltr);
         let rtl = label("dir", &font).with_direction(TextDirection::Rtl);
-        r.build_vertices(&[auto, ltr, rtl]);
+        r.build_instances(&[auto, ltr, rtl]);
         assert_eq!(
             cache_total(&r),
             3,
@@ -5077,10 +5080,10 @@ mod tests {
         let rtl = label("ABcd", &font)
             .with_spans(spans)
             .with_direction(TextDirection::Rtl);
-        let va = r.build_vertices(&[auto]);
-        let vb = r.build_vertices(&[rtl]);
+        let va = r.build_instances(&[auto]);
+        let vb = r.build_instances(&[rtl]);
 
-        let fills = |v: &[MsdfVertex]| -> std::collections::BTreeSet<[u32; 4]> {
+        let fills = |v: &[MsdfInstance]| -> std::collections::BTreeSet<[u32; 4]> {
             v.iter().map(|x| x.fill.map(f32::to_bits)).collect()
         };
         let fa = fills(&va);
@@ -5113,7 +5116,7 @@ mod tests {
             (1, 0)
         );
 
-        let verts = r.build_vertices(std::slice::from_ref(&block));
+        let verts = r.build_instances(std::slice::from_ref(&block));
         assert!(!verts.is_empty());
         let drawn = layout_stats(&measurer);
         assert_eq!(
@@ -5124,7 +5127,7 @@ mod tests {
 
         // And it draws exactly what shaping it afresh draws.
         r.clear_shape_cache();
-        assert_eq!(vbytes(&verts), vbytes(&r.build_vertices(&[block])));
+        assert_eq!(vbytes(&verts), vbytes(&r.build_instances(&[block])));
     }
 
     #[cfg(feature = "bundled-font")]
@@ -5132,13 +5135,13 @@ mod tests {
     fn clear_shape_cache_forces_reshape_with_identical_result() {
         let (mut r, font) = text_prep();
         let blocks = [label("Reshape", &font)];
-        let before = r.build_vertices(&blocks);
+        let before = r.build_instances(&blocks);
         assert_eq!(cache_total(&r), 1);
 
         r.clear_shape_cache();
         assert_eq!(cache_total(&r), 0, "clear empties the cache");
 
-        let after = r.build_vertices(&blocks);
+        let after = r.build_instances(&blocks);
         assert_eq!(cache_total(&r), 1, "re-shaped and re-cached");
         assert_eq!(vbytes(&before), vbytes(&after), "re-shape is identical");
     }
@@ -5168,18 +5171,13 @@ mod tests {
                 color: Some(red),
                 underline: Underline::None,
             }]);
-        let verts = r.build_vertices(&[block]);
+        let verts = r.build_instances(&[block]);
 
-        // Fills are the last back-to-front sweep, one 6-vert quad per glyph.
+        // Fills are the last back-to-front sweep, one instance per glyph.
         // With the line-rebase fix exactly "RED" (3 glyphs) is red; the bug
         // mapped "BLUE"'s line-relative bytes (0..3) into the same range and
         // turned B/L/U red too (6 red quads).
-        let red_quads: Vec<_> = verts
-            .as_chunks::<6>()
-            .0
-            .iter()
-            .filter(|q| q[0].fill == red)
-            .collect();
+        let red_quads: Vec<_> = verts.iter().filter(|q| q.fill == red).collect();
         assert_eq!(
             red_quads.len(),
             3,
@@ -5187,7 +5185,7 @@ mod tests {
         );
         let first_line_bottom = 40.0 + 18.0 * super::LINE_HEIGHT_RATIO; // block.y + one line box
         for quad in &red_quads {
-            let y = quad[0].position[1];
+            let y = quad.corners[0][1];
             assert!(
                 y < first_line_bottom,
                 "red glyph quad at y={y} is below the first line — \
@@ -5215,16 +5213,8 @@ mod tests {
                 color: Some(red),
                 underline: Underline::None,
             }]);
-        let verts = r.build_vertices(&[block]);
-        assert_eq!(
-            verts
-                .as_chunks::<6>()
-                .0
-                .iter()
-                .filter(|q| q[0].fill == red)
-                .count(),
-            3
-        );
+        let verts = r.build_instances(&[block]);
+        assert_eq!(verts.iter().filter(|q| q.fill == red).count(), 3);
     }
 
     /// Soft-wrap mapping: a narrow `max_width` splits "REDBLUE" into several
@@ -5245,21 +5235,21 @@ mod tests {
                 color: Some(red),
                 underline: Underline::None,
             }]);
-        let verts = r.build_vertices(&[block]);
-        let quads: Vec<_> = verts.as_chunks::<6>().0.iter().collect();
+        let verts = r.build_instances(&[block]);
+        let quads: Vec<_> = verts.iter().collect();
         assert!(quads.len() >= 7, "every letter produced a quad");
         // The red ones are exactly the 3 "R E D" glyphs, and they sit on the
         // top row (smallest y).
         let mut reds: Vec<[f32; 2]> = quads
             .iter()
-            .filter(|q| q[0].fill == red)
-            .map(|q| q[0].position)
+            .filter(|q| q.fill == red)
+            .map(|q| q.corners[0])
             .collect();
         reds.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0])));
         assert_eq!(reds.len(), 3);
         let top_y = quads
             .iter()
-            .map(|q| q[0].position[1])
+            .map(|q| q.corners[0][1])
             .fold(f32::MAX, f32::min);
         for p in &reds {
             assert!(
@@ -5606,7 +5596,7 @@ mod tests {
             .with_size(24.0)
             .with_font(font)
             .with_vertical();
-        r.build_vertices(&[block]);
+        r.build_instances(&[block]);
 
         let glyphs = cached_vertical_glyphs(&r, content);
         assert_eq!(glyphs.len(), 3, "three kana → three glyphs");
@@ -5630,7 +5620,7 @@ mod tests {
             .with_size(28.0)
             .with_font(font)
             .with_vertical();
-        r.build_vertices(&[block]);
+        r.build_instances(&[block]);
 
         let glyphs = cached_vertical_glyphs(&r, content);
         assert_eq!(glyphs.len(), 2);
@@ -5656,7 +5646,7 @@ mod tests {
             .with_max_width(max_width)
             .with_align(TextAlign::Center)
             .with_vertical();
-        r.build_vertices(&[block]);
+        r.build_instances(&[block]);
 
         let glyphs = cached_vertical_glyphs(&r, content);
         assert_eq!(glyphs.len(), 3);
@@ -5827,7 +5817,7 @@ mod icon_tests {
     }
 
     #[test]
-    fn push_icon_quad_emits_six_verts_with_tint_and_clip() {
+    fn push_icon_quad_emits_one_instance_with_tint_and_clip() {
         use crate::affine::Affine2;
         let mut atlas = MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE);
         let g = PhosphorIcon::Check.glyph().unwrap();
@@ -5857,14 +5847,15 @@ mod icon_tests {
             atlas.height(),
             atlas.px_range(),
         );
-        assert_eq!(out.len(), 6, "two triangles");
+        assert_eq!(out.len(), 1, "one quad");
         assert_eq!(out[0].fill, [0.2, 0.4, 0.6, 1.0]);
-        assert_eq!(out[0].clip_enabled, 1.0);
+        assert!(out[0].clip_enabled());
         // The translate transform shifts the whole quad by (100, 50). The icon is
         // centred in its 32x32 local rect (centre (16,16)), so the quad centroid
         // lands at (116, 66) in world space regardless of the glyph's tile size.
-        let cx = out.iter().map(|v| v.position[0]).sum::<f32>() / out.len() as f32;
-        let cy = out.iter().map(|v| v.position[1]).sum::<f32>() / out.len() as f32;
+        let corners = out[0].corners;
+        let cx = corners.iter().map(|c| c[0]).sum::<f32>() / 4.0;
+        let cy = corners.iter().map(|c| c[1]).sum::<f32>() / 4.0;
         assert!((cx - 116.0).abs() < 1e-2, "centroid x {cx}");
         assert!((cy - 66.0).abs() < 1e-2, "centroid y {cy}");
     }

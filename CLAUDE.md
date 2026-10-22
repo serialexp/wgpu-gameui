@@ -103,6 +103,14 @@ unchanged — that is a bug to fix by moving it into `Theme`.
   than hard-coding pixels, so DPI scaling and re-theming work.
 - **Rect-native draw entry points.** Prefer `draw(rect, ...)` taking a
   layout-computed `Rect`; `Rect::contains` is edge-exclusive.
+- **Draw repeated shapes as instances.** Something drawn many times in the
+  same shape (a glyph, an icon, a rounded rect, a sprite, a panel) is one
+  record per copy, drawn as an instance of the shared unit quad
+  (`QUAD_VERTS` / `QUAD_INDICES` in `src/render/ui_renderer.rs`). The record
+  holds only what differs between copies, and the vertex shader builds the
+  corners. Don't emit per-vertex copies that repeat the same colour, clip or
+  effect: they multiply the bytes uploaded every frame. A new pipeline
+  follows `IconInstance` or `MsdfInstance`.
 
 ## Build / test
 

@@ -72,6 +72,7 @@ pub use text_contrast::TextContrast;
 pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId};
 pub(crate) use ui_renderer::ortho_matrix;
 pub use ui_renderer::{NineSliceMeta, RenderStats, SMALL_TEXTURE_BATCHES_WARN, UiRenderer};
+pub(crate) use ui_renderer::{QUAD_ATTRIBS, QUAD_INDICES, QUAD_VERTS};
 pub(crate) use uniform_arena::UniformArena;
 pub use yuv::{YuvColour, YuvMatrix, YuvPlane, YuvPlanes, YuvRange, YuvToRgb, chroma_size};
 

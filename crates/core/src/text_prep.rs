@@ -1,8 +1,9 @@
 //! The CPU half of drawing text and MSDF icons: placing every glyph into the
-//! atlases, then building every unit's vertices against the atlases' final
-//! size. Nothing here needs a GPU, so a list's text can be prepared, and its
-//! draw boxes taken, in a plain test. [`TextRenderer`] mirrors the atlases to
-//! the GPU and uploads the vertices kept in [`MsdfPrepared`].
+//! atlases, then building every unit's instances (one a quad) against the
+//! atlases' final size. Nothing here needs a GPU, so a list's text can be
+//! prepared, and its draw boxes taken, in a plain test. [`TextRenderer`]
+//! mirrors the atlases to the GPU and uploads the instances kept in
+//! [`MsdfPrepared`].
 //!
 //! A unit (`docs/design/draw-call-batching.md`, "New: units") is what draws
 //! as one: a text command whose blocks have a shadow or glow draws all its
@@ -30,13 +31,13 @@ pub(crate) struct MsdfCpu {
     icon_fonts: Vec<&'static [u8]>,
 }
 
-/// Blocks of text that draw together, and their vertices.
+/// Blocks of text that draw together, and their instances.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TextUnit {
     /// Into the list's text blocks.
     pub blocks: Range<u32>,
-    /// Into [`MsdfPrepared::text_vertices`].
-    pub vertices: Range<u32>,
+    /// Into [`MsdfPrepared::text_instances`].
+    pub instances: Range<u32>,
 }
 
 /// A list's text and icons as prepared for drawing, kept until they are
@@ -46,34 +47,34 @@ pub(crate) struct MsdfPrepared {
     placements: Vec<GlyphPlacement>,
     /// Each text block's glyphs in `placements`.
     block_glyphs: Vec<Range<u32>>,
-    /// Every text unit's vertices, one unit after another.
-    pub(crate) text_vertices: Vec<MsdfVertex>,
-    /// Each text block's vertices from its shadow, glow and fill sweeps, in
-    /// `text_vertices`; empty where a sweep drew nothing.
+    /// Every text unit's instances, one unit after another.
+    pub(crate) text_instances: Vec<MsdfInstance>,
+    /// Each text block's instances from its shadow, glow and fill sweeps, in
+    /// `text_instances`; empty where a sweep drew nothing.
     pub(crate) block_sweeps: Vec<[Range<u32>; 3]>,
     /// The text units, in paint order.
     pub(crate) text_units: Vec<TextUnit>,
-    /// Each text command's vertices, in paint order: its units, one after
+    /// Each text command's instances, in paint order: its units, one after
     /// another.
     pub(crate) text_commands: Vec<Range<u32>>,
-    /// Every drawn icon's six vertices, in icon order.
+    /// Every drawn icon's instance, in icon order.
     #[cfg(feature = "phosphor-icons")]
-    pub(crate) icon_vertices: Vec<MsdfVertex>,
-    /// Icon `i`'s vertices are `icon_starts[i]..icon_starts[i + 1]`; none for
+    pub(crate) icon_instances: Vec<MsdfInstance>,
+    /// Icon `i`'s instance is `icon_starts[i]..icon_starts[i + 1]`; none for
     /// an icon that doesn't draw.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) icon_starts: Vec<u32>,
 }
 
 impl MsdfPrepared {
-    /// Block `block`'s vertices from each of its sweeps.
-    pub(crate) fn block_vertices(&self, block: usize) -> impl Iterator<Item = &[MsdfVertex]> {
+    /// Block `block`'s instances from each of its sweeps.
+    pub(crate) fn block_instances(&self, block: usize) -> impl Iterator<Item = &[MsdfInstance]> {
         self.block_sweeps[block]
             .iter()
-            .map(|range| &self.text_vertices[range.start as usize..range.end as usize])
+            .map(|range| &self.text_instances[range.start as usize..range.end as usize])
     }
 
-    /// The vertices of icons `icons`.
+    /// The instances of icons `icons`.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) fn icon_range(&self, icons: Range<u32>) -> Range<u32> {
         self.icon_starts[icons.start as usize]..self.icon_starts[icons.end as usize]
@@ -168,7 +169,7 @@ impl MsdfCpu {
 
         out.placements.clear();
         out.block_glyphs.clear();
-        out.text_vertices.clear();
+        out.text_instances.clear();
         out.block_sweeps.clear();
         out.text_units.clear();
         out.text_commands.clear();
@@ -209,7 +210,7 @@ impl MsdfCpu {
         }
         drop(shared);
 
-        // Every unit's vertices, against the final atlas size.
+        // Every unit's instances, against the final atlas size.
         let sweep = Sweep {
             atlas_w: self.atlas.width(),
             atlas_h: self.atlas.height(),
@@ -217,7 +218,7 @@ impl MsdfCpu {
         };
         out.block_sweeps.resize(texts.len(), [0..0, 0..0, 0..0]);
         for blocks in commands {
-            let start = out.text_vertices.len() as u32;
+            let start = out.text_instances.len() as u32;
             let effects = texts[blocks.start as usize..blocks.end as usize]
                 .iter()
                 .any(|b| b.shadow.is_some() || b.glow.is_some());
@@ -229,7 +230,7 @@ impl MsdfCpu {
                 }
             }
             out.text_commands
-                .push(start..out.text_vertices.len() as u32);
+                .push(start..out.text_instances.len() as u32);
         }
     }
 
@@ -237,7 +238,7 @@ impl MsdfCpu {
     /// icon atlas before any quad is built against its size.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) fn prepare_icons(&mut self, out: &mut MsdfPrepared, icons: &[IconMsdf]) {
-        out.icon_vertices.clear();
+        out.icon_instances.clear();
         out.icon_starts.clear();
         // One lock acquisition for the whole list; the bytes are `'static`, so
         // MSDF generation below runs with the registry unlocked.
@@ -256,17 +257,17 @@ impl MsdfCpu {
         let (aw, ah) = (self.icon_atlas.width(), self.icon_atlas.height());
         let px_range = self.icon_atlas.px_range();
         for icon in icons {
-            out.icon_starts.push(out.icon_vertices.len() as u32);
+            out.icon_starts.push(out.icon_instances.len() as u32);
             let tile = self.icon_atlas.cached(
                 icon.glyph.font.index() as u64,
                 icon.glyph.glyph_id,
                 GlyphSizing::Scalable,
             );
             if let Some(Some(tile)) = tile {
-                push_icon_quad(&mut out.icon_vertices, &tile, icon, aw, ah, px_range);
+                push_icon_quad(&mut out.icon_instances, &tile, icon, aw, ah, px_range);
             }
         }
-        out.icon_starts.push(out.icon_vertices.len() as u32);
+        out.icon_starts.push(out.icon_instances.len() as u32);
     }
 }
 
@@ -282,27 +283,27 @@ impl MsdfPrepared {
     /// every fill (and outline), so each glyph's shadow and glow sit behind
     /// all the unit's fills.
     fn build_unit(&mut self, sweep: &Sweep, blocks: Range<u32>) {
-        let start = self.text_vertices.len() as u32;
+        let start = self.text_instances.len() as u32;
         for kind in 0..3 {
             for block in blocks.clone() {
-                let from = self.text_vertices.len() as u32;
+                let from = self.text_instances.len() as u32;
                 let glyphs = self.block_glyphs[block as usize].clone();
                 for p in &self.placements[glyphs.start as usize..glyphs.end as usize] {
-                    push_sweep_quad(&mut self.text_vertices, sweep, p, kind);
+                    push_sweep_quad(&mut self.text_instances, sweep, p, kind);
                 }
-                self.block_sweeps[block as usize][kind] = from..self.text_vertices.len() as u32;
+                self.block_sweeps[block as usize][kind] = from..self.text_instances.len() as u32;
             }
         }
         self.text_units.push(TextUnit {
             blocks,
-            vertices: start..self.text_vertices.len() as u32,
+            instances: start..self.text_instances.len() as u32,
         });
     }
 }
 
 /// One glyph's quad for sweep `kind`: 0 its shadow, 1 its glow, 2 its fill
 /// and outline. Nothing for a shadow or glow the glyph doesn't have.
-fn push_sweep_quad(out: &mut Vec<MsdfVertex>, sweep: &Sweep, p: &GlyphPlacement, kind: usize) {
+fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacement, kind: usize) {
     let (aw, ah, px_range) = (sweep.atlas_w, sweep.atlas_h, sweep.px_range);
     // Effects are capped to the field's reach, so they follow the glyph
     // instead of filling its tile.
