@@ -714,7 +714,12 @@ device cleanly, the tests on real lists that need text become GPU tests
    > `MsdfInstance` of the shared unit quad, as the other instanced
    > families draw (`upload_vertices` is now `upload_instances`). The
    > ranges above count instances; units, sweeps and batches are
-   > unchanged.
+   > unchanged. The instance then got packed to 64 bytes, naming its tile
+   > in atlas texels where it held UVs: growing the atlas moves no tile, so
+   > a quad no longer depends on the atlas's final size, and the growth
+   > tests now check that an earlier unit comes out the same. Every glyph
+   > is still placed before any quad is built, so the atlas a batch binds
+   > holds all of them.
 
    > **2026-10-16 update, after review:** the review found no change in
    > behaviour, except one fix it confirmed: icons drawn on a path without a

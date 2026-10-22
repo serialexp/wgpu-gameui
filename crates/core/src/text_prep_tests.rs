@@ -141,11 +141,11 @@ fn a_text_command_after_an_empty_one_has_its_own_instances() {
     assert_eq!(sizes, [1, 0, 2]);
     // The third command is "BC"'s quads, below the others.
     let third = &out.text_instances[out.text_commands[2].start as usize..];
-    assert!(third.iter().flat_map(|q| q.corners).all(|c| c[1] > 60.0));
+    assert!(third.iter().flat_map(|q| q.corners()).all(|c| c[1] > 60.0));
 }
 
 #[test]
-fn a_later_unit_that_grows_the_atlas_leaves_earlier_ones_built_against_its_final_size() {
+fn a_later_unit_that_grows_the_atlas_leaves_earlier_ones_unchanged() {
     const SMALL: u32 = 128;
     let early = |font: &FontHandle| block("ab", font, 10.0);
     let late = |font: &FontHandle| block("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", font, 40.0);
@@ -168,8 +168,9 @@ fn a_later_unit_that_grows_the_atlas_leaves_earlier_ones_built_against_its_final
     );
     let first = out.text_units[0].instances.clone();
     let first = out.text_instances[first.start as usize..first.end as usize].to_vec();
-    // Built against the small atlas, the early unit's UVs would be these.
-    assert_ne!(first, alone_out.text_instances);
+    // A quad names its tile in texels, and growing the atlas moves no tile,
+    // so the early unit is the same whether the atlas grew after it or not.
+    assert_eq!(first, alone_out.text_instances);
 
     // The atlas is final now, so preparing again builds every unit against
     // the same size, and nothing comes out different.
@@ -209,7 +210,7 @@ mod icons {
     }
 
     #[test]
-    fn an_icon_that_grows_the_atlas_leaves_earlier_ones_built_against_its_final_size() {
+    fn an_icon_that_grows_the_atlas_leaves_earlier_ones_unchanged() {
         const SMALL: u32 = 64;
         let all = PhosphorIcon::ALL;
         let (mut alone, _) = cpu(Some(SMALL));
@@ -226,7 +227,7 @@ mod icons {
             final_size > early_size,
             "the later icons grow the atlas: {early_size} then {final_size}"
         );
-        assert_ne!(out.icon_instances[..1], alone_out.icon_instances[..]);
+        assert_eq!(out.icon_instances[..1], alone_out.icon_instances[..]);
 
         let built = out.icon_instances.clone();
         many.prepare_icons(&mut out, &drawn);

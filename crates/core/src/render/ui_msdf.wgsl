@@ -43,22 +43,25 @@ struct Uniforms {
 struct VsIn {
     // The unit-quad corner in [0,1]².
     @location(0) corner: vec2<f32>,
-    // World-space corners: top-left, top-right / bottom-right, bottom-left.
-    @location(1) c_tl_tr: vec4<f32>,
-    @location(2) c_br_bl: vec4<f32>,
-    // The tile's atlas rect [u0, v0, u1, v1].
-    @location(3) uv_rect: vec4<f32>,
-    @location(4) fill: vec4<f32>,
-    @location(5) clip: vec4<f32>,
-    @location(6) outline: vec4<f32>,
+    // The top-left corner, and the edges from it to the top-right and
+    // bottom-left corners, in world space.
+    @location(1) origin: vec2<f32>,
+    @location(2) axis_x: vec2<f32>,
+    @location(3) axis_y: vec2<f32>,
+    @location(4) clip: vec4<f32>,
+    // The tile's atlas rect in texels [x0, y0, x1, y1].
+    @location(5) texels: vec4<u32>,
+    @location(6) fill: vec4<f32>,
+    @location(7) outline: vec4<f32>,
     // [clip_enabled, px_range, outline_width, softness]; `px_range` is the
     // field's distance-ramp width in *atlas* texels (constant per atlas).
-    @location(7) params: vec4<f32>,
+    @location(8) params: vec4<f32>,
 };
 
 struct VsOut {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+    // Atlas position in texels; the fragment divides by the atlas size.
+    @location(0) texel: vec2<f32>,
     @location(1) fill: vec4<f32>,
     @location(2) clip: vec4<f32>,
     @location(3) clip_enabled: f32,
@@ -72,14 +75,10 @@ struct VsOut {
 @vertex
 fn vs_msdf(in: VsIn) -> VsOut {
     var out: VsOut;
-    let u = in.corner.x;
-    let v = in.corner.y;
-    // Bilinear interp of the four (possibly rotated/sheared) corners.
-    let top = mix(in.c_tl_tr.xy, in.c_tl_tr.zw, u);
-    let bot = mix(in.c_br_bl.zw, in.c_br_bl.xy, u);
-    let world = mix(top, bot, v);
+    let world = in.origin + in.axis_x * in.corner.x + in.axis_y * in.corner.y;
     out.clip_position = uniforms.view_proj * vec4<f32>(world, 0.0, 1.0);
-    out.uv = mix(in.uv_rect.xy, in.uv_rect.zw, in.corner);
+    let texels = vec4<f32>(in.texels);
+    out.texel = mix(texels.xy, texels.zw, in.corner);
     out.fill = in.fill;
     out.clip = in.clip;
     out.clip_enabled = in.params.x;
@@ -128,14 +127,15 @@ fn fs_msdf(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    let msd = textureSample(atlas_tex, atlas_sampler, in.uv).rgb;
+    let tex_size = vec2<f32>(textureDimensions(atlas_tex));
+    let uv = in.texel / tex_size;
+    let msd = textureSample(atlas_tex, atlas_sampler, uv).rgb;
     let sd = median(msd.r, msd.g, msd.b);
 
     // Convert the atlas-space distance range to a screen-pixel range using the uv
     // derivatives. Signed distance in *screen px*, positive inside the glyph.
-    let tex_size = vec2<f32>(textureDimensions(atlas_tex));
     let unit_range = vec2<f32>(in.px_range) / tex_size;
-    let screen_tex_size = vec2<f32>(1.0) / fwidth(in.uv);
+    let screen_tex_size = vec2<f32>(1.0) / fwidth(uv);
     let screen_px_range = max(0.5 * dot(unit_range, screen_tex_size), 1.0);
     let dist = screen_px_range * (sd - 0.5);
 

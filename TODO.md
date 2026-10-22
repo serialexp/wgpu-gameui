@@ -439,9 +439,9 @@ harden those foundations rather than create parallel replacements.
   first in view).
 - [x] **P3 — A glyph uploads six fat vertices.** Done 2026-10-22: MSDF
   text and icons draw as instances of the shared unit quad, like the other
-  instanced pipelines. A glyph is one `MsdfInstance` of 112 bytes (its four
-  corners, uv rect, fill, clip, outline and effect), and `ui_msdf.wgsl`
-  places the corner. It was: A sample of the focused
+  instanced pipelines. A glyph is one packed 64-byte `MsdfInstance` (its
+  corner and edges, clip, tile in atlas texels, 8-bit fill and outline, and
+  f16 effect parameters), and `ui_msdf.wgsl` places the corner. It was: A sample of the focused
   5,000-line field's idle frame (2026-10-21, with the clip culling in) has
   `Queue::write_buffer` copying about a sixth of the frame's samples. It
   uploads only what the frame draws (`RenderStats::buffer_bytes_uploaded`:

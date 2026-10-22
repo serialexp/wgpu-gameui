@@ -1,6 +1,6 @@
 //! The CPU half of drawing text and MSDF icons: placing every glyph into the
-//! atlases, then building every unit's instances (one a quad) against the
-//! atlases' final size. Nothing here needs a GPU, so a list's text can be
+//! atlases, then building every unit's instances (one a quad, naming its
+//! tile in texels). Nothing here needs a GPU, so a list's text can be
 //! prepared, and its draw boxes taken, in a plain test. [`TextRenderer`]
 //! mirrors the atlases to the GPU and uploads the instances kept in
 //! [`MsdfPrepared`].
@@ -155,8 +155,9 @@ impl MsdfCpu {
 
     /// Prepare `texts` for drawing as `commands` (each a range of blocks drawn
     /// as one paint command), placed on `grid`. Every glyph goes into the
-    /// atlas before any vertex is built: generating a glyph can grow the
-    /// atlas, and a UV has to divide by its final size.
+    /// atlas before any quad is built, so the atlas the list's draws sample
+    /// holds all of them. Growing it moves no tile, and a quad names its tile
+    /// in texels, so no quad depends on how big the atlas ended up.
     pub(crate) fn prepare_texts(
         &mut self,
         out: &mut MsdfPrepared,
@@ -210,10 +211,8 @@ impl MsdfCpu {
         }
         drop(shared);
 
-        // Every unit's instances, against the final atlas size.
+        // Every unit's instances.
         let sweep = Sweep {
-            atlas_w: self.atlas.width(),
-            atlas_h: self.atlas.height(),
             px_range: self.atlas.px_range(),
         };
         out.block_sweeps.resize(texts.len(), [0..0, 0..0, 0..0]);
@@ -235,7 +234,7 @@ impl MsdfCpu {
     }
 
     /// Prepare `icons` for drawing. Like text, every icon's glyph goes into the
-    /// icon atlas before any quad is built against its size.
+    /// icon atlas before any quad is built.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) fn prepare_icons(&mut self, out: &mut MsdfPrepared, icons: &[IconMsdf]) {
         out.icon_instances.clear();
@@ -254,7 +253,6 @@ impl MsdfCpu {
                 );
             }
         }
-        let (aw, ah) = (self.icon_atlas.width(), self.icon_atlas.height());
         let px_range = self.icon_atlas.px_range();
         for icon in icons {
             out.icon_starts.push(out.icon_instances.len() as u32);
@@ -264,7 +262,7 @@ impl MsdfCpu {
                 GlyphSizing::Scalable,
             );
             if let Some(Some(tile)) = tile {
-                push_icon_quad(&mut out.icon_instances, &tile, icon, aw, ah, px_range);
+                push_icon_quad(&mut out.icon_instances, &tile, icon, px_range);
             }
         }
         out.icon_starts.push(out.icon_instances.len() as u32);
@@ -273,8 +271,6 @@ impl MsdfCpu {
 
 /// What every glyph quad of one list is built against.
 struct Sweep {
-    atlas_w: u32,
-    atlas_h: u32,
     px_range: f32,
 }
 
@@ -304,7 +300,7 @@ impl MsdfPrepared {
 /// One glyph's quad for sweep `kind`: 0 its shadow, 1 its glow, 2 its fill
 /// and outline. Nothing for a shadow or glow the glyph doesn't have.
 fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacement, kind: usize) {
-    let (aw, ah, px_range) = (sweep.atlas_w, sweep.atlas_h, sweep.px_range);
+    let px_range = sweep.px_range;
     // Effects are capped to the field's reach, so they follow the glyph
     // instead of filling its tile.
     let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
@@ -350,7 +346,7 @@ fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacemen
             }
         }
     };
-    push_glyph_quad(out, p, aw, ah, px_range, &style);
+    push_glyph_quad(out, p, px_range, &style);
 }
 
 #[cfg(all(test, feature = "bundled-font"))]

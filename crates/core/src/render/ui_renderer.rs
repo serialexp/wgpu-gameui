@@ -1861,9 +1861,9 @@ impl UiRenderer {
         view: &wgpu::TextureView,
         draw_list: &DrawList,
     ) {
-        // Place the whole list's glyphs and icons, and build their vertices
-        // against the final atlas, before any batch captures an atlas bind
-        // group.
+        // Place the whole list's glyphs and icons, and build their instances,
+        // before any batch captures an atlas bind group: the atlas it binds
+        // has to hold every glyph the list draws.
         let text_commands = draw_list.paint_cmds.iter().filter_map(|cmd| match cmd {
             PaintCmd::Text { draws } => Some(draws.clone()),
             _ => None,

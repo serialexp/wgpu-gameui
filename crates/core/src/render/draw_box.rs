@@ -487,8 +487,9 @@ pub(crate) fn msdf(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
     let mut out = PixelBox::EMPTY;
     for quad in instances {
         let clip_on = if quad.clip_enabled() { 1.0 } else { 0.0 };
+        let corners = quad.corners();
         for tri in QUAD_INDICES.chunks_exact(3) {
-            let corner = |i: u16| (quad.corners[i as usize], quad.clip, clip_on);
+            let corner = |i: u16| (corners[i as usize], quad.clip, clip_on);
             out = out.union(&triangle(
                 target,
                 [corner(tri[0]), corner(tri[1]), corner(tri[2])],

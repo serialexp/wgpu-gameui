@@ -37,6 +37,9 @@ skrifa = "0.44"
 # every lookup: SipHash over a 250 KB field was most of an idle frame. Already
 # in the tree transitively via cosmic-text.
 rustc-hash = "2"
+# Half floats for the packed MSDF glyph instance's effect parameters (a
+# vertex format the GPU reads natively).
+half = "2"
 nalgebra = "0.34"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # The IBM Plex font files live under assets/fonts/ibm-plex/ and are embedded

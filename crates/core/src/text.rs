@@ -25,13 +25,13 @@ use wgpu::util::DeviceExt;
 
 use crate::RenderStats;
 use crate::layout::Rect;
+use crate::render::{AtlasRegion, QUAD_ATTRIBS, QUAD_INDICES, QUAD_VERTS};
 #[cfg(feature = "phosphor-icons")]
 use crate::render::{DEFAULT_PX_RANGE, IconGlyph, icon_font_snapshot};
 use crate::render::{
     FrameArena, GlyphSizing, GlyphTile, MAX_HINTED_PX, MsdfGlyphAtlas, TextContrast, UniformArena,
     ortho_matrix,
 };
-use crate::render::{QUAD_ATTRIBS, QUAD_INDICES, QUAD_VERTS};
 use crate::shaping::{LayoutSpec, ShapedGlyph, SharedFontSystem};
 #[cfg(feature = "phosphor-icons")]
 use crate::widgets::IconMsdf;
@@ -474,47 +474,105 @@ pub fn load_font_bytes(fs: &FontSystemHandle, bytes: &[u8]) -> Result<FontHandle
 
 /// One MSDF quad, a glyph or an icon — matches `vs_msdf` in `ui_msdf.wgsl`.
 /// Drawn as an instance of the shared unit quad, like the other instanced
-/// pipelines: the vertex shader places the quad's corner from `corners` and
-/// its atlas texel from `uv_rect`, so a glyph uploads one record rather than
-/// six vertices repeating the same colour, clip and effect.
+/// pipelines: the vertex shader places the quad's corner and its atlas texel,
+/// so a glyph uploads one record rather than six vertices repeating the same
+/// colour, clip and effect. Packed to 64 bytes: only positions and the clip
+/// need full floats.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub(crate) struct MsdfInstance {
-    /// The quad's world-space corners: top-left, top-right, bottom-right,
-    /// bottom-left. All four, so an icon's transform can rotate or shear it.
-    pub(crate) corners: [[f32; 2]; 4],
-    /// The tile's atlas rect `[u0, v0, u1, v1]`.
-    uv_rect: [f32; 4],
-    fill: [f32; 4],
-    /// Clip rect `[x, y, w, h]` (ignored unless `params[0] > 0.5`).
+    /// The quad's top-left corner in world space.
+    origin: [f32; 2],
+    /// From the top-left corner to the top-right one, and to the bottom-left
+    /// one: a parallelogram, so an icon's transform can rotate or shear it.
+    axis_x: [f32; 2],
+    axis_y: [f32; 2],
+    /// Clip rect `[x, y, w, h]` (ignored unless the clip flag in `params` is
+    /// set).
     pub(crate) clip: [f32; 4],
+    /// The tile's atlas rect in texels, `[x0, y0, x1, y1]`. Texels rather than
+    /// a fraction of the atlas, so the quad doesn't depend on the atlas's size:
+    /// growing it never moves a tile.
+    texels: [u16; 4],
+    /// Fill colour, sRGB-encoded, 8 bits a channel.
+    fill: [u8; 4],
     /// Outline/glow color composited under the fill (a == 0 disables).
-    outline: [f32; 4],
-    /// `[clip_enabled, px_range, outline_width, softness]`: whether `clip`
-    /// applies; the field's distance-ramp width in atlas texels (constant per
-    /// atlas); the outline width in screen px (the glyph grown outward by
-    /// this much); extra AA spread in screen px (soft shadows / glow, 0 is
-    /// crisp).
-    params: [f32; 4],
+    outline: [u8; 4],
+    /// `[clip_enabled, px_range, outline_width, softness]` as f16 bits:
+    /// whether `clip` applies; the field's distance-ramp width in atlas
+    /// texels (constant per atlas); the outline width in screen px (the glyph
+    /// grown outward by this much); extra AA spread in screen px (soft
+    /// shadows / glow, 0 is crisp).
+    params: [u16; 4],
 }
 
 impl MsdfInstance {
+    /// A quad over `corners` (top-left, top-right, bottom-left; the fourth
+    /// completes the parallelogram) showing `tile`.
+    fn new(
+        [tl, tr, bl]: [[f32; 2]; 3],
+        tile: &AtlasRegion,
+        fill: [f32; 4],
+        outline: [f32; 4],
+        clip: Option<[f32; 4]>,
+        [px_range, outline_width, softness]: [f32; 3],
+    ) -> Self {
+        let texel = |v: u32| u16::try_from(v).expect("MSDF atlas is at most 4096 px");
+        let clip_on = if clip.is_some() { 1.0 } else { 0.0 };
+        Self {
+            origin: tl,
+            axis_x: [tr[0] - tl[0], tr[1] - tl[1]],
+            axis_y: [bl[0] - tl[0], bl[1] - tl[1]],
+            clip: clip.unwrap_or_default(),
+            texels: [
+                texel(tile.x),
+                texel(tile.y),
+                texel(tile.x + tile.w),
+                texel(tile.y + tile.h),
+            ],
+            fill: srgb8(fill),
+            outline: srgb8(outline),
+            params: [clip_on, px_range, outline_width, softness]
+                .map(|v| half::f16::from_f32(v).to_bits()),
+        }
+    }
+
+    /// The quad's world-space corners: top-left, top-right, bottom-right,
+    /// bottom-left.
+    pub(crate) fn corners(&self) -> [[f32; 2]; 4] {
+        let [ox, oy] = self.origin;
+        let ([xx, xy], [yx, yy]) = (self.axis_x, self.axis_y);
+        [
+            [ox, oy],
+            [ox + xx, oy + xy],
+            [ox + xx + yx, oy + xy + yy],
+            [ox + yx, oy + yy],
+        ]
+    }
+
     /// Whether [`clip`](Self::clip) applies.
     pub(crate) fn clip_enabled(&self) -> bool {
-        self.params[0] > 0.5
+        half::f16::from_bits(self.params[0]).to_f32() > 0.5
     }
+}
+
+/// `color` (sRGB-encoded, 0 to 1 a channel) at 8 bits a channel, as an
+/// [`MsdfInstance`] carries it.
+fn srgb8(color: [f32; 4]) -> [u8; 4] {
+    color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
 /// Per-instance MSDF attributes — matches [`MsdfInstance`] / `vs_msdf`
 /// (location 0 is the base-mesh corner).
-const MSDF_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
-    1 => Float32x4, // corners: top-left, top-right
-    2 => Float32x4, // corners: bottom-right, bottom-left
-    3 => Float32x4, // uv_rect
-    4 => Float32x4, // fill
-    5 => Float32x4, // clip
-    6 => Float32x4, // outline
-    7 => Float32x4, // params
+const MSDF_INSTANCE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
+    1 => Float32x2, // origin
+    2 => Float32x2, // axis_x
+    3 => Float32x2, // axis_y
+    4 => Float32x4, // clip
+    5 => Uint16x4,  // texels
+    6 => Unorm8x4,  // fill
+    7 => Unorm8x4,  // outline
+    8 => Float16x4, // params
 ];
 
 /// Which atlas an MSDF upload samples.
@@ -992,8 +1050,8 @@ impl TextRenderer {
 
     /// Prepare a list's text for drawing as `commands`, each a range of
     /// `texts` drawn as one paint command, and upload the glyph atlas it grew.
-    /// Every glyph is placed before any quad is built, so every command's
-    /// UVs use the atlas's final size; each command is then uploaded with
+    /// Every glyph is placed before any quad is built, so the uploaded atlas
+    /// holds every glyph the commands draw; each command is then uploaded with
     /// [`upload_text_command`](Self::upload_text_command).
     pub(crate) fn prepare_texts(
         &mut self,
@@ -1552,8 +1610,6 @@ struct QuadStyle {
 fn push_glyph_quad(
     out: &mut Vec<MsdfInstance>,
     p: &GlyphPlacement,
-    atlas_w: u32,
-    atlas_h: u32,
     px_range: f32,
     style: &QuadStyle,
 ) {
@@ -1566,19 +1622,14 @@ fn push_glyph_quad(
     let y0 = p.baseline_y - m.top_em * font_size + oy;
     let y1 = p.baseline_y - m.bottom_em * font_size + oy;
 
-    let (clip, clip_on) = match p.clip {
-        Some(c) => (c, 1.0),
-        None => ([0.0; 4], 0.0),
-    };
-
-    out.push(MsdfInstance {
-        corners: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-        uv_rect: p.tile.region.uv(atlas_w, atlas_h),
-        fill: style.fill,
-        clip,
-        outline: style.outline,
-        params: [clip_on, px_range, style.outline_width, style.softness],
-    });
+    out.push(MsdfInstance::new(
+        [[x0, y0], [x1, y0], [x0, y1]],
+        &p.tile.region,
+        style.fill,
+        style.outline,
+        p.clip,
+        [px_range, style.outline_width, style.softness],
+    ));
 }
 
 /// Place a glyph tile of EM extent `w_em` x `h_em`, centered inside `rect`,
@@ -1618,14 +1669,7 @@ fn fit_centered(rect: Rect, w_em: f32, h_em: f32) -> (f32, f32, f32, f32) {
 /// rect and transforming the resulting corners by the icon's affine (so
 /// rotation/scale work — unlike the axis-aligned text path).
 #[cfg(feature = "phosphor-icons")]
-fn push_icon_quad(
-    out: &mut Vec<MsdfInstance>,
-    tile: &GlyphTile,
-    icon: &IconMsdf,
-    atlas_w: u32,
-    atlas_h: u32,
-    px_range: f32,
-) {
+fn push_icon_quad(out: &mut Vec<MsdfInstance>, tile: &GlyphTile, icon: &IconMsdf, px_range: f32) {
     let m = &tile.metrics;
     let w_em = m.right_em - m.left_em;
     let h_em = m.top_em - m.bottom_em;
@@ -1634,20 +1678,15 @@ fn push_icon_quad(
     }
     let (x0, y0, x1, y1) = fit_centered(icon.local, w_em, h_em);
 
-    let (clip, clip_on) = match icon.clip {
-        Some(c) => ([c.x, c.y, c.width, c.height], 1.0),
-        None => ([0.0; 4], 0.0),
-    };
-
     let t = &icon.transform;
-    out.push(MsdfInstance {
-        corners: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|c| t.transform_point(c)),
-        uv_rect: tile.region.uv(atlas_w, atlas_h),
-        fill: icon.tint,
-        clip,
-        outline: [0.0; 4],
-        params: [clip_on, px_range, 0.0, 0.0],
-    });
+    out.push(MsdfInstance::new(
+        [[x0, y0], [x1, y0], [x0, y1]].map(|c| t.transform_point(c)),
+        &tile.region,
+        icon.tint,
+        [0.0; 4],
+        icon.clip.map(|c| [c.x, c.y, c.width, c.height]),
+        [px_range, 0.0, 0.0],
+    ));
 }
 
 /// The bind-group layout (group 1) for an MSDF atlas: a filterable 2D texture +
@@ -3406,7 +3445,7 @@ mod tests {
         shared_font_system, vcentered_line_y, vertical_stack_string, visual_caret_neighbor,
     };
     #[cfg(feature = "bundled-font")]
-    use super::{MsdfInstance, TextStyleRange};
+    use super::{MsdfInstance, TextStyleRange, srgb8};
     use crate::render::{GlyphSizing, MAX_HINTED_PX};
     use crate::shaping::{LayoutSpec, LayoutStats, shape_layout};
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
@@ -4861,6 +4900,12 @@ mod tests {
         r.cpu.font_system.lock().unwrap().layout_stats().layouts
     }
 
+    /// What a glyph uploads: one packed record, not six vertices.
+    #[test]
+    fn an_msdf_instance_is_64_bytes() {
+        assert_eq!(std::mem::size_of::<super::MsdfInstance>(), 64);
+    }
+
     #[cfg(feature = "bundled-font")]
     /// Reinterpret an instance slice as raw bytes, to compare instances bit
     /// for bit.
@@ -4906,12 +4951,12 @@ mod tests {
         assert_eq!(cache_total(&r), 1, "moved block reuses the cached layout");
         assert_eq!(a.len(), b.len());
         for (va, vb) in a.iter().zip(b.iter()) {
-            for (ca, cb) in va.corners.iter().zip(vb.corners) {
+            for (ca, cb) in va.corners().iter().zip(vb.corners()) {
                 assert!((cb[0] - ca[0] - 100.0).abs() < 1e-3);
                 assert!((cb[1] - ca[1] - 50.0).abs() < 1e-3);
             }
             // Everything but position is unchanged: compare uv + fill.
-            assert_eq!(va.uv_rect, vb.uv_rect);
+            assert_eq!(va.texels, vb.texels);
             assert_eq!(va.fill, vb.fill);
         }
     }
@@ -4934,7 +4979,7 @@ mod tests {
     /// Each glyph quad's corners in `instances`.
     #[cfg(feature = "bundled-font")]
     fn quads(instances: &[MsdfInstance]) -> Vec<[[f32; 2]; 4]> {
-        instances.iter().map(|quad| quad.corners).collect()
+        instances.iter().map(|quad| quad.corners()).collect()
     }
 
     #[cfg(feature = "bundled-font")]
@@ -5083,12 +5128,12 @@ mod tests {
         let va = r.build_instances(&[auto]);
         let vb = r.build_instances(&[rtl]);
 
-        let fills = |v: &[MsdfInstance]| -> std::collections::BTreeSet<[u32; 4]> {
-            v.iter().map(|x| x.fill.map(f32::to_bits)).collect()
+        let fills = |v: &[MsdfInstance]| -> std::collections::BTreeSet<[u8; 4]> {
+            v.iter().map(|x| x.fill).collect()
         };
         let fa = fills(&va);
         assert!(
-            fa.contains(&red().map(f32::to_bits)) && fa.contains(&blue().map(f32::to_bits)),
+            fa.contains(&srgb8(red())) && fa.contains(&srgb8(blue())),
             "both span colours present in the LTR baseline"
         );
         assert_eq!(
@@ -5177,7 +5222,7 @@ mod tests {
         // With the line-rebase fix exactly "RED" (3 glyphs) is red; the bug
         // mapped "BLUE"'s line-relative bytes (0..3) into the same range and
         // turned B/L/U red too (6 red quads).
-        let red_quads: Vec<_> = verts.iter().filter(|q| q.fill == red).collect();
+        let red_quads: Vec<_> = verts.iter().filter(|q| q.fill == srgb8(red)).collect();
         assert_eq!(
             red_quads.len(),
             3,
@@ -5185,7 +5230,7 @@ mod tests {
         );
         let first_line_bottom = 40.0 + 18.0 * super::LINE_HEIGHT_RATIO; // block.y + one line box
         for quad in &red_quads {
-            let y = quad.corners[0][1];
+            let y = quad.corners()[0][1];
             assert!(
                 y < first_line_bottom,
                 "red glyph quad at y={y} is below the first line — \
@@ -5214,7 +5259,7 @@ mod tests {
                 underline: Underline::None,
             }]);
         let verts = r.build_instances(&[block]);
-        assert_eq!(verts.iter().filter(|q| q.fill == red).count(), 3);
+        assert_eq!(verts.iter().filter(|q| q.fill == srgb8(red)).count(), 3);
     }
 
     /// Soft-wrap mapping: a narrow `max_width` splits "REDBLUE" into several
@@ -5242,14 +5287,14 @@ mod tests {
         // top row (smallest y).
         let mut reds: Vec<[f32; 2]> = quads
             .iter()
-            .filter(|q| q.fill == red)
-            .map(|q| q.corners[0])
+            .filter(|q| q.fill == srgb8(red))
+            .map(|q| q.corners()[0])
             .collect();
         reds.sort_by(|a, b| a[1].total_cmp(&b[1]).then(a[0].total_cmp(&b[0])));
         assert_eq!(reds.len(), 3);
         let top_y = quads
             .iter()
-            .map(|q| q.corners[0][1])
+            .map(|q| q.corners()[0][1])
             .fold(f32::MAX, f32::min);
         for p in &reds {
             assert!(
@@ -5839,21 +5884,14 @@ mod icon_tests {
             clip: Some(Rect::new(0.0, 0.0, 200.0, 200.0)),
         };
         let mut out = Vec::new();
-        push_icon_quad(
-            &mut out,
-            &tile,
-            &icon,
-            atlas.width(),
-            atlas.height(),
-            atlas.px_range(),
-        );
+        push_icon_quad(&mut out, &tile, &icon, atlas.px_range());
         assert_eq!(out.len(), 1, "one quad");
-        assert_eq!(out[0].fill, [0.2, 0.4, 0.6, 1.0]);
+        assert_eq!(out[0].fill, [51, 102, 153, 255]);
         assert!(out[0].clip_enabled());
         // The translate transform shifts the whole quad by (100, 50). The icon is
         // centred in its 32x32 local rect (centre (16,16)), so the quad centroid
         // lands at (116, 66) in world space regardless of the glyph's tile size.
-        let corners = out[0].corners;
+        let corners = out[0].corners();
         let cx = corners.iter().map(|c| c[0]).sum::<f32>() / 4.0;
         let cy = corners.iter().map(|c| c[1]).sum::<f32>() / 4.0;
         assert!((cx - 116.0).abs() < 1e-2, "centroid x {cx}");
