@@ -761,10 +761,11 @@ fn a_dense_overlay_drops_its_dots_and_stops_growing() {
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
-fn trend<'a>(values: &'a [f64], fitted: usize) -> BarTrend<'a> {
+fn trend<'a>(values: &'a [f64], (from, to): (usize, usize)) -> BarTrend<'a> {
     BarTrend {
         values,
-        fitted,
+        from,
+        to,
         legend: "linear trend",
         label: "trend +4.2% / week",
         label_color: WHITE,
@@ -777,10 +778,10 @@ fn a_trend_is_solid_over_the_fitted_bars_and_dashed_into_the_rest() {
     let s = StyleResolver::new(&theme);
     let series = series();
     let segments = [10.0, 20.0];
-    let bars = [bar(&segments); 4];
-    let values = [6.0, 12.0, 18.0, 24.0];
+    let bars = [bar(&segments); 5];
+    let values = [0.0, 6.0, 12.0, 18.0, 24.0];
     let chart = BarChart::new(&bars, &series, &format)
-        .trend(trend(&values, 3))
+        .trend(trend(&values, (1, 4)))
         .legend(false);
     let layout = chart.layout(400.0, &mut DrawList::new(), &s);
     let (list, _) = paint(&chart, 400.0, &s, &away());
@@ -788,24 +789,28 @@ fn a_trend_is_solid_over_the_fitted_bars_and_dashed_into_the_rest() {
     let (base, height) = (PAD + CHART_HEIGHT, CHART_HEIGHT);
     let center = |k: usize| layout.gutter + layout.center(k);
 
-    // The fitted part: a line over a wider halo, from the first bar's
-    // centre to the third's, at 6 and 18 of the axis' 30.
+    // The fitted part: a line over a wider halo, from the second bar's
+    // centre to the fourth's, at 6 and 18 of the axis' 30; nothing over the
+    // first.
     let solid = strokes_of(&list, ink, LINE_WIDTH * 0.5);
     assert_eq!(solid.len(), 2, "{solid:?}");
-    assert_eq!(strokes_of(&list, TREND_HALO, TREND_HALO_WIDTH * 0.5).len(), 2);
+    assert_eq!(
+        strokes_of(&list, TREND_HALO, TREND_HALO_WIDTH * 0.5).len(),
+        2
+    );
     let [ax, ay, ..] = solid[0];
     let [.., bx, by] = solid[1];
-    assert!((ax - center(0)).abs() < 0.01 && (bx - center(2)).abs() < 0.01);
+    assert!((ax - center(1)).abs() < 0.01 && (bx - center(3)).abs() < 0.01);
     assert!((ay - (base - height * 0.2)).abs() < 0.01, "6 of 30");
     assert!((by - (base - height * 0.6)).abs() < 0.01, "18 of 30");
 
-    // Carried on from the third bar to the fourth, dashed and faint.
+    // Carried on from the fourth bar to the fifth, dashed and faint.
     let mut faint = ink;
     faint[3] *= TREND_PROJECTED;
     let dashed = strokes_of(&list, faint, LINE_WIDTH * 0.5);
     assert!(!dashed.is_empty());
-    assert!((dashed[0][0] - center(2)).abs() < 0.01);
-    assert!((dashed[dashed.len() - 1][2] - center(3)).abs() < 0.01);
+    assert!((dashed[0][0] - center(3)).abs() < 0.01);
+    assert!((dashed[dashed.len() - 1][2] - center(4)).abs() < 0.01);
     let dashes = list
         .segment_instances()
         .filter(|g| g.color == faint)
@@ -830,7 +835,7 @@ fn a_trend_over_the_axis_is_clipped_to_the_plot() {
     let bars = [bar(&segments); 3];
     let values = [10.0, 40.0, 70.0];
     let chart = BarChart::new(&bars, &series, &format)
-        .trend(trend(&values, 3))
+        .trend(trend(&values, (0, 3)))
         .legend(false);
     let (list, _) = paint(&chart, 400.0, &s, &away());
     let ink = s.ink(Ink::Title);
@@ -849,7 +854,7 @@ fn a_trend_has_a_legend_entry_and_needs_a_value_a_bar() {
     let segments = [10.0, 20.0];
     let bars = [bar(&segments); 3];
     let values = [6.0, 12.0, 18.0];
-    let chart = BarChart::new(&bars, &series, &format).trend(trend(&values, 3));
+    let chart = BarChart::new(&bars, &series, &format).trend(trend(&values, (0, 3)));
     let (list, out) = paint(&chart, 400.0, &s, &away());
     assert!(shows(&list, "linear trend"));
     assert_eq!(
@@ -858,7 +863,7 @@ fn a_trend_has_a_legend_entry_and_needs_a_value_a_bar() {
     );
 
     let short = [6.0, 12.0];
-    let chart = BarChart::new(&bars, &series, &format).trend(trend(&short, 2));
+    let chart = BarChart::new(&bars, &series, &format).trend(trend(&short, (0, 2)));
     let (list, _) = paint(&chart, 400.0, &s, &away());
     assert!(!shows(&list, "linear trend") && !shows(&list, "trend +4.2% / week"));
     assert!(strokes_of(&list, s.ink(Ink::Title), LINE_WIDTH * 0.5).is_empty());

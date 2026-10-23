@@ -28,7 +28,8 @@
 //!
 //! A trend ([`BarChart::trend`]) is a fitted line on the bars' own axis,
 //! one value a bar: solid and haloed over the bars it was fitted to, dashed
-//! and faint over the rest (a window still running), clipped to the plot.
+//! and faint on over those after them (a window still running), clipped to
+//! the plot. Nothing is drawn over the bars before them.
 //! It has a legend entry and a label at the plot's top right ("trend +4.2%
 //! / week"); the caller does the fitting.
 //!
@@ -41,13 +42,13 @@ use crate::InputState;
 use crate::layout::Rect;
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 
-use super::{DrawList, Stroke};
 use super::chart::{
     self, AxisSide, CHART_HEIGHT, DASH, DASH_GAP, DOT, DOT_RING, DOT_SPACING, EDGE_ROOM,
     LABEL_SPACING, LEGEND_DASH, LEGEND_GAP, LEGEND_LINE, LINE_WIDTH, NOW_TICK, PAD, SERIES_FADED,
-    SWATCH_GAP,
-    TIP_PAD_X, TIP_ROW, TIP_ROW_GAP, TIP_SWATCH_GAP, TIP_VALUE_GAP, TIP_ZERO, X_LABELS, nice_max,
+    SWATCH_GAP, TIP_PAD_X, TIP_ROW, TIP_ROW_GAP, TIP_SWATCH_GAP, TIP_VALUE_GAP, TIP_ZERO, X_LABELS,
+    nice_max,
 };
+use super::{DrawList, Stroke};
 
 /// The widest a bar gets when the caller doesn't say.
 const MAX_BAR_WIDTH: f32 = 56.0;
@@ -185,14 +186,16 @@ impl BarOverlay<'_> {
 pub struct BarTrend<'a> {
     /// The line's value at each bar's centre, oldest first; one per bar.
     pub values: &'a [f64],
-    /// How many bars, from the first, it was fitted to: solid over those,
-    /// dashed over the rest.
-    pub fitted: usize,
+    /// The first bar it was fitted to: nothing is drawn over those before.
+    pub from: usize,
+    /// One past the last bar it was fitted to: solid up to there, dashed on
+    /// over the bars after.
+    pub to: usize,
     /// Its legend entry ("linear trend").
     pub legend: &'a str,
-    /// The label at the plot's top right ("trend +4.2% / week"), and its
-    /// colour.
+    /// The label at the plot's top right ("trend +4.2% / week").
     pub label: &'a str,
+    /// The label's colour.
     pub label_color: [f32; 4],
 }
 
@@ -609,7 +612,12 @@ impl<'a> BarChart<'a> {
         }
         if let Some(trend) = self.shown_trend() {
             let plot_width = width - layout.gutter - layout.right_gutter;
-            let plot = Rect::new(x + layout.gutter, base - self.height, plot_width, self.height);
+            let plot = Rect::new(
+                x + layout.gutter,
+                base - self.height,
+                plot_width,
+                self.height,
+            );
             self.draw_trend(trend, plot, scale, list, s);
         }
         if let Some(overlay) = self.shown_overlay() {
@@ -680,7 +688,7 @@ impl<'a> BarChart<'a> {
 
     /// The trend through each bar's centre in `plot`, `scale` pixels a unit
     /// up from its bottom: haloed over the fitted bars, dashed and faint on
-    /// to the rest, clipped to the plot. Bars sharing a slot keep their own
+    /// over those after them, clipped to the plot. Bars sharing a slot keep their own
     /// place along it. Then its label, at the plot's top right.
     fn draw_trend(
         &self,
@@ -696,16 +704,16 @@ impl<'a> BarChart<'a> {
             let at = (trend.values[i].max(0.0) * scale) as f32;
             [plot.x + (i as f32 + 0.5) * step, plot.bottom() - at]
         };
-        let fitted = trend.fitted.min(n);
+        let (from, to) = (trend.from.min(n), trend.to.min(n));
         let ink = s.ink(Ink::Title);
         list.push_clip(plot);
-        if fitted >= 2 {
-            let points: Vec<[f32; 2]> = (0..fitted).map(point).collect();
+        if to >= from + 2 {
+            let points: Vec<[f32; 2]> = (from..to).map(point).collect();
             list.stroke_polyline(&points, &Stroke::new(TREND_HALO_WIDTH), TREND_HALO);
             list.stroke_polyline(&points, &Stroke::new(LINE_WIDTH), ink);
         }
-        if fitted >= 1 && fitted < n {
-            let points: Vec<[f32; 2]> = (fitted - 1..n).map(point).collect();
+        if to > from && to < n {
+            let points: Vec<[f32; 2]> = (to - 1..n).map(point).collect();
             let mut faint = ink;
             faint[3] *= TREND_PROJECTED;
             let dash = Stroke::new(LINE_WIDTH).dashed(TREND_DASH, TREND_DASH);
@@ -730,7 +738,13 @@ impl<'a> BarChart<'a> {
         let size = s.text_size(TextSize::Meta);
         let y = crate::text::vcentered_line_y(pill.y, pill.height, size);
         let block = s
-            .mono_block(trend.label, pill.x + TREND_PILL_PAD, y, TextSize::Meta, Ink::Row)
+            .mono_block(
+                trend.label,
+                pill.x + TREND_PILL_PAD,
+                y,
+                TextSize::Meta,
+                Ink::Row,
+            )
             .with_color_f32(trend.label_color);
         list.text(block);
     }
