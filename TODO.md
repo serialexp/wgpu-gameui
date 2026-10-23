@@ -15,6 +15,33 @@ still open.
 
 ---
 
+## Flaky media test (found 2026-10-23)
+
+- [ ] **`player::tests::out_of_pictures_the_clock_waits_for_them`** (`crates/media/src/player_tests.rs:367`)
+      failed once in a full `cargo test --workspace` on a loaded machine (picture 2 was not the
+      one shown a second on) and passed five times alone and in a `--no-fail-fast` rerun. It
+      waits for two queued pictures, then asserts what the decode worker has *not* done yet,
+      which depends on how far that thread got; the test should hold the worker (or count its
+      decodes) rather than race it.
+
+## UI scenario follow-ups (2026-10-23)
+
+- [ ] **Explicit test ids on hit zones** (option B in
+      [docs/design/ui-scenarios.md](docs/design/ui-scenarios.md)): a `test_id`
+      on `Sense` and the hit-zone registration, so a scenario can name a
+      widget that has no debug scope and no text (an icon button, a drag
+      handle). Scenarios use scope paths plus text until then.
+
+## Forge cursor follow-ups (2026-10-23)
+
+- [ ] **The designer and `hello_ui` show native cursors** (`CursorIcon::fallback`),
+      not the Forge art; agent-ui's `window_cursors.rs` is the winit glue they'd
+      need (sharp on macOS only with the scale-aware winit constructor).
+- [ ] **Forge's in-scene `Cursor`** (`components/cursor/Cursor.jsx`): a cursor
+      drawn in the scene with a tint and a label chip, for remote players,
+      tutorials or "−40 wood". `CursorIcon::svg` has the art; tinting needs
+      `cursors.js`'s `tint` flag, which the stylesheet doesn't carry.
+
 ## Code editor follow-ups (2026-10-16)
 
 - [ ] **Show IME composition** (preedit) at the caret in `CodeEditor`.

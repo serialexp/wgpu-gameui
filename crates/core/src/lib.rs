@@ -96,6 +96,8 @@ pub use cosmic_text::{Style, Weight};
 
 pub mod affine;
 mod animation;
+#[cfg(feature = "automation")]
+pub mod automation;
 mod chrome;
 mod click_tracker;
 pub mod color;
@@ -105,6 +107,9 @@ mod drag_tracker;
 mod frame;
 mod frame_result;
 mod fullscreen;
+mod host_event;
+#[cfg(feature = "winit")]
+mod host_event_winit;
 mod interaction;
 mod keys;
 pub mod layer;
@@ -139,13 +144,18 @@ pub use click_tracker::{
     CLICK_SLOP, ClickTracker, DEFAULT_DOUBLE_CLICK_THRESHOLD, DEFAULT_HOLD_THRESHOLD,
 };
 pub use color::{Clear, ColorSpace, Hsva, Linear, Srgb};
-pub use cursor::{CursorIcon, CursorState};
+#[cfg(feature = "forge-cursors")]
+pub use cursor::CursorImage;
+pub use cursor::{CURSOR_SIZE, CursorIcon, CursorState};
 /// The entry point to layout inspection — see [`mod@debug`] for the full API.
 pub use debug::DebugReport;
 pub use drag_tracker::{DEFAULT_DRAG_THRESHOLD, DragTracker};
 pub use frame::Frame;
 pub use frame_result::{MAX_DT, NOMINAL_FRAME_DT, UiFrameResult};
 pub use fullscreen::FullscreenState;
+pub use host_event::{HeldModifiers, HostEvent, POINTER_AWAY, PointerButton};
+#[cfg(feature = "winit")]
+pub use host_event_winit::{PIXELS_PER_LINE, key_from_winit};
 pub use interaction::{
     HitRegion, HitShape, InteractionScene, OrderKey, PointerPolicy, Response, WidgetId,
 };

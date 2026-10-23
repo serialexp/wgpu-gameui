@@ -82,7 +82,7 @@ impl<'a> VectorField<'a> {
         // `draw_list` borrow; per-tag requests would need a re-borrow in the
         // loop).
         if rect.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed {
-            ctx.request_cursor(crate::CursorIcon::ResizeHorizontal);
+            ctx.request_cursor(crate::CursorIcon::EwResize);
         }
         let list = &mut *ctx.draw_list;
 

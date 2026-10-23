@@ -55,9 +55,17 @@ tree-sitter-lua = { version = "0.5.0", optional = true }
 # tables, strikethrough and task lists). No HTML output is needed.
 pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 toml = { version = "1.1", optional = true }
+# Draws the Forge cursor artwork (SVG) to pixels at the window's scale, for
+# `CursorIcon::image`. No text or raster-image support: the cursors are paths.
+resvg = { version = "0.46", optional = true, default-features = false }
+# Reading scenario files and writing their reports, for the `automation` module.
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+# Translating window events into `HostEvent`s (`HostEvent::from_winit`).
+winit = { version = "0.30", optional = true }
 
 [features]
-default = ["bundled-font", "phosphor-icons", "headless"]
+default = ["bundled-font", "phosphor-icons", "headless", "forge-cursors"]
 # Generic retained Tree-sitter highlighting API.
 syntax-highlighting = ["dep:tree-sitter-highlight"]
 # Lua grammar and its configured highlighter constructor.
@@ -84,6 +92,16 @@ headless = ["dep:pollster"]
 # atlas. Disable (`--no-default-features`) to drop the ~0.5 MB font; widgets
 # fall back to text glyphs (`+`/`\u{2212}`) for their icon affordances.
 phosphor-icons = []
+# Draw the Forge cursors (`CursorIcon::image`) with resvg. Without it the
+# cursor names, hotspots, native fallbacks and SVG are still there.
+forge-cursors = ["dep:resvg"]
+# Scripted UI tests (`automation`): JSON scenarios of clicks, keys and
+# expectations, played against an app frame by frame, with a report. Screenshots
+# need `headless` as well.
+automation = ["dep:serde", "dep:serde_json"]
+# `HostEvent::from_winit`: one translation of winit's input events for every
+# host.
+winit = ["dep:winit"]
 # Test switches for batching (`docs/design/draw-call-batching.md`):
 # `UiRenderer::set_paint_order` draws in paint order, as before batching, and
 # `UiRenderer::set_check_plan` checks each list's batches against a brute-force
@@ -92,10 +110,11 @@ paint-order-oracle = []
 
 [dev-dependencies]
 # The crate itself, so its tests (integration tests build as a separate crate,
-# out of `cfg(test)`'s reach) get the paint-order switches. Without
+# out of `cfg(test)`'s reach) get the paint-order switches, the scenario
+# runner and the winit translation. Without
 # `default-features = false` this would turn the default features back on in a
 # `--no-default-features` run. Publishing strips path-only dev-dependencies.
-wgpu-gameui = { path = ".", default-features = false, features = ["paint-order-oracle"] }
+wgpu-gameui = { path = ".", default-features = false, features = ["paint-order-oracle", "automation", "winit"] }
 winit = "0.30"
 pollster = "0.3"
 env_logger = "0.11"

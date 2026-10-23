@@ -70,8 +70,8 @@ impl Splitter {
         let (px, py) = (input.mouse_x, input.mouse_y);
         let hovered = rect.contains(px, py) && !input.mouse_consumed;
         let grab_axis = match self.axis {
-            SplitAxis::Vertical => crate::CursorIcon::ResizeHorizontal,
-            SplitAxis::Horizontal => crate::CursorIcon::ResizeVertical,
+            SplitAxis::Vertical => crate::CursorIcon::ColResize,
+            SplitAxis::Horizontal => crate::CursorIcon::RowResize,
         };
 
         if !input.mouse_down {
@@ -383,7 +383,7 @@ mod tests {
 
         assert!(out.dragging);
         assert_eq!(out.delta, 8.0);
-        assert_eq!(cursor.resolve(), crate::CursorIcon::ResizeHorizontal);
+        assert_eq!(cursor.resolve(), crate::CursorIcon::ColResize);
         assert_eq!(list.shadow_instance_count(), 1);
         let shadow = list.shadow_instance(0).unwrap();
         assert_eq!(shadow.element_rect, [12.0, 57.0, 2.0, 26.0]);

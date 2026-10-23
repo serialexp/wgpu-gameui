@@ -310,7 +310,7 @@ impl<'a> Window<'a> {
             resize_released = was_resizing && !resizing;
             grip_hot = resizing || (hovered && capture.is_free());
             if grip_hot {
-                ctx.request_cursor(crate::CursorIcon::ResizeDiagonal);
+                ctx.request_cursor(crate::CursorIcon::NwseResize);
             }
             if resizing {
                 resize_delta = input.drag_delta;

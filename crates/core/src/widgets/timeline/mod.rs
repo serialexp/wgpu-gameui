@@ -919,11 +919,11 @@ impl Timeline {
         match &mut gesture {
             Gesture::Idle => done = true,
             Gesture::Scrub => {
-                ctx.request_cursor(CursorIcon::ResizeHorizontal);
+                ctx.request_cursor(CursorIcon::EwResize);
                 self.set_frame(state, l.frame_at(mx).floor() as i64);
             }
             Gesture::Keys { x0, delta, lo, hi } => {
-                ctx.request_cursor(CursorIcon::ResizeHorizontal);
+                ctx.request_cursor(CursorIcon::EwResize);
                 *delta = (((mx - *x0) / l.ppf).round() as i64).clamp(*lo, *hi);
                 if cancel {
                     *delta = 0;
@@ -946,7 +946,7 @@ impl Timeline {
                 }
             }
             Gesture::Range { edge, from } => {
-                ctx.request_cursor(CursorIcon::ResizeHorizontal);
+                ctx.request_cursor(CursorIcon::EwResize);
                 let f = (l.frame_at(mx).floor() as i64).clamp(0, self.length as i64) as u32;
                 let [lo, hi] = state.bounds(self.length);
                 let next = if cancel {
@@ -1029,7 +1029,7 @@ impl Timeline {
         if l.ruler.contains(mx, my) {
             let s = ctx.styles();
             let icon = if self.bracket_at(l, state, mx, my).is_some() {
-                CursorIcon::ResizeHorizontal
+                CursorIcon::EwResize
             } else if self.markers_editable
                 && self
                     .flag_at(l, markers, state, ctx.draw_list, &s, mx, my)
@@ -1049,7 +1049,7 @@ impl Timeline {
                 && !tracks[row.track].locked
                 && self.key_at(l, rows, row, tracks, mx).is_some()
             {
-                ctx.request_cursor(CursorIcon::ResizeHorizontal);
+                ctx.request_cursor(CursorIcon::EwResize);
             }
         }
     }

@@ -319,7 +319,7 @@ widgets each frame:
 | `AnimationState` | in-flight color/scalar transitions | animated widgets via `DrawContext::with_animations` |
 | `DragTracker` | press origin + click-vs-drag latch | writes `input.is_dragging` / `drag_delta` |
 | `ClickTracker` | double-click + hold detection | writes `input.mouse_double_clicked` / `mouse_held` |
-| `CursorState` | per-frame cursor icon accumulator | widgets request via `DrawContext::request_cursor` |
+| `CursorState` | per-frame cursor icon accumulator (the Forge cursor set; `CursorIcon::image` draws one at a scale for a custom OS cursor) | widgets request via `DrawContext::request_cursor` |
 
 ### Layout
 
@@ -564,6 +564,7 @@ write_png("frame.png", &rgba, (800, 600))?;
 |---|---|---|
 | `bundled-font` | ✅ | Embed IBM Plex Sans (regular/bold/italic) as the default sans-serif plus IBM Plex Mono as its technical companion. Drop ~1.5 MB if you supply your own fonts. |
 | `phosphor-icons` | ✅ | Embed the Phosphor (MIT) icon font and expose the `PhosphorIcon` enum + `Icon` widget. Drop ~0.5 MB if unused. |
+| `forge-cursors` | ✅ | `CursorIcon::image`: draw the Forge cursors (vendored from the design system's `tokens/cursors.css`) to RGBA at any scale, for a custom OS cursor. Pulls in `resvg` without its text or raster features. Names, hotspots, native fallbacks and SVG are there without it. |
 | `headless` | ✅ | `HeadlessGpu` — offscreen device + renderer for screenshot capture in tests. Pulls in `pollster`. The dependency-free half (`capture_draw_list`, `write_png`) is always available. |
 | `tracy` | ❌ | Emit `tracing` spans around the render path for Tracy profiling. |
 

@@ -11,7 +11,7 @@ name = "gameui-designer"
 path = "src/main.rs"
 
 [dependencies]
-wgpu-gameui = { path = "../crates/core", features = ["preset"] }
+wgpu-gameui = { path = "../crates/core", features = ["preset", "winit"] }
 wgpu = "24"
 winit = "0.30"
 pollster = "0.3"

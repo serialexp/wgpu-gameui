@@ -12,30 +12,20 @@ use std::time::Instant;
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{
     Button, ClickTracker, CursorIcon, CursorState, DragCapture, DragHandle, DragTracker,
-    DrawContext, Dropdown, DropdownState, FocusState, FontHandle, InputState, LayerStack,
-    Placement, ScrollState, ScrollView, StyleResolver, TextAlign, TextBlock, TextInput, Theme,
-    UiContext, UiRenderer,
+    DrawContext, Dropdown, DropdownState, FocusState, FontHandle, HostEvent, InputState,
+    LayerStack, Placement, ScrollState, ScrollView, StyleResolver, TextAlign, TextBlock, TextInput,
+    Theme, UiContext, UiRenderer,
 };
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-/// Map the library's windowing-agnostic [`CursorIcon`] to winit's. This is the
-/// one place the application bridges UI cursor requests to the windowing system.
+/// Map the library's windowing-agnostic [`CursorIcon`] to winit's native
+/// cursor closest to it (its CSS keyword, which winit parses). This is the one
+/// place the application bridges UI cursor requests to the windowing system.
 fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
-    use winit::window::CursorIcon as W;
-    match icon {
-        CursorIcon::Default => W::Default,
-        CursorIcon::Pointer => W::Pointer,
-        CursorIcon::Text => W::Text,
-        CursorIcon::Grab => W::Grab,
-        CursorIcon::Grabbing => W::Grabbing,
-        CursorIcon::ResizeHorizontal => W::EwResize,
-        CursorIcon::ResizeVertical => W::NsResize,
-        CursorIcon::ResizeDiagonal => W::NwseResize,
-        CursorIcon::NotAllowed => W::NotAllowed,
-    }
+    icon.fallback().parse().unwrap_or_default()
 }
 
 const CHECKER_SIZE: u32 = 32;
@@ -288,122 +278,6 @@ impl ApplicationHandler for App {
                     gpu.config.height,
                     window.scale_factor() as f32,
                 );
-                window.request_redraw();
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                // The UI lays out in logical pixels; winit reports physical.
-                let scale = window.scale_factor() as f32;
-                self.input.mouse_x = position.x as f32 / scale;
-                self.input.mouse_y = position.y as f32 / scale;
-                window.request_redraw();
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let pressed = state == ElementState::Pressed;
-                match button {
-                    MouseButton::Left => {
-                        if pressed && !self.input.mouse_down {
-                            self.input.mouse_clicked = true;
-                        } else if !pressed && self.input.mouse_down {
-                            self.input.mouse_released = true;
-                        }
-                        self.input.mouse_down = pressed;
-                    }
-                    MouseButton::Right => {
-                        if pressed && !self.input.mouse_right_down {
-                            self.input.mouse_right_clicked = true;
-                        } else if !pressed && self.input.mouse_right_down {
-                            self.input.mouse_right_released = true;
-                        }
-                        self.input.mouse_right_down = pressed;
-                    }
-                    MouseButton::Middle => {
-                        if pressed && !self.input.mouse_middle_down {
-                            self.input.mouse_middle_clicked = true;
-                        } else if !pressed && self.input.mouse_middle_down {
-                            self.input.mouse_middle_released = true;
-                        }
-                        self.input.mouse_middle_down = pressed;
-                    }
-                    _ => {}
-                }
-                window.request_redraw();
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => (p.y / 20.0) as f32,
-                };
-                self.input.scroll_delta = dy;
-                window.request_redraw();
-            }
-            WindowEvent::KeyboardInput { event: ref ke, .. } => {
-                use winit::keyboard::{KeyCode, PhysicalKey};
-                let pressed = ke.state == ElementState::Pressed;
-                // Map physical keys to our input fields.
-                if let PhysicalKey::Code(code) = ke.physical_key {
-                    match code {
-                        KeyCode::ArrowLeft => self.input.key_left = pressed,
-                        KeyCode::ArrowRight => self.input.key_right = pressed,
-                        KeyCode::ArrowUp => self.input.key_up = pressed,
-                        KeyCode::ArrowDown => self.input.key_down = pressed,
-                        KeyCode::Space => {
-                            if pressed {
-                                self.input.key_space = true;
-                            }
-                        }
-                        KeyCode::Home => self.input.key_home = pressed,
-                        KeyCode::End => self.input.key_end = pressed,
-                        KeyCode::Delete => self.input.key_delete = pressed,
-                        KeyCode::Tab => {
-                            if pressed {
-                                self.input.key_tab = true;
-                            }
-                        }
-                        KeyCode::Escape => {
-                            if pressed {
-                                self.input.key_escape = true;
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            if pressed {
-                                self.input.backspace_pressed = true;
-                            }
-                        }
-                        KeyCode::ShiftLeft | KeyCode::ShiftRight => {
-                            self.input.shift_pressed = pressed;
-                        }
-                        KeyCode::ControlLeft | KeyCode::ControlRight => {
-                            self.input.ctrl_pressed = pressed;
-                        }
-                        KeyCode::AltLeft | KeyCode::AltRight => {
-                            // `alt_down` is held state; Alt additionally carries
-                            // press/release edges because a bare tap between two
-                            // frames is a gesture in its own right (arming a menu
-                            // bar), and held-only state would miss it entirely.
-                            self.input.alt_down = pressed;
-                            if pressed {
-                                self.input.alt_pressed = true;
-                            } else {
-                                self.input.alt_released = true;
-                            }
-                        }
-                        KeyCode::Enter if pressed => {
-                            self.input.enter_pressed = true;
-                        }
-                        _ => {}
-                    }
-                }
-                // Capture text from the key event (winit 0.30 replaces `ReceivedCharacter` with
-                // `KeyEvent::text`).
-                if pressed {
-                    ke.text.iter().for_each(|text| {
-                        // Filter out control characters (Enter, Tab, etc.) — they're
-                        // handled via physical key mappings above.
-                        self.input
-                            .text_input
-                            .extend(text.chars().filter(|c| !c.is_control()));
-                    });
-                }
                 window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
@@ -946,7 +820,13 @@ impl ApplicationHandler for App {
                 self.input.end_frame();
                 window.request_redraw();
             }
-            _ => {}
+            // Pointer, wheel, keys and modifiers: gameui's one mapping.
+            _ => {
+                if let Some(input) = HostEvent::from_winit(&event, window.scale_factor()) {
+                    self.input.apply(&input);
+                    window.request_redraw();
+                }
+            }
         }
     }
 }

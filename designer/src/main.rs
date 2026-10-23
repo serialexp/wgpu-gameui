@@ -23,31 +23,20 @@ use std::time::{Duration, Instant};
 
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{
-    ClickTracker, CursorIcon, DragTracker, HeadlessGpu, InputState, LayerStack, StyleKey,
-    UiRenderer, write_png,
+    ClickTracker, CursorIcon, DragTracker, HeadlessGpu, HostEvent, InputState, Key, LayerStack,
+    StyleKey, UiRenderer, write_png,
 };
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use app::{Command, Designer};
 
-/// The windowing system's cursor for the UI's request.
+/// The windowing system's cursor for the UI's request: the native one closest
+/// to the Forge cursor (its CSS keyword, which winit parses).
 fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
-    use winit::window::CursorIcon as W;
-    match icon {
-        CursorIcon::Default => W::Default,
-        CursorIcon::Pointer => W::Pointer,
-        CursorIcon::Text => W::Text,
-        CursorIcon::Grab => W::Grab,
-        CursorIcon::Grabbing => W::Grabbing,
-        CursorIcon::ResizeHorizontal => W::EwResize,
-        CursorIcon::ResizeVertical => W::NsResize,
-        CursorIcon::ResizeDiagonal => W::NwseResize,
-        CursorIcon::NotAllowed => W::NotAllowed,
-    }
+    icon.fallback().parse().unwrap_or_default()
 }
 
 struct Gpu {
@@ -90,45 +79,23 @@ impl Host {
         }
     }
 
-    fn key(&mut self, code: KeyCode, pressed: bool) {
-        let input = &mut self.input;
-        match code {
-            KeyCode::ArrowLeft => input.key_left = pressed,
-            KeyCode::ArrowRight => input.key_right = pressed,
-            KeyCode::ArrowUp => input.key_up = pressed,
-            KeyCode::ArrowDown => input.key_down = pressed,
-            KeyCode::Home => input.key_home = pressed,
-            KeyCode::End => input.key_end = pressed,
-            KeyCode::Delete => input.key_delete = pressed,
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => input.shift_pressed = pressed,
-            KeyCode::ControlLeft | KeyCode::ControlRight => input.ctrl_pressed = pressed,
-            KeyCode::AltLeft | KeyCode::AltRight => {
-                input.alt_down = pressed;
-                if pressed {
-                    input.alt_pressed = true;
-                } else {
-                    input.alt_released = true;
-                }
-            }
-            _ if !pressed => {}
-            KeyCode::Space => input.key_space = true,
-            KeyCode::Tab => input.key_tab = true,
-            KeyCode::Escape => input.key_escape = true,
-            KeyCode::Backspace => input.backspace_pressed = true,
-            KeyCode::Enter | KeyCode::NumpadEnter => input.enter_pressed = true,
-            KeyCode::KeyA if input.ctrl_pressed => input.key_select_all = true,
-            KeyCode::KeyC if input.ctrl_pressed => input.key_copy = true,
-            KeyCode::KeyX if input.ctrl_pressed => input.key_cut = true,
-            KeyCode::KeyV if input.ctrl_pressed => input.key_paste = true,
-            KeyCode::KeyN if input.ctrl_pressed => self.command = Some(Command::New),
-            KeyCode::KeyO if input.ctrl_pressed => self.command = Some(Command::Open),
-            KeyCode::KeyS if input.ctrl_pressed && input.shift_pressed => {
-                self.command = Some(Command::SaveAs)
-            }
-            KeyCode::KeyS if input.ctrl_pressed => self.command = Some(Command::Save),
-            KeyCode::KeyQ if input.ctrl_pressed => self.command = Some(Command::Quit),
-            _ => {}
+    /// The designer's own shortcuts, on a key going down with the shortcut
+    /// key held. Text editing's (select all, copy, cut, paste) are
+    /// [`InputState::apply`]'s.
+    fn shortcut(&mut self, key: Key) {
+        let input = &self.input;
+        let Key::Char(c) = key else { return };
+        if !input.ctrl_pressed {
+            return;
         }
+        self.command = match c.to_ascii_lowercase() {
+            'n' => Some(Command::New),
+            'o' => Some(Command::Open),
+            's' if input.shift_pressed => Some(Command::SaveAs),
+            's' => Some(Command::Save),
+            'q' => Some(Command::Quit),
+            _ => return,
+        };
     }
 
     fn render(&mut self, event_loop: &ActiveEventLoop) {
@@ -325,68 +292,25 @@ impl ApplicationHandler for Host {
                 }
                 self.redraw();
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                // The UI lays out in logical pixels.
-                let scale = self.scale();
-                self.input.mouse_x = position.x as f32 / scale;
-                self.input.mouse_y = position.y as f32 / scale;
-                self.redraw();
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let pressed = state == ElementState::Pressed;
-                let input = &mut self.input;
-                let (down, clicked, released) = match button {
-                    MouseButton::Left => (
-                        &mut input.mouse_down,
-                        &mut input.mouse_clicked,
-                        &mut input.mouse_released,
-                    ),
-                    MouseButton::Right => (
-                        &mut input.mouse_right_down,
-                        &mut input.mouse_right_clicked,
-                        &mut input.mouse_right_released,
-                    ),
-                    MouseButton::Middle => (
-                        &mut input.mouse_middle_down,
-                        &mut input.mouse_middle_clicked,
-                        &mut input.mouse_middle_released,
-                    ),
-                    _ => return,
-                };
-                if pressed && !*down {
-                    *clicked = true;
-                } else if !pressed && *down {
-                    *released = true;
-                }
-                *down = pressed;
-                self.redraw();
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => (x, y),
-                    MouseScrollDelta::PixelDelta(p) => ((p.x / 20.0) as f32, (p.y / 20.0) as f32),
-                };
-                self.input.scroll_delta += dy;
-                self.input.scroll_delta_x += dx;
-                self.redraw();
-            }
-            WindowEvent::KeyboardInput { event: ref key, .. } => {
-                let pressed = key.state == ElementState::Pressed;
-                if let PhysicalKey::Code(code) = key.physical_key {
-                    self.key(code, pressed);
-                }
-                if pressed
-                    && !self.input.ctrl_pressed
-                    && let Some(text) = &key.text
-                {
-                    self.input
-                        .text_input
-                        .extend(text.chars().filter(|c| !c.is_control()));
-                }
-                self.redraw();
-            }
             WindowEvent::RedrawRequested => self.render(event_loop),
-            _ => {}
+            _ => {
+                // The UI lays out in logical pixels.
+                let scale = f64::from(self.scale());
+                let Some(input) = HostEvent::from_winit(&event, scale) else {
+                    return;
+                };
+                if let HostEvent::Key {
+                    key,
+                    down: true,
+                    repeat: false,
+                    ..
+                } = input
+                {
+                    self.shortcut(key);
+                }
+                self.input.apply(&input);
+                self.redraw();
+            }
         }
     }
 

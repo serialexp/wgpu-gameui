@@ -234,7 +234,7 @@ impl<'a> PropertyRow<'a> {
         }
         let hover_label = !input.mouse_consumed && label.contains(input.mouse_x, input.mouse_y);
         if out.scrubbing || (self.changeable() && hover_label) {
-            ctx.request_cursor(crate::CursorIcon::ResizeHorizontal);
+            ctx.request_cursor(crate::CursorIcon::EwResize);
         }
 
         ctx.push_debug_scope_rect(

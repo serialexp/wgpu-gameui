@@ -102,7 +102,7 @@ const WORDS: usize = SLOTS.div_ceil(64);
 impl Key {
     /// This key's bit, or `None` for a key outside the vocabulary (a
     /// non-ASCII character, `F(0)`, `F(25)`…).
-    fn slot(self) -> Option<usize> {
+    pub(crate) fn slot(self) -> Option<usize> {
         match self {
             Key::Char(c) if c.is_ascii() => Some(c.to_ascii_uppercase() as usize),
             Key::Char(_) => None,

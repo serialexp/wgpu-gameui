@@ -58,7 +58,7 @@ use super::material::{self, Material, Tone};
 use super::scroll_view::{ScrollState, ScrollView};
 use super::status_dot::{STATUS_DOT_SIZE, Status, asking_dot, status_dot};
 use super::tree::{CARET_HALF, draw_disclosure};
-use super::{DrawList, Icon, Thumb};
+use super::{DrawList, Icon, Thumb, scope_name};
 
 /// Height of a header row, including the rule under it.
 pub const GROUP_HEADER_HEIGHT: f32 = 23.0;
@@ -663,11 +663,20 @@ impl GroupList {
             if is_hovered {
                 self.click(r, i, selected, key_hot, input, state, &mut out);
             }
+            // Each row is a scope of its own, named for what it shows, so a
+            // test can point at one row out of the list.
+            let name = match r {
+                GroupRow::Header(h) => scope_name("GroupHeader", h.name),
+                GroupRow::Item(item) => scope_name("GroupItem", item.title),
+                GroupRow::More(m) => scope_name("GroupMore", m.label),
+            };
+            list.push_debug_scope_rect(name, world);
             match r {
                 GroupRow::Header(h) => draw_header(list, style, &h, paint),
                 GroupRow::Item(item) => draw_item(list, style, &item, paint),
                 GroupRow::More(m) => draw_more(list, style, &m, paint),
             }
+            list.pop_debug_scope();
         }
         view.end(&mut state.scroll, list, style, input, begun);
         list.pop_debug_scope();
@@ -1135,6 +1144,45 @@ mod tests {
 
     fn has_text(list: &DrawList, content: &str) -> bool {
         list.texts.iter().any(|t| t.content == content)
+    }
+
+    /// Every row is a scope named for what it shows, in the list's scope,
+    /// declaring the row's box.
+    #[test]
+    fn each_row_is_a_named_scope() {
+        let rows = rows();
+        let (list, _) = frame(
+            &rows,
+            GroupList::new(),
+            None,
+            &mut GroupListState::default(),
+            &mut at(-1.0, -1.0),
+        );
+        let scopes = list.debug_scopes();
+        let names: Vec<&str> = scopes.iter().map(|s| s.name.as_str()).collect();
+        for name in [
+            r#"GroupHeader "agent-ui""#,
+            r#"GroupItem "Session context menu""#,
+            r#"GroupItem "README repo description""#,
+            r#"GroupMore "3 older""#,
+            r#"GroupHeader "dotfiles""#,
+        ] {
+            let scope = scopes
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("no scope {name}: {names:?}"));
+            assert!(scope.closed);
+            let mut ancestors = std::iter::successors(scope.parent, |&p| scopes[p].parent);
+            assert!(
+                ancestors.any(|p| scopes[p].name == "GroupList"),
+                "{name} is not inside the list"
+            );
+        }
+        let second = scopes
+            .iter()
+            .find(|s| s.name == r#"GroupItem "README repo description""#)
+            .expect("the second item");
+        assert_eq!(second.declared, Some(Rect::new(0.0, 60.0, 272.0, 37.0)));
     }
 
     #[test]

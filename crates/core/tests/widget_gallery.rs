@@ -2728,6 +2728,38 @@ fn render_widget_gallery() {
     let nine_slice_id = ui.register_nine_slice("frame", frame_sprite, [4, 4, 4, 4]);
     #[cfg(feature = "phosphor-icons")]
     let video_picture = gallery_picture(&mut ui);
+    // Every Forge cursor at 1×, and a few at 2× (what a Retina screen gets).
+    #[cfg(feature = "forge-cursors")]
+    let cursor_sprites = {
+        let mut load = |icon: wgpu_gameui::CursorIcon, scale: f32| {
+            let image = icon.image(scale);
+            let sprite = ui
+                .load_sprite_rgba8(
+                    &format!("cursor-{}-{scale}", icon.name()),
+                    image.width.into(),
+                    image.height.into(),
+                    image.rgba,
+                    wgpu_gameui::Placement::Own,
+                )
+                .unwrap_or_else(|e| panic!("load the {} cursor: {e:?}", icon.name()));
+            (icon, sprite, image.hotspot)
+        };
+        let one: Vec<_> = wgpu_gameui::CursorIcon::ALL
+            .iter()
+            .map(|&icon| load(icon, 1.0))
+            .collect();
+        let two: Vec<_> = [
+            wgpu_gameui::CursorIcon::Default,
+            wgpu_gameui::CursorIcon::Pointer,
+            wgpu_gameui::CursorIcon::Text,
+            wgpu_gameui::CursorIcon::ColResize,
+            wgpu_gameui::CursorIcon::Build,
+        ]
+        .into_iter()
+        .map(|icon| load(icon, 2.0))
+        .collect();
+        (one, two)
+    };
 
     // (Slider needs no assets — it renders procedurally from the theme.)
 
@@ -3076,6 +3108,35 @@ fn render_widget_gallery() {
             Icon::new(PhosphorIcon::Trash)
                 .tint([0.90, 0.25, 0.25, 1.0])
                 .draw(r, list);
+        }
+
+        // ---- Forge cursors ----------------------------------------------
+        #[cfg(feature = "forge-cursors")]
+        {
+            flow.section(
+                list,
+                Category::Foundations,
+                "Cursor",
+                "Forge set, 1× and 2×, hotspot dotted",
+            );
+            let (one, two) = &cursor_sprites;
+            for &(icon, sprite, _) in one {
+                let r = flow.cell(list, icon.name(), 32.0, 32.0);
+                list.image(sprite, r, [1.0; 4]);
+            }
+            // The 2× art drawn 64 logical pixels square, so it shows pixel for
+            // pixel; the dot marks the hotspot.
+            for &(icon, sprite, [hx, hy]) in two {
+                let r = flow.cell(list, &format!("{} 2×", icon.name()), 64.0, 64.0);
+                list.image(sprite, r, [1.0; 4]);
+                list.quad(
+                    r.x + f32::from(hx) - 1.0,
+                    r.y + f32::from(hy) - 1.0,
+                    2.0,
+                    2.0,
+                    [0.95, 0.2, 0.3, 1.0],
+                );
+            }
         }
 
         // ---- Text -------------------------------------------------------

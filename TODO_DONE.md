@@ -2417,3 +2417,17 @@ editor. Coverage 85 of 91.
       `units_ordered`, `order_overlap_tests` and `order_cell_visits`;
       `UiRenderer::set_paint_order` (feature `paint-order-oracle`) draws the
       old way for comparison.
+
+## 2026-10-23 — Forge cursors
+
+- [x] **The design system's cursors.** `assets/cursors/cursors.css` is Forge's
+      `tokens/cursors.css`, vendored unchanged; `build.rs` decodes its 35
+      cursors (SVG, hotspot, native fallback) into a table. `CursorIcon` is now
+      the Forge set in its order (`ALL`, with `name`, `hotspot`, `fallback`,
+      `svg`), and the feature `forge-cursors` (default, `resvg`) adds
+      `CursorIcon::image(scale) -> CursorImage`: straight-alpha RGBA, the
+      side `CURSOR_SIZE × scale` rounded, the hotspot scaled with it. The old
+      resize names became Forge's (`EwResize`, `NsResize`, `NwseResize`), and
+      `Splitter` asks for `ColResize` / `RowResize` as Forge's Splitter does.
+      The designer and `hello_ui` map to winit's native cursor through
+      `fallback().parse()`. Gallery: Foundations / Cursor.
