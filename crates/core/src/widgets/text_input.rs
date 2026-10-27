@@ -157,6 +157,19 @@ fn line_x_for_byte(layout: &[CaretPos], line: usize, byte: usize) -> f32 {
     last
 }
 
+/// Where a multiline field's caret stood, and in how tall a box: when any of
+/// it changes (a move, an edit, a new wrap, a resize) the field scrolls to
+/// the caret again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CaretMark {
+    cursor: usize,
+    selection: Option<usize>,
+    len: usize,
+    top: f32,
+    bottom: f32,
+    inner_h: f32,
+}
+
 /// A text input widget with selection, cursor navigation, and optional clipboard integration.
 ///
 /// Supports:
@@ -168,6 +181,7 @@ fn line_x_for_byte(layout: &[CaretPos], line: usize, byte: usize) -> f32 {
 /// - Ctrl+A to select all
 /// - Backspace/Delete (selection-aware)
 /// - Selection highlight rendering
+/// - The mouse wheel, over a multiline field
 ///
 /// # Clipboard
 ///
@@ -196,8 +210,9 @@ pub struct TextInput {
     /// the field width, Up/Down navigate lines, and the field clips + autoscrolls
     /// vertically to keep the caret visible. Single-line (`false`) is unchanged.
     pub multiline: bool,
-    /// Vertical scroll offset in pixels (multiline only). Maintained by autoscroll
-    /// in [`draw`](Self::draw) so the caret line stays inside the box.
+    /// Vertical scroll offset in pixels (multiline only). The wheel over the
+    /// field moves it; [`draw`](Self::draw) brings the caret line back inside
+    /// the box whenever the caret moves or the text changes.
     pub scroll_offset: f32,
     /// Horizontal scroll offset in pixels (single-line only). Maintained by
     /// [`draw`](Self::draw) so long values keep the caret inside the field.
@@ -213,6 +228,10 @@ pub struct TextInput {
     /// caret's x on the first vertical move and cleared by any horizontal
     /// move/edit, so a run of Up/Down keeps the original column.
     desired_caret_x: Option<f32>,
+    /// Where the caret stood when the multiline field last scrolled to it.
+    /// The field scrolls to the caret only when this changes, so a wheel
+    /// scroll away from a caret that stays put is kept. `None` while unfocused.
+    caret_followed: Option<CaretMark>,
     /// The caret's byte and the x of the stop it stands at, in the display's
     /// visual layout, as the click or Left/Right that put it there found them:
     /// at a direction boundary a byte has two stops (the end of one run, the
@@ -282,6 +301,7 @@ impl Default for TextInput {
             drag_selection_anchor: None,
             drag_unit: None,
             desired_caret_x: None,
+            caret_followed: None,
             caret_at: None,
             mask: None,
             direction: crate::TextDirection::Auto,
@@ -1221,9 +1241,17 @@ impl TextInput {
             crate::widgets::material::draw_well(list, &s, frame, focused, self.invalid);
         }
 
-        // Render-time caret layout (multiline+focused), reflecting any edits made
-        // this frame — used for autoscroll, per-line selection, and the caret.
-        let render_layout: Arc<[CaretPos]> = if multiline && focused {
+        // The wheel over a multiline field scrolls it, focused or not.
+        let wheel = if multiline && hovered && !input.scroll_consumed {
+            input.scroll_delta
+        } else {
+            0.0
+        };
+
+        // Render-time caret layout (multiline+focused, or under the wheel),
+        // reflecting any edits made this frame — used for autoscroll, the
+        // wheel's limit, per-line selection, and the caret.
+        let render_layout: Arc<[CaretPos]> = if multiline && (focused || wheel != 0.0) {
             list.caret_layout(&field_text.block(self.value.as_str(), 0.0, 0.0))
         } else {
             Arc::from([])
@@ -1250,15 +1278,36 @@ impl TextInput {
                 line_height
             };
             let caret_bottom = caret_top + caret_h;
-            if caret_top < self.scroll_offset {
-                self.scroll_offset = caret_top;
-            } else if caret_bottom > self.scroll_offset + inner_h {
-                self.scroll_offset = caret_bottom - inner_h;
+            let mark = CaretMark {
+                cursor: self.cursor_pos,
+                selection: self.selection_start,
+                len: self.value.len(),
+                top: caret_top,
+                bottom: caret_bottom,
+                inner_h,
+            };
+            if self.caret_followed != Some(mark) {
+                self.caret_followed = Some(mark);
+                if caret_top < self.scroll_offset {
+                    self.scroll_offset = caret_top;
+                } else if caret_bottom > self.scroll_offset + inner_h {
+                    self.scroll_offset = caret_bottom - inner_h;
+                }
             }
-            if self.scroll_offset < 0.0 {
-                self.scroll_offset = 0.0;
+        } else if multiline {
+            self.caret_followed = None;
+        }
+        if multiline {
+            let inner_h = (self.height - eff_pad_h * 2.0).max(1.0);
+            self.scroll_offset -= wheel * line_height;
+            // The layout is there while focused or under the wheel; otherwise
+            // the offset stands as it was left.
+            if let Some(last) = render_layout.last() {
+                let content_h = last.line_top + last.line_height.max(line_height);
+                self.scroll_offset = self.scroll_offset.min((content_h - inner_h).max(0.0));
             }
-        } else if !multiline {
+            self.scroll_offset = self.scroll_offset.max(0.0);
+        } else {
             let caret_byte = self.value_to_display_byte(self.cursor_pos);
             let caret_x =
                 visual_caret_pos(&line_vis, caret_byte, self.caret_x()).map_or(0.0, |c| c.x);
@@ -1786,6 +1835,102 @@ mod tests {
             focus.ime_request().is_some(),
             "a focused multiline field requests IME"
         );
+    }
+
+    /// A focused 3-row textarea of 20 lines, at (10, 10), drawn once with
+    /// its caret at the end: scrolled to the bottom.
+    fn tall_area(focus: &mut FocusState, list: &mut DrawList, theme: &Theme) -> TextInput {
+        let text = (1..=20)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut ti = TextInput::new(10.0, 10.0, 200.0, 60.0)
+            .with_multiline(true)
+            .with_value(text);
+        focus.focus(0);
+        draw_input(&mut ti, 0, focus, list, theme, &away());
+        ti
+    }
+
+    /// The pointer outside every field, and nothing else.
+    fn away() -> InputState {
+        InputState {
+            mouse_x: 500.0,
+            mouse_y: 500.0,
+            ..Default::default()
+        }
+    }
+
+    /// `lines` of the wheel over the field at (10, 10).
+    fn wheel(lines: f32) -> InputState {
+        InputState {
+            mouse_x: 50.0,
+            mouse_y: 30.0,
+            scroll_delta: lines,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_textarea_and_the_scroll_stays_until_the_caret_moves() {
+        let (mut focus, mut list, theme) = (FocusState::new(), DrawList::new(), Theme::default());
+        let mut ti = tall_area(&mut focus, &mut list, &theme);
+        let bottom = ti.scroll_offset;
+        assert!(bottom > 0.0, "the caret at the end scrolled the field down");
+        let line = theme.font_size * 1.25;
+
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &wheel(2.0));
+        assert!((ti.scroll_offset - (bottom - 2.0 * line)).abs() < 0.01);
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &away());
+        assert!(
+            (ti.scroll_offset - (bottom - 2.0 * line)).abs() < 0.01,
+            "a frame without a move or an edit keeps the wheel's scroll"
+        );
+
+        let typed = InputState {
+            text_input: "x".into(),
+            ..away()
+        };
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &typed);
+        assert!(
+            ti.scroll_offset >= bottom - 0.01,
+            "typing brings the caret back into view"
+        );
+    }
+
+    #[test]
+    fn the_wheel_stops_at_either_end_of_a_textarea() {
+        let (mut focus, mut list, theme) = (FocusState::new(), DrawList::new(), Theme::default());
+        let mut ti = tall_area(&mut focus, &mut list, &theme);
+        let bottom = ti.scroll_offset;
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &wheel(-50.0));
+        assert!(
+            (ti.scroll_offset - bottom).abs() < 0.01,
+            "no further than the last line"
+        );
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &wheel(500.0));
+        assert_eq!(ti.scroll_offset, 0.0);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_an_unfocused_textarea_but_not_one_it_was_claimed_from() {
+        let (mut focus, mut list, theme) = (FocusState::new(), DrawList::new(), Theme::default());
+        let mut ti = tall_area(&mut focus, &mut list, &theme);
+        let bottom = ti.scroll_offset;
+        focus.focus(1);
+
+        let claimed = InputState {
+            scroll_consumed: true,
+            ..wheel(2.0)
+        };
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &claimed);
+        assert_eq!(
+            ti.scroll_offset, bottom,
+            "an inner scrollable took the wheel"
+        );
+
+        draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &wheel(2.0));
+        assert!(ti.scroll_offset < bottom);
     }
 
     // ---- Password / masking ----

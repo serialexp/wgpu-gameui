@@ -2294,8 +2294,8 @@ impl<'a> UiContext<'a> {
 
     /// Multi-line text field (textarea). Like [`text_input`](Self::text_input)
     /// but `rows` tall, with `Enter` inserting a newline, word/glyph wrapping to
-    /// the field width, Up/Down line navigation, and vertical autoscroll to the
-    /// caret. The box height is `rows * (font_size * 1.25) + 2 * padding`.
+    /// the field width, Up/Down line navigation, the mouse wheel, and vertical
+    /// autoscroll to the caret when it moves. The box height is `rows * (font_size * 1.25) + 2 * padding`.
     /// Returns whether the text changed this frame; auto-advances by the height.
     pub fn text_area(
         &mut self,
