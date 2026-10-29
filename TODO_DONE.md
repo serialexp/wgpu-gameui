@@ -2441,3 +2441,11 @@ editor. Coverage 85 of 91.
       and `remember` let a host hand over the text of blocks it skipped (a
       virtualized list's rows scrolled past in one jump), and `began` says
       when the selection started over, so the host knows to look again.
+
+## 2026-10-29 — Prompt dialog
+
+- [x] **A prompt opened again empty panicked on the first key.**
+      `PromptDialogState::open` cleared the field's text but not its caret,
+      so after a longer value the caret sat past the end and typing inserted
+      out of bounds. It now empties the field with `TextInput::clear` first.
+      Found by agent-ui's New File prompt.

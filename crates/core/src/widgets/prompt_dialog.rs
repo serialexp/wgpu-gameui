@@ -53,7 +53,8 @@ impl PromptDialogState {
     /// Open the prompt holding `value`, all of it selected so typing
     /// replaces it.
     pub fn open(&mut self, value: &str) {
-        self.field.value.clear();
+        // The caret and selection too: one left past the end of `value`.
+        self.field.clear();
         self.field.value.push_str(value);
         self.field.select_all();
         self.touched = false;
@@ -402,6 +403,23 @@ mod tests {
         frame(&dialog, &mut state, &mut focus, idle());
         assert_eq!(focus.focused(), Some(32), "the field takes focus");
         assert_eq!(state.field.selected_text(), Some("Props"));
+    }
+
+    /// Opened again empty after a longer value, typing goes in from the
+    /// start: the caret doesn't stay where the old value ended.
+    #[test]
+    fn opening_again_empty_types_from_the_start() {
+        let dialog = PromptDialog::new("New file");
+        let mut state = PromptDialogState::new();
+        let mut focus = FocusState::new();
+        state.open("");
+        frame(&dialog, &mut state, &mut focus, idle());
+        frame(&dialog, &mut state, &mut focus, typing("long-name.rs"));
+        frame(&dialog, &mut state, &mut focus, enter());
+        state.open("");
+        frame(&dialog, &mut state, &mut focus, idle());
+        frame(&dialog, &mut state, &mut focus, typing("b"));
+        assert_eq!(state.value(), "b");
     }
 
     #[test]
