@@ -455,3 +455,38 @@ fn an_arrow_onto_a_direction_boundary_keeps_the_stop_it_moved_to() {
         "one step left of where the caret was drawn"
     );
 }
+
+#[test]
+fn a_field_in_a_scrolled_view_asks_for_the_ime_where_it_shows() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 24.0).with_value("hello");
+    let mut focus = FocusState::default();
+    let (x, y) = ime_at(&mut ti, &mut focus, 2);
+
+    let mut list = DrawList::new();
+    let theme = Theme::default();
+    let input = InputState::default();
+    focus.focus(ID);
+    focus.begin_frame(&input);
+    list.push_transform();
+    list.translate(30.0, -200.0);
+    {
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
+        ti.draw(ID, &mut ctx);
+    }
+    list.pop_transform();
+    let rect = focus
+        .ime_request()
+        .expect("a focused field asks for the IME");
+    assert!(
+        (rect.x - (x + 30.0)).abs() < NEAR,
+        "{} vs {}",
+        rect.x,
+        x + 30.0
+    );
+    assert!(
+        (rect.y - (y - 200.0)).abs() < NEAR,
+        "{} vs {}",
+        rect.y,
+        y - 200.0
+    );
+}
