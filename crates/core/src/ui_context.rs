@@ -2273,7 +2273,6 @@ impl<'a> UiContext<'a> {
             if ti.value != *buffer {
                 ti.set_value(buffer);
             }
-            let before = ti.value.clone();
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
@@ -2281,7 +2280,9 @@ impl<'a> UiContext<'a> {
                 .with_animations(anim)
                 .with_interactions(interactions);
             draw(ti, local, id, &mut ctx);
-            let changed = ti.value != before;
+            // The field held `buffer` going in, so comparing with it shows an
+            // edit without copying a long value every frame.
+            let changed = ti.value != *buffer;
             if changed {
                 buffer.clear();
                 buffer.push_str(&ti.value);

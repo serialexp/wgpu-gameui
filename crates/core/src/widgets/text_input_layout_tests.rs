@@ -49,37 +49,30 @@ struct Cell {
 }
 
 /// The cells of the text `list` drew, from the layout it is drawn with, and
-/// where each of its lines starts in the drawn string.
+/// where each of its lines starts. A multi-line field draws a block per
+/// paragraph: their cells and lines follow one another, each byte counted
+/// within its own paragraph.
 fn drawn(list: &DrawList) -> (Vec<Cell>, Vec<usize>) {
-    let block = list
-        .texts
-        .iter()
-        .find(|block| !block.content.is_empty())
-        .expect("the field drew its text");
     let handle = list.text_measurer.font_system_handle();
     let mut shared = handle.lock().unwrap();
-    let layout = shared.layout(&LayoutSpec::of_block(block), &block.content);
-    let cells = layout
-        .glyphs
-        .iter()
-        .map(|g| Cell {
+    let (mut cells, mut lines) = (Vec::new(), Vec::new());
+    for block in list.texts.iter().filter(|block| !block.content.is_empty()) {
+        let layout = shared.layout(&LayoutSpec::of_block(block), &block.content);
+        cells.extend(layout.glyphs.iter().map(|g| Cell {
             byte: g.byte_start as usize,
             left: block.x + g.cell_x,
             right: block.x + g.cell_x + g.advance,
-        })
-        .collect();
-    // Where each line, wrapped ones included, starts: its first glyph's byte.
-    let lines = layout
-        .lines
-        .iter()
-        .map(|l| {
+        }));
+        // Where each line, wrapped ones included, starts: its first glyph's byte.
+        lines.extend(layout.lines.iter().map(|l| {
             layout
                 .glyphs
                 .get(l.glyphs.start as usize)
                 .filter(|_| !l.glyphs.is_empty())
                 .map_or(l.byte_start as usize, |g| g.byte_start as usize)
-        })
-        .collect();
+        }));
+    }
+    assert!(!cells.is_empty(), "the field drew its text");
     (cells, lines)
 }
 
@@ -489,4 +482,174 @@ fn a_field_in_a_scrolled_view_asks_for_the_ime_where_it_shows() {
         rect.y,
         y - 200.0
     );
+}
+
+/// A long value, as an 8,000-line paste leaves it: `line N of the pasted text`.
+fn pasted(lines: usize) -> String {
+    (0..lines)
+        .map(|i| format!("line {i} of the pasted text"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One frame of `ti` into `list`, as an app draws every frame into the same
+/// one; `focused` or not. The layout cache's counts after it.
+fn frame_into(
+    list: &mut DrawList,
+    ti: &mut TextInput,
+    focus: &mut FocusState,
+    input: &InputState,
+    focused: bool,
+) -> crate::shaping::LayoutStats {
+    let theme = Theme::default();
+    list.clear();
+    if focused {
+        focus.focus(ID);
+    } else {
+        focus.blur();
+    }
+    focus.begin_frame(input);
+    {
+        let mut ctx = DrawContext::new(list, focus, &theme, input, 800.0, 600.0);
+        ti.draw(ID, &mut ctx);
+    }
+    list.text_measurer
+        .font_system_handle()
+        .lock()
+        .unwrap()
+        .layout_stats()
+}
+
+#[test]
+fn a_long_field_lays_out_only_the_paragraphs_in_view() {
+    let value = pasted(8_000);
+    let len = value.len();
+    for focused in [true, false] {
+        let mut ti = TextInput::new(0.0, 0.0, 400.0, 120.0)
+            .with_multiline(true)
+            .with_value(value.clone());
+        let mut focus = FocusState::new();
+        let mut list = DrawList::new();
+        let stats = frame_into(
+            &mut list,
+            &mut ti,
+            &mut focus,
+            &InputState::default(),
+            focused,
+        );
+        // 120 px holds six or so 20 px lines; a few more for the caret's
+        // paragraph and the one cut by the box's edge.
+        assert!(
+            stats.layouts <= 12,
+            "focused {focused}: {} layouts",
+            stats.layouts
+        );
+        // Laid out whole, the value takes megabytes.
+        assert!(
+            stats.bytes < 64 * 1024,
+            "focused {focused}: {} bytes of layout for a {len} byte value",
+            stats.bytes
+        );
+        let drawn: usize = list.texts.iter().map(|block| block.content.len()).sum();
+        assert!(
+            drawn < 1_000,
+            "focused {focused}: drew {drawn} bytes of text"
+        );
+    }
+}
+
+#[test]
+fn typing_at_the_end_of_a_long_field_lays_out_one_paragraph() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 120.0)
+        .with_multiline(true)
+        .with_value(pasted(8_000));
+    let mut focus = FocusState::new();
+    let mut list = DrawList::new();
+    let idle = InputState::default();
+    let before = frame_into(&mut list, &mut ti, &mut focus, &idle, true).shaped;
+    let typed = InputState {
+        text_input: "x".into(),
+        ..Default::default()
+    };
+    let after = frame_into(&mut list, &mut ti, &mut focus, &typed, true).shaped;
+    assert_eq!(after - before, 1, "the edited paragraph alone");
+    let still = frame_into(&mut list, &mut ti, &mut focus, &idle, true).shaped;
+    assert_eq!(still, after, "nothing on the idle frame after it");
+}
+
+#[test]
+fn the_caret_stays_in_the_box_walking_up_through_estimated_paragraphs() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 120.0)
+        .with_multiline(true)
+        .with_value(pasted(500));
+    let mut focus = FocusState::new();
+    let mut list = DrawList::new();
+    frame_into(&mut list, &mut ti, &mut focus, &InputState::default(), true);
+    let up = InputState {
+        key_up: true,
+        ..Default::default()
+    };
+    for step in 0..50 {
+        let was = ti.cursor_pos;
+        frame_into(&mut list, &mut ti, &mut focus, &up, true);
+        assert!(ti.cursor_pos < was, "step {step}: up moved the caret");
+        let rect = focus
+            .ime_request()
+            .expect("a focused field asks for the IME");
+        assert!(
+            rect.y >= 0.0 && rect.y + rect.height <= 120.0,
+            "step {step}: the caret at {} is in the box",
+            rect.y
+        );
+    }
+}
+
+#[test]
+fn the_text_shown_stays_put_while_nothing_changes() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 120.0)
+        .with_multiline(true)
+        .with_value(pasted(2_000));
+    let mut focus = FocusState::new();
+    let mut list = DrawList::new();
+    let idle = InputState::default();
+    let shown = |list: &DrawList| {
+        list.texts
+            .iter()
+            .map(|block| (block.content.clone(), block.y))
+            .collect::<Vec<_>>()
+    };
+    frame_into(&mut list, &mut ti, &mut focus, &idle, true);
+    let first = shown(&list);
+    assert!(
+        first
+            .iter()
+            .any(|(text, _)| text == "line 1999 of the pasted text"),
+        "scrolled to the caret at the end: {first:?}"
+    );
+    frame_into(&mut list, &mut ti, &mut focus, &idle, true);
+    assert_eq!(shown(&list), first);
+}
+
+#[test]
+fn a_click_lands_on_the_paragraph_drawn_under_it() {
+    let mut ti = TextInput::new(0.0, 0.0, 400.0, 120.0)
+        .with_multiline(true)
+        .with_value(pasted(2_000));
+    let mut focus = FocusState::new();
+    let list = idle(&mut ti, &mut focus);
+    // Click halfway down each paragraph drawn, just right of its start.
+    let rows: Vec<(String, f32)> = list
+        .texts
+        .iter()
+        .map(|block| (block.content.clone(), block.y))
+        .filter(|(_, y)| *y >= 0.0 && *y + 20.0 <= 120.0)
+        .collect();
+    assert!(!rows.is_empty());
+    for (text, y) in rows {
+        click(&mut ti, &mut focus, 12.0, y + 8.0);
+        let start = ti.value[..ti.cursor_pos].rfind('\n').map_or(0, |i| i + 1);
+        let line = &ti.value[start..];
+        let line = &line[..line.find('\n').unwrap_or(line.len())];
+        assert_eq!(line, text, "clicked at y {}", y + 8.0);
+    }
 }

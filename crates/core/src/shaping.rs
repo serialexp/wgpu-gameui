@@ -27,7 +27,9 @@ use crate::text::{
 /// drops the least recently used, down to three quarters of it (so eviction
 /// runs rarely rather than on every new layout). Over four hundred thousand
 /// glyphs: many screens of dense text, measured and drawn, with room for
-/// scrolling back.
+/// scrolling back. Large layouts, over a quarter of it each, are kept apart
+/// under a budget of the same size, so one long text can only push out other
+/// long ones, never every label and row on screen.
 const LAYOUT_BUDGET: usize = 16 << 20;
 
 /// Bookkeeping bytes counted per layout on top of its text and glyphs.
@@ -129,7 +131,7 @@ impl SharedFontSystem {
             shaped: self.layouts.shaped,
             reshaped: self.layouts.reshaped,
             layouts: self.layouts.len,
-            bytes: self.layouts.bytes,
+            bytes: self.layouts.bytes(),
         }
     }
 
@@ -449,21 +451,29 @@ struct CachedLayout {
     last_used: u64,
     /// The layout's bytes and those of what was worked out from it.
     bytes: usize,
+    /// Kept with the large layouts: it took over a quarter of the budget
+    /// when it was laid out.
+    large: bool,
 }
 
 /// Layouts keyed by spec, then content, so a lookup borrows the content as
 /// `&str` and allocates nothing. A lookup hashes the whole content, so the
 /// inner maps hash with Fx rather than SipHash.
+///
+/// Small and large layouts (over a quarter of the budget) share the map but
+/// are budgeted apart, each kind to `budget`, and eviction drops only layouts
+/// of the kind that went over it.
 struct LayoutCache {
     map: HashMap<LayoutKey, HashMap<String, CachedLayout, rustc_hash::FxBuildHasher>>,
-    /// The bytes kept before the least recently used layouts go
+    /// The bytes kept of each kind before its least recently used layouts go
     /// ([`LAYOUT_BUDGET`]), and what eviction trims down to.
     budget: usize,
     low_water: usize,
     /// Lookups so far: the clock least-recently-used eviction goes by.
     uses: u64,
     len: usize,
-    bytes: usize,
+    /// The bytes kept of small layouts, then of large ones.
+    bytes: [usize; 2],
     hits: u64,
     shaped: u64,
     reshaped: u64,
@@ -483,7 +493,7 @@ impl LayoutCache {
             low_water: low_water(budget),
             uses: 0,
             len: 0,
-            bytes: 0,
+            bytes: [0; 2],
             hits: 0,
             shaped: 0,
             reshaped: 0,
@@ -493,15 +503,22 @@ impl LayoutCache {
     fn set_budget(&mut self, budget: usize) {
         self.budget = budget;
         self.low_water = low_water(budget);
-        if self.bytes > budget {
-            self.evict(None);
+        for large in [false, true] {
+            if self.bytes[usize::from(large)] > budget {
+                self.evict(large, None);
+            }
         }
     }
 
     fn clear(&mut self) {
         self.map.clear();
         self.len = 0;
-        self.bytes = 0;
+        self.bytes = [0; 2];
+    }
+
+    /// The bytes kept, of both kinds.
+    fn bytes(&self) -> usize {
+        self.bytes[0] + self.bytes[1]
     }
 
     fn get_or_shape(
@@ -544,11 +561,12 @@ impl LayoutCache {
                 + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
                 + layout.lines.len() * std::mem::size_of::<ShapedLine>()
                 + LAYOUT_OVERHEAD;
-            if self.bytes + bytes > self.budget {
-                self.evict(None);
+            let large = bytes > self.budget / 4;
+            if self.bytes[usize::from(large)] + bytes > self.budget {
+                self.evict(large, None);
             }
             self.len += 1;
-            self.bytes += bytes;
+            self.bytes[usize::from(large)] += bytes;
             self.map.entry(key).or_default().insert(
                 content.to_owned(),
                 CachedLayout {
@@ -557,6 +575,7 @@ impl LayoutCache {
                     visual: None,
                     last_used: self.uses,
                     bytes,
+                    large,
                 },
             );
         }
@@ -645,21 +664,24 @@ impl LayoutCache {
         let bytes = made.len() * std::mem::size_of::<T>();
         entry.bytes += bytes;
         *slot(entry) = Some(Arc::clone(&made));
-        self.bytes += bytes;
-        if self.bytes > self.budget {
-            self.evict(Some(self.uses));
+        let large = entry.large;
+        self.bytes[usize::from(large)] += bytes;
+        if self.bytes[usize::from(large)] > self.budget {
+            self.evict(large, Some(self.uses));
         }
         made
     }
 
-    /// Drop the least recently used layouts down to the low-water mark. The
-    /// one last used at `in_use`, if any, stays, as a new layout does when it
-    /// alone is over.
-    fn evict(&mut self, in_use: Option<u64>) {
+    /// Drop the least recently used `large` layouts (or small ones) down to
+    /// the low-water mark, leaving the other kind alone. The one last used at
+    /// `in_use`, if any, stays, as a new layout does when it alone is over.
+    fn evict(&mut self, large: bool, in_use: Option<u64>) {
         let mut uses: Vec<(u64, usize)> = self
             .map
             .values()
-            .flat_map(|inner| inner.values().map(|entry| (entry.last_used, entry.bytes)))
+            .flat_map(|inner| inner.values())
+            .filter(|entry| entry.large == large)
+            .map(|entry| (entry.last_used, entry.bytes))
             .collect();
         uses.sort_unstable_by_key(|&(last_used, _)| std::cmp::Reverse(last_used));
         // Keep the most recently used layouts while they fit under the
@@ -674,17 +696,21 @@ impl LayoutCache {
         let (mut len, mut total) = (0, 0);
         for inner in self.map.values_mut() {
             inner.retain(|_, entry| {
-                let keep = entry.last_used > cutoff || Some(entry.last_used) == in_use;
+                let keep = entry.large != large
+                    || entry.last_used > cutoff
+                    || Some(entry.last_used) == in_use;
                 if keep {
                     len += 1;
-                    total += entry.bytes;
+                    if entry.large == large {
+                        total += entry.bytes;
+                    }
                 }
                 keep
             });
         }
         self.map.retain(|_, inner| !inner.is_empty());
         self.len = len;
-        self.bytes = total;
+        self.bytes[usize::from(large)] = total;
     }
 }
 
@@ -1051,7 +1077,12 @@ mod tests {
 
         for row in 0..16 {
             cache.get_or_shape(&spec, &format!("row {row:02}"), fonts);
-            assert!(cache.bytes <= one * 10, "{} > {}", cache.bytes, one * 10);
+            assert!(
+                cache.bytes() <= one * 10,
+                "{} > {}",
+                cache.bytes(),
+                one * 10
+            );
         }
         let kept: Vec<_> = (0..16)
             .filter(|row| bytes_of(&cache, &format!("row {row:02}")) > 0)
@@ -1228,6 +1259,54 @@ mod tests {
             "bold letters are wider, so fewer fit"
         );
         assert!(plain_w <= 150.0 && bold_w <= 150.0, "{plain_w} {bold_w}");
+    }
+
+    #[test]
+    fn a_large_layout_pushes_out_only_large_ones() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let fonts = shared.font_system();
+        let spec = LayoutSpec::plain(16.0, None);
+        let long = |n: usize| format!("{n} {}", "long text ".repeat(400));
+        let mut probe = LayoutCache::default();
+        probe.get_or_shape(&spec, &long(0), fonts);
+        // Each long text takes a third of the budget: large, and three of
+        // them don't fit.
+        let mut cache = LayoutCache::with_budget(bytes_of(&probe, &long(0)) * 3);
+        for row in 0..5 {
+            cache.get_or_shape(&spec, &format!("row {row}"), fonts);
+        }
+        for n in 0..4 {
+            cache.get_or_shape(&spec, &long(n), fonts);
+        }
+        for row in 0..5 {
+            assert!(
+                bytes_of(&cache, &format!("row {row}")) > 0,
+                "row {row} stays"
+            );
+        }
+        assert_eq!(bytes_of(&cache, &long(0)), 0, "the oldest long text went");
+        assert!(bytes_of(&cache, &long(3)) > 0, "the newest stays");
+        assert!(cache.bytes[1] <= cache.budget);
+    }
+
+    #[test]
+    fn small_layouts_push_out_only_small_ones() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let fonts = shared.font_system();
+        let spec = LayoutSpec::plain(16.0, None);
+        let long = "long text ".repeat(400);
+        let mut probe = LayoutCache::default();
+        probe.get_or_shape(&spec, &long, fonts);
+        let mut cache = LayoutCache::with_budget(bytes_of(&probe, &long) * 2);
+        cache.get_or_shape(&spec, &long, fonts);
+        for row in 0..2_000 {
+            cache.get_or_shape(&spec, &format!("row {row}"), fonts);
+        }
+        assert!(bytes_of(&cache, &long) > 0, "the long text stays");
+        assert_eq!(bytes_of(&cache, "row 0"), 0, "the oldest row went");
+        assert!(cache.bytes[0] <= cache.budget);
     }
 
     #[test]

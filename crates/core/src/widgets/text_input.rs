@@ -10,8 +10,7 @@ use crate::StyleKey;
 use crate::TextUnit;
 use crate::layout::Rect;
 use crate::text::{
-    CaretPos, TextBlock, TextSpan, Underline, VisualGlyph, WrapMode, byte_at_point,
-    byte_on_adjacent_line, byte_under_point, caret_for_byte, on_line, selection_rects,
+    CaretPos, TextSpan, Underline, VisualGlyph, WrapMode, caret_for_byte, on_line, selection_rects,
     visual_caret_neighbor, visual_caret_pos, visual_hit,
 };
 #[cfg(feature = "syntax-highlighting")]
@@ -19,7 +18,8 @@ use crate::{SyntaxHighlighting, TextStyleRange};
 #[cfg(feature = "syntax-highlighting")]
 use tree_sitter_highlight::Highlighter;
 
-use super::{DrawContext, FocusId};
+use super::field_paragraphs::{FieldParagraphs, FieldText, Shown};
+use super::{DrawContext, DrawList, FocusId};
 
 /// Shared clipboard reader used by retained text editors.
 pub type ClipboardGet = Rc<RefCell<dyn FnMut() -> String>>;
@@ -99,38 +99,21 @@ fn compose_preedit(
     (spans, caret_byte)
 }
 
-/// How a field lays its text out: the parts of its drawn block that place
-/// glyphs. Every caret, click, selection and scroll position is read from the
-/// layout of a block built here, so it is the layout the text is drawn with.
-#[derive(Clone, Copy)]
-struct FieldText {
-    font_size: f32,
-    wrap: WrapMode,
-    max_width: f32,
-    direction: crate::TextDirection,
-}
-
-impl FieldText {
-    /// `content` laid out as the field draws it, at (`x`, `y`).
-    fn block(self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
-        TextBlock::new(content, x, y)
-            .with_size(self.font_size)
-            .with_wrap(self.wrap)
-            .with_max_width(self.max_width)
-            .with_direction(self.direction)
-    }
-}
-
-/// The `(first_byte, last_byte)` of the visual line containing `byte`, from a
-/// [`CaretPos`] layout. Used for line-relative Home/End in multiline mode.
-/// Falls back to `(byte, byte)` for an empty layout.
-fn line_bounds(layout: &[CaretPos], byte: usize) -> (usize, usize) {
-    if layout.is_empty() {
-        return (byte, byte);
-    }
-    let line = on_line(layout, caret_for_byte(layout, byte).line, |p| p.line);
-    let bytes = || line.iter().map(|p| p.byte);
-    bytes().min().zip(bytes().max()).unwrap_or((byte, byte))
+/// The style ranges of `ranges` (sorted and not overlapping, as highlighting
+/// makes them) that fall within `within`, cut to it and counted from its
+/// start: what a paragraph drawn on its own is coloured with.
+#[cfg(feature = "syntax-highlighting")]
+fn ranges_within(ranges: &[TextStyleRange], within: std::ops::Range<usize>) -> Vec<TextStyleRange> {
+    let first = ranges.partition_point(|r| r.range.end <= within.start);
+    ranges[first..]
+        .iter()
+        .take_while(|r| r.range.start < within.end)
+        .map(|r| TextStyleRange {
+            range: r.range.start.max(within.start) - within.start
+                ..r.range.end.min(within.end) - within.start,
+            ..r.clone()
+        })
+        .collect()
 }
 
 /// The `(first_byte, last_byte)` byte range of a specific visual `line`.
@@ -196,9 +179,19 @@ pub struct TextInput {
     /// the field width, Up/Down navigate lines, and the field clips + autoscrolls
     /// vertically to keep the caret visible. Single-line (`false`) is unchanged.
     pub multiline: bool,
-    /// Vertical scroll offset in pixels (multiline only). Maintained by autoscroll
-    /// in [`draw`](Self::draw) so the caret line stays inside the box.
+    /// Vertical scroll offset in pixels (multiline only), for reading: worked
+    /// out each frame from where the field keeps its scroll, the paragraph at
+    /// the top and how far into it, which autoscroll in [`draw`](Self::draw)
+    /// moves so the caret line stays inside the box.
     pub scroll_offset: f32,
+    /// The paragraph at the top of a multi-line field and how far into it the
+    /// box starts. Kept by paragraph rather than in pixels so a paragraph
+    /// above, measured late, doesn't move what is shown.
+    scroll_anchor: (usize, f32),
+    /// A multi-line field's paragraphs, laid out only when drawn or asked
+    /// about (`docs/design/paragraph-text-layout.md`).
+    paragraphs: FieldParagraphs,
+
     /// Horizontal scroll offset in pixels (single-line only). Maintained by
     /// [`draw`](Self::draw) so long values keep the caret inside the field.
     pub horizontal_scroll_offset: f32,
@@ -278,6 +271,8 @@ impl Default for TextInput {
             selection_start: None,
             multiline: false,
             scroll_offset: 0.0,
+            scroll_anchor: (0, 0.0),
+            paragraphs: FieldParagraphs::default(),
             horizontal_scroll_offset: 0.0,
             drag_selection_anchor: None,
             drag_unit: None,
@@ -342,6 +337,28 @@ impl TextInput {
         self.drag_selection_anchor = None;
         self.drag_unit = None;
         self.desired_caret_x = None;
+    }
+
+    /// Bring a multi-line field's paragraphs in step with `value`, keeping
+    /// the scroll on the paragraph it was on wherever an edit moved it.
+    fn sync_paragraphs(&mut self, field: FieldText) {
+        if let Some(splice) = self.paragraphs.sync(&self.value, field) {
+            self.scroll_anchor.0 = splice.index(self.scroll_anchor.0).0;
+        }
+        self.scroll_anchor.0 = self.scroll_anchor.0.min(self.paragraphs.len() - 1);
+    }
+
+    /// Where a multi-line field's box starts, from the top of its text.
+    fn view_top(&self) -> f32 {
+        self.paragraphs.top(self.scroll_anchor.0) + self.scroll_anchor.1
+    }
+
+    /// Scroll a multi-line field so its box starts `y` from the top of its
+    /// text, kept as the paragraph there and how far into it.
+    fn scroll_to(&mut self, y: f32) {
+        let y = y.max(0.0);
+        let segment = self.paragraphs.segment_at(y);
+        self.scroll_anchor = (segment, y - self.paragraphs.top(segment));
     }
 
     /// Paint the field's own well (`true`, the default) or leave the frame to
@@ -481,17 +498,19 @@ impl TextInput {
     /// The value byte of the character under `local`, the pointer relative to
     /// the text's origin: what a double or triple click picks its word or
     /// paragraph around.
-    /// `nav_layout` is the value's carets, which multiline picks from;
-    /// `pick_vis` the display's glyphs in visual order, which single-line does.
+    /// Multiline picks from its paragraphs, laid out as `field`; single-line
+    /// from `pick_vis`, the display's glyphs in visual order.
     fn byte_under(
-        &self,
-        nav_layout: &[CaretPos],
+        &mut self,
+        list: &mut DrawList,
+        field: FieldText,
         pick_vis: &[VisualGlyph],
         multiline: bool,
         local: [f32; 2],
     ) -> usize {
         if multiline {
-            byte_under_point(nav_layout, local[0], local[1] + self.scroll_offset)
+            let y = local[1] + self.view_top();
+            self.paragraphs.byte_under(list, field, local[0], y)
         } else {
             let x = local[0] + self.horizontal_scroll_offset;
             self.display_to_value_byte(visual_hit(pick_vis, x).map_or(0, |hit| hit.under))
@@ -654,6 +673,7 @@ impl TextInput {
         self.selection_start = None;
         self.desired_caret_x = None;
         self.scroll_offset = 0.0;
+        self.scroll_anchor = (0, 0.0);
         self.horizontal_scroll_offset = 0.0;
     }
 
@@ -699,32 +719,35 @@ impl TextInput {
     /// the widget holds focus; callers driving it directly are responsible for
     /// the focus gate.
     ///
-    /// This is the single-line / no-layout entry point: vertical navigation and
-    /// line-relative Home/End (which need laid-out line geometry) are inert. For
-    /// a multi-line field, call [`process_keyboard_with_layout`] with the field's
-    /// [`CaretPos`] layout instead (which `draw` does automatically).
-    ///
-    /// [`process_keyboard_with_layout`]: Self::process_keyboard_with_layout
+    /// This is the no-layout entry point: vertical navigation and line-relative
+    /// Home/End (which need laid-out line geometry) are inert. `draw` handles
+    /// a focused field's keys with its layout.
     pub fn process_keyboard(&mut self, input: &InputState) {
-        self.handle_keyboard(input, &[], &[]);
+        self.handle_keyboard(input, None, &[]);
     }
 
-    /// Like [`process_keyboard`](Self::process_keyboard) but with the field's
-    /// laid-out caret geometry, enabling multi-line vertical navigation (Up/Down
-    /// with a sticky column) and line-relative Home/End. The `layout` reflects
-    /// the value as laid out *this* frame (pre-edit); edits re-layout next frame
-    /// — a one-frame latency that only affects the Up/Down target line.
-    pub fn process_keyboard_with_layout(&mut self, input: &InputState, layout: &[CaretPos]) {
-        self.handle_keyboard(input, layout, &[]);
-    }
-
-    /// Full keyboard handler. `layout` is the line-aware [`CaretPos`] geometry
-    /// (vertical nav / line Home-End); `vis` is the visual-order glyph layout
-    /// used for bidi-correct Left/Right caret movement. `draw` supplies both;
-    /// the public entry points pass empty slices for the parts they can't build.
-    fn handle_keyboard(&mut self, input: &InputState, layout: &[CaretPos], vis: &[VisualGlyph]) {
+    /// Full keyboard handler. `nav` is a draw list to lay a multi-line field's
+    /// paragraphs out with, and how (vertical nav / line Home-End); `vis` is
+    /// the visual-order glyph layout used for bidi-correct Left/Right caret
+    /// movement. `draw` supplies both; [`process_keyboard`] neither. The
+    /// paragraphs are the value as it stands before this frame's edits, which
+    /// re-layout next frame: a one-frame latency that only affects the
+    /// Up/Down target line.
+    ///
+    /// [`process_keyboard`]: Self::process_keyboard
+    fn handle_keyboard(
+        &mut self,
+        input: &InputState,
+        mut nav: Option<(&mut DrawList, FieldText)>,
+        vis: &[VisualGlyph],
+    ) {
         // Masking forces single-line semantics (Enter submits, Up/Down inert).
         let multiline = self.multiline && self.mask.is_none();
+        if let Some((_, field)) = &nav
+            && multiline
+        {
+            self.sync_paragraphs(*field);
+        }
         // Check for Ctrl shortcuts via text_input.
         // When Ctrl is held, `ReceivedCharacter` may send ASCII control codes
         // (0x01 = Ctrl+A, 0x03 = Ctrl+C, 0x16 = Ctrl+V, 0x18 = Ctrl+X)
@@ -787,15 +810,21 @@ impl TextInput {
         }
 
         // Up/Down — vertical line navigation (multiline only; needs layout).
-        if multiline && (input.key_up || input.key_down) && !layout.is_empty() {
+        if multiline
+            && (input.key_up || input.key_down)
+            && let Some((list, field)) = nav.as_mut()
+        {
             let dir = if input.key_up { -1 } else { 1 };
             // Seed the sticky column from the current caret on the first vertical
             // move; subsequent moves keep the original column.
-            let desired = self
-                .desired_caret_x
-                .unwrap_or_else(|| caret_for_byte(layout, self.cursor_pos).x);
+            let desired = match self.desired_caret_x {
+                Some(x) => x,
+                None => self.paragraphs.caret(list, *field, self.cursor_pos).x,
+            };
             let was = self.cursor_pos;
-            let target = byte_on_adjacent_line(layout, self.cursor_pos, dir, desired);
+            let target = self
+                .paragraphs
+                .adjacent(list, *field, self.cursor_pos, dir, desired);
             if input.shift_pressed {
                 if self.selection_start.is_none() {
                     self.selection_start = Some(was);
@@ -869,10 +898,11 @@ impl TextInput {
             }
             // Multiline: jump to the start of the current visual line; single-line:
             // document start.
-            self.cursor_pos = if multiline && !layout.is_empty() {
-                line_bounds(layout, self.cursor_pos).0
-            } else {
-                0
+            self.cursor_pos = match nav.as_mut() {
+                Some((list, field)) if multiline => {
+                    self.paragraphs.line_bounds(list, *field, self.cursor_pos).0
+                }
+                _ => 0,
             };
             return;
         }
@@ -889,10 +919,11 @@ impl TextInput {
             }
             // Multiline: jump to the end of the current visual line; single-line:
             // document end.
-            self.cursor_pos = if multiline && !layout.is_empty() {
-                line_bounds(layout, self.cursor_pos).1
-            } else {
-                self.value.len()
+            self.cursor_pos = match nav.as_mut() {
+                Some((list, field)) if multiline => {
+                    self.paragraphs.line_bounds(list, *field, self.cursor_pos).1
+                }
+                _ => self.value.len(),
             };
             return;
         }
@@ -1045,19 +1076,16 @@ impl TextInput {
         let sl_band_h = line_height * 1.1;
         let sl_band_top = self.y + (self.height - sl_band_h) / 2.0;
 
-        // Caret layout for the *current* value (multiline+focused only), built
-        // BEFORE keyboard/click so vertical nav, line Home/End, and click hit
-        // testing see this frame's geometry (one-frame edit latency — see
-        // `process_keyboard_with_layout`).
-        let nav_layout: Arc<[CaretPos]> = if multiline && focused {
-            list.caret_layout(&field_text.block(self.value.as_str(), 0.0, 0.0))
-        } else {
-            Arc::from([])
-        };
+        // A multi-line field's paragraphs as the value stands before this
+        // frame's input, so clicks and keys see this frame's geometry (a
+        // one-frame edit latency, see `handle_keyboard`).
+        if multiline {
+            self.sync_paragraphs(field_text);
+        }
         // What a single-line click or drag picks a byte from: the glyphs of
         // the drawn string in visual order, which is the display (the bullets,
         // when masked), so a click in right-to-left text lands on the edge the
-        // caret is drawn at. Multiline picks from `nav_layout`.
+        // caret is drawn at. Multiline picks from its paragraphs.
         let pick_vis: Arc<[VisualGlyph]> = if focused && !multiline {
             list.visual_layout(&field_text.block(self.display_value(), 0.0, 0.0))
         } else {
@@ -1066,7 +1094,7 @@ impl TextInput {
 
         // Visual-order glyph layout for bidi-correct Left/Right caret movement,
         // built BEFORE keyboard handling (same one-frame-latency contract as
-        // `nav_layout`). Only for focused, single-line, *unmasked* fields,
+        // the paragraphs). Only for focused, single-line, *unmasked* fields,
         // where it is `pick_vis`: masked bullets are LTR (visual == logical, so
         // the logical fallback in `cursor_left`/`cursor_right` is exact);
         // multiline keeps the existing logical movement + left-edge caret
@@ -1088,8 +1116,8 @@ impl TextInput {
                 // Hit-test against the laid-out lines, accounting for the scroll
                 // offset and top-left text origin.
                 let local_x = input.mouse_x - text_x;
-                let local_y = input.mouse_y - text_top + self.scroll_offset;
-                let byte_pos = byte_at_point(&nav_layout, local_x, local_y);
+                let local_y = input.mouse_y - text_top + self.view_top();
+                let byte_pos = self.paragraphs.byte_at(list, field_text, local_x, local_y);
                 if input.shift_pressed {
                     if self.selection_start.is_none() {
                         self.selection_start = Some(self.cursor_pos);
@@ -1145,7 +1173,8 @@ impl TextInput {
                     0..self.value.len()
                 } else {
                     let under = self.byte_under(
-                        &nav_layout,
+                        list,
+                        field_text,
                         &pick_vis,
                         multiline,
                         [input.mouse_x - text_x, input.mouse_y - text_top],
@@ -1167,8 +1196,8 @@ impl TextInput {
             let mut picked = None;
             let byte_pos = if multiline {
                 let local_x = input.mouse_x - text_x;
-                let local_y = input.mouse_y - text_top + self.scroll_offset;
-                byte_at_point(&nav_layout, local_x, local_y)
+                let local_y = input.mouse_y - text_top + self.view_top();
+                self.paragraphs.byte_at(list, field_text, local_x, local_y)
             } else {
                 let local_x =
                     (input.mouse_x - text_x + self.horizontal_scroll_offset).clamp(0.0, f32::MAX);
@@ -1181,7 +1210,8 @@ impl TextInput {
                 Some((_, origin)) if self.mask.is_some() => (origin.start, origin.end),
                 Some((unit, origin)) => {
                     let under = self.byte_under(
-                        &nav_layout,
+                        list,
+                        field_text,
                         &pick_vis,
                         multiline,
                         [input.mouse_x - text_x, input.mouse_y - text_top],
@@ -1202,7 +1232,8 @@ impl TextInput {
 
         // Process keyboard events only while focused.
         if focused {
-            self.handle_keyboard(input, &nav_layout, &move_vis);
+            let nav = multiline.then_some((&mut *list, field_text));
+            self.handle_keyboard(input, nav, &move_vis);
         }
 
         // A live IME composition is shown inline (underlined) and supersedes the
@@ -1221,13 +1252,11 @@ impl TextInput {
             crate::widgets::material::draw_well(list, &s, frame, focused, self.invalid);
         }
 
-        // Render-time caret layout (multiline+focused), reflecting any edits made
-        // this frame — used for autoscroll, per-line selection, and the caret.
-        let render_layout: Arc<[CaretPos]> = if multiline && focused {
-            list.caret_layout(&field_text.block(self.value.as_str(), 0.0, 0.0))
-        } else {
-            Arc::from([])
-        };
+        // The paragraphs after this frame's edits, which the field scrolls to
+        // and draws from.
+        if multiline {
+            self.sync_paragraphs(field_text);
+        }
 
         // Single-line: the display's glyphs in visual order as they stand after
         // this frame's edits, which the field scrolls to and draws its
@@ -1240,25 +1269,43 @@ impl TextInput {
         };
 
         // ---- Autoscroll to keep the caret visible ----
-        if multiline && focused {
+        if multiline {
             let inner_h = (self.height - eff_pad_h * 2.0).max(1.0);
-            let caret = caret_for_byte(&render_layout, self.cursor_pos);
-            let caret_top = caret.line_top;
-            let caret_h = if caret.line_height > 0.0 {
-                caret.line_height
-            } else {
-                line_height
-            };
-            let caret_bottom = caret_top + caret_h;
-            if caret_top < self.scroll_offset {
-                self.scroll_offset = caret_top;
-            } else if caret_bottom > self.scroll_offset + inner_h {
-                self.scroll_offset = caret_bottom - inner_h;
+            // Re-anchor on the paragraph the box starts in now: an edit may
+            // have shortened the one it was on.
+            self.scroll_to(self.view_top());
+            // Scroll to the caret, then lay out what that brings into view:
+            // where the caret sits against the box counts the heights of the
+            // paragraphs between, estimated until then, so a second round
+            // settles it.
+            for _ in 0..3 {
+                if !focused {
+                    break;
+                }
+                let caret = self.paragraphs.caret(list, field_text, self.cursor_pos);
+                let caret_h = if caret.height > 0.0 {
+                    caret.height
+                } else {
+                    line_height
+                };
+                let top = self.view_top();
+                let moved = if caret.top < top {
+                    self.scroll_to(caret.top);
+                    true
+                } else if caret.top + caret_h > top + inner_h {
+                    self.scroll_to(caret.top + caret_h - inner_h);
+                    true
+                } else {
+                    false
+                };
+                let top = self.view_top();
+                self.paragraphs.shown(list, field_text, top, top + inner_h);
+                if !moved {
+                    break;
+                }
             }
-            if self.scroll_offset < 0.0 {
-                self.scroll_offset = 0.0;
-            }
-        } else if !multiline {
+            self.scroll_offset = self.view_top();
+        } else {
             let caret_byte = self.value_to_display_byte(self.cursor_pos);
             let caret_x =
                 visual_caret_pos(&line_vis, caret_byte, self.caret_x()).map_or(0.0, |c| c.x);
@@ -1284,15 +1331,6 @@ impl TextInput {
         if multiline && !composing {
             self.update_syntax_cache();
         }
-        // The drawn string is the masked display (plaintext when unmasked); the
-        // placeholder is shown unmasked when the value is empty. Built after the
-        // autoscroll mutation above so the borrow it holds on `self` doesn't clash.
-        let display = self.display_value();
-        let (text_content, text_color): (&str, [f32; 4]) = if self.value.is_empty() {
-            (&self.placeholder, s.color(StyleKey::TextDim))
-        } else {
-            (&display, s.color(StyleKey::Text))
-        };
 
         // All editable content is clipped to the inner box. Multiline scrolls
         // vertically; single-line fields scroll horizontally for long values.
@@ -1306,80 +1344,137 @@ impl TextInput {
         };
         let draw_text_x = text_x - horizontal_scroll;
 
-        // ---- Draw selection highlight ----
-        #[allow(clippy::collapsible_if)]
-        if focused && !composing && !self.value.is_empty() {
-            if let Some((sel_start, sel_end)) =
-                self.selection_range().filter(|(start, end)| start < end)
+        // A multi-line field draws its paragraphs in view one by one, each
+        // with its selection; an empty one draws its placeholder below.
+        let paragraphs_drawn = multiline && !self.value.is_empty();
+        // Where a multi-line caret is drawn when it isn't where the value
+        // puts it: in a composition. On screen: x, top and height.
+        let mut drawn_caret: Option<(f32, f32, f32)> = None;
+        if paragraphs_drawn {
+            let selection = self
+                .selection_range()
+                .filter(|(start, end)| focused && !composing && start < end);
+            let composing_in = composing.then(|| {
+                self.paragraphs
+                    .caret(list, field_text, self.cursor_pos)
+                    .segment
+            });
+            let shown = self
+                .paragraphs
+                .shown(list, field_text, scroll, scroll + inner_rect.height);
+            // How far a composition taller or shorter than its paragraph
+            // moves the paragraphs below it, this frame.
+            let mut shift = 0.0;
+            for Shown {
+                segment,
+                top,
+                carets,
+            } in shown
             {
-                if multiline {
-                    // The selected lines in view: the first ending below the
-                    // top of the field, through the last starting above its
-                    // bottom.
-                    let above = |p: &CaretPos| p.line_top + p.line_height <= scroll;
-                    let first_shown = render_layout
-                        .get(render_layout.partition_point(above))
-                        .map_or(usize::MAX, |p| p.line);
-                    let last_shown = render_layout
-                        .partition_point(|p| p.line_top < scroll + inner_rect.height)
-                        .checked_sub(1)
-                        .map_or(0, |i| render_layout[i].line);
-                    let start_line = caret_for_byte(&render_layout, sel_start)
-                        .line
-                        .max(first_shown);
-                    let end_line = caret_for_byte(&render_layout, sel_end).line.min(last_shown);
-                    for line in start_line..=end_line {
-                        let (line_lo, line_hi) = line_byte_range(&render_layout, line);
-                        let a = sel_start.max(line_lo);
-                        let b = sel_end.min(line_hi);
+                let range = self.paragraphs.range(segment);
+                let y = text_top - scroll + top + shift;
+                if let Some((sel_start, sel_end)) = selection.filter(|&(_, end)| end >= range.start)
+                {
+                    let a_from = sel_start.saturating_sub(range.start);
+                    let b_to = sel_end - range.start;
+                    for line in carets.chunk_by(|a, b| a.line == b.line) {
+                        let (line_top, height) = (line[0].line_top, line[0].line_height);
+                        // Only the selected lines in view.
+                        if top + line_top + height <= scroll
+                            || top + line_top >= scroll + inner_rect.height
+                        {
+                            continue;
+                        }
+                        let (line_lo, line_hi) = line_byte_range(line, line[0].line);
+                        let a = a_from.max(line_lo);
+                        let b = b_to.min(line_hi);
                         if b < a {
                             continue;
                         }
-                        let x1 = line_x_for_byte(&render_layout, line, a);
+                        let x1 = line_x_for_byte(line, line[0].line, a);
                         // Selection that continues onto the next line fills to
                         // the inner edge (shows the newline is selected).
-                        let x2 = if sel_end > line_hi {
+                        let x2 = if b_to > line_hi {
                             text_max_w
                         } else {
-                            line_x_for_byte(&render_layout, line, b)
+                            line_x_for_byte(line, line[0].line, b)
                         };
-                        let lt = on_line(&render_layout, line, |p| p.line)
-                            .first()
-                            .map_or(0.0, |p| p.line_top);
                         list.quad(
                             text_x + x1,
-                            text_top - scroll + lt,
+                            y + line_top,
                             (x2 - x1).max(1.0),
                             line_height,
                             s.color(StyleKey::Accent),
                         );
                     }
-                } else {
-                    // Single-line: resolve bidi-correct visual rectangles.
-                    // A logically-contiguous selection can map to several
-                    // disjoint visual spans across an LTR↔RTL boundary, so
-                    // we draw one quad per returned rect. Selection bytes are
-                    // mapped to display bytes first (identity when unmasked;
-                    // masked bullets are LTR so this yields a single span).
-                    let ds = self.value_to_display_byte(sel_start);
-                    let de = self.value_to_display_byte(sel_end);
-                    for r in selection_rects(&line_vis, ds, de) {
-                        list.quad(
-                            draw_text_x + r.x,
-                            sl_band_top,
-                            r.w.max(1.0),
-                            sl_band_h,
-                            s.color(StyleKey::Accent),
-                        );
-                    }
                 }
+                if composing_in == Some(segment) {
+                    // The composition goes into the caret's paragraph alone.
+                    let (spans, caret_byte) = compose_preedit(
+                        self.paragraphs.text(segment),
+                        self.cursor_pos.saturating_sub(range.start),
+                        &input.preedit,
+                        input.preedit_cursor,
+                    );
+                    let block = field_text
+                        .block("", draw_text_x, y)
+                        .with_color_f32(s.color(StyleKey::Text))
+                        .with_spans(spans);
+                    let composed = list.caret_layout(&block);
+                    let caret = caret_for_byte(&composed, caret_byte);
+                    drawn_caret =
+                        Some((draw_text_x + caret.x, y + caret.line_top, caret.line_height));
+                    let height = composed
+                        .iter()
+                        .map(|c| c.line_top + c.line_height)
+                        .fold(0.0, f32::max);
+                    shift += height - self.paragraphs.height(segment);
+                    list.text(block);
+                    continue;
+                }
+                let block = field_text
+                    .block(self.paragraphs.text(segment), draw_text_x, y)
+                    .with_color_f32(s.color(StyleKey::Text));
+                #[cfg(feature = "syntax-highlighting")]
+                let block = if self.syntax.is_some() {
+                    block.with_style_ranges(ranges_within(&self.syntax_ranges, range))
+                } else {
+                    block
+                };
+                list.text(block);
+            }
+        }
+
+        // ---- Draw a single-line selection highlight ----
+        if focused
+            && !composing
+            && !self.value.is_empty()
+            && !multiline
+            && let Some((sel_start, sel_end)) =
+                self.selection_range().filter(|(start, end)| start < end)
+        {
+            // Resolve bidi-correct visual rectangles. A logically-contiguous
+            // selection can map to several disjoint visual spans across an
+            // LTR↔RTL boundary, so we draw one quad per returned rect.
+            // Selection bytes are mapped to display bytes first (identity when
+            // unmasked; masked bullets are LTR so this yields a single span).
+            let ds = self.value_to_display_byte(sel_start);
+            let de = self.value_to_display_byte(sel_end);
+            for r in selection_rects(&line_vis, ds, de) {
+                list.quad(
+                    draw_text_x + r.x,
+                    sl_band_top,
+                    r.w.max(1.0),
+                    sl_band_h,
+                    s.color(StyleKey::Accent),
+                );
             }
         }
 
         // A composing field splices the underlined preedit into the value at
         // the caret and renders it as spans; otherwise it's the plain value (or
         // placeholder). `composed` is owned, so it is reused for the caret below.
-        let composed = if composing {
+        let composed = if composing && !paragraphs_drawn {
             Some(compose_preedit(
                 &self.value,
                 self.cursor_pos,
@@ -1390,9 +1485,20 @@ impl TextInput {
             None
         };
 
+        // The drawn string is the masked display (plaintext when unmasked); the
+        // placeholder is shown unmasked when the value is empty. Built after the
+        // paragraphs are drawn so the borrow it holds on `self` doesn't clash.
+        let display = self.display_value();
+        let (text_content, text_color): (&str, [f32; 4]) = if self.value.is_empty() {
+            (&self.placeholder, s.color(StyleKey::TextDim))
+        } else {
+            (&display, s.color(StyleKey::Text))
+        };
         let block_y = text_top - scroll;
         // The caret within a composition, from the layout it is drawn with.
-        let composed_caret = if let Some((spans, caret_byte)) = &composed {
+        let composed_caret = if paragraphs_drawn {
+            None
+        } else if let Some((spans, caret_byte)) = &composed {
             let text = field_text
                 .block("", draw_text_x, block_y)
                 .with_color_f32(s.color(StyleKey::Text))
@@ -1407,18 +1513,20 @@ impl TextInput {
                 }
             }
             list.text(text);
+            if multiline {
+                drawn_caret = Some((
+                    draw_text_x + caret.x,
+                    block_y + caret.line_top,
+                    caret.line_height,
+                ));
+            }
             Some(caret)
         } else {
-            let text = field_text
-                .block(text_content, draw_text_x, block_y)
-                .with_color_f32(text_color);
-            #[cfg(feature = "syntax-highlighting")]
-            let text = if multiline && !self.value.is_empty() && self.syntax.is_some() {
-                text.with_shared_style_ranges(self.syntax_ranges.clone())
-            } else {
-                text
-            };
-            list.text(text);
+            list.text(
+                field_text
+                    .block(text_content, draw_text_x, block_y)
+                    .with_color_f32(text_color),
+            );
             None
         };
 
@@ -1427,14 +1535,11 @@ impl TextInput {
             let (caret_x, caret_top, caret_h) = if multiline {
                 // A composition's caret sits in the preedit where the IME asked,
                 // on whichever line the preedit has reached.
-                let caret = composed_caret
-                    .unwrap_or_else(|| caret_for_byte(&render_layout, self.cursor_pos));
-                let caret_h = if caret.line_height > 0.0 {
-                    caret.line_height
-                } else {
-                    line_height
-                };
-                (draw_text_x + caret.x, block_y + caret.line_top, caret_h)
+                let (x, top, h) = drawn_caret.unwrap_or_else(|| {
+                    let caret = self.paragraphs.caret(list, field_text, self.cursor_pos);
+                    (draw_text_x + caret.x, block_y + caret.top, caret.height)
+                });
+                (x, top, if h > 0.0 { h } else { line_height })
             } else {
                 let x = if let Some(caret) = composed_caret {
                     draw_text_x + caret.x
@@ -2446,17 +2551,27 @@ mod tests {
 
     // ---- Multi-line behaviour ----
 
+    /// How the keyboard tests lay a multi-line field out.
+    const FIELD: FieldText = FieldText {
+        font_size: 16.0,
+        wrap: WrapMode::WordOrGlyph,
+        max_width: 1000.0,
+        direction: crate::TextDirection::Auto,
+    };
+
     /// Build a `[CaretPos]` layout matching what a multiline field lays out, so
-    /// keyboard tests can exercise vertical nav / line Home-End off-screen.
-    fn caret_layout(text: &str, max_width: f32) -> Vec<CaretPos> {
-        let block = FieldText {
-            font_size: 16.0,
-            wrap: WrapMode::WordOrGlyph,
-            max_width,
-            direction: crate::TextDirection::Auto,
-        }
-        .block(text, 0.0, 0.0);
-        DrawList::new().caret_layout(&block).to_vec()
+    /// keyboard tests can check where vertical nav / line Home-End land.
+    fn caret_layout(text: &str) -> Vec<CaretPos> {
+        DrawList::new()
+            .caret_layout(&FIELD.block(text, 0.0, 0.0))
+            .to_vec()
+    }
+
+    /// Handle `input` as a focused multi-line field does, laid out as
+    /// [`FIELD`], off-screen.
+    fn keys_laid_out(ti: &mut TextInput, input: &InputState) {
+        let mut list = DrawList::new();
+        ti.handle_keyboard(input, Some((&mut list, FIELD)), &[]);
     }
 
     #[test]
@@ -2486,13 +2601,13 @@ mod tests {
     fn up_down_move_across_lines() {
         // Two short lines; the layout is unambiguous.
         let mut ti = make_input("foo\nbar").with_multiline(true);
-        let layout = caret_layout("foo\nbar", 1000.0);
+        let layout = caret_layout("foo\nbar");
         // Put the cursor at the end of line 0 ("foo", byte 3).
         ti.cursor_pos = 3;
         // Down → land on line 1.
         let mut down = fake_input();
         down.key_down = true;
-        ti.process_keyboard_with_layout(&down, &layout);
+        keys_laid_out(&mut ti, &down);
         assert_eq!(
             caret_for_byte(&layout, ti.cursor_pos).line,
             1,
@@ -2501,7 +2616,7 @@ mod tests {
         // Up → back to line 0.
         let mut up = fake_input();
         up.key_up = true;
-        ti.process_keyboard_with_layout(&up, &layout);
+        keys_laid_out(&mut ti, &up);
         assert_eq!(
             caret_for_byte(&layout, ti.cursor_pos).line,
             0,
@@ -2512,11 +2627,11 @@ mod tests {
     #[test]
     fn up_at_top_and_down_at_bottom_are_noops() {
         let mut ti = make_input("foo\nbar").with_multiline(true);
-        let layout = caret_layout("foo\nbar", 1000.0);
+        let layout = caret_layout("foo\nbar");
         ti.cursor_pos = 1; // line 0
         let mut up = fake_input();
         up.key_up = true;
-        ti.process_keyboard_with_layout(&up, &layout);
+        keys_laid_out(&mut ti, &up);
         assert_eq!(
             caret_for_byte(&layout, ti.cursor_pos).line,
             0,
@@ -2526,7 +2641,7 @@ mod tests {
         ti.cursor_pos = 5; // line 1 ("bar")
         let mut down = fake_input();
         down.key_down = true;
-        ti.process_keyboard_with_layout(&down, &layout);
+        keys_laid_out(&mut ti, &down);
         assert_eq!(
             caret_for_byte(&layout, ti.cursor_pos).line,
             1,
@@ -2537,12 +2652,11 @@ mod tests {
     #[test]
     fn shift_down_extends_selection() {
         let mut ti = make_input("foo\nbar").with_multiline(true);
-        let layout = caret_layout("foo\nbar", 1000.0);
         ti.cursor_pos = 1;
         let mut ev = fake_input();
         ev.key_down = true;
         ev.shift_pressed = true;
-        ti.process_keyboard_with_layout(&ev, &layout);
+        keys_laid_out(&mut ti, &ev);
         assert_eq!(
             ti.selection_start,
             Some(1),
@@ -2557,20 +2671,20 @@ mod tests {
         // column on line 0 should keep the column across the short middle line.
         let text = "abcdefghij\nx\nabcdefghij";
         let mut ti = make_input(text).with_multiline(true);
-        let layout = caret_layout(text, 1000.0);
+        let layout = caret_layout(text);
         // Place the caret near the end of line 0 (byte 10, the '\n').
         ti.cursor_pos = 10;
         let start_x = caret_for_byte(&layout, ti.cursor_pos).x;
 
         let mut down = fake_input();
         down.key_down = true;
-        ti.process_keyboard_with_layout(&down, &layout);
+        keys_laid_out(&mut ti, &down);
         // Now on the short line (line 1) — clamped near its end.
         assert_eq!(caret_for_byte(&layout, ti.cursor_pos).line, 1);
 
         // Down again — sticky column should land near the original x on line 2,
         // NOT clamped to the short middle line's end.
-        ti.process_keyboard_with_layout(&down, &layout);
+        keys_laid_out(&mut ti, &down);
         let landed = caret_for_byte(&layout, ti.cursor_pos);
         assert_eq!(landed.line, 2);
         assert!(
@@ -2583,7 +2697,7 @@ mod tests {
         // A horizontal move clears the sticky column.
         let mut left = fake_input();
         left.key_left = true;
-        ti.process_keyboard_with_layout(&left, &layout);
+        keys_laid_out(&mut ti, &left);
         assert!(
             ti.desired_caret_x.is_none(),
             "horizontal move resets the sticky column"
@@ -2594,27 +2708,16 @@ mod tests {
     fn home_end_are_line_relative_in_multiline() {
         let text = "hello\nworld";
         let mut ti = make_input(text).with_multiline(true);
-        let layout = caret_layout(text, 1000.0);
         // Cursor in the middle of line 1 ("world", byte 8).
         ti.cursor_pos = 8;
         let mut home = fake_input();
         home.key_home = true;
-        ti.process_keyboard_with_layout(&home, &layout);
+        keys_laid_out(&mut ti, &home);
         assert_eq!(ti.cursor_pos, 6, "Home → start of line 1 (absolute byte 6)");
         let mut end = fake_input();
         end.key_end = true;
-        ti.process_keyboard_with_layout(&end, &layout);
+        keys_laid_out(&mut ti, &end);
         assert_eq!(ti.cursor_pos, 11, "End → end of line 1 (absolute byte 11)");
-    }
-
-    #[test]
-    fn line_bounds_finds_visual_line_extent() {
-        let text = "ab\ncd";
-        let layout = caret_layout(text, 1000.0);
-        // Byte 4 is on line 1 ("cd", bytes 3..5).
-        let (lo, hi) = line_bounds(&layout, 4);
-        assert_eq!(lo, 3);
-        assert_eq!(hi, 5);
     }
 
     // ---- IME preedit composition (compose_preedit) ----
