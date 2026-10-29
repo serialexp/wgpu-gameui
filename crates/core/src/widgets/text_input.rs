@@ -1463,8 +1463,13 @@ impl TextInput {
                 s.color(StyleKey::Text),
             );
             // Tell the windowing layer a text field is focused (so it can
-            // enable IME) and where to anchor the IME candidate window.
-            focus.request_ime(Rect::new(caret_x, caret_top, CARET_WIDTH, caret_h));
+            // enable IME) and where to anchor the IME candidate window: on
+            // screen, so a field drawn in a scrolled view anchors it where
+            // it shows.
+            let [x, y] = list
+                .current_transform()
+                .transform_point([caret_x, caret_top]);
+            focus.request_ime(Rect::new(x, y, CARET_WIDTH, caret_h));
         }
 
         list.pop_clip();

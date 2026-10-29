@@ -2431,3 +2431,13 @@ editor. Coverage 85 of 91.
       `Splitter` asks for `ColResize` / `RowResize` as Forge's Splitter does.
       The designer and `hello_ui` map to winit's native cursor through
       `fallback().parse()`. Gallery: Foundations / Cursor.
+- [x] **P3 — Full IME support.** agent-ui turns the window's input method
+      on while a field asks for it (`take_ime_request`) and puts the
+      candidate window at its caret; `Ime` events already reached the field
+      through `HostEvent`. The caret rect a field reports is now on screen
+      (through the draw list's transform), so a field in a scrolled view
+      places it where it shows.
+- [x] **Text a selection never saw drawn.** `TextSelection::has_text_in`
+      and `remember` let a host hand over the text of blocks it skipped (a
+      virtualized list's rows scrolled past in one jump), and `began` says
+      when the selection started over, so the host knows to look again.

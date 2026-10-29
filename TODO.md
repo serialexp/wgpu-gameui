@@ -642,11 +642,6 @@ harden those foundations rather than create parallel replacements.
       resolves "a shortcut wins if one matches, otherwise the key types
       text". gameui leaves shortcuts to each app, and agent-ui writes them
       out by hand (see its AltGr/Ctrl typing TODO, which this would fix).
-- [ ] **P3 — Full IME support.** `FocusState` already asks for IME and
-      reports a caret rect (`take_ime_request`), but agent-ui never reads
-      it or handles `WindowEvent::Ime`, so the macOS candidate window and
-      accent menu don't work. Needs preedit text drawn in the field and the
-      committed text inserted, as gpui's input handler does.
 - [ ] **P3 — Drag and drop that carries data.** gameui tracks a drag, but
       nothing carries a payload to a drop target. gpui attaches typed data
       to a drag (`on_drag`) and lets elements accept it (`on_drop::<T>`).
