@@ -33,6 +33,7 @@ mod drop_zone;
 mod dropdown;
 mod empty_state;
 mod field_label;
+mod field_paragraphs;
 #[cfg(feature = "phosphor-icons")]
 mod file_dialog;
 mod file_field;
