@@ -708,3 +708,11 @@ sharp at any size, list selection and gamepad navigation.
       with a renderer pass `with_font_system`; tests and font-less hosts pay
       it. Share one lazily made system across the stack's layers, or make
       `new()` take the process-wide `shared_font_system()`.
+- [ ] **P2 — `player::tests::out_of_pictures_the_clock_waits_for_them` fails
+      now and then under load.** Seen once (2026-10-29) in a full
+      `cargo test --workspace --all-features`, at
+      `crates/media/src/player_tests.rs:367` (the shown picture is checked to
+      be picture 2 a second on, with two pictures decoded ahead); it passed
+      alone five times and in the next full run. Likely the worker decodes a
+      third picture before the check on a busy machine; make the test hold
+      the worker at two pictures rather than rely on it being slow.
