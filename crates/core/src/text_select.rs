@@ -23,8 +23,9 @@
 //!
 //! Text the selection covers but that was never drawn while it was made
 //! (rows of a virtualized list scrolled past in one jump) is not in
-//! [`TextSelection::text`]; a drag past a scrolling edge draws every block it
-//! crosses, so it is complete.
+//! [`TextSelection::text`] unless the host hands it over: it asks
+//! [`TextSelection::has_text_in`] which keys it lacks, and gives their
+//! content with [`TextSelection::remember`].
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -241,6 +242,8 @@ pub struct TextSelection {
     /// The content of every block in the selection's scope drawn since it
     /// began, for [`text`](Self::text).
     contents: BTreeMap<TextKey, String>,
+    /// How many times `contents` was emptied (see [`began`](Self::began)).
+    began: u64,
 }
 
 impl TextSelection {
@@ -280,6 +283,14 @@ impl TextSelection {
         self.origin = None;
         self.dragging = false;
         self.contents.clear();
+        self.began += 1;
+    }
+
+    /// Changes each time the selection starts over and drops the text it
+    /// had: a host that [hands over](Self::remember) text reads it to know
+    /// it must look at the selection's keys again.
+    pub fn began(&self) -> u64 {
+        self.began
     }
 
     /// Drop the selection if it is in `scope`: for when that text is
@@ -319,6 +330,25 @@ impl TextSelection {
             out.push_str(&content[from..to.max(from)]);
         }
         Some(out)
+    }
+
+    /// Whether the selection holds the content of any block keyed in `keys`
+    /// (drawn since it began, or [remembered](Self::remember)).
+    pub fn has_text_in(&self, keys: Range<TextKey>) -> bool {
+        self.contents.range(keys).next().is_some()
+    }
+
+    /// Keep `content` as block `key`'s, for [`text`](Self::text), when the
+    /// block is in the selection's scope and wasn't drawn: the host's copy of
+    /// text it never drew while the selection was made. A block drawn later
+    /// replaces it with what was drawn.
+    pub fn remember(&mut self, key: TextKey, content: String) {
+        if self
+            .anchor
+            .is_some_and(|anchor| anchor.key.scope == key.scope)
+        {
+            self.contents.entry(key).or_insert(content);
+        }
     }
 
     /// Whether selectable text is under `(x, y)`, where nothing above hides
@@ -421,6 +451,7 @@ impl TextSelection {
             });
         } else {
             self.contents.clear();
+            self.began += 1;
             let range = match unit {
                 TextUnit::Char => caret..caret,
                 unit => unit.range_at(content, under),
@@ -797,6 +828,44 @@ mod tests {
         release(&mut selection);
         assert_eq!(selection.dragging(), None);
         assert!(!selection.is_empty(), "the selection outlives the drag");
+    }
+
+    #[test]
+    fn text_handed_over_for_a_block_never_drawn_is_in_the_copy() {
+        let mut layers = LayerStack::with_font_system(fonts());
+        let mut selection = TextSelection::new();
+        // Block 1 is between the two drawn ones but never drawn itself.
+        let list = layers.base_mut();
+        list.text(
+            TextBlock::new("first", 10.0, 10.0)
+                .with_size(16.0)
+                .selectable(key(0)),
+        );
+        list.text(
+            TextBlock::new("last", 10.0, 60.0)
+                .with_size(16.0)
+                .selectable(key(2)),
+        );
+        selection.collect(&layers);
+        press(&mut selection, 11.0, 15.0, 1, false);
+        drag(&mut selection, 290.0, 65.0);
+        assert_eq!(selection.text().as_deref(), Some("first\nlast"));
+        assert!(!selection.has_text_in(key(1)..key(2)));
+        assert!(selection.has_text_in(key(0)..key(1)));
+
+        selection.remember(key(1), "middle".into());
+        // A drawn block keeps what was drawn, and another scope is ignored.
+        selection.remember(key(0), "not drawn".into());
+        selection.remember(TextKey::new(OTHER, 0), "elsewhere".into());
+        assert!(selection.has_text_in(key(1)..key(2)));
+        assert_eq!(selection.text().as_deref(), Some("first\nmiddle\nlast"));
+
+        // Starting over drops what was handed over, and says so.
+        let began = selection.began();
+        release(&mut selection);
+        press(&mut selection, 11.0, 15.0, 1, false);
+        assert_ne!(selection.began(), began);
+        assert!(!selection.has_text_in(key(1)..key(2)));
     }
 
     #[test]
