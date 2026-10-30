@@ -4,7 +4,7 @@ use std::rc::Rc;
 use wgpu_gameui::{CursorState, FocusState, Theme};
 
 use super::*;
-use crate::CompletionKind;
+use crate::{CompletionEdit, CompletionKind, CompletionList, CompletionTrigger};
 
 const ID: FocusId = 7;
 /// Another focusable, after the editor in the Tab ring.
@@ -1383,7 +1383,10 @@ fn backspace_widens_the_match_and_closes_it_with_the_word_gone() {
 fn ctrl_space_opens_it_with_no_word_and_tells_the_host() {
     let mut rig = completing_rig("player\n", Language::Plain);
     let output = ctrl_space(&mut rig);
-    assert!(output.completion_asked);
+    let ask = output.completion_asked.expect("the host is asked");
+    assert_eq!(ask.trigger, CompletionTrigger::Invoked);
+    assert_eq!((ask.at, ask.from), (7, 7));
+    assert_eq!(ask.version, rig.editor.document().version());
     assert_eq!(offered(&rig), vec!["player"]);
     assert!(!rig.editor.text().ends_with("  "), "no space typed");
 }
@@ -1393,19 +1396,25 @@ fn the_hosts_items_come_first_and_reach_an_open_list() {
     let mut rig = completing_rig("speed\n", Language::Plain);
     rig.type_text("sp");
     assert_eq!(offered(&rig), vec!["speed"]);
-    rig.editor.set_completions(vec![
-        Completion::new("spawn", CompletionKind::Function).with_detail("(kind, x, y)"),
-    ]);
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    rig.editor.offer(
+        ask.id,
+        CompletionList {
+            incomplete: false,
+            items: vec![
+                Completion::new("spawn", CompletionKind::Function).with_detail("(kind, x, y)"),
+            ],
+        },
+    );
     assert_eq!(offered(&rig), vec!["spawn", "speed"]);
     rig.frame(&InputState {
         enter_pressed: true,
         ..away()
     });
-    assert_eq!(rig.editor.text(), "speed\nspawn()");
     assert_eq!(
-        rig.selection().head,
-        "speed\nspawn(".len(),
-        "the caret between"
+        rig.editor.text(),
+        "speed\nspawn",
+        "a server's item, as it is"
     );
 }
 
@@ -1506,7 +1515,7 @@ fn opening_reads_the_document_once_however_long_it_is_typed_into() {
         pool,
         "not gathered again"
     );
-    let expected: Vec<String> = (29_990..29_998).map(|n| format!("value{n}")).collect();
+    let expected: Vec<String> = (29_990..30_000).map(|n| format!("value{n}")).collect();
     assert_eq!(offered(&rig), expected, "the word typed itself left out");
 }
 
@@ -1627,4 +1636,394 @@ fn a_click_where_the_list_was_before_a_resize_is_not_the_lists() {
     );
     assert_eq!(rig.editor.text(), "player plan\npl", "nothing accepted");
     assert!(!rig.editor.is_completing(), "the click went to the code");
+}
+
+/// `items` as the host's answer.
+fn list(incomplete: bool, items: Vec<Completion>) -> CompletionList {
+    CompletionList { incomplete, items }
+}
+
+/// A frame `dt` seconds after the last, nothing else happening.
+fn wait(rig: &mut Rig, dt: f32) -> CodeEditorOutput {
+    rig.frame(&InputState {
+        frame_dt: dt,
+        ..away()
+    })
+}
+
+#[test]
+fn a_trigger_character_asks_the_host_and_waits_for_its_items() {
+    let mut rig = completing_rig("let thing = 1;\n", Language::Rust);
+    rig.editor.set_trigger_characters(&['.']);
+    rig.type_text("thing");
+    let ask = rig.type_text(".").completion_asked.expect("asked");
+    assert_eq!(ask.trigger, CompletionTrigger::Character('.'));
+    let text = rig.editor.text();
+    assert_eq!((ask.at, ask.from), (text.len(), text.len()));
+    assert!(rig.editor.is_completing() && offered(&rig).is_empty());
+    assert!(rig.editor.popup.is_none(), "nothing to show yet");
+    // Enter isn't the list's while it has nothing in it.
+    let mut empty = completing_rig("x\n", Language::Plain);
+    empty.editor.set_trigger_characters(&['.']);
+    empty.type_text(".");
+    empty.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(empty.editor.text(), "x\n.\n");
+
+    rig.editor.offer(
+        ask.id,
+        list(
+            false,
+            vec![Completion::new("len", CompletionKind::Function)],
+        ),
+    );
+    assert_eq!(
+        offered(&rig),
+        vec!["len"],
+        "the host's only, no words after a dot"
+    );
+    rig.idle();
+    assert!(rig.editor.popup.is_some());
+}
+
+#[test]
+fn an_answer_to_an_older_ask_or_a_closed_list_is_dropped() {
+    let mut rig = completing_rig("speed\n", Language::Plain);
+    let first = ctrl_space(&mut rig).completion_asked.unwrap();
+    let second = ctrl_space(&mut rig).completion_asked.unwrap();
+    assert!(second.id > first.id);
+    rig.editor.offer(
+        first.id,
+        list(false, vec![Completion::new("stale", CompletionKind::Field)]),
+    );
+    assert_eq!(offered(&rig), vec!["speed"]);
+    rig.frame(&InputState {
+        key_left: true,
+        ..away()
+    });
+    assert!(!rig.editor.is_completing());
+    rig.editor.offer(
+        second.id,
+        list(false, vec![Completion::new("late", CompletionKind::Field)]),
+    );
+    assert!(!rig.editor.is_completing(), "a closed list stays closed");
+}
+
+#[test]
+fn an_incomplete_list_asks_again_as_the_word_changes() {
+    let mut rig = completing_rig("\n", Language::Plain);
+    rig.type_text("s");
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    rig.editor.offer(
+        ask.id,
+        list(
+            true,
+            vec![Completion::new("spawn", CompletionKind::Function)],
+        ),
+    );
+    let again = rig.type_text("p").completion_asked.expect("asked again");
+    assert_eq!(again.trigger, CompletionTrigger::Incomplete);
+    assert_eq!(offered(&rig), vec!["spawn"], "the old items meanwhile");
+    rig.editor.offer(
+        again.id,
+        list(false, vec![Completion::new("spare", CompletionKind::Field)]),
+    );
+    assert_eq!(offered(&rig), vec!["spare"]);
+    assert!(
+        rig.type_text("a").completion_asked.is_none(),
+        "complete now"
+    );
+}
+
+#[test]
+fn a_host_items_edit_follows_the_typing_since_the_ask() {
+    let mut rig = completing_rig("x.foobar;\n", Language::Plain);
+    // The caret after "x.fo".
+    rig.frame(&InputState {
+        key_up: true,
+        ..away()
+    });
+    for _ in 0..4 {
+        rig.frame(&InputState {
+            key_right: true,
+            ..away()
+        });
+    }
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    assert_eq!((ask.at, ask.from), (4, 2));
+    rig.editor.offer(
+        ask.id,
+        list(
+            false,
+            vec![Completion::new("foobaz", CompletionKind::Field).with_edit(2..8, "foobaz")],
+        ),
+    );
+    rig.type_text("o");
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "x.foobaz;\n", "the whole word replaced");
+    assert_eq!(rig.selection().head, 8);
+}
+
+#[test]
+fn an_item_with_an_import_is_one_step_to_undo() {
+    let mut rig = completing_rig("fn main() {}\n", Language::Rust);
+    rig.type_text("HashM");
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    rig.editor.offer(
+        ask.id,
+        list(
+            false,
+            vec![
+                Completion::new("HashMap", CompletionKind::Type)
+                    .with_edit(13..18, "HashMap")
+                    .with_extra_edit(0..0, "use std::collections::HashMap;\n"),
+            ],
+        ),
+    );
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    let done = "use std::collections::HashMap;\nfn main() {}\nHashMap";
+    assert_eq!(rig.editor.text(), done);
+    assert_eq!(rig.selection().head, done.len());
+    rig.shortcut('z', false);
+    assert_eq!(
+        rig.editor.text(),
+        "fn main() {}\nHashM",
+        "the import went with it"
+    );
+}
+
+#[test]
+fn a_long_list_scrolls_to_its_last_item() {
+    let mut rig = completing_rig("\n", Language::Plain);
+    rig.type_text("it");
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    let items = (0..300)
+        .map(|n| Completion::new(format!("item{n:03}"), CompletionKind::Field))
+        .collect();
+    rig.editor.offer(ask.id, list(false, items));
+    assert_eq!(offered(&rig).len(), crate::completion::MAX_ITEMS);
+    rig.frame(&InputState {
+        key_up: true,
+        ..away()
+    });
+    let popup = rig.editor.popup.clone().unwrap();
+    assert_eq!(popup.rows.len(), crate::popup::MAX_ROWS);
+    let last = *popup.rows.last().unwrap();
+    assert_eq!(
+        popup.row_at(last.x + 1.0, last.y + 1.0),
+        Some(crate::completion::MAX_ITEMS - 1),
+        "wrapped round to the last, in view"
+    );
+}
+
+/// An editor whose list holds the host's `item`, asked at its end.
+fn resolving_rig(text: &str, typed: &str, item: Completion) -> (Rig, CompletionAsk) {
+    let mut rig = completing_rig(text, Language::Plain);
+    rig.type_text(typed);
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    rig.editor.offer(ask.id, list(false, vec![item]));
+    (rig, ask)
+}
+
+#[test]
+fn the_chosen_item_is_resolved_once_per_text() {
+    let (mut rig, ask) = resolving_rig(
+        "\n",
+        "Ha",
+        Completion::new("HashMap", CompletionKind::Type).with_resolve(7),
+    );
+    let resolve = rig.idle().resolve.expect("resolve the chosen item");
+    assert_eq!((resolve.id, resolve.key), (ask.id, 7));
+    assert_eq!(resolve.version, rig.editor.document().version());
+    assert!(rig.idle().resolve.is_none(), "not asked twice for one text");
+    let again = rig.type_text("s").resolve.expect("again for the new text");
+    assert_eq!(again.version, rig.editor.document().version());
+}
+
+#[test]
+fn resolved_edits_for_another_text_are_not_used() {
+    let (mut rig, ask) = resolving_rig(
+        "x\n",
+        "Ha",
+        Completion::new("HashMap", CompletionKind::Type).with_resolve(7),
+    );
+    let old = rig.idle().resolve.unwrap();
+    rig.type_text("s");
+    rig.editor.resolved(
+        ask.id,
+        7,
+        old.version,
+        vec![CompletionEdit::new(0..0, "use;\n")],
+        None,
+    );
+    // Not resolved for this text: the accept waits, then goes without.
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    wait(&mut rig, 2.0);
+    assert_eq!(rig.editor.text(), "x\nHashMap");
+}
+
+#[test]
+fn an_accept_waits_for_its_item_and_keeps_the_typing_meanwhile() {
+    let (mut rig, ask) = resolving_rig(
+        "fn main() {}\n",
+        "HashM",
+        Completion::new("HashMap", CompletionKind::Type)
+            .with_edit(13..18, "HashMap")
+            .with_resolve(7),
+    );
+    let resolve = rig.idle().resolve.unwrap();
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "fn main() {}\nHashM", "waiting");
+    let output = rig.frame(&InputState {
+        text_input: "::new".into(),
+        frame_dt: 0.1,
+        ..away()
+    });
+    assert!(!output.changed, "kept for after");
+    assert!(
+        rig.list.next_repaint().is_some_and(|at| at <= 0.9),
+        "a frame by the deadline"
+    );
+    rig.editor.resolved(
+        ask.id,
+        7,
+        resolve.version,
+        vec![CompletionEdit::new(
+            0..0,
+            "use std::collections::HashMap;\n",
+        )],
+        Some("struct HashMap<K, V>".into()),
+    );
+    wait(&mut rig, 0.016);
+    assert_eq!(
+        rig.editor.text(),
+        "use std::collections::HashMap;\nfn main() {}\nHashMap::new"
+    );
+}
+
+#[test]
+fn an_accept_waits_no_longer_than_its_time() {
+    let (mut rig, _) = resolving_rig(
+        "\n",
+        "Ha",
+        Completion::new("HashMap", CompletionKind::Type).with_resolve(7),
+    );
+    rig.idle();
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    wait(&mut rig, RESOLVE_WAIT / 2.0);
+    assert_eq!(rig.editor.text(), "\nHa");
+    wait(&mut rig, RESOLVE_WAIT / 2.0 + 0.01);
+    assert_eq!(rig.editor.text(), "\nHashMap", "accepted without");
+}
+
+#[test]
+fn a_resolved_item_is_accepted_at_once() {
+    let (mut rig, ask) = resolving_rig(
+        "\n",
+        "Ha",
+        Completion::new("HashMap", CompletionKind::Type).with_resolve(7),
+    );
+    let resolve = rig.idle().resolve.unwrap();
+    rig.editor.resolved(
+        ask.id,
+        7,
+        resolve.version,
+        vec![CompletionEdit::new(0..0, "use m;")],
+        None,
+    );
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "use m;\nHashMap");
+}
+
+#[test]
+fn an_accept_asks_for_a_frame_by_the_time_it_gives_up() {
+    let (mut rig, _) = resolving_rig(
+        "\n",
+        "Ha",
+        Completion::new("HashMap", CompletionKind::Type).with_resolve(7),
+    );
+    rig.idle();
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert!(
+        rig.list.next_repaint().is_some_and(|at| at <= RESOLVE_WAIT),
+        "the frame the wait began asks, with nothing else to come"
+    );
+}
+
+#[test]
+fn a_list_coming_while_an_accept_waits_does_not_change_its_item() {
+    let mut rig = completing_rig("\n", Language::Plain);
+    rig.type_text("Ha");
+    let ask = ctrl_space(&mut rig).completion_asked.unwrap();
+    rig.editor.offer(
+        ask.id,
+        list(
+            true,
+            vec![Completion::new("HashMap", CompletionKind::Type).with_resolve(7)],
+        ),
+    );
+    let again = rig.type_text("s").completion_asked.expect("asked again");
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    rig.editor.offer(
+        again.id,
+        list(
+            false,
+            vec![Completion::new("HashSet", CompletionKind::Type).with_resolve(8)],
+        ),
+    );
+    wait(&mut rig, 2.0);
+    assert_eq!(rig.editor.text(), "\nHashMap", "the item accepted");
+}
+
+#[test]
+fn a_new_list_resolves_its_item_though_the_key_and_text_are_the_same() {
+    let (mut rig, first) = resolving_rig(
+        "\n",
+        "Ha",
+        Completion::new("HashMap", CompletionKind::Type).with_resolve(7),
+    );
+    assert_eq!(rig.idle().resolve.unwrap().id, first.id);
+    let mut escape = InputState {
+        key_escape: true,
+        ..away()
+    };
+    escape.nav.cancel = true;
+    rig.frame(&escape);
+    assert!(!rig.editor.is_completing());
+    let second = ctrl_space(&mut rig).completion_asked.unwrap();
+    rig.editor.offer(
+        second.id,
+        list(
+            false,
+            vec![Completion::new("HashMap", CompletionKind::Type).with_resolve(7)],
+        ),
+    );
+    let resolve = rig.idle().resolve.expect("asked for the new list");
+    assert_eq!((resolve.id, resolve.key), (second.id, 7));
 }

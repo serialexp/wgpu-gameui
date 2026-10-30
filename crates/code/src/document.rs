@@ -258,8 +258,10 @@ impl Document {
     /// Make `changes`, all positioned in the text as it is now, and leave
     /// `after` selected. They mustn't overlap.
     pub fn edit(&mut self, mut changes: Vec<Change>, after: Selection, kind: EditKind) {
-        // Last first, so each change's positions still hold when it comes.
-        changes.sort_by_key(|change| std::cmp::Reverse(change.range.start));
+        // Last first, so each change's positions still hold when it comes;
+        // of two starting at one place, the one ending later (an insertion
+        // there goes in front of what it replaces, not into it).
+        changes.sort_by_key(|change| std::cmp::Reverse((change.range.start, change.range.end)));
         debug_assert!(
             changes
                 .windows(2)

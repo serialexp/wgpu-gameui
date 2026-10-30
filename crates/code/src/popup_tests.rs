@@ -18,7 +18,7 @@ fn open(labels: &[&str], prefix: &str) -> Completing {
         .iter()
         .map(|l| Completion::new(*l, CompletionKind::Variable))
         .collect();
-    Completing::open(0, prefix.to_owned(), pool).expect("something matches")
+    Completing::open(0, prefix.to_owned(), pool, None).expect("something matches")
 }
 
 #[test]
@@ -83,6 +83,7 @@ fn the_list_is_painted_with_each_items_tag_and_label() {
             Completion::new("spawn", CompletionKind::Function).with_detail("(kind, x, y)"),
             Completion::new("speed", CompletionKind::Variable),
         ],
+        None,
     )
     .unwrap();
     let popup = laid(
@@ -203,6 +204,7 @@ fn a_detail_that_would_run_into_the_label_is_left_out() {
             Completion::new("spawn", CompletionKind::Function)
                 .with_detail("abcdefghijklmnopqrstuvwxyz0123456789"),
         ],
+        None,
     )
     .unwrap();
     let bounds = Rect::new(0.0, 0.0, 150.0, 400.0);

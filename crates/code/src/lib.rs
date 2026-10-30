@@ -20,7 +20,10 @@ pub use commands::{
     ends_with_word, indent, line_at, move_caret, move_lines, newline, opens_bracket, outdent,
     paste, select_all, type_text, word_at,
 };
-pub use completion::{Completion, CompletionKind};
+pub use completion::{
+    Completion, CompletionAsk, CompletionEdit, CompletionKind, CompletionList, CompletionTrigger,
+    ResolveAsk,
+};
 pub use diagnostics::{Diagnostic, Diagnostics, Severity};
 pub use document::{Change, Document, EditKind, Point, Selection, TextEdit};
 pub use editor::{CodeEditor, CodeEditorOutput, CodeTheme};

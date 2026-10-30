@@ -28,6 +28,8 @@ const MIN_WIDTH: f32 = 220.0;
 const ROW_RADIUS: f32 = 2.0;
 /// Its distance from the line it completes.
 const OFFSET: f32 = 2.0;
+/// The most rows shown; a longer list scrolls.
+pub(crate) const MAX_ROWS: usize = 8;
 
 /// Where the list goes, worked out when the editor draws.
 #[derive(Clone, Debug, PartialEq)]
@@ -65,17 +67,22 @@ pub(crate) fn layout(
     list: &mut DrawList,
 ) -> Option<Popup> {
     let border = styles.dropdown().surface.border_widths;
-    let row_width = open
-        .items
-        .iter()
-        .map(|item| {
-            let label = styles.mono_width(list, &item.label, TextSize::Dense);
-            let detail = item.detail.as_ref().map_or(0.0, |detail| {
-                DETAIL_GAP + styles.mono_width(list, detail, TextSize::Meta)
-            });
-            ROW_PAD + TAG_WIDTH + GAP + label + detail + ROW_PAD
-        })
-        .fold(0.0, f32::max);
+    // Measured once per set of items, not per frame.
+    let row_width = open.widest.get().unwrap_or_else(|| {
+        let widest = open
+            .items
+            .iter()
+            .map(|item| {
+                let label = styles.mono_width(list, &item.label, TextSize::Dense);
+                let detail = item.detail.as_ref().map_or(0.0, |detail| {
+                    DETAIL_GAP + styles.mono_width(list, detail, TextSize::Meta)
+                });
+                ROW_PAD + TAG_WIDTH + GAP + label + detail + ROW_PAD
+            })
+            .fold(0.0, f32::max);
+        open.widest.set(Some(widest));
+        widest
+    });
     let width = (row_width + 2.0 * PAD + border.left + border.right)
         .max(MIN_WIDTH)
         .min(bounds.width);
@@ -84,12 +91,13 @@ pub(crate) fn layout(
     let room_below = bounds.bottom() - below;
     let room_above = word.y - OFFSET - bounds.y;
     let all = open.items.len();
-    let fits = |room: f32| (((room - chrome) / ROW_HEIGHT).floor().max(0.0) as usize).min(all);
-    let full = all as f32 * ROW_HEIGHT + chrome;
+    let most = all.min(MAX_ROWS);
+    let fits = |room: f32| (((room - chrome) / ROW_HEIGHT).floor().max(0.0) as usize).min(most);
+    let full = most as f32 * ROW_HEIGHT + chrome;
     let (shown, above) = if full <= room_below {
-        (all, false)
+        (most, false)
     } else if full <= room_above {
-        (all, true)
+        (most, true)
     } else if room_above > room_below {
         (fits(room_above), true)
     } else {

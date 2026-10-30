@@ -13,8 +13,14 @@
 //! [`CodeEditor::draw_layers`], and the status strip counts them.
 //!
 //! Typing a word, or Ctrl-Space, opens a completion list under it: the
-//! host's items ([`CodeEditor::set_completions`]), the language's keywords
-//! and the document's own words. It is drawn by `draw_layers` too.
+//! language's keywords and the document's own words, and the host's items
+//! when it has a language server. Ctrl-Space and the host's trigger
+//! characters ask the host ([`CodeEditorOutput::completion_asked`]), which
+//! answers with [`CodeEditor::offer`]. An item the host can say more about
+//! is resolved while it is chosen ([`CodeEditorOutput::resolve`],
+//! [`CodeEditor::resolved`]); accepting one before that has come back waits
+//! for it a moment, the keys typed meanwhile kept and played after. The list
+//! is drawn by `draw_layers` too.
 
 use std::ops::Range;
 
@@ -29,8 +35,12 @@ use wgpu_gameui::{
 
 use crate::columns::{Piece, byte_at_column, column_of, pieces};
 use crate::commands::{self, Motion, Rules};
-use crate::completion::{self, Completing, Completion};
+use crate::completion::{
+    self, Completing, Completion, CompletionAsk, CompletionEdit, CompletionList, CompletionTrigger,
+    ResolveAsk, Resolved,
+};
 use crate::diagnostics::{Diagnostic, Diagnostics, Severity};
+use crate::document::EditKind;
 use crate::document::{Document, Selection};
 use crate::highlight::{Span, Syntax};
 use crate::language::Language;
@@ -70,6 +80,8 @@ const GLOW_ALPHA: f32 = 0.3;
 /// The status strip's problem counts: the glyph, and the gap after it.
 const COUNT_ICON: f32 = 12.0;
 const COUNT_GAP: f32 = 4.0;
+/// The longest an accept waits for its item to be resolved, in seconds.
+pub(crate) const RESOLVE_WAIT: f32 = 1.0;
 
 /// The editor's own colours, beside the syntax inks: Forge's `--code-*`
 /// tokens.
@@ -144,10 +156,13 @@ impl Default for CodeTheme {
 pub struct CodeEditorOutput {
     /// The text changed.
     pub changed: bool,
-    /// Ctrl-Space asked for completions: a host with a language server asks
-    /// it now, and hands what it says to
-    /// [`set_completions`](CodeEditor::set_completions).
-    pub completion_asked: bool,
+    /// Completions were asked for (Ctrl-Space, a trigger character, or the
+    /// word changing under an incomplete list): a host with a language
+    /// server asks it, and hands what it says to [`CodeEditor::offer`].
+    pub completion_asked: Option<CompletionAsk>,
+    /// The chosen item has more to say: a host resolves it and hands what
+    /// it says to [`CodeEditor::resolved`].
+    pub resolve: Option<ResolveAsk>,
 }
 
 /// What the keys of a frame did besides editing, for focus and the host.
@@ -159,6 +174,17 @@ struct Taken {
     escape: bool,
     /// Ctrl-Space asked for completions.
     asked: bool,
+}
+
+/// An accept waiting for its item to be resolved.
+#[derive(Clone)]
+struct Hold {
+    /// The item, in the open list.
+    index: usize,
+    /// Seconds left before it is accepted without.
+    left: f32,
+    /// The frames' input meanwhile, played after it.
+    queued: Vec<InputState>,
 }
 
 /// What a drag after a press grows by: characters, or the words or lines a
@@ -248,9 +274,16 @@ pub struct CodeEditor {
     clipboard_set: Option<ClipboardSet>,
     diagnostics: Diagnostics,
     hover: Option<Hover>,
-    /// The host's completions, offered before keywords and words.
-    completions: Vec<Completion>,
     pub(crate) completing: Option<Completing>,
+    /// What typed opens the list and asks the host.
+    trigger_characters: Vec<char>,
+    /// The last ask's id.
+    asks: u64,
+    /// This frame's ask, for the output.
+    asked: Option<CompletionAsk>,
+    /// The last resolve asked for: the item's key and the text's version.
+    resolving: Option<ResolveAsk>,
+    hold: Option<Hold>,
     /// Where the open list was drawn, for the clicks on it.
     pub(crate) popup: Option<Popup>,
     /// Where on the screen the word being completed starts, at its line.
@@ -294,8 +327,12 @@ impl CodeEditor {
             clipboard_set: None,
             diagnostics: Diagnostics::default(),
             hover: None,
-            completions: Vec::new(),
             completing: None,
+            trigger_characters: Vec::new(),
+            asks: 0,
+            asked: None,
+            resolving: None,
+            hold: None,
             popup: None,
             word: None,
             #[cfg(test)]
@@ -349,6 +386,7 @@ impl CodeEditor {
         self.read_only = read_only;
         if read_only {
             self.completing = None;
+            self.hold = None;
         }
     }
 
@@ -378,14 +416,66 @@ impl CodeEditor {
         &self.diagnostics
     }
 
-    /// Offer `completions` before the language's keywords and the
-    /// document's words, from the next list opened (and in one open now).
-    pub fn set_completions(&mut self, completions: Vec<Completion>) {
-        self.completions = completions;
-        if let Some(open) = &self.completing {
-            let (from, prefix) = (open.from, open.prefix.clone());
-            self.completing = Completing::open(from, prefix, self.pool(from));
+    /// Typing one of `characters` opens the list after it and asks the
+    /// host (a language server's trigger characters: `.`, `::`'s `:`).
+    pub fn set_trigger_characters(&mut self, characters: &[char]) {
+        self.trigger_characters = characters.to_vec();
+    }
+
+    /// The host's items for ask `id`, offered before the keywords and the
+    /// document's words. Used only while `id` is the open list's latest ask;
+    /// otherwise dropped, as is a list that closed before it came, or one
+    /// that comes while an accept waits (its item stays the one accepted).
+    pub fn offer(&mut self, id: u64, list: CompletionList) {
+        if self.hold.is_some() {
+            return;
         }
+        let Some(open) = &mut self.completing else {
+            return;
+        };
+        let Some(asked) = open.asked.filter(|asked| asked.id == id) else {
+            return;
+        };
+        open.offer(asked, list);
+        if !open.alive() {
+            self.completing = None;
+        }
+    }
+
+    /// What resolving item `key` of ask `id`'s list gave, for the text at
+    /// `version`: its extra edits (in that text) and its detail. Used only
+    /// while the text is still that version.
+    pub fn resolved(
+        &mut self,
+        id: u64,
+        key: u64,
+        version: u64,
+        extra_edits: Vec<CompletionEdit>,
+        detail: Option<String>,
+    ) {
+        if version != self.document.version() {
+            return;
+        }
+        let Some(open) = &mut self.completing else {
+            return;
+        };
+        if open.offered.map(|offered| offered.id) != Some(id) {
+            return;
+        }
+        if let Some(detail) = detail {
+            for item in open.host.iter_mut().chain(open.items.iter_mut()) {
+                if item.resolve == Some(key) {
+                    item.detail = Some(detail.clone());
+                }
+            }
+            open.widest.set(None);
+        }
+        open.resolved.retain(|resolved| resolved.key != key);
+        open.resolved.push(Resolved {
+            key,
+            version,
+            extra_edits,
+        });
     }
 
     /// Whether a completion list is open.
@@ -414,47 +504,184 @@ impl CodeEditor {
         }
     }
 
-    /// Everything completion offers for the word from `from`: the host's
-    /// items, the keywords, and the document's other words (read through
-    /// once, as a list opens).
+    /// The keywords and the document's words, but the word from `from`
+    /// (read through once, as a list opens).
     fn pool(&self, from: usize) -> Vec<Completion> {
         let words = completion::identifiers(&self.document, Some(from));
-        completion::pool(&self.completions, self.language().keywords(), &words)
+        completion::pool(self.language().keywords(), &words)
     }
 
-    /// Open the completion list for the word before the caret, or match it
-    /// again when one is open for that word. `asked`: Ctrl-Space, which opens
-    /// one with no word typed too.
-    fn complete(&mut self, asked: bool) {
+    /// A new ask for the word from `from`, reported in this frame's output.
+    fn ask(&mut self, trigger: CompletionTrigger, from: usize) -> CompletionAsk {
+        self.asks += 1;
+        let ask = CompletionAsk {
+            id: self.asks,
+            at: self.document.selection().head,
+            from,
+            trigger,
+            version: self.document.version(),
+        };
+        self.asked = Some(ask);
+        ask
+    }
+
+    /// Open a completion list for the word before the caret, asking the
+    /// host when `trigger` says to. A trigger character's list offers only
+    /// the host's items, and opens with no word.
+    fn open_list(&mut self, trigger: Option<CompletionTrigger>) {
         let selection = self.document.selection();
         let (from, prefix) = completion::prefix_at(&self.document, selection.head);
-        if !selection.is_empty() || (prefix.is_empty() && !asked) {
+        let by_character = matches!(trigger, Some(CompletionTrigger::Character(_)));
+        if !selection.is_empty() || (prefix.is_empty() && trigger.is_none()) {
             self.completing = None;
             return;
         }
-        match &mut self.completing {
-            Some(open) if open.from == from => {
-                if !open.refine(from, prefix) {
-                    self.completing = None;
-                }
+        let pool = if by_character {
+            Vec::new()
+        } else {
+            self.pool(from)
+        };
+        let asked = trigger.map(|trigger| self.ask(trigger, from));
+        self.completing = Completing::open(from, prefix, pool, asked);
+    }
+
+    /// The word before the caret changed: match the open list again if it
+    /// is still that word's (asking again under an incomplete one), open one
+    /// if `open` and it isn't, else close it.
+    fn refine_list(&mut self, open: bool) {
+        let selection = self.document.selection();
+        let (from, prefix) = completion::prefix_at(&self.document, selection.head);
+        // A list typed open closes with its word gone; one asked for (with
+        // Ctrl-Space or a trigger character) stays for an empty word.
+        let same = self.completing.as_ref().is_some_and(|list| {
+            list.from == from
+                && selection.is_empty()
+                && (!prefix.is_empty() || list.asked.is_some())
+        });
+        if !same {
+            if open {
+                self.open_list(None);
+            } else {
+                self.completing = None;
             }
-            _ => self.completing = Completing::open(from, prefix, self.pool(from)),
+            return;
+        }
+        let incomplete = self.completing.as_ref().is_some_and(|list| list.incomplete);
+        let asked = incomplete.then(|| self.ask(CompletionTrigger::Incomplete, from));
+        let list = self.completing.as_mut().expect("the list is open");
+        if asked.is_some() {
+            list.asked = asked;
+        }
+        if !list.refine(from, prefix) {
+            self.completing = None;
         }
     }
 
-    /// Put the open list's `index`th item in place of its word, and close it.
+    /// Accept the open list's `index`th item, or, when it is the host's and
+    /// not yet resolved for the text as it is, wait for that a moment.
     fn accept(&mut self, index: usize) {
+        if self.read_only {
+            self.completing = None;
+            return;
+        }
+        let Some(open) = &mut self.completing else {
+            return;
+        };
+        if index >= open.items.len() {
+            return;
+        }
+        open.chosen = index;
+        let version = self.document.version();
+        let unresolved = open.is_hosts(index)
+            && open.items[index].resolve.is_some()
+            && open.resolved_for(index, version).is_none();
+        if unresolved {
+            self.hold = Some(Hold {
+                index,
+                left: RESOLVE_WAIT,
+                queued: Vec::new(),
+            });
+        } else {
+            self.commit(index);
+        }
+    }
+
+    /// Put the open list's `index`th item in place of its word, with any
+    /// edits it makes elsewhere, as one step; and close it.
+    fn commit(&mut self, index: usize) {
         let Some(open) = self.completing.take() else {
             return;
         };
-        if self.read_only {
+        let Some(item) = open.items.get(index) else {
             return;
+        };
+        match open.offered {
+            Some(asked) if open.is_hosts(index) => {
+                let version = self.document.version();
+                let resolved = open
+                    .resolved_for(index, version)
+                    .map(|resolved| resolved.extra_edits.as_slice());
+                let at = self.document.selection().head;
+                let (changes, caret) = completion::host_changes(item, &asked, at, resolved);
+                self.document
+                    .edit(changes, Selection::caret(caret), EditKind::Other);
+            }
+            _ => completion::accept(&mut self.document, open.from, item),
         }
-        if let Some(item) = open.items.get(index) {
-            completion::accept(&mut self.document, open.from, item);
-            self.column = None;
-            self.reveal = true;
+        self.column = None;
+        self.reveal = true;
+    }
+
+    /// The chosen item, when it is the host's and has more to say for the
+    /// text as it is that hasn't been asked for yet.
+    fn resolve_ask(&mut self) -> Option<ResolveAsk> {
+        let open = self.completing.as_ref()?;
+        let offered = open.offered?;
+        if !open.is_hosts(open.chosen) {
+            return None;
         }
+        let ask = ResolveAsk {
+            id: offered.id,
+            key: open.items.get(open.chosen)?.resolve?,
+            version: self.document.version(),
+        };
+        if open.resolved_for(open.chosen, ask.version).is_some() || self.resolving == Some(ask) {
+            return None;
+        }
+        self.resolving = Some(ask);
+        Some(ask)
+    }
+
+    /// A frame while an accept waits for its item to be resolved: the input
+    /// is kept, and once resolved (or out of time) the item is accepted and
+    /// the input kept, this frame's too, is played. True when there was an
+    /// accept waiting, so this frame's input has been dealt with.
+    fn holding(&mut self, input: &InputState, page: isize, cx: &mut DrawContext) -> bool {
+        let Some(hold) = &mut self.hold else {
+            return false;
+        };
+        hold.left -= input.frame_dt;
+        hold.queued.push(input.clone());
+        let version = self.document.version();
+        let ready = self
+            .completing
+            .as_ref()
+            .is_none_or(|open| open.resolved_for(hold.index, version).is_some());
+        if !ready && hold.left > 0.0 {
+            return true;
+        }
+        let hold = self.hold.take().expect("held");
+        self.commit(hold.index);
+        for queued in &hold.queued {
+            let taken = self.keys(queued, page);
+            if taken.tab {
+                cx.focus.claim_tab();
+            }
+            if taken.escape {
+                cx.focus.claim_escape();
+            }
+        }
+        true
     }
 
     /// The pointer on the open list drawn last frame: resting on a row
@@ -498,6 +725,7 @@ impl CodeEditor {
         cx.push_debug_scope_rect("CodeEditor", rect);
         cx.register_focus(id);
         let version = self.document.version();
+        self.asked = None;
         let font = cx.theme.mono_font.clone();
         let metrics = self.metrics(cx.draw_list, cx.styles().scalar(StyleKey::FontSize), &font);
         let status = if self.status { STATUS_HEIGHT } else { 0.0 };
@@ -515,23 +743,30 @@ impl CodeEditor {
             let [x1, y1] = transform.transform_point([body.right(), body.bottom()]);
             Rect::new(x0, y0, x1 - x0, y1 - y0)
         };
+        let page = ((body.height - 2.0 * PAD_Y) / metrics.line_height)
+            .floor()
+            .max(2.0) as isize
+            - 1;
+        // While an accept waits for its item, the frame's input is kept for
+        // after it, and the pointer is left alone.
+        let held = focused && self.holding(cx.input, page, cx);
         // A press on the open list is the list's, not the code's under it.
-        let listed = focused && self.popup_pointer(cx.input, bounds);
-        let mut taken = Taken::default();
-        if focused {
-            let page = ((body.height - 2.0 * PAD_Y) / metrics.line_height)
-                .floor()
-                .max(2.0) as isize
-                - 1;
-            taken = self.keys(cx.input, page);
+        let listed = held || (focused && self.popup_pointer(cx.input, bounds));
+        if focused && self.hold.is_none() && !held {
+            let taken = self.keys(cx.input, page);
             if taken.tab {
                 cx.focus.claim_tab();
             }
             if taken.escape {
                 cx.focus.claim_escape();
             }
-        } else {
+        } else if !focused {
             self.completing = None;
+            self.hold = None;
+        }
+        // A frame by the time a waiting accept gives up, however it began.
+        if let Some(hold) = &self.hold {
+            cx.draw_list.repaint_after(hold.left.max(0.0));
         }
         if self.status {
             // Before the body, so a jump to a problem is drawn this frame.
@@ -550,21 +785,28 @@ impl CodeEditor {
         // from where it was.
         // While its word is out of view (a scroll gliding to it) the list
         // stays open, unshown.
+        // A list still waiting on the host for its first items has nothing
+        // to show.
         let first = self.popup.as_ref().map_or(0, |popup| popup.first);
         self.popup = None;
-        if let (Some(open), Some(word)) = (&self.completing, self.word) {
+        if let (Some(open), Some(word)) = (&self.completing, self.word)
+            && !open.items.is_empty()
+        {
             let styles = cx.styles();
             self.popup = popup::layout(open, word, bounds, first, &styles, cx.draw_list);
             // An editor too short to show a row of it shows no list, so
             // none is left open to take the keys unseen.
             if self.popup.is_none() {
                 self.completing = None;
+                self.hold = None;
             }
         }
+        let resolve = self.resolve_ask();
         cx.pop_debug_scope();
         CodeEditorOutput {
             changed: self.document.version() != version,
-            completion_asked: taken.asked,
+            completion_asked: self.asked,
+            resolve,
         }
     }
 
@@ -594,13 +836,16 @@ impl CodeEditor {
         if !editable {
             self.completing = None;
         }
-        // An open list takes the keys that choose from it.
+        // An open list takes the keys that choose from it, once it has
+        // something to choose; Escape closes one still waiting on the host
+        // too, but is then not the list's.
         if let Some(open) = &mut self.completing {
-            if input.key_up || input.key_down {
+            let shown = !open.items.is_empty();
+            if shown && (input.key_up || input.key_down) {
                 open.step(if input.key_up { -1 } else { 1 });
                 return taken;
             }
-            if input.enter_pressed || input.key_tab {
+            if shown && (input.enter_pressed || input.key_tab) {
                 let chosen = open.chosen;
                 self.accept(chosen);
                 taken.tab = input.key_tab;
@@ -608,8 +853,10 @@ impl CodeEditor {
             }
             if input.key_escape {
                 self.completing = None;
-                taken.escape = true;
-                return taken;
+                taken.escape = shown;
+                if shown {
+                    return taken;
+                }
             }
         }
         let shift = input.shift_pressed;
@@ -701,7 +948,7 @@ impl CodeEditor {
             commands::move_caret(&mut self.document, motion, shift);
         } else if control && space {
             if editable {
-                self.complete(true);
+                self.open_list(Some(CompletionTrigger::Invoked));
                 taken.asked = true;
             }
         } else if input.key_tab && editable {
@@ -750,20 +997,21 @@ impl CodeEditor {
         if moved {
             self.reveal = true;
         }
-        // A word typed opens the list or narrows it, Backspace widens it;
-        // anything else that moves the caret or changes the text closes it.
-        let typed_word = !input.text_input.is_empty()
-            && self.document.version() != version
-            && input
-                .text_input
-                .chars()
-                .last()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        // A word typed opens the list or narrows it, Backspace widens it, a
+        // trigger character opens one after it; anything else that moves
+        // the caret or changes the text closes it.
+        let typed = !input.text_input.is_empty() && self.document.version() != version;
+        let last = input.text_input.chars().last();
+        let typed_word = typed && last.is_some_and(|c| c.is_alphanumeric() || c == '_');
         let backspaced = self.completing.is_some() && input.backspace_pressed && moved;
-        if typed_word || backspaced {
-            self.complete(false);
-        } else if moved && !taken.asked {
-            self.completing = None;
+        match last {
+            Some(c) if typed && editable && self.trigger_characters.contains(&c) => {
+                self.open_list(Some(CompletionTrigger::Character(c)));
+            }
+            _ if typed_word => self.refine_list(true),
+            _ if backspaced => self.refine_list(false),
+            _ if moved && !taken.asked => self.completing = None,
+            _ => {}
         }
         taken
     }

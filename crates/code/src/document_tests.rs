@@ -303,3 +303,16 @@ fn characters_are_counted_in_a_range() {
     assert_eq!(document.chars_in(1..3), 1);
     assert_eq!(document.chars_in(2..2), 0);
 }
+
+#[test]
+fn an_insertion_goes_in_front_of_a_change_starting_where_it_does() {
+    let mut document = Document::new(".");
+    document.edit(
+        vec![change(0..0, "foo"), change(0..1, "")],
+        Selection::caret(3),
+        EditKind::Other,
+    );
+    assert_eq!(document.text(), "foo");
+    assert!(document.undo());
+    assert_eq!(document.text(), ".");
+}
