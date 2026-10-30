@@ -2449,3 +2449,26 @@ editor. Coverage 85 of 91.
       so after a longer value the caret sat past the end and typing inserted
       out of bounds. It now empties the field with `TextInput::clear` first.
       Found by agent-ui's New File prompt.
+
+## 2026-10-29 — Code editor follow-ups (`docs/design/code-editor.md`)
+
+- [x] **Word delete** (Option/Ctrl-Backspace and Delete), **long non-ASCII
+      lines** windowed like ASCII ones, and a **sideways scroll width that
+      shrinks** after an edit: ede1408 and 4e9c726.
+- [x] **Diagnostics.** `Diagnostic` (byte range, `Severity`, message, code)
+      and `CodeEditor::set_diagnostics`; ranges follow the edits made since
+      (`Diagnostics::follow`, fed from the same `take_edits` as the parser).
+      Drawn per line in view: a wavy underline over the visible columns only
+      (`marks::wave`), the worst problem's row wash, gutter dot and number
+      ink; the caret line's band gives way to a wash. The message shows on
+      hover over the underline or the dot, and the status strip counts
+      errors and warnings (a click jumps to the next, wrapping).
+- [x] **Completion.** Opens as a word is typed or on Ctrl-Space (the real
+      Control key on macOS: new `InputState::control_down`); offers the
+      host's items (`set_completions`), `Language::keywords` and the
+      document's other words, gathered once as the list opens. Up/Down,
+      Enter/Tab, Escape, a click or hover on a row; a function gets `()`.
+      `CodeEditorOutput::completion_asked` tells the host Ctrl-Space was
+      pressed. The list and the message are drawn by
+      `CodeEditor::draw_layers` on tooltip layers, so they never take the
+      keyboard from the editor.

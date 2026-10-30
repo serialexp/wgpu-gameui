@@ -45,12 +45,12 @@ still open.
 ## Code editor follow-ups (2026-10-16)
 
 - [ ] **Show IME composition** (preedit) at the caret in `CodeEditor`.
-- [ ] **Word delete and line moves**: Alt/Ctrl-Backspace, Alt-Up/Down.
-- [ ] **Long non-ASCII lines** are shaped whole when in view; window them as ASCII ones are.
-- [ ] **Sideways scroll width never shrinks** (widest line seen so far).
+- [ ] **Line moves**: Alt-Up/Down.
 - [ ] **Injections** (Markdown fences, script in HTML) and **WGSL** (needs a grammar on
       Tree-sitter 0.27).
-- [ ] **Diagnostics and completion** from a language server.
+- [ ] **Diagnostics and completion from a language server**: the widget takes both
+      (`set_diagnostics`, `set_completions`); the client is agent-ui's
+      (`docs/design/code-editor.md`, round three).
 
 ## Video phase 1 follow-ups (review, 2026-10-14)
 

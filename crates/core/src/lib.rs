@@ -354,6 +354,10 @@ pub struct InputState {
     pub shift_pressed: bool,
     /// Ctrl (or Cmd on macOS) key is currently held.
     pub ctrl_pressed: bool,
+    /// The Control key itself is held, on macOS too, where
+    /// [`ctrl_pressed`](Self::ctrl_pressed) is Command: for the shortcuts
+    /// that stay on Control there (Ctrl-Space to complete a word).
+    pub control_down: bool,
     /// Alt (or Option on macOS) is currently held. Held state, like
     /// [`shift_pressed`](Self::shift_pressed)/[`ctrl_pressed`](Self::ctrl_pressed);
     /// cleared by the windowing layer on key-up, not by [`end_frame`](Self::end_frame).
@@ -438,6 +442,7 @@ impl Default for InputState {
             keys: KeyState::default(),
             shift_pressed: false,
             ctrl_pressed: false,
+            control_down: false,
             alt_down: false,
             alt_pressed: false,
             alt_released: false,

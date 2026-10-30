@@ -4,6 +4,7 @@ use std::rc::Rc;
 use wgpu_gameui::{CursorState, FocusState, Theme};
 
 use super::*;
+use crate::CompletionKind;
 
 const ID: FocusId = 7;
 /// Another focusable, after the editor in the Tab ring.
@@ -49,6 +50,11 @@ impl Rig {
 
     /// Draw a frame under `input`.
     fn frame(&mut self, input: &InputState) -> CodeEditorOutput {
+        self.frame_in(RECT, input)
+    }
+
+    /// A frame with the editor in `rect`.
+    fn frame_in(&mut self, rect: Rect, input: &InputState) -> CodeEditorOutput {
         self.list = DrawList::new();
         self.focus.begin_frame(input);
         self.cursor.begin_frame();
@@ -61,7 +67,7 @@ impl Rig {
             600.0,
         )
         .with_cursor(&mut self.cursor);
-        let output = self.editor.draw(ID, RECT, &mut cx);
+        let output = self.editor.draw(ID, rect, &mut cx);
         self.focus.register(NEXT);
         self.focus.end_frame(None);
         output
@@ -980,4 +986,645 @@ fn the_pointer_is_a_text_cursor_over_the_code_and_not_the_numbers() {
         ..InputState::default()
     });
     assert_eq!(rig.cursor.resolve(), CursorIcon::Default);
+}
+
+fn problem(range: Range<usize>, severity: Severity, message: &str) -> Diagnostic {
+    Diagnostic::new(range, severity, message)
+}
+
+/// A frame with the pointer resting at `column` of `line`.
+fn rest(rig: &mut Rig, line: usize, column: f32) {
+    let (x, y) = rig.at(line, column);
+    rig.frame(&InputState {
+        mouse_x: x,
+        mouse_y: y,
+        ..InputState::default()
+    });
+}
+
+#[test]
+fn a_problem_is_underlined_in_its_ink_across_its_columns() {
+    let mut rig = Rig::new("let x = plyer;\nfine\n", Language::Rust);
+    rig.editor
+        .set_diagnostics(vec![problem(8..13, Severity::Error, "unknown")]);
+    rig.idle();
+    let drawn = &rig.editor.drawn;
+    assert_eq!(drawn.waves.len(), 1);
+    let (line, across, severity) = drawn.waves[0].clone();
+    assert_eq!((line, severity), (0, Severity::Error));
+    assert_eq!(across.start, drawn.origin[0] + 8.0 * drawn.advance);
+    assert_eq!(across.end, drawn.origin[0] + 13.0 * drawn.advance);
+    assert_eq!(drawn.washes, vec![(0, Severity::Error)]);
+    assert_eq!(drawn.dots, vec![0]);
+}
+
+#[test]
+fn a_note_gets_a_dot_and_an_underline_but_no_wash() {
+    let mut rig = Rig::new("value\n", Language::Plain);
+    rig.editor
+        .set_diagnostics(vec![problem(0..5, Severity::Info, "unused")]);
+    rig.idle();
+    assert_eq!(rig.editor.drawn.waves.len(), 1);
+    assert!(rig.editor.drawn.washes.is_empty());
+    assert_eq!(rig.editor.drawn.dots, vec![0]);
+}
+
+#[test]
+fn a_line_with_several_is_washed_for_the_worst() {
+    let mut rig = Rig::new("aa bb\n", Language::Plain);
+    rig.editor.set_diagnostics(vec![
+        problem(0..2, Severity::Warning, "w"),
+        problem(3..5, Severity::Error, "e"),
+    ]);
+    rig.idle();
+    assert_eq!(rig.editor.drawn.waves.len(), 2);
+    assert_eq!(rig.editor.drawn.washes, vec![(0, Severity::Error)]);
+}
+
+#[test]
+fn the_caret_lines_band_gives_way_to_a_problems_wash() {
+    let mut rig = Rig::new("bad\ngood\n", Language::Plain).focused();
+    rig.editor
+        .set_diagnostics(vec![problem(0..3, Severity::Error, "e")]);
+    rig.idle();
+    assert!(
+        rig.editor.drawn.band.is_none(),
+        "the caret is on the washed line"
+    );
+    rig.frame(&InputState {
+        key_down: true,
+        ..away()
+    });
+    assert!(rig.editor.drawn.band.is_some());
+}
+
+#[test]
+fn a_problem_follows_the_text_typed_before_it() {
+    let mut rig = Rig::new("x = plyer\n", Language::Plain).focused();
+    rig.editor
+        .set_diagnostics(vec![problem(4..9, Severity::Error, "unknown")]);
+    rig.type_text("let ");
+    let range = rig.editor.diagnostics().all()[0].range.clone();
+    assert_eq!(rig.editor.document().slice(range), "plyer");
+    let drawn = &rig.editor.drawn;
+    assert_eq!(
+        drawn.waves[0].1.start,
+        drawn.origin[0] + 8.0 * drawn.advance
+    );
+}
+
+#[test]
+fn problems_set_after_unseen_edits_are_where_the_text_is_now() {
+    let mut rig = Rig::new("x = plyer\n", Language::Plain).focused();
+    rig.type_text("let ");
+    // Set before the next draw has told anything of the typing: the ranges
+    // are the text's as it is now, and mustn't be moved again by it.
+    rig.editor
+        .set_diagnostics(vec![problem(8..13, Severity::Error, "unknown")]);
+    rig.idle();
+    let range = rig.editor.diagnostics().all()[0].range.clone();
+    assert_eq!(rig.editor.document().slice(range), "plyer");
+}
+
+#[test]
+fn an_empty_problem_at_a_lines_end_is_drawn_as_one_column() {
+    let mut rig = Rig::new("call(\n", Language::Plain);
+    rig.editor
+        .set_diagnostics(vec![problem(5..5, Severity::Error, "expected `)`")]);
+    rig.idle();
+    let drawn = &rig.editor.drawn;
+    let across = drawn.waves[0].1.clone();
+    assert_eq!(across.start, drawn.origin[0] + 5.0 * drawn.advance);
+    assert_eq!(across.end, across.start + drawn.advance);
+}
+
+#[test]
+fn a_problem_over_lines_is_underlined_on_each() {
+    let mut rig = Rig::new("one\ntwo\nthree\n", Language::Plain);
+    rig.editor
+        .set_diagnostics(vec![problem(1..10, Severity::Warning, "w")]);
+    rig.idle();
+    let lines: Vec<usize> = rig.editor.drawn.waves.iter().map(|w| w.0).collect();
+    assert_eq!(lines, vec![0, 1, 2]);
+}
+
+#[test]
+fn only_the_problems_in_view_are_drawn() {
+    // Representative scale: one on each of 10,000 lines.
+    let text = numbered(10_000);
+    let mut rig = Rig::new(&text, Language::Rust);
+    let document = Document::new(&text);
+    let list = (0..10_000)
+        .map(|line| {
+            let start = document.line_start(line) + 4;
+            problem(start..start + 2, Severity::Warning, "w")
+        })
+        .collect();
+    rig.editor.set_diagnostics(list);
+    rig.idle();
+    let lines = rig.editor.drawn.lines.clone();
+    assert_eq!(rig.editor.drawn.waves.len(), lines.len());
+    assert_eq!(rig.editor.diagnostics().count(Severity::Warning), 10_000);
+}
+
+#[test]
+fn resting_on_an_underline_shows_its_message_above_everything() {
+    let mut rig = Rig::new("let x = plyer;\n", Language::Rust);
+    rig.editor.set_diagnostics(vec![
+        problem(8..13, Severity::Error, "cannot find value `plyer`").with_code("E0425"),
+    ]);
+    rig.idle();
+    rest(&mut rig, 0, 10.5);
+    let hover = rig.editor.hover.clone().expect("a message to show");
+    assert_eq!(hover.diagnostic.message, "cannot find value `plyer`");
+    let mut layers = LayerStack::new();
+    let styles = StyleResolver::new(&rig.theme);
+    rig.editor
+        .draw_layers(&mut layers, &styles, Rect::new(0.0, 0.0, 800.0, 600.0));
+    let texts: Vec<&str> = layers.layers()[0]
+        .list
+        .texts
+        .iter()
+        .map(|t| t.content.as_str())
+        .collect();
+    assert_eq!(texts, vec!["ERROR E0425", "cannot find value `plyer`"]);
+    // Below the line.
+    assert!(layers.layers()[0].rect.y >= hover.anchor.bottom());
+}
+
+#[test]
+fn off_the_underline_nothing_shows() {
+    let mut rig = Rig::new("let x = plyer;\n", Language::Rust);
+    rig.editor
+        .set_diagnostics(vec![problem(8..13, Severity::Error, "e")]);
+    rig.idle();
+    rest(&mut rig, 0, 2.5);
+    assert!(rig.editor.hover.is_none());
+    let mut layers = LayerStack::new();
+    let styles = StyleResolver::new(&rig.theme);
+    rig.editor
+        .draw_layers(&mut layers, &styles, Rect::new(0.0, 0.0, 800.0, 600.0));
+    assert!(layers.layers().is_empty());
+}
+
+#[test]
+fn resting_on_the_gutter_dot_shows_the_lines_worst() {
+    let mut rig = Rig::new("aa bb\n", Language::Plain);
+    rig.editor.set_diagnostics(vec![
+        problem(0..2, Severity::Warning, "a warning"),
+        problem(3..5, Severity::Error, "an error"),
+    ]);
+    rig.idle();
+    let (_, y) = rig.at(0, 0.0);
+    let x = RECT.x + DOT_X;
+    rig.frame(&InputState {
+        mouse_x: x,
+        mouse_y: y,
+        ..InputState::default()
+    });
+    let hover = rig.editor.hover.clone().expect("the gutter's message");
+    assert_eq!(hover.diagnostic.message, "an error");
+}
+
+#[test]
+fn the_status_strip_counts_errors_and_warnings() {
+    let mut rig = Rig::new("aa bb cc\n", Language::Plain);
+    rig.editor.set_diagnostics(vec![
+        problem(0..2, Severity::Error, "e"),
+        problem(3..5, Severity::Error, "e"),
+        problem(6..8, Severity::Warning, "w"),
+    ]);
+    rig.idle();
+    let counts = |rig: &Rig, severity| {
+        let rect = rig
+            .editor
+            .drawn
+            .counts
+            .iter()
+            .find(|c| c.0 == severity)
+            .unwrap()
+            .1;
+        rig.list
+            .texts
+            .iter()
+            .find(|t| rect.contains(t.x + 0.5, t.y + 1.0))
+            .map(|t| t.content.clone())
+    };
+    assert_eq!(counts(&rig, Severity::Error).as_deref(), Some("2"));
+    assert_eq!(counts(&rig, Severity::Warning).as_deref(), Some("1"));
+}
+
+#[test]
+fn a_click_on_a_count_goes_to_the_next_of_its_kind() {
+    let mut rig = Rig::new("aa bb cc dd\n", Language::Plain);
+    rig.editor.set_diagnostics(vec![
+        problem(0..2, Severity::Error, "e"),
+        problem(3..5, Severity::Warning, "w"),
+        problem(6..8, Severity::Error, "e"),
+    ]);
+    rig.idle();
+    let errors = rig.editor.drawn.counts[0];
+    assert_eq!(errors.0, Severity::Error);
+    let click = |rig: &mut Rig, rect: Rect| {
+        rig.frame(&InputState {
+            mouse_x: rect.x + 2.0,
+            mouse_y: rect.y + rect.height / 2.0,
+            mouse_down: true,
+            mouse_clicked: true,
+            mouse_click_count: 1,
+            ..InputState::default()
+        });
+    };
+    click(&mut rig, errors.1);
+    assert_eq!(rig.selection(), Selection::caret(6));
+    assert!(rig.focus.is_focused(ID), "the editor takes focus");
+    click(&mut rig, errors.1);
+    assert_eq!(rig.selection(), Selection::caret(0), "wraps round");
+    let warnings = rig.editor.drawn.counts[1].1;
+    click(&mut rig, warnings);
+    assert_eq!(rig.selection(), Selection::caret(3));
+}
+
+fn offered(rig: &Rig) -> Vec<String> {
+    rig.editor
+        .completing
+        .as_ref()
+        .map(|open| open.items.iter().map(|c| c.label.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// The editor holding `text`, focused, the caret at its end.
+fn completing_rig(text: &str, language: Language) -> Rig {
+    let mut rig = Rig::new(text, language).focused();
+    // Cmd-Down on macOS, Ctrl-End elsewhere.
+    let mac = cfg!(target_os = "macos");
+    rig.frame(&InputState {
+        ctrl_pressed: true,
+        key_down: mac,
+        key_end: !mac,
+        ..away()
+    });
+    rig
+}
+
+/// A frame pressing Ctrl-Space (Control itself on macOS).
+fn ctrl_space(rig: &mut Rig) -> CodeEditorOutput {
+    let mut input = InputState {
+        ctrl_pressed: !cfg!(target_os = "macos"),
+        control_down: true,
+        key_space: true,
+        ..away()
+    };
+    input.keys.key_event(Key::Space, true);
+    rig.frame(&input)
+}
+
+#[test]
+fn typing_a_word_offers_the_documents_words_and_keywords() {
+    let mut rig = completing_rig("let player = 1;\nlet plan = 2;\n", Language::Rust);
+    rig.type_text("p");
+    assert_eq!(offered(&rig), vec!["pub", "player", "plan"]);
+    rig.type_text("l");
+    assert_eq!(offered(&rig), vec!["player", "plan"]);
+}
+
+#[test]
+fn a_word_nothing_matches_offers_nothing() {
+    let mut rig = completing_rig("let player = 1;\n", Language::Plain);
+    rig.type_text("zq");
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn up_and_down_choose_and_enter_accepts() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    rig.frame(&InputState {
+        key_down: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.completing.as_ref().unwrap().chosen, 1);
+    let before = rig.selection();
+    assert_eq!(before, rig.selection(), "the caret stays put");
+    let output = rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert!(output.changed);
+    assert_eq!(rig.editor.text(), "player plan\nplan");
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn tab_accepts_and_does_not_move_focus() {
+    let mut rig = completing_rig("player\n", Language::Plain);
+    rig.type_text("pl");
+    rig.frame(&InputState {
+        key_tab: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "player\nplayer");
+    assert!(rig.focus.is_focused(ID));
+}
+
+#[test]
+fn escape_closes_the_list_and_keeps_focus() {
+    let mut rig = completing_rig("player\n", Language::Plain);
+    rig.type_text("pl");
+    let mut input = InputState {
+        key_escape: true,
+        ..away()
+    };
+    input.nav.cancel = true;
+    rig.frame(&input);
+    assert!(!rig.editor.is_completing());
+    assert!(rig.focus.is_focused(ID), "the Escape was the list's");
+}
+
+#[test]
+fn moving_the_caret_or_typing_past_the_word_closes_it() {
+    let mut rig = completing_rig("player\n", Language::Plain);
+    rig.type_text("pl");
+    rig.frame(&InputState {
+        key_left: true,
+        ..away()
+    });
+    assert!(!rig.editor.is_completing());
+    rig.frame(&InputState {
+        key_end: true,
+        ..away()
+    });
+    rig.type_text("a");
+    assert!(rig.editor.is_completing());
+    rig.type_text(" ");
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn backspace_widens_the_match_and_closes_it_with_the_word_gone() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pla");
+    assert_eq!(offered(&rig), vec!["player", "plan"]);
+    rig.frame(&InputState {
+        backspace_pressed: true,
+        ..away()
+    });
+    assert_eq!(offered(&rig), vec!["player", "plan"]);
+    for _ in 0..2 {
+        rig.frame(&InputState {
+            backspace_pressed: true,
+            ..away()
+        });
+    }
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn ctrl_space_opens_it_with_no_word_and_tells_the_host() {
+    let mut rig = completing_rig("player\n", Language::Plain);
+    let output = ctrl_space(&mut rig);
+    assert!(output.completion_asked);
+    assert_eq!(offered(&rig), vec!["player"]);
+    assert!(!rig.editor.text().ends_with("  "), "no space typed");
+}
+
+#[test]
+fn the_hosts_items_come_first_and_reach_an_open_list() {
+    let mut rig = completing_rig("speed\n", Language::Plain);
+    rig.type_text("sp");
+    assert_eq!(offered(&rig), vec!["speed"]);
+    rig.editor.set_completions(vec![
+        Completion::new("spawn", CompletionKind::Function).with_detail("(kind, x, y)"),
+    ]);
+    assert_eq!(offered(&rig), vec!["spawn", "speed"]);
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "speed\nspawn()");
+    assert_eq!(
+        rig.selection().head,
+        "speed\nspawn(".len(),
+        "the caret between"
+    );
+}
+
+#[test]
+fn the_list_is_drawn_under_the_word_above_everything() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    let popup = rig.editor.popup.clone().expect("laid out");
+    let (_, y) = rig.at(1, 0.0);
+    assert!(popup.rect.y >= y - rig.editor.drawn.line_height / 2.0 + rig.editor.drawn.line_height);
+    let mut layers = LayerStack::new();
+    let styles = StyleResolver::new(&rig.theme);
+    rig.editor
+        .draw_layers(&mut layers, &styles, Rect::new(0.0, 0.0, 800.0, 600.0));
+    let texts: Vec<&str> = layers.layers()[0]
+        .list
+        .texts
+        .iter()
+        .map(|t| t.content.as_str())
+        .collect();
+    assert_eq!(texts, vec!["v", "pl", "ayer", "v", "pl", "an"]);
+}
+
+#[test]
+fn a_click_on_a_row_accepts_it_and_not_the_code_under_it() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    let row = rig.editor.popup.clone().unwrap().rows[1];
+    let caret = rig.selection();
+    rig.frame(&InputState {
+        mouse_x: row.x + 4.0,
+        mouse_y: row.y + 4.0,
+        mouse_down: true,
+        mouse_clicked: true,
+        mouse_click_count: 1,
+        ..InputState::default()
+    });
+    assert_eq!(rig.editor.text(), "player plan\nplan");
+    assert_eq!(
+        rig.selection().head,
+        caret.head + 2,
+        "the caret after the word, not the click"
+    );
+    assert!(rig.focus.is_focused(ID));
+}
+
+#[test]
+fn resting_on_a_row_chooses_it() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    let row = rig.editor.popup.clone().unwrap().rows[1];
+    rig.frame(&InputState {
+        mouse_x: row.x + 4.0,
+        mouse_y: row.y + 4.0,
+        ..InputState::default()
+    });
+    assert_eq!(rig.editor.completing.as_ref().unwrap().chosen, 1);
+}
+
+#[test]
+fn a_click_in_the_code_closes_it() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    rig.click(0, 1.0, 1);
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn losing_focus_closes_it() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    rig.focus.focus(NEXT);
+    rig.idle();
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn a_read_only_editor_never_completes() {
+    let mut rig = Rig::with(CodeEditor::new("player\n", Language::Plain).read_only(true)).focused();
+    ctrl_space(&mut rig);
+    assert!(!rig.editor.is_completing());
+}
+
+#[test]
+fn opening_reads_the_document_once_however_long_it_is_typed_into() {
+    // Representative scale: 30,000 lines. The words are gathered as the list
+    // opens; narrowing it matches what was gathered.
+    let text: String = (0..30_000)
+        .map(|n| format!("let value{n} = {n};\n"))
+        .collect();
+    let mut rig = completing_rig(&text, Language::Rust);
+    rig.type_text("v");
+    let pool = rig.editor.completing.as_ref().unwrap().pool.len();
+    assert!(pool > 30_000, "{pool}");
+    rig.type_text("alue2999");
+    assert_eq!(
+        rig.editor.completing.as_ref().unwrap().pool.len(),
+        pool,
+        "not gathered again"
+    );
+    let expected: Vec<String> = (29_990..29_998).map(|n| format!("value{n}")).collect();
+    assert_eq!(offered(&rig), expected, "the word typed itself left out");
+}
+
+#[test]
+fn a_jump_to_a_problem_closes_the_list_for_the_word_left_behind() {
+    let mut rig = completing_rig("player\n", Language::Plain);
+    rig.type_text("pl");
+    rig.type_text("\nbad");
+    rig.frame(&InputState {
+        key_up: true,
+        ..away()
+    });
+    rig.frame(&InputState {
+        key_end: true,
+        ..away()
+    });
+    rig.frame(&InputState {
+        backspace_pressed: true,
+        ..away()
+    });
+    rig.type_text("l");
+    assert!(rig.editor.is_completing());
+    rig.editor
+        .set_diagnostics(vec![problem(10..13, Severity::Error, "bad")]);
+    rig.idle();
+    let errors = rig.editor.drawn.counts[0].1;
+    rig.frame(&InputState {
+        mouse_x: errors.x + 2.0,
+        mouse_y: errors.y + errors.height / 2.0,
+        mouse_down: true,
+        mouse_clicked: true,
+        mouse_click_count: 1,
+        ..InputState::default()
+    });
+    assert!(!rig.editor.is_completing());
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(
+        rig.editor.text(),
+        "player\npl\n\nbad",
+        "Enter was a newline"
+    );
+}
+
+#[test]
+fn turning_read_only_closes_the_list() {
+    let mut rig = completing_rig("player\n", Language::Plain);
+    rig.type_text("pl");
+    let row = rig.editor.popup.clone().unwrap().rows[0];
+    rig.editor.set_read_only(true);
+    assert!(!rig.editor.is_completing());
+    rig.frame(&InputState {
+        mouse_x: row.x + 4.0,
+        mouse_y: row.y + 4.0,
+        mouse_down: true,
+        mouse_clicked: true,
+        mouse_click_count: 1,
+        ..InputState::default()
+    });
+    rig.frame(&InputState {
+        enter_pressed: true,
+        ..away()
+    });
+    assert_eq!(rig.editor.text(), "player\npl");
+}
+
+#[test]
+fn a_short_editor_keeps_the_list_inside_it() {
+    let text: String = (0..8).map(|n| format!("item{n} ")).collect();
+    let mut rig = completing_rig(&text, Language::Plain);
+    let short = Rect::new(0.0, 0.0, 600.0, 90.0);
+    rig.frame_in(
+        short,
+        &InputState {
+            text_input: "it".into(),
+            ..away()
+        },
+    );
+    let popup = rig.editor.popup.clone().unwrap();
+    assert!(
+        popup.rect.y >= 0.0 && popup.rect.bottom() <= short.height,
+        "{popup:?}"
+    );
+    assert!(popup.rows.len() < 8);
+    // Down to the last item scrolls the list to it.
+    for _ in 0..7 {
+        rig.frame_in(
+            short,
+            &InputState {
+                key_down: true,
+                ..away()
+            },
+        );
+    }
+    let popup = rig.editor.popup.clone().unwrap();
+    let last = *popup.rows.last().unwrap();
+    assert_eq!(popup.row_at(last.x + 1.0, last.y + 1.0), Some(7));
+}
+
+#[test]
+fn a_click_where_the_list_was_before_a_resize_is_not_the_lists() {
+    let mut rig = completing_rig("player plan\n", Language::Plain);
+    rig.type_text("pl");
+    let row = rig.editor.popup.clone().unwrap().rows[1];
+    let moved = Rect::new(RECT.x, RECT.y + 40.0, RECT.width, RECT.height - 40.0);
+    rig.frame_in(
+        moved,
+        &InputState {
+            mouse_x: row.x + 4.0,
+            mouse_y: row.y + 4.0,
+            mouse_down: true,
+            mouse_clicked: true,
+            mouse_click_count: 1,
+            ..InputState::default()
+        },
+    );
+    assert_eq!(rig.editor.text(), "player plan\npl", "nothing accepted");
+    assert!(!rig.editor.is_completing(), "the click went to the code");
 }

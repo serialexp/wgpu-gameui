@@ -57,13 +57,18 @@ impl Syntax {
     /// Catch up with `document`'s edits since the last parse.
     pub fn update(&mut self, document: &mut Document) {
         let edits = document.take_edits();
+        self.follow(document, &edits);
+    }
+
+    /// Catch up with `edits`, taken from `document` since the last parse.
+    pub fn follow(&mut self, document: &Document, edits: &[TextEdit]) {
         let Some((parser, tree)) = &mut self.parsed else {
             return;
         };
         if edits.is_empty() {
             return;
         }
-        for edit in &edits {
+        for edit in edits {
             tree.edit(&input_edit(edit));
         }
         if let Some(new) = parse(parser, document, Some(tree)) {

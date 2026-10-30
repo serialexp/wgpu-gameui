@@ -203,6 +203,13 @@ impl Document {
         self.rope.byte_to_line(at)
     }
 
+    /// `at`, kept to the text and moved back to the start of the character
+    /// it falls inside.
+    pub fn boundary(&self, at: usize) -> usize {
+        let at = at.min(self.rope.len_bytes());
+        self.rope.char_to_byte(self.rope.byte_to_char(at))
+    }
+
     /// The character just before `at`, a line ending's too.
     pub fn char_before(&self, at: usize) -> Option<char> {
         let index = self.rope.byte_to_char(at);

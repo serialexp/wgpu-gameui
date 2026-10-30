@@ -223,3 +223,17 @@ fn modifier_sets_combine() {
     assert!(both.control && both.shift && !both.alt && !both.logo);
     assert!(HeldModifiers::default().is_empty() && !HeldModifiers::LOGO.is_empty());
 }
+
+#[test]
+fn control_is_held_as_itself_whatever_the_shortcut_key_is() {
+    let mut input = InputState::default();
+    input.apply(&HostEvent::Modifiers(HeldModifiers::CONTROL));
+    assert!(input.control_down);
+    // Control is the shortcut key everywhere but macOS.
+    assert_eq!(input.ctrl_pressed, !cfg!(target_os = "macos"));
+    input.apply(&HostEvent::Modifiers(HeldModifiers::default()));
+    assert!(!input.control_down);
+    input.apply(&HostEvent::Modifiers(primary()));
+    assert!(input.ctrl_pressed);
+    assert_eq!(input.control_down, !cfg!(target_os = "macos"));
+}

@@ -203,6 +203,7 @@ impl InputState {
             HostEvent::Modifiers(held) => {
                 self.shift_pressed = held.shift;
                 self.ctrl_pressed = held.primary();
+                self.control_down = held.control;
                 self.alt_pressed |= held.alt && !self.alt_down;
                 self.alt_released |= !held.alt && self.alt_down;
                 self.alt_down = held.alt;
