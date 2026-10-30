@@ -65,7 +65,9 @@ Tracking the gap between this design and what's on the main branch.
 Round three, language servers (agent-ui; see [Round three design](#round-three-design)):
 
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
-- [ ] R3.6 tried with `typescript-language-server` and `gopls` (an ignored test, and the app)
+- [ ] R3.6 tried with `typescript-language-server` and `gopls` (an ignored test, and the app).
+  The ignored tests pass, and what they found is fixed (agent-ui 980939b; see the update
+  under Tests); the Files tab by hand is still to do
 - [ ] R3.7 overrides and additions to the built-in list in the server's settings (deferred:
   after R3.6, and see question 1's update)
 - [ ] Incremental text sync (`didChange` with ranges) (deferred: whole text first)
@@ -687,6 +689,27 @@ All under the existing login and peer gate.
   `gopls` (problems after a dependency changes on disk), an `#[ignore]`d test that runs only
   when the command is installed, and the Files tab.
 
+> **2026-10-30 update (R3.6, agent-ui 980939b):** the ignored tests are
+> `real_gopls_gives_problems_and_completions` and
+> `real_typescript_gives_problems_completions_and_an_import` in
+> `crates/server/src/language_servers_tests.rs` (run with
+> `cargo test -p agent-ui-server -- --ignored language_servers::tests::real_`). Both pass with
+> gopls and typescript-language-server 6.0.2 (TypeScript 6.0.3). Trying them found two things,
+> both fixed:
+> - typescript-language-server installed globally found no TypeScript in a project without
+>   its own, and stopped. It is now started with `initializationOptions.tsserver.fallbackPath
+>   = "tsserver"`, which it uses only then, looked up on the `PATH` it runs with (a global
+>   `npm install -g typescript` puts `tsserver` beside it). `SessionOptions::initialization`
+>   and `ServerKind::initialization` carry it.
+> - TypeScript lists everything in scope whatever was typed, auto-imports last, so the
+>   1,000-item cut dropped the very item being typed. A list over the limit now keeps only
+>   the items the typed word matches (the editor's case-insensitive prefix, on the filter
+>   text else the label) before it is cut. It is still called incomplete.
+>
+> Not tried yet: the Files tab by hand, which needs the server restarted on this code, and
+> gopls seeing a dependency change on disk. TypeScript 7 (the native port) ships no
+> `tsserver.js`, so typescript-language-server can't use it; see question 7.
+
 ### Security
 
 A language server runs code from the project: rust-analyzer runs build scripts and
@@ -704,3 +727,11 @@ routes.
 6. **Overrides (R3.7).** A `language_servers` list in `ServerSettings`, each entry an
    extension list, a command with arguments, and root markers, ahead of the built-in rows;
    edited in Settings → Server. Proposed, deferred until the built-in list has been tried.
+7. **TypeScript 7.** The native port has its own server, `tsc --lsp --stdio`, and no
+   `tsserver.js`, so typescript-language-server works only with TypeScript 6 or older.
+   Options: keep typescript-language-server only (TypeScript 7 projects get the global
+   TypeScript 6's view of them); try `tsc --lsp --stdio` first and fall back to
+   typescript-language-server (but a `tsc` on the `PATH` older than 7 has no `--lsp`, so it
+   needs a version check, or the project's own `node_modules/.bin/tsc`); or the project's
+   own TypeScript picks: 7 runs its `tsc --lsp`, anything older runs
+   typescript-language-server. Open, for Bart.
