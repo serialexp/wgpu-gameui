@@ -54,14 +54,14 @@ Tracking the gap between this design and what's on the main branch.
   process groups and bounded waits; the routes; saves reported as `didSave`; tested against
   an in-process fake server and real script processes (agent-ui a59e18d). See the update
   under Routes
+- [x] R3.4 server: file watching for servers that register for it
+  (`workspace/didChangeWatchedFiles`) (agent-ui bad758d). See the update under Watched files
 
 ### Outstanding
 
 Round three, language servers (agent-ui; see [Round three design](#round-three-design)):
 
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
-- [ ] R3.4 server: file watching for servers that register for it
-  (`workspace/didChangeWatchedFiles`)
 - [ ] R3.5 desktop: following the open file's events, sending its text as it is edited
   (debounced), asking for completions and resolving the one accepted, handing all of it to
   the editor
@@ -550,6 +550,29 @@ being told when files change outside the editor (an agent editing a dependency, 
 - A base that can't be watched (the watch limit reached) sends a `degraded {message}` event
   to the session's openings, which the Files tab shows, and the server only learns of
   changes to its open documents.
+
+> **2026-10-30 update (R3.4, agent-ui bad758d):** registrations are parsed and matched in
+> `crates/lsp/src/watch.rs` (`Watches`); the session publishes them (`Session::watches`),
+> takes changes (`Session::changed`) and tells openings it is degraded
+> (`Session::degraded`). The disk side is `crates/server/src/language_watch.rs`. What was
+> added beyond the text above, mostly from review:
+> - One watch per folder on Linux only. macOS and Windows watch each base recursively and
+>   drop changes in a left-out folder instead. On Linux at most 50,000 folders are watched
+>   per server.
+> - A base reached through a link is watched at its real path, and changes are named as the
+>   server named the base (through every base a change is in). A folder that holds a base
+>   is never left out. Walks never follow links, and a folder made later is walked only
+>   when its real path is its own, inside home and inside a base.
+> - A base not there yet is waited for: its nearest folder is watched on its own, and when
+>   the base comes it is watched, with its files told as created. Files in a folder made
+>   (or moved in) are told as created too.
+> - A folder that goes is told as deleted (`FileChange::FolderDeleted`) to a watcher that
+>   could want anything in it, since its files went with it. On Linux, the watches below it
+>   are let go.
+> - Changes are gathered for 100 ms and sent as one notification. Only a change that
+>   repeats a path's last one is dropped, so the last state is the one told.
+> - Missed changes (a watch error, or an overflow asking for a rescan) re-watch the bases
+>   and tell the openings it is degraded, once per server.
 
 ### Routes
 
