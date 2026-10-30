@@ -56,15 +56,15 @@ Tracking the gap between this design and what's on the main branch.
   under Routes
 - [x] R3.4 server: file watching for servers that register for it
   (`workspace/didChangeWatchedFiles`) (agent-ui bad758d). See the update under Watched files
+- [x] R3.5 desktop: following the open file's events, sending its text as it is edited
+  (debounced), asking for completions and resolving the one accepted, handing all of it to
+  the editor (agent-ui efcd480). See the update under Completion
 
 ### Outstanding
 
 Round three, language servers (agent-ui; see [Round three design](#round-three-design)):
 
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
-- [ ] R3.5 desktop: following the open file's events, sending its text as it is edited
-  (debounced), asking for completions and resolving the one accepted, handing all of it to
-  the editor
 - [ ] R3.6 tried with `typescript-language-server` and `gopls` (an ignored test, and the app)
 - [ ] R3.7 overrides and additions to the built-in list in the server's settings (deferred:
   after R3.6, and see question 1's update)
@@ -527,6 +527,23 @@ and `initialized` sent before any `didOpen`; a document's `didOpen` comes before
   Variable.
 - **Trigger characters** come from the server's `completionProvider.triggerCharacters` in
   the opening's first event.
+
+> **2026-10-30 update (R3.5, agent-ui efcd480):** built in agent-ui's
+> `crates/desktop/src/files_language.rs` (one `FileLanguage` per followed text) and
+> `crates/desktop/src/working_client/language.rs`. The Files tab follows the open text when
+> it was read whole. Each editor is a new follow (a file read again starts its versions over),
+> and each follow has a number that comes back with its stream's events, so a replaced
+> follow's late `failed` or break is dropped. The text goes at once when nothing went in the
+> last 300 ms, else when that is up, with a frame asked for then. Ctrl-Space and
+> trigger-character asks send it at once. A re-ask of an incomplete list and a resolve wait
+> for the text they need: only the latest of each goes, and one for a text the editor has
+> since left is dropped. Texts, asks and saves share one ordered worker. A batch drops a text
+> that a later text of the same opening replaces, unless a kept ask or save between them
+> needs it. Each job carries the login it was asked under, and sends nothing once another
+> login has begun (`Api::under`). Logging out now also ends the file watch and the language
+> follow. Only single-character triggers are used: `::` opens the list on its `:` only when
+> the server names `:` as well. A server's `degraded` and `failed` messages are toasted,
+> each once.
 
 ### Watched files (R3.4)
 
