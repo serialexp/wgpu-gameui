@@ -25,17 +25,17 @@ Tracking the gap between this design and what's on the main branch.
 - [x] agent-ui's Files tab shows text in it, read-only (frameless, `with_frame(false)`), and
   since 2026-10-29 edits and saves it (agent-ui 0ddc072)
 - [x] Diagnostics in: `Diagnostic` (byte range, severity, message, code) and
-  `CodeEditor::set_diagnostics`; ranges move with the edits made since (uncommitted)
+  `CodeEditor::set_diagnostics`; ranges move with the edits made since (41413a3)
 - [x] Diagnostics drawn: the wavy underline in the severity's ink, the row wash, the gutter
-  dot and number ink (uncommitted)
+  dot and number ink (41413a3)
 - [x] The message on hover (over the underline or the gutter dot), drawn by
-  `CodeEditor::draw_layers` (uncommitted; see the update under Diagnostics)
-- [x] Problem counts in the status strip; a click jumps to the next one (uncommitted)
+  `CodeEditor::draw_layers` (41413a3; see the update under Diagnostics)
+- [x] Problem counts in the status strip; a click jumps to the next one (41413a3)
 - [x] Completion: the list as a word is typed or on Ctrl-Space, offering the host's items,
   the language's keywords and the document's other words; Up/Down, Enter/Tab, Escape, a
-  click on a row; a function accepted gets `()` with the caret between (uncommitted)
+  click on a row; a function accepted gets `()` with the caret between (41413a3)
 - [x] agent-ui's Files tab calls `draw_layers`, so the list and messages show there
-  (uncommitted)
+  (agent-ui e6af3bb)
 
 ### Outstanding
 
