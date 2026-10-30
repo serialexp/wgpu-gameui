@@ -49,16 +49,17 @@ Tracking the gap between this design and what's on the main branch.
   and the text of the latest, positions converted to and from bytes; tested against an
   in-process fake server (agent-ui bc1e756). The wire shapes landed with it, in
   `crates/protocol/src/language.rs`; see the update under the session actor
+- [x] R3.3 server: the built-in server list, finding a file's project root, one session per
+  (command, root) started on first use and stopped a while after its last document closes,
+  process groups and bounded waits; the routes; saves reported as `didSave`; tested against
+  an in-process fake server and real script processes (agent-ui a59e18d). See the update
+  under Routes
 
 ### Outstanding
 
 Round three, language servers (agent-ui; see [Round three design](#round-three-design)):
 
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
-- [ ] R3.3 server: the built-in server list, finding a file's project root, one session per
-  (command, root) started on first use and stopped a while after its last document closes,
-  process groups and bounded waits; the routes; saves reported as `didSave`; tested against
-  a fake server process
 - [ ] R3.4 server: file watching for servers that register for it
   (`workspace/didChangeWatchedFiles`)
 - [ ] R3.5 desktop: following the open file's events, sending its text as it is edited
@@ -566,6 +567,24 @@ All under the existing login and peer gate.
 - `POST /api/v1/language/resolve` `{path, opening, revision, key}`: the chosen item's extra
   edits (in that revision's text) and detail; stale when the key is from an older completion
   request or the revision is not the latest.
+
+> **2026-10-30 update (R3.3, agent-ui a59e18d):** built in
+> `crates/server/src/language_servers.rs`.
+> - The request statuses are: `409` when the opening no longer follows the file or its
+>   server ended; `412` for a stale key or a revision that isn't the latest; `501` when the
+>   server can't do it; `504` when it timed out; `502` when the server failed it. Without a
+>   home folder the routes give `503`, as they do once the server is shutting down.
+> - A server that isn't installed, or keeps stopping as it starts, gives a stream with only
+>   `failed` (not a status), so the desktop shows why.
+> - Starting a server goes through a `Launch` trait: `find` searches the `PATH` (absolute
+>   entries only), `~/.cargo/bin`, `~/go/bin`, `~/.local/bin` and nvm's newest node, and
+>   `launch` spawns it in its own process group. Both run off the async runtime and outside
+>   the hub's lock. The lookup, the cooldown check and joining the session happen under one
+>   lock, so a sweep or an end can't come between them; a launch that loses a race, or
+>   finishes after a cooldown or shutdown began, is dropped, which kills it.
+> - Each idle server has one grace timer, cancelled when a file follows it again.
+> - On shutdown, `stop_all` asks every server to shut down and waits at most twice the
+>   shutdown wait, plus a second.
 
 ### R3.1 gameui changes
 
