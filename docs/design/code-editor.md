@@ -572,8 +572,9 @@ All under the existing login and peer gate.
 > `crates/server/src/language_servers.rs`.
 > - The request statuses are: `409` when the opening no longer follows the file or its
 >   server ended; `412` for a stale key or a revision that isn't the latest; `501` when the
->   server can't do it; `504` when it timed out; `502` when the server failed it. Without a
->   home folder the routes give `503`, as they do once the server is shutting down.
+>   server can't do it; `504` when it timed out; `502` when the server failed it. Following
+>   (`events`) gives `503` without a home folder, or once the server is shutting down; the
+>   other routes need an opening, so they give `409` then.
 > - A server that isn't installed, or keeps stopping as it starts, gives a stream with only
 >   `failed` (not a status), so the desktop shows why.
 > - Starting a server goes through a `Launch` trait: `find` searches the `PATH` (absolute
