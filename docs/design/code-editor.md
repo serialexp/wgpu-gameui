@@ -59,6 +59,10 @@ Tracking the gap between this design and what's on the main branch.
 - [x] R3.5 desktop: following the open file's events, sending its text as it is edited
   (debounced), asking for completions and resolving the one accepted, handing all of it to
   the editor (agent-ui efcd480). See the update under Completion
+- [x] TypeScript 7's own server (`tsc --lsp --stdio`) for a project whose first `tsc` found
+  is 7 or later, else typescript-language-server (question 7), and pull diagnostics
+  (`textDocument/diagnostic`), which TypeScript 7 needs and rust-analyzer then uses
+  (agent-ui ef8c7c3). See the update under Tests
 
 ### Outstanding
 
@@ -67,12 +71,11 @@ Round three, language servers (agent-ui; see [Round three design](#round-three-d
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
 - [ ] R3.6 tried with `typescript-language-server` and `gopls` (an ignored test, and the app).
   The ignored tests pass, and what they found is fixed (agent-ui 980939b; see the update
-  under Tests); the Files tab by hand is still to do
+  under Tests), with TypeScript 7 and rust-analyzer tried too (agent-ui ef8c7c3); the
+  Files tab by hand, and gopls after a dependency changes on disk, are still to do
 - [ ] R3.7 overrides and additions to the built-in list in the server's settings (deferred:
   after R3.6, and see question 1's update)
 - [ ] Incremental text sync (`didChange` with ranges) (deferred: whole text first)
-- [ ] Pull diagnostics (`textDocument/diagnostic`) for servers that only offer those
-  (deferred: the servers tried push theirs)
 
 Later:
 
@@ -710,6 +713,26 @@ All under the existing login and peer gate.
 > gopls seeing a dependency change on disk. TypeScript 7 (the native port) ships no
 > `tsserver.js`, so typescript-language-server can't use it; see question 7.
 
+> **2026-10-30 update (agent-ui ef8c7c3):** TypeScript 7 runs as its own server (question
+> 7's answer). Trying it found that it gives a file's problems only when asked
+> (`textDocument/diagnostic`, "pull" diagnostics); it pushes none for an open file. The
+> session now does both:
+> - It tells servers it can ask (`textDocument.diagnostic`) and that it handles
+>   `workspace/diagnostic/refresh`. A server offering `diagnosticProvider` is asked after
+>   each text; an ask a newer text overtakes is cancelled and its answer dropped. A server
+>   that cancels an ask and says to retry (`ServerCancelled`) is asked again, up to three
+>   times; a refresh asks again for every open file. When it says a file's problems hang on
+>   others (`interFileDependencies`), the other open files are asked again when one changes,
+>   closes, or a watched file changes on disk.
+> - rust-analyzer always offers `diagnosticProvider`, and once the client can ask it stops
+>   pushing its own problems but still pushes `cargo check`'s. So pushed and asked-for
+>   problems are kept apart for each text and shown together; asked-for ones are always for
+>   their text, so a `problems` event is exact unless pushed ones are unversioned.
+>
+> New ignored tests: `real_typescript_7_is_its_own_server` (installs TypeScript 7 into its
+> project with npm) and `real_rust_analyzer_gives_problems_and_completions`. All four real
+> tests pass.
+
 ### Security
 
 A language server runs code from the project: rust-analyzer runs build scripts and
@@ -735,3 +758,15 @@ routes.
    needs a version check, or the project's own `node_modules/.bin/tsc`); or the project's
    own TypeScript picks: 7 runs its `tsc --lsp`, anything older runs
    typescript-language-server. Open, for Bart.
+
+   > **Answered 2026-10-30 (Bart): the version check, the project's own `tsc` first.**
+   > Neither version's `tsc --help` lists `--lsp`, and TypeScript 6 rejects it, so the
+   > first `tsc` found (the project's `node_modules/.bin`, nearest first from its root and
+   > within home, then the search path) is asked `--version`. 7 or later runs
+   > `tsc --lsp --stdio`; anything older, or no `tsc`, runs typescript-language-server, also
+   > looked for in the project first. A project's own TypeScript 6 decides even with a 7 on
+   > the `PATH`. The answer is kept per program and its change time, so an upgrade is asked
+   > again, and one that said nothing (it failed to start, or took over 10 s) is asked again
+   > next time. `ServerKind.commands` became a list of `ServerCommand`s (program, arguments,
+   > `node_local`, `since`, `initialization`); the server's name is its program. Shipped in
+   > agent-ui ef8c7c3.
