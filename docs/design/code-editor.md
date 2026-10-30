@@ -44,16 +44,17 @@ Tracking the gap between this design and what's on the main branch.
   revision the desktop sends is `document().version()`; a waiting accept counts its second
   down with each frame's `frame_dt` and asks for a frame by its end; a list that comes while
   an accept waits is dropped, so the item accepted stays the one taken
+- [x] R3.2 `crates/lsp`: message framing, requests and replies, a session actor that owns
+  the process and serializes everything sent to it, documents with the server's versions
+  and the text of the latest, positions converted to and from bytes; tested against an
+  in-process fake server (agent-ui bc1e756). The wire shapes landed with it, in
+  `crates/protocol/src/language.rs`; see the update under the session actor
 
 ### Outstanding
 
 Round three, language servers (agent-ui; see [Round three design](#round-three-design)):
 
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
-- [ ] R3.2 `crates/lsp`: message framing, requests and replies, a session actor that owns
-  the process and serializes everything sent to it, documents with the server's versions
-  and the text of the latest, positions converted to and from bytes; tested against an
-  in-process fake server
 - [ ] R3.3 server: the built-in server list, finding a file's project root, one session per
   (command, root) started on first use and stopped a while after its last document closes,
   process groups and bounded waits; the routes; saves reported as `didSave`; tested against
@@ -382,6 +383,29 @@ and `initialized` sent before any `didOpen`; a document's `didOpen` comes before
 - **Stopping when unused:** when its last document closes, a grace starts (five minutes,
   `LANGUAGE_SERVER_GRACE`); an opening during it cancels it. The grace takes its clock as an
   argument, so its tests count, never wait.
+
+> **2026-10-30 update (R3.2, agent-ui bc1e756):** built as `agent_ui_lsp::Session`, with
+> these choices the text above doesn't make:
+>
+> - The actor doesn't spawn the process. `Session::start` takes the pipes and a value to
+>   keep, which the hub (R3.3) makes the process guard; the actor drops it last, after the
+>   cleanup.
+> - Every request is sent to the actor when it is called, not when it is awaited, so two
+>   requests keep their order however the caller awaits them.
+> - Versions are counted per session, not per document, so a file closed and opened again
+>   never reuses a version that a late `publishDiagnostics` could still name.
+> - The client offers `snippetSupport: false` and `insertReplaceSupport: false`. A server
+>   that sends an insert-and-replace edit anyway has its insert range used, which ends at
+>   the caret. Lists are cut at 1,000 items (`MAX_COMPLETIONS`) and called incomplete when
+>   cut.
+> - An item with `insertText` and no edit gets an edit over the word before the caret,
+>   found as the editor finds it (letters, digits and `_`, not starting with a digit). An
+>   item with neither has no edit, and the editor puts its label over the word.
+> - A completion asked inside a character or a line ending is asked before it, and its
+>   items' edits are in those bytes.
+> - The pipes closing or failing either way ends the session (a server that stops reading
+>   is caught when a write fails).
+> - Registrations are answered but not yet kept; R3.4 keeps them.
 
 ### Positions
 
