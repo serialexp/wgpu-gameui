@@ -36,17 +36,20 @@ Tracking the gap between this design and what's on the main branch.
   click on a row; a function accepted gets `()` with the caret between (41413a3)
 - [x] agent-ui's Files tab calls `draw_layers`, so the list and messages show there
   (agent-ui e6af3bb)
+- [x] R3.1 gameui: numbered completion asks with their trigger, the host's items offered
+  for one ask, items that carry their own edit (a range and text) and extra edits, filtered
+  by `filter_text` and kept in the server's order, a list longer than the rows shown, a
+  re-ask while an incomplete list narrows, trigger characters, edits mapped through the
+  typing since the ask, and the chosen item resolved before it is accepted (3fa7955). The
+  revision the desktop sends is `document().version()`; a waiting accept counts its second
+  down with each frame's `frame_dt` and asks for a frame by its end; a list that comes while
+  an accept waits is dropped, so the item accepted stays the one taken
 
 ### Outstanding
 
 Round three, language servers (agent-ui; see [Round three design](#round-three-design)):
 
 - [x] Design the client from the answered questions below (this doc, 2026-10-30)
-- [ ] R3.1 gameui: numbered completion asks with their trigger, the host's items offered
-  for one ask, items that carry their own edit (a range and text) and extra edits, filtered
-  by `filter_text` and kept in the server's order, a list longer than the rows shown, a
-  re-ask while an incomplete list narrows, trigger characters, edits mapped through the
-  typing since the ask, and the chosen item resolved before it is accepted
 - [ ] R3.2 `crates/lsp`: message framing, requests and replies, a session actor that owns
   the process and serializes everything sent to it, documents with the server's versions
   and the text of the latest, positions converted to and from bytes; tested against an
