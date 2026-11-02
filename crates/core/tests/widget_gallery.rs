@@ -52,9 +52,9 @@ use wgpu_gameui::{
     COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE, DropZone, EmptyState, FieldLabel, Ink,
     MINI_METER_WARN, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT, STATUS_BAR_HEIGHT,
     STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status, StatusIcon, StatusPart,
-    StatusToggle, StatusZone, TextSize, WELL_CHIP_HEIGHT, Waffle, WaffleCategory, WaffleFill,
-    WellChip, WellChipPart, ZonedStatusBar, dots, draw_combo_trigger, draw_curve_editor,
-    draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar, draw_tag_input,
+    StatusToggle, StatusZone, TagInput, TextSize, WELL_CHIP_HEIGHT, Waffle, WaffleCategory,
+    WaffleFill, WellChip, WellChipPart, ZonedStatusBar, dots, draw_combo_trigger,
+    draw_curve_editor, draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar,
     inline_meter, keycap, mini_meter, place_popover, skeleton, spinner, stacked_bar, toolbar_band,
 };
 use wgpu_gameui::{
@@ -6892,12 +6892,21 @@ fn render_widget_gallery() {
 
         flow.section(list, Category::Forms, "TagInput", "");
         {
-            // Committed tags + an empty draft.
-            let r_tags = flow.cell(list, "Tags", 220.0, 48.0);
-            let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
-            let tags = vec!["occlusion".to_string(), "static".to_string()];
-            let mut draft = String::new();
-            let _ = draw_tag_input(r_tags, &tags, &mut draft, false, &mut tctx);
+            // Tags wrapping onto a second line, then one refused.
+            let tags: Vec<String> = ["occlusion", "static", "shadow", "baked"]
+                .map(String::from)
+                .to_vec();
+            let styles = StyleResolver::new(&theme);
+            for (label, invalid) in [("Tags", false), ("Invalid", true)] {
+                let field = TagInput::new(&tags)
+                    .placeholder("Add tag\u{2026}")
+                    .invalid(invalid);
+                let height = field.height(200.0, list, &styles);
+                let r_tags = flow.cell(list, label, 200.0, height);
+                let mut tctx = DrawContext::new(list, &mut focus, &theme, &input, W as f32, 600.0);
+                let mut typing = TextInput::new(0.0, 0.0, 1.0, 1.0);
+                let _ = field.draw(&mut typing, 9100 + invalid as u64, r_tags, &mut tctx);
+            }
         }
 
         flow.section(list, Category::Forms, "ComboBox", "combo trigger");

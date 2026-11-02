@@ -456,19 +456,6 @@ pub(crate) fn sheen_over(base: [f32; 4], sheen: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Derive a stable [`FocusId`](crate::FocusId) from a name + rect, for
-/// stateless widgets that still want click-to-focus (the id is stable across
-/// frames as long as the field doesn't move; movement merely re-keys it).
-pub(crate) fn focus_id_for(name: &str, rect: &Rect) -> crate::FocusId {
-    let mut h = crate::style::fnv1a64(name);
-    for v in [rect.x, rect.y, rect.width, rect.height] {
-        for b in v.to_bits().to_le_bytes() {
-            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
-        }
-    }
-    h
-}
-
 /// Ghost tone's face (over the plinth the caller drew): transparent at rest
 /// on a faint border; hover and press lay a flat white wash on it, with the
 /// design's own insets.

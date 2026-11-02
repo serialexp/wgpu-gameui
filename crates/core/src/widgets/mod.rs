@@ -269,7 +269,7 @@ pub use status_zones::{
 pub use stroke::{Cap, Dash, Join, SegmentInstance, Stroke};
 pub use table::{Align, ColumnWidth, Table, TableCell, TableColumn, TableOutput};
 pub use tabs::{Tabs, TabsOutput};
-pub use tag_input::{TagOutput, draw as draw_tag_input};
+pub use tag_input::{TagInput, TagOutput};
 pub use text_input::{ClipboardGet, ClipboardSet, TextInput};
 #[cfg(feature = "phosphor-icons")]
 pub use thumb::{Thumb, hue_of, initials};

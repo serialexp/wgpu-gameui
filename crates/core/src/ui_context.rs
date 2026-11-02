@@ -26,12 +26,10 @@ use crate::widgets::{
     FocusState, GradientStop, Group, HitZone, HitZoneOutput, List, ListItem, ListOutput, ListState,
     NumberInput, Pager, PagerOutput, Panel, PressState, Pressable, ProgressBar, RadioGroup,
     RampOutput, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Table,
-    TableCell, TableOutput, Tabs, TagOutput, TextInput, ToastStack, Toggle, TooltipLayer, TreeId,
-    TreeNode, TreeNodeOutput, TreeState, VectorField, VectorFieldOutput, VectorScrub,
+    TableCell, TableOutput, Tabs, TagInput, TagOutput, TextInput, ToastStack, Toggle, TooltipLayer,
+    TreeId, TreeNode, TreeNodeOutput, TreeState, VectorField, VectorFieldOutput, VectorScrub,
 };
-use crate::widgets::{
-    dots, draw_combo_trigger, draw_gradient_ramp, draw_tag_input, keycap, skeleton, spinner,
-};
+use crate::widgets::{dots, draw_combo_trigger, draw_gradient_ramp, keycap, skeleton, spinner};
 #[cfg(feature = "phosphor-icons")]
 use crate::{IconKey, PhosphorIcon, Tone};
 use cosmic_text::{Style, Weight};
@@ -2933,48 +2931,45 @@ impl<'a> UiContext<'a> {
         new_state
     }
 
-    /// Draw a tag input — a well containing removable chips followed by an
-    /// inline text field. Returns a [`TagOutput`] describing removals and
-    /// commits. Auto-advances by `theme.input_height`.
+    /// Tag input ([`TagInput`]): a well of removable tags followed by the
+    /// text being typed, kept in `draft` (the caller's, synced like
+    /// [`text_input`](Self::text_input)'s buffer, sharing its retained
+    /// editor map, so give it an id distinct from other fields'). Enter adds
+    /// the typing, Backspace in empty typing removes the last tag; the
+    /// [`TagOutput`] says which, and the caller changes `tags`. `invalid`
+    /// paints the error ring. `w` defaults to `default_field_width`; the
+    /// height grows as the tags wrap ([`TagInput::height`]). Auto-advances
+    /// by the height.
     pub fn tag_input(
         &mut self,
+        id: FocusId,
         tags: &[String],
         draft: &mut String,
-        focused: bool,
+        placeholder: &str,
+        invalid: bool,
         w: Option<f32>,
     ) -> TagOutput {
-        let (input, theme) = match self.interactive_refs() {
-            Some(v) => v,
-            None => return TagOutput::default(),
+        let Some((_, theme)) = self.interactive_refs() else {
+            return TagOutput::default();
         };
         let width = w.unwrap_or_else(|| self.default_field_width());
-        let height = theme.input_height;
-        let world = self.place_rect(width, height);
-        let inv = self.backend.list_mut().current_transform().inverse();
-        let (local, local_input) = self.localize(inv, world, input);
-        let out = {
-            let list = self.backend.list_mut();
-            let state = match self.state.as_mut() {
-                Some(s) => s,
-                None => {
-                    debug_assert!(false, "UiContext::tag_input requires interactive state");
-                    return TagOutput::default();
-                }
-            };
-            let mut ctx = DrawContext::new(
-                list,
-                &mut state.focus,
-                theme,
-                &local_input,
-                state.screen[0],
-                state.screen[1],
-            )
-            .with_enabled(!self.input_disabled)
-            .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
-            draw_tag_input(local, tags, draft, focused, &mut ctx)
+        let field = TagInput::new(tags)
+            .placeholder(placeholder)
+            .invalid(invalid);
+        let height = {
+            let overlay = self.style_stack.last().expect("style stack is never empty");
+            let styles = crate::style::StyleResolver::with_overlay_opt(theme, Some(overlay));
+            field.height(width, self.backend.list_mut(), &styles)
         };
-        self.advance(height);
+        let mut out = TagOutput::default();
+        self.retained_text_field(
+            id,
+            draft,
+            placeholder,
+            [width, height],
+            TextInput::new,
+            |typing, rect, id, ctx| out = field.draw(typing, id, rect, ctx),
+        );
         out
     }
 
@@ -5584,6 +5579,45 @@ mod tests {
         assert_eq!(buffer, "");
         let (_, list) = frame(&mut InputState::default(), &mut state, &mut buffer);
         assert_eq!(list.icons_msdf.len(), 1, "the clear key is gone");
+    }
+
+    #[test]
+    fn tag_input_keeps_the_typing_and_enter_adds_it() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let tags = vec!["rs".to_string()];
+        let mut draft = String::new();
+        let frame = |input: &mut InputState, state: &mut UiState, draft: &mut String| {
+            state.begin_frame(input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            let out = {
+                let mut ui = UiContext::interactive(&mut list, input, state, &theme);
+                ui.tag_input(5, &tags, draft, ".lua", false, Some(200.0))
+            };
+            state.end_frame(&[]);
+            out
+        };
+        // A click at the right end of the well, past the tag, focuses it.
+        assert_eq!(
+            frame(&mut click_at(150.0, 10.0), &mut state, &mut draft),
+            TagOutput::default()
+        );
+        let mut typing = InputState {
+            text_input: "lua".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            frame(&mut typing, &mut state, &mut draft),
+            TagOutput::default()
+        );
+        assert_eq!(draft, "lua");
+        let mut enter = InputState {
+            enter_pressed: true,
+            ..Default::default()
+        };
+        let out = frame(&mut enter, &mut state, &mut draft);
+        assert_eq!(out.added.as_deref(), Some("lua"));
+        assert_eq!(draft, "");
     }
 
     #[test]
