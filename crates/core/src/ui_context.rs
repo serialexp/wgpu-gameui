@@ -2137,7 +2137,20 @@ impl<'a> UiContext<'a> {
         placeholder: &str,
         w: Option<f32>,
     ) -> bool {
-        self.text_input_masked(id, buffer, placeholder, w, None)
+        self.text_input_masked(id, buffer, placeholder, w, None, false)
+    }
+
+    /// [`text_input`](Self::text_input) with the error border and ring while
+    /// `invalid`: what it holds was refused.
+    pub fn text_input_invalid(
+        &mut self,
+        id: FocusId,
+        buffer: &mut String,
+        placeholder: &str,
+        invalid: bool,
+        w: Option<f32>,
+    ) -> bool {
+        self.text_input_masked(id, buffer, placeholder, w, None, invalid)
     }
 
     /// Password field: like [`text_input`](Self::text_input) but characters are
@@ -2150,7 +2163,7 @@ impl<'a> UiContext<'a> {
         placeholder: &str,
         w: Option<f32>,
     ) -> bool {
-        self.text_input_masked(id, buffer, placeholder, w, Some('•'))
+        self.text_input_masked(id, buffer, placeholder, w, Some('•'), false)
     }
 
     /// Search field: a round well with a magnifier, the text, and a clear key
@@ -2184,7 +2197,7 @@ impl<'a> UiContext<'a> {
 
     /// Shared body for [`text_input`](Self::text_input) /
     /// [`password_input`](Self::password_input): `mask` selects plaintext (`None`)
-    /// vs masked (`Some(ch)`) display.
+    /// vs masked (`Some(ch)`) display, and `invalid` the error ring.
     fn text_input_masked(
         &mut self,
         id: FocusId,
@@ -2192,6 +2205,7 @@ impl<'a> UiContext<'a> {
         placeholder: &str,
         w: Option<f32>,
         mask: Option<char>,
+        invalid: bool,
     ) -> bool {
         let Some((_, theme)) = self.interactive_refs() else {
             return false;
@@ -2205,6 +2219,7 @@ impl<'a> UiContext<'a> {
             TextInput::new,
             |ti, _, id, ctx| {
                 ti.mask = mask;
+                ti.invalid = invalid;
                 ti.draw(id, ctx);
             },
         )
@@ -5618,6 +5633,26 @@ mod tests {
         let out = frame(&mut enter, &mut state, &mut draft);
         assert_eq!(out.added.as_deref(), Some("lua"));
         assert_eq!(draft, "");
+    }
+
+    #[test]
+    fn an_invalid_text_input_wears_its_ring_until_it_is_valid() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut buffer = String::new();
+        let mut frame = |invalid: bool| {
+            let mut input = InputState::default();
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            {
+                let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+                ui.text_input_invalid(4, &mut buffer, "", invalid, Some(120.0));
+            }
+            state.end_frame(&[]);
+            state.text_inputs[&4].invalid
+        };
+        assert!(frame(true));
+        assert!(!frame(false));
     }
 
     #[test]
