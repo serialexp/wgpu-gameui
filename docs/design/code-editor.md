@@ -65,6 +65,8 @@ Tracking the gap between this design and what's on the main branch.
   (agent-ui ef8c7c3). See the update under Tests
 - [x] A file's server only while it is edited (question 5), and Revert renamed × Cancel
   Changes (agent-ui efe8839). See the second update under Completion
+- [x] R3.7a your servers and built-ins switched off in `ServerSettings`, checked and stored
+  (agent-ui 38c2913). See the update under [Your servers (R3.7)](#your-servers-r37)
 
 ### Outstanding
 
@@ -75,8 +77,11 @@ Round three, language servers (agent-ui; see [Round three design](#round-three-d
   The ignored tests pass, and what they found is fixed (agent-ui 980939b; see the update
   under Tests), with TypeScript 7 and rust-analyzer tried too (agent-ui ef8c7c3); the
   Files tab by hand, and gopls after a dependency changes on disk, are still to do
-- [ ] R3.7 overrides and additions to the built-in list in the server's settings (deferred:
-  after R3.6, and see question 1's update)
+- [ ] R3.7b the server chooses from them, and says what it finds (`GET
+  /api/v1/language/servers`, `GET /api/v1/language/programs`)
+- [ ] R3.7c the desktop's Language servers page in Preferences, after the Agent UI comp
+  (waiting for the comp's script, which `Agent Desktop v2.dc.html` cuts off past
+  DesignSync's 256 KiB read limit)
 - [ ] Incremental text sync (`didChange` with ranges) (deferred: whole text first)
 
 Later:
@@ -641,6 +646,62 @@ All under the existing login and peer gate.
 > - On shutdown, `stop_all` asks every server to shut down and waits at most twice the
 >   shutdown wait, plus a second.
 
+### Your servers (R3.7)
+
+Bart's servers, ahead of the built-in ones, and built-ins switched off: both in
+`ServerSettings` (`crates/protocol/src/lib.rs`), so they are kept in the server's database
+(the `server_settings` key/value table, `crates/storage/src/server_settings.rs`; a key of its
+own each, so no migration) and edited from any desktop. They apply to every project on the
+server.
+
+- **`language_servers`**: a list of entries, each
+  - `extensions`: without the dot, as typed but lowercased (`c`, `h`, `lua`);
+  - `command`: as typed, a program then its arguments, split as a shell would (`shlex`);
+  - `roots`: root markers, file names;
+  - `on`: an entry switched off is kept but not used.
+- **`language_servers_off`**: the ids of built-ins switched off: `typescript`, `rust`, `go`,
+  `python`.
+- **Mistakes** (`ServerSettings::check`, so the server refuses a list with any; the desktop
+  keeps an entry being edited as its own draft until it has none): an entry with no
+  extensions; an extension that isn't a plain name (empty, a `/`, a space, a dot inside); an
+  extension two entries list; a command that is empty or doesn't split (an open quote); a root
+  marker that isn't a plain file name; a built-in id that isn't one. An entry taking
+  extensions from a built-in is the point, not a mistake: the built-in row says so.
+- **Choosing**: a file's extension is looked for in the entries that are on, in order, then
+  in the built-ins not switched off. The entry's program is found as the built-ins' are (the
+  `PATH`, `~/.cargo/bin`, `~/go/bin`, `~/.local/bin`, nvm's newest node), or used as is when
+  it is a path (`~/` is the home folder). Its root is the nearest folder above the file
+  holding one of its markers, never above home; with none (or no marker found), the file's
+  own folder (question 8). The language id sent with each document is from a short table
+  (`c`, `cpp`, `lua`, `zig`, `toml`, …), else the extension.
+- **A change** doesn't restart a running server: the next file followed is chosen by the new
+  settings, and a server nobody follows stops after its grace as before. A session is one per
+  (program, arguments, root), so an entry that runs a program with other arguments than a
+  built-in gets its own.
+- **What the server finds**, for the page:
+  - `GET /api/v1/language/servers`: each built-in (id, language, extensions, its commands,
+    switched off or not, what it is looked for as, and the first command found: its path and
+    the first line it says to `--version`), and for each entry, in order, what was found for
+    its program, if anything. A built-in found per project (TypeScript's `tsc` in
+    `node_modules/.bin`) is reported as found on the `PATH`, and the page says it is chosen
+    per project.
+  - `GET /api/v1/language/programs?command=`: the same for a command being typed, so the
+    entry being edited can say whether it is installed before it is stored.
+  - `--version` is asked once per program until the program changes (as the TypeScript
+    check does), and at most [`VERSION_WAIT`] each.
+
+> Phasing: R3.7a is the protocol and storage; R3.7b the choosing and the two routes, on the
+> fake `Launch` the hub's tests already use; R3.7c the desktop page, from the comp.
+
+> **2026-11-02 update (R3.7a, agent-ui 38c2913):** built in
+> `crates/protocol/src/language.rs` (`LanguageServerEntry`, `entry_mistakes`, `claims`,
+> `typed_extension`, `BUILT_IN_SERVERS`) and `crates/storage/src/server_settings.rs`. One
+> change from the above: an extension two entries list is not a mistake. Only entries that
+> are on count, and the earlier one gets it; `claims` reports it so the page can say so.
+> Refusing it would make switching a second server for the same files on unsaveable. The
+> desktop's context-window change now sends the other settings as the server last said,
+> since a `PUT` replaces them all.
+
 ### R3.1 gameui changes
 
 - `CodeEditorOutput::completion_asked` becomes `Option<CompletionAsk { id, at, from,
@@ -762,6 +823,10 @@ routes.
 6. **Overrides (R3.7).** A `language_servers` list in `ServerSettings`, each entry an
    extension list, a command with arguments, and root markers, ahead of the built-in rows;
    edited in Settings → Server. Proposed, deferred until the built-in list has been tried.
+
+   > **Answered 2026-11-02 (Bart):** one list for the whole server, per extension, as
+   > proposed; a choice per project or folder only if it is ever needed. Its page is in the
+   > Agent UI comp's Preferences window. See [Your servers (R3.7)](#your-servers-r37).
 7. **TypeScript 7.** The native port has its own server, `tsc --lsp --stdio`, and no
    `tsserver.js`, so typescript-language-server works only with TypeScript 6 or older.
    Options: keep typescript-language-server only (TypeScript 7 projects get the global
@@ -782,3 +847,7 @@ routes.
    > next time. `ServerKind.commands` became a list of `ServerCommand`s (program, arguments,
    > `node_local`, `since`, `initialization`); the server's name is its program. Shipped in
    > agent-ui ef8c7c3.
+8. **A root with no marker (R3.7).** The comp says an entry without root markers runs in
+   "the session's folder". The server only knows the file, so today's rule (the file's own
+   folder, as the built-ins do) is proposed; the session's folder would need the desktop to
+   send it with the follow. Open, for Bart.
