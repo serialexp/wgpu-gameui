@@ -1,7 +1,7 @@
 # Code editor
 
 **Status:** In progress
-**Last updated:** 2026-10-30
+**Last updated:** 2026-11-02
 
 ## Implementation status
 
@@ -63,6 +63,8 @@ Tracking the gap between this design and what's on the main branch.
   is 7 or later, else typescript-language-server (question 7), and pull diagnostics
   (`textDocument/diagnostic`), which TypeScript 7 needs and rust-analyzer then uses
   (agent-ui ef8c7c3). See the update under Tests
+- [x] A file's server only while it is edited (question 5), and Revert renamed × Cancel
+  Changes (agent-ui efe8839). See the second update under Completion
 
 ### Outstanding
 
@@ -550,6 +552,13 @@ and `initialized` sent before any `didOpen`; a document's `didOpen` comes before
 > the server names `:` as well. A server's `degraded` and `failed` messages are toasted,
 > each once.
 
+> **2026-11-02 update (question 5, agent-ui efe8839):** the Files tab now follows the open
+> text only while it is edited, not whenever it was read whole: ✎ starts the follow, and
+> leaving edit mode ends it, clearing the server's problems and trigger characters from the
+> editor. Each ✎ is a new follow. While editing, the header's keys are × Cancel Changes
+> (was ⟲ Revert and Stop Editing, renamed on Bart's word) and ⤓ Save. Cancel stops editing,
+> and drops unsaved edits by reading the file again, as Revert did.
+
 ### Watched files (R3.4)
 
 gopls and rust-analyzer register `workspace/didChangeWatchedFiles` watchers and rely on
@@ -747,6 +756,9 @@ routes.
 5. **When a file gets a server.** On opening it in the Files tab, so a read-only view shows
    its problems too; or only once ✎ makes it editable, which never starts rust-analyzer
    just to look at a file. Proposed: on opening, since the grace stops it soon after.
+
+   > **Answered 2026-11-02 (Bart):** only while editing. Starting servers for quick looks
+   > is wasteful. Built in agent-ui efe8839; see the second update under Completion.
 6. **Overrides (R3.7).** A `language_servers` list in `ServerSettings`, each entry an
    extension list, a command with arguments, and root markers, ahead of the built-in rows;
    edited in Settings → Server. Proposed, deferred until the built-in list has been tried.
