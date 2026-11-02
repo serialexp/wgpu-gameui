@@ -112,8 +112,14 @@ impl<'a> TagInput<'a> {
         let top = rect.y + ((field - line) / 2.0).max(PAD_Y);
         let (mut x, mut y) = (left, top);
         let mut chips = Vec::with_capacity(self.tags.len());
+        let font = s.theme().font.clone();
         for tag in self.tags {
-            let text = list.measure_text(tag, size, None).0;
+            // Measured in the font the chip is drawn in, and rounded up, so
+            // the text fits the room the chip leaves it and isn't cut short.
+            let block = TextBlock::new(tag.as_str(), 0.0, 0.0)
+                .with_size(size)
+                .with_font_opt(font.clone());
+            let text = list.measure_block(&block).0.ceil();
             let width = (CHIP_PAD_LEFT + text + 4.0 + CHIP_X + CHIP_PAD_RIGHT).min(right - left);
             if x > left && x + width > right {
                 x = left;
