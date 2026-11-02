@@ -1,8 +1,9 @@
 //! Status dot — the small glowing light in front of a session or agent row
 //! (Forge's 6 px dot with a 5 px glow): green while it runs, amber while it
-//! waits on the user, accent when it has something unread, any hue the
-//! caller picks for a state of its own, and nothing when idle. One that asks
-//! the user something outright is louder: 8 px, ringed and glowing amber.
+//! waits on the user, accent when it has something unread, red when it
+//! failed, any hue the caller picks for a state of its own, an empty socket
+//! when it is switched off, and nothing when idle. One that asks the user
+//! something outright is louder: 8 px, ringed and glowing amber.
 //!
 //! # Example
 //! ```ignore
@@ -10,7 +11,7 @@
 //! status_dot(list, &style, (x + 3.0, row_mid), Status::Hue(300.0));
 //! ```
 
-use crate::color::oklch;
+use crate::color::{HUE_DANGER, oklch};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{StyleKey, StyleResolver};
@@ -50,6 +51,11 @@ pub enum Status {
     Asking,
     /// Has something the user hasn't seen (`--accent-dirty`, accent glow).
     Unread,
+    /// Failed, or can't run as it is (Forge's `error` tone: the danger hue,
+    /// glowing in it).
+    Error,
+    /// Switched off: an empty socket, unlit (Forge's `off` tone).
+    Off,
     /// Any hue, in degrees (OKLCH), glowing in its own colour: for a state
     /// the three above don't name (an agent working somewhere else). Same
     /// lightness and chroma whatever the hue, like
@@ -58,11 +64,12 @@ pub enum Status {
 }
 
 impl Status {
-    /// The dot's fill and its glow under `s`, or `None` when idle.
+    /// The dot's fill and its glow under `s`, or `None` when it has
+    /// neither: idle, or an unlit socket.
     pub fn colors(self, s: &StyleResolver) -> Option<([f32; 4], [f32; 4])> {
         let with = |c: [f32; 4], a: f32| [c[0], c[1], c[2], a];
         match self {
-            Status::Idle => None,
+            Status::Idle | Status::Off => None,
             Status::Running => {
                 let ok = s.color(StyleKey::StatusOk);
                 Some((ok, with(ok, 0.6)))
@@ -75,6 +82,10 @@ impl Status {
                 s.color(StyleKey::AccentDirty),
                 with(s.color(StyleKey::Accent), 0.65),
             )),
+            Status::Error => {
+                let fill = oklch(0.68, 0.17, HUE_DANGER, 1.0);
+                Some((fill, with(fill, 0.55)))
+            }
             Status::Hue(hue) => {
                 let fill = oklch(HUE_LIGHTNESS, HUE_CHROMA, hue, 1.0);
                 Some((fill, with(fill, HUE_GLOW_ALPHA)))
@@ -93,6 +104,10 @@ impl Status {
 
 /// Draw a status dot centred on `center`. An idle status draws nothing.
 pub fn status_dot(list: &mut DrawList, s: &StyleResolver, center: (f32, f32), status: Status) {
+    if status == Status::Off {
+        super::radio::radio_mark(list, s, center, STATUS_DOT_SIZE * 0.5, false);
+        return;
+    }
     let Some((fill, glow)) = status.colors(s) else {
         return;
     };
@@ -186,6 +201,27 @@ mod tests {
         assert_ne!(fills[0], fills[1]);
         assert_ne!(fills[1], fills[2]);
         assert_eq!(fills[0], theme.status_ok);
+    }
+
+    #[test]
+    fn an_error_glows_red_and_off_is_an_unlit_socket() {
+        let theme = Theme::default();
+        let s = StyleResolver::new(&theme);
+        let (fill, _) = Status::Error.colors(&s).unwrap();
+        assert!(fill[0] > fill[1] && fill[0] > fill[2], "red: {fill:?}");
+        assert_eq!(frame(Status::Error).shadow_instance_count(), 1);
+
+        assert_eq!(Status::Off.colors(&s), None);
+        let off = frame(Status::Off);
+        assert_eq!(
+            off.prim_counts().circle_instances,
+            2,
+            "the socket's well and its edge"
+        );
+        assert!(
+            off.shadow_instance_count() <= 2,
+            "only the socket's rim, no glow"
+        );
     }
 
     #[test]
