@@ -2152,7 +2152,7 @@ impl TextMeasurer {
         if block.ellipsize && !block.vertical {
             spec = spec.natural();
         }
-        self.measure_spec(&block.content, &spec)
+        self.measure_spec(&block.drawn_content(), &spec)
     }
 
     /// The band of real glyph **ink** a block paints, as `(top, bottom)` offsets
@@ -2172,11 +2172,12 @@ impl TextMeasurer {
     /// with the block's layout, but worked out only when asked for, never on
     /// the drawing path.
     pub fn measure_block_ink(&mut self, block: &TextBlock) -> Option<(f32, f32)> {
-        if block.content.is_empty() {
+        let content = block.drawn_content();
+        if content.is_empty() {
             return None;
         }
         let mut shared = self.font_system.lock().expect("FontSystem poisoned");
-        let (layout, fs) = shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
+        let (layout, fs) = shared.layout_and_fonts(&LayoutSpec::of_block(block), &content);
         *layout.ink.get_or_init(|| ink_band(fs, &layout.glyphs))
     }
 
@@ -3390,6 +3391,18 @@ impl TextBlock {
         self
     }
 
+    /// The text the block draws: its spans' texts joined when it has spans,
+    /// else its content. Measuring goes by this, so a block in span mode
+    /// measures as what it shows.
+    pub fn drawn_content(&self) -> std::borrow::Cow<'_, str> {
+        match self.spans.is_empty() {
+            true => std::borrow::Cow::Borrowed(&self.content),
+            false => {
+                std::borrow::Cow::Owned(self.spans.iter().map(|span| span.text.as_str()).collect())
+            }
+        }
+    }
+
     /// Apply sorted byte-range styles without replacing or copying `content`.
     /// Invalid/out-of-order ranges are ignored defensively by colour resolution;
     /// callers should produce non-overlapping ranges on UTF-8 boundaries.
@@ -3925,6 +3938,42 @@ mod tests {
         assert!(
             (loose_h - lines * 22.0).abs() < 0.01,
             "{lines} lines of 22px, got {loose_h}"
+        );
+    }
+
+    #[test]
+    fn a_block_of_spans_measures_as_the_text_it_draws() {
+        let mut measurer = TextMeasurer::new();
+        let plain = TextBlock::new("Applies to leviticus, kept there", 0.0, 0.0)
+            .with_size(14.0)
+            .with_max_width(90.0);
+        let spans = TextBlock::new("", 0.0, 0.0)
+            .with_size(14.0)
+            .with_max_width(90.0)
+            .with_spans(vec![
+                TextSpan {
+                    text: "Applies to ".into(),
+                    ..TextSpan::default()
+                },
+                TextSpan {
+                    text: "leviticus".into(),
+                    color: Some([1.0, 1.0, 1.0, 1.0]),
+                    ..TextSpan::default()
+                },
+                TextSpan {
+                    text: ", kept there".into(),
+                    ..TextSpan::default()
+                },
+            ]);
+        let measured = measurer.measure_block(&plain);
+        assert!(
+            measured.1 > 14.0 * LINE_HEIGHT_RATIO * 1.5,
+            "precondition: it wraps"
+        );
+        assert_eq!(measurer.measure_block(&spans), measured);
+        assert_eq!(
+            measurer.measure_block_ink(&spans),
+            measurer.measure_block_ink(&plain)
         );
     }
 
