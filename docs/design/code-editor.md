@@ -70,6 +70,12 @@ Tracking the gap between this design and what's on the main branch.
 - [x] R3.7b the server chooses from them, and says what it finds (`GET
   /api/v1/language/servers`, `GET /api/v1/language/programs`) (agent-ui 2a84702). See the
   second update under [Your servers (R3.7)](#your-servers-r37)
+- [x] An entry with no root marker runs in the session's folder (question 8) (agent-ui
+  96e8019), and an entry not installed hands its files to the next server (agent-ui 0f4f4a3).
+  See the third update under [Your servers (R3.7)](#your-servers-r37)
+- [x] R3.7c the desktop's Language servers page in Preferences, after the Agent UI comp's
+  `PreferencesDialog.dc.html` (agent-ui 0b2860e). See the fourth update under
+  [Your servers (R3.7)](#your-servers-r37)
 
 ### Outstanding
 
@@ -80,9 +86,6 @@ Round three, language servers (agent-ui; see [Round three design](#round-three-d
   The ignored tests pass, and what they found is fixed (agent-ui 980939b; see the update
   under Tests), with TypeScript 7 and rust-analyzer tried too (agent-ui ef8c7c3); the
   Files tab by hand, and gopls after a dependency changes on disk, are still to do
-- [ ] R3.7c the desktop's Language servers page in Preferences, after the Agent UI comp
-  (waiting for the comp's script, which `Agent Desktop v2.dc.html` cuts off past
-  DesignSync's 256 KiB read limit)
 - [ ] Incremental text sync (`didChange` with ranges) (deferred: whole text first)
 
 Later:
@@ -718,6 +721,34 @@ server.
 >   on the server" (a name) or "… is not a program the server can run" (a path); the built-in
 >   is not used instead.
 
+> **2026-11-02 update (agent-ui 96e8019, 0f4f4a3):** two changes to R3.7b, from the comp.
+> - An entry whose root markers find nothing runs in the session's folder (Bart's answer to
+>   question 8): the desktop sends it with the follow (`folder` on
+>   `/api/v1/language/events`). Built-ins keep the file's own folder.
+> - An entry whose program isn't installed no longer fails the follow: the candidates for a
+>   file (each matching entry that is on and splits, in order, then the built-in unless it is
+>   switched off) are tried in turn, and the first found runs. With none found, the follow
+>   fails with the first candidate's message, as before. The comp's "Its files fall back to
+>   …" says the same.
+
+> **2026-11-02 update (R3.7c, agent-ui 0b2860e):** built in
+> `crates/desktop/src/language_settings.rs` (the page's model: drafts with ids, what is sent,
+> every sentence the rows show), `crates/desktop/src/preferences_language.rs` (the rows,
+> each laid out by one function for both its height and its drawing) and
+> `crates/desktop/src/working_client/language_servers.rs` (the two routes, on a worker of
+> their own). As the comp draws it, with these choices:
+> - An extension an earlier server already takes (Bart: the later one just loses it) is a
+>   note in the warning ink, on its chip and under the row, not a problem: the entry is still
+>   sent.
+> - A command being typed is only looked up where it is; it is asked its `--version` once its
+>   field lets go, since that runs it and a half-typed name may be some other program. The
+>   entry is sent then too, as the context window is.
+> - The command field is in the UI font, not mono (gameui's `TextInput` has no font; agent-ui
+>   TODO.md), and the note under Your servers says "Drag a row by its handle" for the comp's
+>   "Drag ⠿".
+> - Along the way, gameui's `measure_block` now measures a block of spans as the text it draws
+>   (a7ba56c), and the tag input measures a tag in its chip's font (74a315e).
+
 ### R3.1 gameui changes
 
 - `CodeEditorOutput::completion_asked` becomes `Option<CompletionAsk { id, at, from,
@@ -867,3 +898,6 @@ routes.
    "the session's folder". The server only knows the file, so today's rule (the file's own
    folder, as the built-ins do) is proposed; the session's folder would need the desktop to
    send it with the follow. Open, for Bart.
+
+   > **Answered 2026-11-02:** the session's folder. The desktop sends it with the follow
+   > (agent-ui 96e8019).
