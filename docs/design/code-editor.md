@@ -67,6 +67,9 @@ Tracking the gap between this design and what's on the main branch.
   Changes (agent-ui efe8839). See the second update under Completion
 - [x] R3.7a your servers and built-ins switched off in `ServerSettings`, checked and stored
   (agent-ui 38c2913). See the update under [Your servers (R3.7)](#your-servers-r37)
+- [x] R3.7b the server chooses from them, and says what it finds (`GET
+  /api/v1/language/servers`, `GET /api/v1/language/programs`) (agent-ui 2a84702). See the
+  second update under [Your servers (R3.7)](#your-servers-r37)
 
 ### Outstanding
 
@@ -77,8 +80,6 @@ Round three, language servers (agent-ui; see [Round three design](#round-three-d
   The ignored tests pass, and what they found is fixed (agent-ui 980939b; see the update
   under Tests), with TypeScript 7 and rust-analyzer tried too (agent-ui ef8c7c3); the
   Files tab by hand, and gopls after a dependency changes on disk, are still to do
-- [ ] R3.7b the server chooses from them, and says what it finds (`GET
-  /api/v1/language/servers`, `GET /api/v1/language/programs`)
 - [ ] R3.7c the desktop's Language servers page in Preferences, after the Agent UI comp
   (waiting for the comp's script, which `Agent Desktop v2.dc.html` cuts off past
   DesignSync's 256 KiB read limit)
@@ -701,6 +702,21 @@ server.
 > Refusing it would make switching a second server for the same files on unsaveable. The
 > desktop's context-window change now sends the other settings as the server last said,
 > since a `PUT` replaces them all.
+
+> **2026-11-02 update (R3.7b, agent-ui 2a84702):** built in
+> `crates/server/src/language_servers.rs` (`chosen_for`, `Run`, `found_servers`,
+> `found_program`), with the protocol's `LanguageServersFound`, `BuiltInServer` and
+> `ProgramFound`. The hub reads the settings from the server's settings watch for each
+> follow. Three changes from the above:
+> - A program written as a relative path (`./tools/srv`) is run from the project's root. The
+>   status routes know no project, so they report such a program as not found.
+> - `GET /api/v1/language/servers` doesn't say whether a built-in is switched off: the page has
+>   the settings. It also says, per built-in, where it is looked for (`searched`) and whether a
+>   project's own copy comes first (`per_project`).
+> - An entry that can't run (an open quote) or is off is passed over, as the server refuses a
+>   list with mistakes anyway. An entry not installed fails the follow with "… is not installed
+>   on the server" (a name) or "… is not a program the server can run" (a path); the built-in
+>   is not used instead.
 
 ### R3.1 gameui changes
 
