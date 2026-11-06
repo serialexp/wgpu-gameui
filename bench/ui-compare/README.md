@@ -240,7 +240,16 @@ What is left, in the order the profile puts it, with what each would change:
    An `Arc<str>` or `Cow` would remove it but changes the public type.
 4. **Cache hits** (`LayoutCache::entry` three hashes, the `fontdb::ID` map).
 
-None of 1 to 4 has been tried. The measurement behind the table is one
+Item 1's first half was then tried (`1e95fe9`): a glyph quad is bounded once
+from its four corners, and the clip's bound once per run of quads sharing it.
+Back to back against the commit before it (three alternating rounds, machine
+at load average 20 to 30), the frame went from about 1.88 to 1.72 ms at 3,000
+cells (8%) and from 8.77 to 8.38 ms at 10,000 (4.5%). That is well under the
+16% the profile's `triangle` and `union` frames suggested: inlining spreads
+the cost across callers in `perf`, so those shares overstate what one function
+can give back. Axis-aligned quads give the same box as before (tested against
+the old two-triangle method), and rotated ones never a smaller one. Items 2 to
+4 and bounding a block from its layout size have not been tried. The measurement behind the table is one
 profile; the per-phase ms were taken on a machine at load average 25 to 50,
 which moves absolute numbers but not these shares much (two phase runs agreed
 within 3%).
