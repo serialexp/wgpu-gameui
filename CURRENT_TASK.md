@@ -7,17 +7,21 @@ of N cells at 100 / 1k / 3k / 10k; a separate workspace in `bench/ui-compare/`
 (its README has the method and what each number covers); gpui from
 `~/Projects/zed` (aeolun fork, fast-forwarded to main `e231594b6b`, 6 Nov).
 
-- Done: `common` (scene, timing, frame check), `gameui`, `egui` (CPU and with
-  `egui-wgpu`) and `iced` harnesses. All three draw the same scene and the frame
-  is checked and saved as a PNG.
-- Findings so far (one machine, RX 7900 XTX, animated, mean ms for 100 / 1k / 3k
-  / 10k cells): gameui 0.09 / 0.66 / 2.1 / 8.5, egui+wgpu 0.07 / 0.55 / 1.7 / 10.9,
-  iced 0.06 / 0.38 / 1.2 / 5.4. Not final: see the README for what each covers.
-- Next: gpui (probably `TestAppContext`/`VisualTestContext` draw into a `Scene`,
-  no GPU), then BUI (`blenderui`, needs CMake and a C compiler; GPL, so it stays
-  in this workspace), then GPU timing (timestamp queries) for all of them.
-- Not committed beyond `bench/`; the stale `tmp_pack_Tj1MIA` left by a failed
-  fetch is still in `~/Projects/zed/.git/objects/pack/`.
+- Done: `common` (scene, timing, frame check) and harnesses for gameui, egui
+  (CPU, and with `egui-wgpu`), iced, gpui (its headless bench platform with the
+  real wgpu renderer; zed `e231594b6b`) and BUI (headless, CPU raster). Each
+  draws the same scene and checks and saves its frame as a PNG. Three workspaces
+  (`.`, `gpui/`, `bui/`); the README has the method, what each number covers, and
+  the results table.
+- Results (2026-11-07, one run under load, so only large gaps mean anything):
+  at 10k cells gameui 9.5 ms, iced 10.5, egui+wgpu 13.5, gpui 103, bui(cpu) 170;
+  at 100 to 3k iced and egui are below gameui. gpui is an order of magnitude
+  above from 1k cells.
+- Next: rerun on a quiet machine; GPU timing (timestamp queries, and BUI's
+  OpenGL path and gpui in a real window); find why gameui costs more than
+  iced/egui at 1k to 3k (text shaping per frame is the first suspect).
+- The stale `tmp_pack_Tj1MIA` left by a failed fetch is still in
+  `~/Projects/zed/.git/objects/pack/`.
 
 # Current task: code editor (2026-10-16)
 

@@ -1,0 +1,35 @@
+# Its own workspace: gpui's tree pins crates (unicode-properties =0.1.3) that
+# egui cannot share a lockfile with. Build it from here, not from the parent.
+[workspace]
+
+[package]
+name = "ui-compare-gpui"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ui-compare-common = { path = "../common" }
+# The zed checkout is a sibling of this repo: ~/Projects/zed.
+gpui = { path = "../../../../zed/crates/gpui", features = ["bench-support", "test-support"] }
+gpui_platform = { path = "../../../../zed/crates/gpui_platform", default-features = false, features = ["bench-support", "test-support", "x11"] }
+# Must be the version gpui's `BenchMeasurement` implements `Measurement` for.
+criterion = "0.8"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"
+
+# gpui is built from a checkout of zed (the aeolun fork, `main`, sibling of
+# this repo under ~/Projects), where it is part of zed's own workspace. A path
+# dependency from outside does not get zed's `[patch.crates-io]`, so the ones
+# gpui's tree needs are copied here from zed's root Cargo.toml; keep them in
+# step with the checkout.
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+crash-context = { git = "https://github.com/rust-minidump/minidump-writer", rev = "911b04e09b79b736cc15cbe712e83e2d3f348bb9" }

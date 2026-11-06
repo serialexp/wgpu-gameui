@@ -1,0 +1,18 @@
+# Its own workspace, and the only place BUI (GPL-3.0-or-later) is linked: the
+# published crates and the rest of this harness never depend on it.
+[workspace]
+
+[package]
+name = "ui-compare-bui"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ui-compare-common = { path = "../common" }
+blenderui = "0.4"
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"
