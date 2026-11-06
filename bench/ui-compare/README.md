@@ -22,7 +22,8 @@ cargo build --release                          # gameui, egui, iced
 DISPLAY=:0 ./target/release/ui-compare-gameui   # or -egui, -iced
 DISPLAY=:0 ./target/release/ui-compare-egui 1000  # one cell count only
 DISPLAY=:0 gpui/target/release/ui-compare-gpui
-DISPLAY=:0 bui/target/release/ui-compare-bui
+DISPLAY=:0 bui/target/release/ui-compare-bui           # headless, CPU raster
+DISPLAY=:0 bui/target/release/ui-compare-bui --window  # real X11 window, OpenGL
 ```
 
 Each harness needs a GPU adapter (it picks the high-performance one and prints
@@ -58,6 +59,8 @@ CPU frame cost on the calling thread, no waiting for the GPU:
 | iced | `view`, `UserInterface::build` (diff + layout), `draw`, `Renderer::present` (prepare, upload, pass, `submit`) |
 | gpui | gpui's own bench machinery, headless (`BenchAppContext`, a real text system, `WgpuHeadlessRenderer`): the view's `render`, taffy layout, prepaint, paint into a `Scene`, then the scene is handed to the wgpu renderer (atlas and instance upload, pass, `submit`). One iteration is the gap between successive calls of the per-iteration callback; criterion only drives the loop and its statistics are unused |
 | bui(cpu) | BUI headless (`Application::headless()`, as its own `raster_probe` example): `render`, layout, **CPU software rasterization** of the whole frame, and a copy of the 1920x1080 pixels out (about 8 MB, which `App::draw` always makes) |
+| bui(gpu,cpu) | `--window`: a real, visible X11 window drawn with BUI's OpenGL 3.3 path (`Application::gpu(true)`, vsync off, a new frame requested every `render`). The window's own loop does the work, so the view times itself: **the thread's CPU time** (`CLOCK_THREAD_CPUTIME_ID`) between two successive `render` calls. That is the rebuild, layout, paint and the GL calls and driver work on the UI thread, with the waiting left out. Any BUI worker threads are not counted |
+| bui(gpu,wall) | the same runs, but wall-clock time between two `render` calls: the whole frame as the window sees it, including the buffer swap and the compositor. Pinned near the display's refresh interval (about 17 ms) at small sizes, so it says when BUI stops keeping up, not what a frame costs |
 
 The `egui+wgpu` row is the one to put beside gameui and iced, which both
 include their GPU hand-off. A real iced or egui app would skip a frame in which
@@ -69,8 +72,12 @@ table hide it:
 - `bui(cpu)` rasterizes on the CPU; everything else rasterizes on the GPU
   after the hand-off. Its number contains work the others leave to the GPU, so
   read it as BUI's cost per frame in its default mode, not as its draw-call
-  cost. BUI's GPU path (OpenGL 3.3, `.gpu(true)`) needs a real window and
-  belongs to the GPU-timing phase.
+  cost. `bui(gpu,cpu)` is the OpenGL path in a real window and is the closer
+  match, but it is measured differently (thread CPU time inside a live window
+  loop, not a timed call) and the window really is presented to the desktop.
+  The GPU path switches on a few frames after the window opens, and each row
+  is labelled with what `is_gpu()` said when the case ended. The frame was
+  checked with an `xwd` capture of the window (`shots/bui-gpu-window.png`).
 - gpui's test window has a fixed scale factor of 2 and no way to change it from
   outside, so its scene is built at half logical size: the frame is the same
   1920x1080 device pixels with the same cells and 12 px (device) text. gpui's
@@ -123,3 +130,20 @@ the others from 1,000 cells and grows faster than linearly. The `static`
 scenario matches `animated` within noise for every library except
 `bui(cpu)`, which is cheaper when nothing changes (it compares tiles).
 gpui's 10,000-cell case has only 10 timed frames, so its spread is thin.
+### BUI in a real window (OpenGL), same run
+
+`--window` run, `animated`, ms per frame, mean (p99 in brackets):
+
+| cells | bui(cpu), headless | bui(gpu,cpu) | bui(gpu,wall) |
+| ---: | ---: | ---: | ---: |
+| 100 | 2.1 | 0.32 (0.74) | 17.1 (17.5) |
+| 1,000 | 14.7 | 1.9 (3.5) | 18.6 (20.7) |
+| 3,000 | 50.1 | 4.9 (8.4) | 21.7 (25.2) |
+| 10,000 | 170 | 23.0 (32.7) | 39.8 (49.5) |
+
+On the GPU path BUI's CPU cost falls to roughly a tenth of its headless
+number, which puts it at about 3 to 5 times gameui's at 1,000 to 10,000 cells
+(gameui 0.63 / 2.1 / 9.5 ms) rather than 15 to 25 times. The static scenario
+is within noise of animated. At 10,000 cells the wall time (40 ms) shows BUI
+no longer holds 60 fps in this scene; the other libraries' wall time was not
+measured. Same load caveat as above, and one run only.

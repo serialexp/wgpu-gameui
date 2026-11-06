@@ -147,6 +147,12 @@ pub fn measure(mut frame: impl FnMut(u64)) -> Stats {
             break;
         }
     }
+    stats_from(times)
+}
+
+/// Statistics of per-frame timings in microseconds, for a harness that gets
+/// its frame times from somewhere other than [`measure`] (a window's own loop).
+pub fn stats_from(mut times: Vec<f64>) -> Stats {
     times.sort_by(|a, b| a.total_cmp(b));
     let at = |q: f64| times[((times.len() - 1) as f64 * q).round() as usize];
     Stats {
@@ -157,6 +163,12 @@ pub fn measure(mut frame: impl FnMut(u64)) -> Stats {
         max_us: *times.last().unwrap(),
     }
 }
+
+/// Frames timed per case after the warm-up (public for harnesses that count
+/// their own frames).
+pub const TIMED_FRAMES: usize = SAMPLES;
+/// Frames to run before timing starts.
+pub const WARMUP_FRAMES: usize = WARMUP;
 
 /// Print one result line: `library scenario n frames mean p50 p99 max`
 /// (times in ms). One format for every harness so the lines can be joined.
