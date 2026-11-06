@@ -1,8 +1,8 @@
 # UI library comparison
 
-How wgpu-gameui, egui, iced, gpui and BUI compare on the same scene. Separate
+How wgpu-gameui, egui, iced, gpui, BUI and Rune compare on the same scene. Separate
 from the published crates on purpose: gpui's dependency tree and BUI's GPL
-licence must not reach them or CI. There are three Cargo workspaces here, each
+licence must not reach them or CI. There are four Cargo workspaces here, each
 with its own lockfile and `target/`:
 
 - `.` : `common`, `gameui`, `egui`, `iced`;
@@ -12,16 +12,22 @@ with its own lockfile and `target/`:
   and carries zed's `[patch.crates-io]` entries, which a path dependency does
   not inherit;
 - `bui/` : the only place BUI (`blenderui` 0.4.1, GPL-3.0-or-later, a C core
-  built with CMake and a C compiler) is linked.
+  built with CMake and a C compiler) is linked;
+- `rune/` : Rune (`anomalyco/rune`, MIT, pre-release, git only, no crates.io
+  release) from a local clone at `~/Projects/rune-src/rune` (the `dev` branch,
+  shallow). It is a workspace of its own so its toolchain pin (1.99.1; the
+  harness builds fine on 1.97.1) and dependency tree stay out of the others.
 
 ```
 cd bench/ui-compare
 cargo build --release                          # gameui, egui, iced
 (cd gpui && cargo build --release)
 (cd bui && cargo build --release)
+(cd rune && cargo build --release)
 DISPLAY=:0 ./target/release/ui-compare-gameui   # or -egui, -iced
 DISPLAY=:0 ./target/release/ui-compare-egui 1000  # one cell count only
 DISPLAY=:0 gpui/target/release/ui-compare-gpui
+DISPLAY=:0 rune/target/release/ui-compare-rune
 DISPLAY=:0 bui/target/release/ui-compare-bui           # headless, CPU raster
 DISPLAY=:0 bui/target/release/ui-compare-bui --window  # real X11 window, OpenGL
 ```
@@ -58,6 +64,8 @@ CPU frame cost on the calling thread, no waiting for the GPU:
 | egui | `run_pass` + `tessellate` (`egui`); plus texture delta, `update_buffers`, render pass, `submit` (`egui+wgpu`) |
 | iced | `view`, `UserInterface::build` (diff + layout), `draw`, `Renderer::present` (prepare, upload, pass, `submit`) |
 | gpui | gpui's own bench machinery, headless (`BenchAppContext`, a real text system, `WgpuHeadlessRenderer`): the view's `render`, taffy layout, prepaint, paint into a `Scene`, then the scene is handed to the wgpu renderer (atlas and instance upload, pass, `submit`). One iteration is the gap between successive calls of the per-iteration callback; criterion only drives the loop and its statistics are unused |
+| rune | Rune headless against an offscreen wgpu target, as its own `pinch_bench` example does: change the state (animated) or only `invalidate` it (static, so the view is rebuilt either way), `Runtime::frame` (view, flex layout in `rune-taffy`, instances), then `Renderer::upload_images`, `prepare` (atlas and instance upload), the pass and `submit`. Not waited on. Scale factor 1 |
+| rune(cpu) | the same frames; the thread's CPU time (`CLOCK_THREAD_CPUTIME_ID`) instead of wall time. At 100 cells wall time is 1.7 ms against 0.2 to 0.4 ms of CPU, so about 1.4 ms of each frame is spent blocked (probably on the previous frame's GPU work); from 1,000 cells on the two are equal. The comparison table uses the CPU row |
 | bui(cpu) | BUI headless (`Application::headless()`, as its own `raster_probe` example): `render`, layout, **CPU software rasterization** of the whole frame, and a copy of the 1920x1080 pixels out (about 8 MB, which `App::draw` always makes) |
 | bui(gpu,cpu) | `--window`: a real, visible X11 window drawn with BUI's OpenGL 3.3 path (`Application::gpu(true)`, vsync off, a new frame requested every `render`). The window's own loop does the work, so the view times itself: **the thread's CPU time** (`CLOCK_THREAD_CPUTIME_ID`) between two successive `render` calls. That is the rebuild, layout, paint and the GL calls and driver work on the UI thread, with the waiting left out. Any BUI worker threads are not counted |
 | bui(gpu,wall) | the same runs, but wall-clock time between two `render` calls: the whole frame as the window sees it, including the buffer swap and the compositor. Pinned near the display's refresh interval (about 17 ms) at small sizes, so it says when BUI stops keeping up, not what a frame costs |
@@ -99,7 +107,7 @@ renderer's primitive count; egui prints its vertex count.
 
 egui 0.37.0, egui-wgpu 0.37.0 (wgpu 30), iced 0.14.0 (wgpu 27), wgpu-gameui
 from this tree (wgpu 24), gpui from zed `e231594b6b` (wgpu from zed's pinned
-git revision), blenderui 0.4.1. Exact locks in each workspace's `Cargo.lock`.
+git revision), blenderui 0.4.1, rune `dev` `ddf1414` (0.0.1, wgpu 30, parley 0.12, taffy 0.15; clone taken 2026-11-07). Exact locks in each workspace's `Cargo.lock`.
 
 A mismatch caught while building each harness is worth knowing about:
 `egui`'s `default_fonts` feature needs `epaint_default_fonts 0.37`, which is not
@@ -147,3 +155,23 @@ number, which puts it at about 3 to 5 times gameui's at 1,000 to 10,000 cells
 is within noise of animated. At 10,000 cells the wall time (40 ms) shows BUI
 no longer holds 60 fps in this scene; the other libraries' wall time was not
 measured. Same load caveat as above, and one run only.
+### Rune, run on its own at lower load (load average about 4)
+
+Mean ms per frame (median in brackets); `rune(cpu)` is thread CPU time. Run
+separately from the table above, so the machine was quieter than for the other
+libraries. The frame was checked as for the others (`shots/rune-*.png`).
+
+| cells | rune(cpu) animated | rune(cpu) static | rune wall, animated | gameui animated |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 0.38 (0.36) | 0.19 (0.16) | 1.76 | 0.09 |
+| 1,000 | 3.2 (3.2) | 1.5 (1.5) | 3.2 | 0.63 |
+| 3,000 | 13.2 (12.9) | 5.8 (5.6) | 13.2 | 2.1 |
+| 10,000 | 55.3 (54.7) | 30.8 (30.5) | 55.3 | 9.5 |
+
+Rune costs about 5 to 6 times gameui per animated frame from 1,000 cells, and
+about 4 times at 100. It is cheaper when nothing changes (it diffs the rebuilt
+tree against the last, so static frames reuse layout and instances), roughly
+half of its animated cost at 3,000 and 10,000 cells. The scene is built with
+flex rows and columns (as for gpui, iced and BUI), not absolute positions, which
+is also what `rune-kit` apps would use; Rune's own `pinch_bench` pins its cards
+absolutely, and that may cost less than this layout. Not tried.

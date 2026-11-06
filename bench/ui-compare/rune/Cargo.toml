@@ -1,0 +1,21 @@
+# Its own workspace: Rune is a git-only dependency whose toolchain pin and
+# dependency tree (wgpu, parley, taffy) should not decide the other harnesses'.
+# It is used from a local clone, `~/Projects/rune-src/rune` (see the README).
+[workspace]
+
+[package]
+name = "ui-compare-rune"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ui-compare-common = { path = "../common" }
+rune = { path = "../../../../rune-src/rune/crates/rune", default-features = false, features = ["embedded-fonts"] }
+wgpu = { version = "~30.0.1", default-features = false }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"

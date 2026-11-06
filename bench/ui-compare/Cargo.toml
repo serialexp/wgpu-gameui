@@ -4,7 +4,7 @@
 members = ["common", "gameui", "egui", "iced"]
 # gpui pins crates (unicode-properties) that egui cannot share a lockfile
 # with, so it is a workspace of its own.
-exclude = ["gpui", "bui"]
+exclude = ["gpui", "bui", "rune"]
 resolver = "3"
 
 [workspace.package]
