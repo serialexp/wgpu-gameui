@@ -193,3 +193,54 @@ that has drawn goes quiet until something asks for a frame (hence the 2x2
 looping-opacity element in the corner, which is part of the measured scene),
 and `WINIT_X11_SCALE_FACTOR=1` is needed or the window opens at 1.17x scale
 (2240x1260 device pixels, more than the others draw).
+## Where gameui's time goes (profile at 3,000 animated cells)
+
+`perf record` (frame pointers, line tables) on `ui-compare-gameui 3000`, on a
+loaded machine, plus a per-phase timer around the harness's own calls
+(removed again: it was only there for this). Percentages are of all samples.
+
+Phases, ms per frame (3,000 cells / 10,000 cells), before the hasher change
+below: building the `DrawList` 0.26 / 1.1; `UiRenderer::render` 1.69 / 7.6;
+`queue.submit` and poll 0.02 / 0.08; dropping the list 0.14 / 0.5. So `render`
+is about 80% of the frame and the list itself (building and dropping, one
+`String` per label) about 20%.
+
+Inside `render` (the share of the profile, as it stood before the change):
+
+| what | share | notes |
+| --- | ---: | --- |
+| `DrawPlan` walk: pixel bounds of every unit | about 40% | text blocks are bounded by unioning two clipped triangles per glyph (`draw_box::msdf` / `triangle`, about 16% on its own); `cull_bounds` about 5% to 12% |
+| `DrawOrder::add` (overlap ordering) | 12% to 15%, plus `store` 2% and sorting the plan about 3.5% | each cell is a rectangle and a text block, two batch keys, so the grid path runs for all 6,000 units |
+| text preparation (`prepare_texts`) | 21% to 31% | the layout-cache lookup was 11%, of which SipHash was most; then `build_unit` and `append_placements` (placements per glyph) |
+| SipHash, summed over the layout cache, the glyph-atlas lookup and a `fontdb::ID` map | about 12% | |
+| malloc / free / memmove | about 10% | one `String` per `TextBlock` per frame, and `queue.write_buffer`'s copy (2.5%, wgpu's) |
+
+One change was made and measured: the layout cache's outer map and the glyph
+atlas's lookup map now hash with Fx instead of SipHash (committed as
+`f8dc974`). `render` went from 1.69 to 1.39 ms at 3,000 cells and from 7.6 to
+6.9 ms at 10,000; the whole frame is then about 1.9 ms against iced's 1.3 and
+egui's 1.5 to 1.8 at 3,000 cells. The remaining hashing is the `fontdb::ID` map
+(about 1.5%) and two more lookups per label in `LayoutCache::entry`, which
+hashes the key three times in the hit path (`get`, then `get_mut` after
+`contains_key`); neither was changed.
+
+What is left, in the order the profile puts it, with what each would change:
+
+1. **Pixel bounds for text** (about 16% to 40% depending on how inlined
+   callers are counted): bound a glyph quad once instead of through two
+   clipped triangles, or bound a whole block from its layout size and clip.
+   Both change what `DrawOrder` is given, so the draw-order equivalence tests
+   (`brute_force_orders`) are what would show whether the order stays the same.
+2. **Draw-order ordering** (about 17% together): it exists so batches that
+   overlap keep paint order. A list in which no unit overlaps another, as this
+   grid, gets nothing from it; a cheap test for that, or a coarser grid for
+   text, is the design question in `docs/design/draw-call-batching.md`.
+3. **Owned text** (about 10% malloc/free/drop plus part of the list-building
+   share): `TextBlock` owns its string, so every frame allocates one per label.
+   An `Arc<str>` or `Cow` would remove it but changes the public type.
+4. **Cache hits** (`LayoutCache::entry` three hashes, the `fontdb::ID` map).
+
+None of 1 to 4 has been tried. The measurement behind the table is one
+profile; the per-phase ms were taken on a machine at load average 25 to 50,
+which moves absolute numbers but not these shares much (two phase runs agreed
+within 3%).
