@@ -1,0 +1,14 @@
+# A separate workspace: gpui's dependency tree and BUI's GPL licence must not
+# reach the published crates or CI. Run from this directory.
+[workspace]
+members = ["common", "gameui", "egui", "iced"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"

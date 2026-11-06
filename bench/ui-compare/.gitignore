@@ -1,0 +1,5 @@
+/target
+# Screenshots the harnesses save to check what each library drew.
+/shots
+# A benchmark pins its dependencies; the repo's root .gitignore drops lockfiles.
+!/Cargo.lock

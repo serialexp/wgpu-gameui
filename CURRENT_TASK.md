@@ -1,3 +1,24 @@
+# Current task: UI library comparison (2026-11-07)
+
+Bart asked for a performance comparison of gameui against gpui, BUI
+(ppmpreetham/BUI, crate `blenderui`, GPL, C core), egui and iced under the same
+load. Decisions: CPU frame cost first, real GPU render times eventually; a grid
+of N cells at 100 / 1k / 3k / 10k; a separate workspace in `bench/ui-compare/`
+(its README has the method and what each number covers); gpui from
+`~/Projects/zed` (aeolun fork, fast-forwarded to main `e231594b6b`, 6 Nov).
+
+- Done: `common` (scene, timing, frame check), `gameui`, `egui` (CPU and with
+  `egui-wgpu`) and `iced` harnesses. All three draw the same scene and the frame
+  is checked and saved as a PNG.
+- Findings so far (one machine, RX 7900 XTX, animated, mean ms for 100 / 1k / 3k
+  / 10k cells): gameui 0.09 / 0.66 / 2.1 / 8.5, egui+wgpu 0.07 / 0.55 / 1.7 / 10.9,
+  iced 0.06 / 0.38 / 1.2 / 5.4. Not final: see the README for what each covers.
+- Next: gpui (probably `TestAppContext`/`VisualTestContext` draw into a `Scene`,
+  no GPU), then BUI (`blenderui`, needs CMake and a C compiler; GPL, so it stays
+  in this workspace), then GPU timing (timestamp queries) for all of them.
+- Not committed beyond `bench/`; the stale `tmp_pack_Tj1MIA` left by a failed
+  fetch is still in `~/Projects/zed/.git/objects/pack/`.
+
 # Current task: code editor (2026-10-16)
 
 A source editor widget after Forge's `CodeEditor`, in a new crate `crates/code`

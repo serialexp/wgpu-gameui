@@ -1,0 +1,11 @@
+[package]
+name = "ui-compare-egui"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+ui-compare-common = { path = "../common" }
+egui = "0.37"
+egui-wgpu = "0.37"
+pollster = "0.4"

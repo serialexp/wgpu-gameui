@@ -1,0 +1,11 @@
+[package]
+name = "ui-compare-gameui"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+ui-compare-common = { path = "../common" }
+wgpu-gameui = { path = "../../../crates/core" }
+wgpu = "24"
+pollster = "0.4"
