@@ -18,7 +18,6 @@
 //! Every bound is also widened by [`float_margin`], for the error of the f32
 //! steps a position goes through on its way to the target.
 
-use super::QUAD_INDICES;
 use crate::layout::Rect;
 use crate::text::{MsdfInstance, MsdfPrepared};
 use crate::widgets::{
@@ -480,21 +479,46 @@ pub(crate) fn soup(target: &Target, vertices: &[Vertex], indices: &[u32]) -> Pix
     out
 }
 
-/// MSDF quads, text glyphs or icons: each quad's two triangles, as the base
-/// mesh splits it, their boxes cut by the quad's clip. The MSDF shader draws
-/// its quads exactly as given.
+/// MSDF quads, text glyphs or icons: each quad's box, cut by the quad's clip.
+/// The MSDF shader draws its quads exactly as given.
+///
+/// The base mesh splits a quad into two triangles that share a diagonal, and
+/// all six vertices carry the quad's one clip. The two triangles' boxes both
+/// hold the diagonal's endpoints, so they overlap on each axis, and their
+/// union is the box of the four corners; cutting that by the clip gives what
+/// cutting each triangle's box and joining the two did, except that a rotated
+/// quad whose clip touches only opposite corners keeps a box where the pair
+/// kept none, which only widens a bound. So the four corners are bounded once,
+/// and the clip's bound is worked out once per run of quads that share a clip,
+/// as the glyphs of one block do.
 pub(crate) fn msdf(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
     let mut out = PixelBox::EMPTY;
+    // The clip of the previous quad and its bound.
+    let mut clip: Option<([f32; 4], bool, Bound)> = None;
     for quad in instances {
-        let clip_on = if quad.clip_enabled() { 1.0 } else { 0.0 };
-        let corners = quad.corners();
-        for tri in QUAD_INDICES.chunks_exact(3) {
-            let corner = |i: u16| (corners[i as usize], quad.clip, clip_on);
-            out = out.union(&triangle(
-                target,
-                [corner(tri[0]), corner(tri[1]), corner(tri[2])],
-            ));
+        let on = quad.clip_enabled();
+        let clip = match clip {
+            Some((c, o, bound)) if o == on && c == quad.clip => bound,
+            _ => {
+                let bound = if on {
+                    clip_bound(target, quad.clip)
+                } else {
+                    Bound::Whole
+                };
+                clip = Some((quad.clip, on, bound));
+                bound
+            }
+        };
+        let mut points = Points::new();
+        for corner in quad.corners() {
+            points.add(corner);
         }
+        out = out.union(
+            &points
+                .bound(target, HARD_EDGE)
+                .intersect(clip)
+                .pixels(target),
+        );
     }
     out
 }

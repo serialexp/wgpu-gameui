@@ -537,6 +537,24 @@ impl MsdfInstance {
         }
     }
 
+    /// A quad over `corners` (as in [`new`](Self::new)) with an optional
+    /// clip and nothing else set, for tests of what is drawn where.
+    #[cfg(test)]
+    pub(crate) fn placed(corners: [[f32; 2]; 3], clip: Option<[f32; 4]>) -> Self {
+        let [tl, tr, bl] = corners;
+        Self {
+            origin: tl,
+            axis_x: [tr[0] - tl[0], tr[1] - tl[1]],
+            axis_y: [bl[0] - tl[0], bl[1] - tl[1]],
+            clip: clip.unwrap_or_default(),
+            texels: [0; 4],
+            fill: [255; 4],
+            outline: [0; 4],
+            params: [if clip.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]
+                .map(|v| half::f16::from_f32(v).to_bits()),
+        }
+    }
+
     /// The quad's world-space corners: top-left, top-right, bottom-right,
     /// bottom-left.
     pub(crate) fn corners(&self) -> [[f32; 2]; 4] {

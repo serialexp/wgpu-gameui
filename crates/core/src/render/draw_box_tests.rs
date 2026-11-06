@@ -563,6 +563,91 @@ fn coordinates_around_1e5_widen_a_box_by_their_float_margin() {
     assert_eq!(right_edge(&far_circle, &far), 21);
 }
 
+/// What `msdf` computed before it bounded a quad's four corners at once: each
+/// of the two triangles the base mesh splits it into, cut by the clip, joined.
+fn msdf_by_triangles(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
+    let mut out = PixelBox::EMPTY;
+    for quad in instances {
+        let clip_on = if quad.clip_enabled() { 1.0 } else { 0.0 };
+        let corners = quad.corners();
+        for tri in crate::render::QUAD_INDICES.chunks_exact(3) {
+            let corner = |i: u16| (corners[i as usize], quad.clip, clip_on);
+            out = out.union(&triangle(
+                target,
+                [corner(tri[0]), corner(tri[1]), corner(tri[2])],
+            ));
+        }
+    }
+    out
+}
+
+#[test]
+fn a_quad_is_bounded_as_its_two_triangles_were() {
+    let t = plain();
+    let clips = [
+        None,
+        Some([0.0, 0.0, 100.0, 100.0]),
+        Some([12.0, 14.0, 9.0, 7.0]),
+        Some([25.5, 0.0, 5.0, 100.0]),
+        Some([40.0, 40.0, 0.0, 10.0]),
+        Some([-30.0, -30.0, 40.0, 40.0]),
+    ];
+    // Axis-aligned quads, as glyphs are: the two bounds must be the same box.
+    for clip in clips {
+        for (x, y, w, h) in [
+            (10.0, 10.0, 8.0, 12.0),
+            (-4.0, 3.0, 20.0, 5.0),
+            (90.0, 95.0, 30.0, 30.0),
+            (13.25, 14.75, 0.5, 0.5),
+            (200.0, 200.0, 5.0, 5.0),
+        ] {
+            let quad = MsdfInstance::placed([[x, y], [x + w, y], [x, y + h]], clip);
+            assert_eq!(
+                msdf(&t, &[quad]),
+                msdf_by_triangles(&t, &[quad]),
+                "quad {x} {y} {w} {h} clip {clip:?}"
+            );
+        }
+    }
+    // A rotated or sheared quad (an icon under a transform): never smaller
+    // than the two triangles' join, and the same unless a clip touches only
+    // two opposite corners.
+    for clip in clips {
+        for corners in [
+            [[30.0, 10.0], [50.0, 30.0], [10.0, 30.0]],
+            [[20.0, 20.0], [60.0, 25.0], [25.0, 50.0]],
+            [[70.0, 5.0], [90.0, 50.0], [40.0, 20.0]],
+        ] {
+            let quad = MsdfInstance::placed(corners, clip);
+            let (now, was) = (msdf(&t, &[quad]), msdf_by_triangles(&t, &[quad]));
+            assert!(
+                was.is_empty()
+                    || (now.x0 <= was.x0
+                        && now.y0 <= was.y0
+                        && now.x1 >= was.x1
+                        && now.y1 >= was.y1),
+                "quad {corners:?} clip {clip:?}: {now:?} does not hold {was:?}"
+            );
+        }
+    }
+    // Several quads under one clip, then another: the clip bound is reused
+    // only while it is the same.
+    let run: Vec<MsdfInstance> = (0..6)
+        .map(|i| {
+            let x = 10.0 + 12.0 * i as f32;
+            let clip = if i < 3 {
+                Some([0.0, 0.0, 30.0, 100.0])
+            } else if i < 5 {
+                None
+            } else {
+                Some([60.0, 0.0, 10.0, 100.0])
+            };
+            MsdfInstance::placed([[x, 20.0], [x + 8.0, 20.0], [x, 32.0]], clip)
+        })
+        .collect();
+    assert_eq!(msdf(&t, &run), msdf_by_triangles(&t, &run));
+}
+
 /// Text and MSDF icons prepared on the CPU, as `plain()` would draw them.
 #[cfg(feature = "bundled-font")]
 mod msdf_boxes {
