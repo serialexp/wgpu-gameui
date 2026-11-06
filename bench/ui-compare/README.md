@@ -175,3 +175,21 @@ half of its animated cost at 3,000 and 10,000 cells. The scene is built with
 flex rows and columns (as for gpui, iced and BUI), not absolute positions, which
 is also what `rune-kit` apps would use; Rune's own `pinch_bench` pins its cards
 absolutely, and that may cost less than this layout. Not tried.
+### Rune in a real window: not measured yet
+
+`UI_COMPARE_WINDOW=1 WINIT_X11_SCALE_FACTOR=1 rune/target/release/ui-compare-rune`
+opens a visible window and times it (thread CPU time, Rune's own
+`update_ms + encode_ms` from `on_frame_encoded`, and wall time). The scene
+draws correctly there (`shots/rune-window.png`), but the numbers from the one
+run made are not usable and are not recorded: that session had the desktop
+locked and the monitor off (`GetActive` true, DPMS "Monitor is Off"), and the
+window then presented one frame per second, whatever the app asked for
+(`wake_after`, a waking thread and a looping animation all made no
+difference). Rune presents with `AutoVsync` and the other windowed run, BUI's,
+presents with vsync off, so a compositor that stops sending frame callbacks
+throttles only Rune. It needs a rerun with the screen unlocked. Two more
+things to know when it does run: on X11 Rune has no display link, so a window
+that has drawn goes quiet until something asks for a frame (hence the 2x2
+looping-opacity element in the corner, which is part of the measured scene),
+and `WINIT_X11_SCALE_FACTOR=1` is needed or the window opens at 1.17x scale
+(2240x1260 device pixels, more than the others draw).

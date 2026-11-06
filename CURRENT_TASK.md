@@ -17,9 +17,16 @@ of N cells at 100 / 1k / 3k / 10k; a separate workspace in `bench/ui-compare/`
   at 10k cells gameui 9.5 ms, iced 10.5, egui+wgpu 13.5, gpui 103, bui(cpu) 170;
   at 100 to 3k iced and egui are below gameui. gpui is an order of magnitude
   above from 1k cells.
-- Next: rerun on a quiet machine; GPU timing (timestamp queries, and BUI's
-  OpenGL path and gpui in a real window); find why gameui costs more than
-  iced/egui at 1k to 3k (text shaping per frame is the first suspect).
+- Also done since: BUI in a real window (`bui --window`, OpenGL, thread CPU
+  time) and Rune (`rune/`, headless; about 5 to 6 times gameui's CPU per
+  animated frame from 1k cells). Rune's `UI_COMPARE_WINDOW=1` mode is written
+  but its numbers are unusable: the desktop was locked with the monitor off,
+  and Rune (AutoVsync) then drew one frame per second. Rerun it with the screen
+  unlocked and record the table (README, last section).
+- Next: rerun everything on a quiet machine (Rune's headless numbers moved by
+  2x at 100 cells between two runs at different load); GPU timing (timestamp
+  queries, gpui in a real window); find why gameui costs more than iced/egui at
+  1k to 3k (text shaping per frame is the first suspect).
 - The stale `tmp_pack_Tj1MIA` left by a failed fetch is still in
   `~/Projects/zed/.git/objects/pack/`.
 
