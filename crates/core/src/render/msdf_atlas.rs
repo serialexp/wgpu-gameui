@@ -131,7 +131,7 @@ pub struct MsdfGlyphAtlas {
     /// outline-less glyphs (whitespace) and generation failures. Caches misses so
     /// we never retry — including a font whose hinting `skrifa` declines, which
     /// would otherwise re-parse on every frame.
-    lookup: HashMap<(u64, u16, GlyphSizing), Option<u32>>,
+    lookup: HashMap<(u64, u16, GlyphSizing), Option<u32>, rustc_hash::FxBuildHasher>,
     dirty: bool,
     ref_px: f32,
     px_range: f32,
@@ -152,7 +152,7 @@ impl MsdfGlyphAtlas {
             shelves: Vec::new(),
             next_shelf_y: 0,
             glyphs: Vec::new(),
-            lookup: HashMap::new(),
+            lookup: HashMap::default(),
             dirty: true,
             ref_px,
             px_range,

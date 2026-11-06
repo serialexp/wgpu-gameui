@@ -457,14 +457,19 @@ struct CachedLayout {
 }
 
 /// Layouts keyed by spec, then content, so a lookup borrows the content as
-/// `&str` and allocates nothing. A lookup hashes the whole content, so the
-/// inner maps hash with Fx rather than SipHash.
+/// `&str` and allocates nothing. Every text block of every frame looks up
+/// here, so both levels hash with Fx rather than SipHash (the key is a few
+/// plain integers and the keys are not attacker-chosen).
 ///
 /// Small and large layouts (over a quarter of the budget) share the map but
 /// are budgeted apart, each kind to `budget`, and eviction drops only layouts
 /// of the kind that went over it.
 struct LayoutCache {
-    map: HashMap<LayoutKey, HashMap<String, CachedLayout, rustc_hash::FxBuildHasher>>,
+    map: HashMap<
+        LayoutKey,
+        HashMap<String, CachedLayout, rustc_hash::FxBuildHasher>,
+        rustc_hash::FxBuildHasher,
+    >,
     /// The bytes kept of each kind before its least recently used layouts go
     /// ([`LAYOUT_BUDGET`]), and what eviction trims down to.
     budget: usize,
@@ -488,7 +493,7 @@ impl Default for LayoutCache {
 impl LayoutCache {
     fn with_budget(budget: usize) -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashMap::default(),
             budget,
             low_water: low_water(budget),
             uses: 0,
