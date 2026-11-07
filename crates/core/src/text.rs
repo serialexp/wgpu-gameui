@@ -1513,8 +1513,9 @@ pub(crate) struct PixelGrid {
     /// Generate each glyph's field from an outline hinted for the size it will
     /// be drawn at, rather than from one shared scalable field.
     hint: bool,
-    /// The target's size in physical px, when known: glyphs wholly outside it
-    /// are not placed. `None` places every glyph.
+    /// The target's size in logical px (its physical size over `scale`), when
+    /// known: glyphs wholly outside it are not placed. `None` places every
+    /// glyph.
     target: Option<[f32; 2]>,
 }
 
@@ -1529,7 +1530,7 @@ impl PixelGrid {
         }
     }
 
-    /// This grid, for a target of `width` by `height` physical px.
+    /// This grid, for a target of `width` by `height` logical px.
     pub(crate) fn with_target(mut self, width: f32, height: f32) -> Self {
         self.target = Some([width, height]);
         self
@@ -1540,7 +1541,7 @@ impl PixelGrid {
     pub(crate) fn viewport(&self) -> Option<[f32; 4]> {
         let [w, h] = self.target?;
         let [x, y] = self.view_origin;
-        Some([x, y, x + w / self.scale, y + h / self.scale])
+        Some([x, y, x + w, y + h])
     }
 
     /// Round `v` — a canvas coordinate along `axis` (0 = x, 1 = y) — to the

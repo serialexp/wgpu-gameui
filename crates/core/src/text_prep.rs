@@ -78,6 +78,12 @@ impl MsdfPrepared {
             .map(|range| &self.text_instances[range.start as usize..range.end as usize])
     }
 
+    /// How many glyphs block `block` placed.
+    #[cfg(test)]
+    pub(crate) fn block_glyphs_len(&self, block: usize) -> usize {
+        self.block_glyphs[block].len()
+    }
+
     /// The instances of icons `icons`.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) fn icon_range(&self, icons: Range<u32>) -> Range<u32> {

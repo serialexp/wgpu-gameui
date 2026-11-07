@@ -238,6 +238,26 @@ mod icons {
 }
 
 #[test]
+fn the_target_is_measured_in_logical_px_at_any_scale() {
+    let (mut cpu, font) = cpu(None);
+    // A 600 x 200 device-px target at scale 2 shows 300 x 100 logical px.
+    let at_scale_2 =
+        PixelGrid::new(GlyphSnap::default(), 2.0, [0.0, 0.0], true).with_target(300.0, 100.0);
+    assert_eq!(at_scale_2.viewport(), Some([0.0, 0.0, 300.0, 100.0]));
+    let from =
+        PixelGrid::new(GlyphSnap::default(), 2.0, [10.0, 20.0], true).with_target(300.0, 100.0);
+    assert_eq!(from.viewport(), Some([10.0, 20.0, 310.0, 120.0]));
+
+    // A label at y = 80 logical is on screen, though it is below 50 (the
+    // height in logical px if the scale were divided out twice).
+    let texts = [block("visible", &font, 80.0), block("below", &font, 140.0)];
+    let mut out = MsdfPrepared::default();
+    cpu.prepare_texts(&mut out, at_scale_2, &texts, once(0..2));
+    assert_eq!(out.block_glyphs_len(0), 7);
+    assert_eq!(out.block_glyphs_len(1), 0);
+}
+
+#[test]
 fn glyphs_outside_the_target_are_not_placed_and_those_in_view_are_unchanged() {
     let (mut cpu, font) = cpu(None);
     let text = vec!["abcdefgh"; 60].join("\n");
