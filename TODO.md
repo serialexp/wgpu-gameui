@@ -15,6 +15,64 @@ still open.
 
 ---
 
+## Performance review follow-ups (Codex + Antigravity, 2026-11-08)
+
+Static reviews of `f52ea97`; none of these were measured. Impact figures are the
+reviewers' guesses. Scene = `bench/ui-compare` (10k rounded rects + 2-char labels).
+
+Frame cost in the 10k scene (both reviewers agree, or only Antigravity):
+
+- [ ] **Fill-only `build_unit`** (`text_prep.rs` ~218-297): with no shadow/glow it still
+      walks the placements three times; the shadow and glow passes emit nothing.
+- [ ] **Compact `GlyphPlacement`** (`text.rs` ~1591): ~180 B per glyph, of which `clip`,
+      `outline`, `shadow`, `glow` are block-level. Keep them per block; ~3.6 MB written
+      and read back per frame at 10k cells.
+- [ ] **`draw_box::analytic` fast path** (`draw_box.rs` ~310-369): `reach_holds` checks 40
+      floats and the identity-linear case still builds four corners. Compute the bounds
+      directly for untransformed chrome and check only the six geometry floats.
+- [ ] **`Option<Arc<[…]>>` text ranges** (`text.rs` ~3246, 3341): empty ranges still cost
+      two atomic increments at build and two decrements at drop per block.
+- [ ] **`DrawOrder::highest()` and cell storage** (`draw_order.rs` ~165-328): per-cell
+      `Vec<u32>` plus a `chain`/`filter` iterator per cell visited. Test `top` first and
+      flatten cell entries into one pool.
+- [ ] **Per-glyph font-key and atlas lookups** (`text.rs` ~1546, `msdf_atlas.rs` ~267):
+      remember the last font id; store the resolved atlas tile on `ShapedGlyph`.
+- [ ] **`BatchDraws::fill`** (`batch_draws.rs` ~72-184): hoist the per-unit `match`,
+      reserve capacity, copy contiguous instance ranges in one go. Also upload via
+      `write_buffer_with` so instances are not copied twice (`frame_arena.rs:78`).
+- [ ] **`push_chrome_instance` identity fast path** (`draw_list.rs` ~2034): 30-float
+      finiteness check and a matrix inverse per rect even for identity transforms.
+
+Structural (larger designs; judge on the new ui-compare scenarios first):
+
+- [ ] **Frozen/prepared list**: unchanged geometry and text repeat the whole prepare,
+      order, sort, copy and upload pipeline. A caller-owned prepared list with separate
+      invalidation for geometry/order, text appearance and instance data.
+- [ ] **Incremental atlas upload** (`msdf_atlas.rs` ~295, `textures.rs` ~669, `atlas.rs`
+      ~376): one new glyph or sprite rebuilds and uploads the whole atlas (64 MiB at 4096²).
+      Track dirty regions.
+- [ ] **Cull text against the viewport before layout** (`text_prep.rs` ~88-191): off-screen
+      blocks are shaped and placed before being discarded.
+- [ ] **Rich text**: `resolve_span_color` is O(glyphs × spans) (`text.rs` ~1357); span text
+      is re-concatenated per draw (`draw_list.rs` ~2688). Normalise once into `TextContent`
+      plus range styles.
+- [ ] **Paragraph reuse disabled with face ranges** (`shaping/paragraphs.rs` ~42): markdown
+      and highlighted documents reshape fully on every edit. Also SipHash in `plan`.
+- [ ] **`FieldParagraphs::sync`** (`field_paragraphs.rs` ~139) compares the whole value on
+      every call; track edit ranges. Multiline/single-line inputs build several owned
+      `TextBlock`s per frame.
+- [ ] **Per-widget scope-name allocations** (`button.rs` ~271, `pressable.rs` ~183): use
+      static names or capture lazily.
+- [ ] **Named image / nine-slice keys** allocate a `String` per draw (`draw_list.rs` ~2898,
+      ~3015); intern or share.
+- [ ] **Layout lookup hashes the whole content and face ranges** (`shaping.rs` ~558-617):
+      cached fingerprints on immutable text/style.
+- [ ] **Password mask** (`text_input.rs` ~484) allocates a `String` every frame.
+- [ ] Replaced `FrameArena` buffers are kept for the renderer's lifetime
+      (`frame_arena.rs:58`): memory only, not CPU.
+
+New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios section).
+
 ## Flaky media test (found 2026-10-23)
 
 - [ ] **`player::tests::out_of_pictures_the_clock_waits_for_them`** (`crates/media/src/player_tests.rs:367`)
