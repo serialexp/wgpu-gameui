@@ -222,34 +222,68 @@ atlas's lookup map now hash with Fx instead of SipHash (committed as
 egui's 1.5 to 1.8 at 3,000 cells. The remaining hashing is the `fontdb::ID` map
 (about 1.5%) and two more lookups per label in `LayoutCache::entry`, which
 hashes the key three times in the hit path (`get`, then `get_mut` after
-`contains_key`); neither was changed.
+`contains_key`); both were changed later (below).
 
-What is left, in the order the profile puts it, with what each would change:
+Every item that profile listed was then tried, one at a time, each
+measured back to back against the commit before it (the frame at 3,000 cells
+unless noted; the machine was at load average 20 to 40 throughout, so each
+figure is the mean of several alternating runs and is good to a few percent):
 
-1. **Pixel bounds for text** (about 16% to 40% depending on how inlined
-   callers are counted): bound a glyph quad once instead of through two
-   clipped triangles, or bound a whole block from its layout size and clip.
-   Both change what `DrawOrder` is given, so the draw-order equivalence tests
-   (`brute_force_orders`) are what would show whether the order stays the same.
-2. **Draw-order ordering** (about 17% together): it exists so batches that
-   overlap keep paint order. A list in which no unit overlaps another, as this
-   grid, gets nothing from it; a cheap test for that, or a coarser grid for
-   text, is the design question in `docs/design/draw-call-batching.md`.
-3. **Owned text** (about 10% malloc/free/drop plus part of the list-building
-   share): `TextBlock` owns its string, so every frame allocates one per label.
-   An `Arc<str>` or `Cow` would remove it but changes the public type.
-4. **Cache hits** (`LayoutCache::entry` three hashes, the `fontdb::ID` map).
+| what | commit | effect |
+| --- | --- | --- |
+| Fx hashers for the layout cache's outer map and the glyph atlas lookup | `f8dc974` | `render` 1.69 to 1.39 ms |
+| bound a glyph quad once from its four corners, and the clip once per run | `1e95fe9` | about 8% at 3,000, 4.5% at 10,000. Well under the 16% the profile's `triangle` and `union` frames suggested: inlining spreads cost across callers in `perf`, so those shares overstate what one function gives back |
+| one hash per level on a layout-cache hit (a slab behind the maps, so no borrow outlives the lookup) | `20fde6a` | about 2% at 3,000, nothing visible at 10,000 |
+| draw-order grid cell tuned to the list (16, 32 or 64 px) | `311bbf0` | 1.62 to 1.45 ms at 3,000 (-10%), 7.49 to 6.07 ms at 10,000 (-19%) |
+| a plain `TextBlock` shares its two empty range lists instead of allocating them | `5c6f672` | about 7% at 3,000 |
+| `TextBlock::content` is a shared `TextContent` (`Arc<str>`), so a retained label costs a reference count | `1d1897b` | about 6% at 3,000 with the harness holding its labels, as the egui and iced ones borrow theirs |
+| Fx hash for the per-glyph `fontdb::ID` lookup | `c1ef0ae` | about 3% at 3,000 |
 
-Item 1's first half was then tried (`1e95fe9`): a glyph quad is bounded once
-from its four corners, and the clip's bound once per run of quads sharing it.
-Back to back against the commit before it (three alternating rounds, machine
-at load average 20 to 30), the frame went from about 1.88 to 1.72 ms at 3,000
-cells (8%) and from 8.77 to 8.38 ms at 10,000 (4.5%). That is well under the
-16% the profile's `triangle` and `union` frames suggested: inlining spreads
-the cost across callers in `perf`, so those shares overstate what one function
-can give back. Axis-aligned quads give the same box as before (tested against
-the old two-triangle method), and rotated ones never a smaller one. Items 2 to
-4 and bounding a block from its layout size have not been tried. The measurement behind the table is one
+Notes on the three that were not just a swap:
+
+- **Draw order.** The "skip it for lists with no overlap" idea in the first
+  version of this list does not apply to this scene: every label sits on its
+  own plate, so every unit overlaps one. What helped is the grid under it. At
+  64 px a cell held a dozen of these small boxes and each lookup tested them
+  all. A smaller cell fixes that here but costs boxes that are big or overlap
+  anyway (shadows with their blur): counted in cell visits plus overlap
+  tests, 16 px is about 6 times the work of 64 px on a shadow grid and about
+  half on this one. So `CellTuner` picks the cell by measuring: it tries a
+  neighbour, keeps the cheapest, and measures afresh every 120 lists or when
+  the unit count moves by a quarter. The grid only finds overlaps, so orders
+  are identical (tested against the brute force at every cell size). Cells
+  are reset only where they were written, since clearing all of 16 px's
+  8,000 cells every frame cost a list that never reaches the grid about 20 us.
+- **Owned text.** The type change is breaking (`TextBlock::content`,
+  `DebugNode::text` and what `TextSelection::remember` keeps are `TextContent`;
+  `TextBlock::new` and the theme and style helpers take `impl
+  Into<TextContent>`, so every call that passed a `&str`, `String` or
+  `&String` still compiles). The gain only appears for a caller that keeps its
+  labels; one that formats a fresh `String` per frame copies it once, as before.
+- **Not done: bounding a whole text block from its layout.** The per-glyph
+  union can be replaced by one box over every corner only where nothing is
+  clipped *and* every glyph is on the target; a block half off the edge, or
+  inside a scroll view, would otherwise get a wider box than the per-glyph one,
+  and a wider box can chain batches that a tight one keeps apart. `msdf` is now
+  about 7% of the frame, so an exact version with those exceptions would give
+  back a few percent at most.
+
+After all of these, back to back with egui and iced in one session (animated,
+mean ms per frame, load average 24, two runs each):
+
+| cells | gameui | egui+wgpu | iced |
+| ---: | ---: | ---: | ---: |
+| 100 | 0.07 | 0.06 | 0.06 |
+| 1,000 | 0.42 | 0.52 | 0.39 |
+| 3,000 | 1.24 | 1.58 | 1.18 |
+| 10,000 | 5.98 | 12.0 | 4.79 |
+
+gameui went from 2.1 ms at 3,000 cells (and 9.5 at 10,000) to about 1.25 (and
+about 5.4 to 6); iced is still 5% to 20% lower, egui is higher from 1,000
+cells. The iced and egui figures here differ from the table above because the
+load differs: only compare numbers within one table.
+
+The shares in the profile table above are from one
 profile; the per-phase ms were taken on a machine at load average 25 to 50,
 which moves absolute numbers but not these shares much (two phase runs agreed
 within 3%).

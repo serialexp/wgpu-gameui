@@ -23,10 +23,24 @@ of N cells at 100 / 1k / 3k / 10k; a separate workspace in `bench/ui-compare/`
   but its numbers are unusable: the desktop was locked with the monitor off,
   and Rune (AutoVsync) then drew one frame per second. Rerun it with the screen
   unlocked and record the table (README, last section).
-- Next: rerun everything on a quiet machine (Rune's headless numbers moved by
-  2x at 100 cells between two runs at different load); GPU timing (timestamp
-  queries, gpui in a real window); find why gameui costs more than iced/egui at
-  1k to 3k (text shaping per frame is the first suspect).
+- The profile of gameui's own cost was followed up and every option on its list
+  tried (README, "Where gameui's time goes"): Fx hashers, one-pass glyph quad
+  bound, one hash per layout-cache hit, a draw-order grid whose cell is tuned
+  to the list (`CellTuner`), shared empty range lists, `TextBlock::content` as
+  a shared `TextContent` (breaking), Fx for the font-key lookup. gameui went
+  from 2.1 to about 1.25 ms at 3k cells and from 9.5 to about 5.4 to 6 at 10k;
+  iced is still 5% to 20% lower, egui higher from 1k cells. Left undone, with
+  the reason: bounding a whole text block from its layout size (not exact for
+  clipped or partly off-screen blocks; ~7% of the frame is `msdf` at most).
+  All committed locally (`f8dc974`..`c1ef0ae`), nothing pushed.
+- Next: rerun everything on a quiet machine (the load average was 20 to 40
+  for the last measurements, and Rune's headless numbers moved by 2x at 100
+  cells between two runs at different load); GPU timing (timestamp queries,
+  gpui in a real window).
+- Heads up for other crates that use gameui by path (mesh-forge, agent-ui):
+  `TextBlock::content` is now a `TextContent`, not a `String`. `.to_string()`
+  where a `String` is needed; reading, `==` against strings and `as_str()` work
+  as before.
 - The stale `tmp_pack_Tj1MIA` left by a failed fetch is still in
   `~/Projects/zed/.git/objects/pack/`.
 
