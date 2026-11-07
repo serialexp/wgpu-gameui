@@ -1520,19 +1520,6 @@ fn append_placements(
     out: &mut Vec<GlyphPlacement>,
 ) {
     let block_fill = color_to_rgba(block.color);
-    let clip = block.clip.map(|c| [c.x, c.y, c.width, c.height]);
-    let outline = block
-        .outline
-        .as_ref()
-        .map(|o| (color_to_rgba(o.color), o.width_px));
-    let shadow = block
-        .shadow
-        .as_ref()
-        .map(|s| (color_to_rgba(s.color), s.offset, s.softness));
-    let glow = block
-        .glow
-        .as_ref()
-        .map(|g| (color_to_rgba(g.color), g.radius_px));
 
     for g in shaped {
         // A glyph that can't reach into the clip isn't placed (see
@@ -1576,31 +1563,54 @@ fn append_placements(
             baseline_y: grid.baseline_y(block.y + g.rel_y),
             tile,
             font_size: g.font_size,
-            clip,
             fill,
-            outline,
-            shadow,
-            glow,
         });
     }
 }
 
-/// A glyph ready to be turned into quads, captured before uv resolution. Carries
-/// the block's resolved effect parameters so the emit sweeps can build shadow /
-/// glow / fill quads from one record.
+/// A glyph ready to be turned into quads, captured before uv resolution. What
+/// the whole block shares (clip and effects) is in its [`BlockEffects`], not
+/// repeated in every glyph.
 struct GlyphPlacement {
     tile: GlyphTile,
     pen_x: f32,
     baseline_y: f32,
     font_size: f32,
-    clip: Option<[f32; 4]>,
     fill: [f32; 4],
+}
+
+/// The parameters every glyph of one block shares: its clip and resolved
+/// effects. The emit sweeps build shadow / glow / fill quads from a glyph's
+/// [`GlyphPlacement`] and these.
+#[derive(Default)]
+struct BlockEffects {
+    clip: Option<[f32; 4]>,
     /// (color, width_px)
     outline: Option<([f32; 4], f32)>,
     /// (color, offset, softness)
     shadow: Option<([f32; 4], [f32; 2], f32)>,
     /// (color, radius_px)
     glow: Option<([f32; 4], f32)>,
+}
+
+impl BlockEffects {
+    fn of(block: &TextBlock) -> Self {
+        Self {
+            clip: block.clip.map(|c| [c.x, c.y, c.width, c.height]),
+            outline: block
+                .outline
+                .as_ref()
+                .map(|o| (color_to_rgba(o.color), o.width_px)),
+            shadow: block
+                .shadow
+                .as_ref()
+                .map(|s| (color_to_rgba(s.color), s.offset, s.softness)),
+            glow: block
+                .glow
+                .as_ref()
+                .map(|g| (color_to_rgba(g.color), g.radius_px)),
+        }
+    }
 }
 
 /// Maximum effect reach (screen px) a glyph's distance field supports at a given
@@ -1628,6 +1638,7 @@ struct QuadStyle {
 fn push_glyph_quad(
     out: &mut Vec<MsdfInstance>,
     p: &GlyphPlacement,
+    clip: Option<[f32; 4]>,
     px_range: f32,
     style: &QuadStyle,
 ) {
@@ -1645,7 +1656,7 @@ fn push_glyph_quad(
         &p.tile.region,
         style.fill,
         style.outline,
-        p.clip,
+        clip,
         [px_range, style.outline_width, style.softness],
     ));
 }

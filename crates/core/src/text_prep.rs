@@ -45,6 +45,8 @@ pub(crate) struct TextUnit {
 #[derive(Default)]
 pub(crate) struct MsdfPrepared {
     placements: Vec<GlyphPlacement>,
+    /// What each text block's glyphs share.
+    block_effects: Vec<BlockEffects>,
     /// Each text block's glyphs in `placements`.
     block_glyphs: Vec<Range<u32>>,
     /// Every text unit's instances, one unit after another.
@@ -169,6 +171,7 @@ impl MsdfCpu {
         let _span = tracing::info_span!("gameui_text_shape").entered();
 
         out.placements.clear();
+        out.block_effects.clear();
         out.block_glyphs.clear();
         out.text_instances.clear();
         out.block_sweeps.clear();
@@ -190,6 +193,7 @@ impl MsdfCpu {
         let mut shared = fs_handle.lock().expect("FontSystem poisoned");
         for block in texts {
             let start = out.placements.len() as u32;
+            out.block_effects.push(BlockEffects::of(block));
             if !block.content.is_empty() {
                 let (layout, fs) =
                     shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
@@ -284,8 +288,9 @@ impl MsdfPrepared {
             for block in blocks.clone() {
                 let from = self.text_instances.len() as u32;
                 let glyphs = self.block_glyphs[block as usize].clone();
+                let effects = &self.block_effects[block as usize];
                 for p in &self.placements[glyphs.start as usize..glyphs.end as usize] {
-                    push_sweep_quad(&mut self.text_instances, sweep, p, kind);
+                    push_sweep_quad(&mut self.text_instances, sweep, p, effects, kind);
                 }
                 self.block_sweeps[block as usize][kind] = from..self.text_instances.len() as u32;
             }
@@ -306,8 +311,9 @@ impl MsdfPrepared {
     fn build_fill_unit(&mut self, sweep: &Sweep, block: u32) {
         let from = self.text_instances.len() as u32;
         let glyphs = self.block_glyphs[block as usize].clone();
+        let effects = &self.block_effects[block as usize];
         for p in &self.placements[glyphs.start as usize..glyphs.end as usize] {
-            push_sweep_quad(&mut self.text_instances, sweep, p, 2);
+            push_sweep_quad(&mut self.text_instances, sweep, p, effects, 2);
         }
         let end = self.text_instances.len() as u32;
         self.block_sweeps[block as usize] = [from..from, from..from, from..end];
@@ -320,14 +326,20 @@ impl MsdfPrepared {
 
 /// One glyph's quad for sweep `kind`: 0 its shadow, 1 its glow, 2 its fill
 /// and outline. Nothing for a shadow or glow the glyph doesn't have.
-fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacement, kind: usize) {
+fn push_sweep_quad(
+    out: &mut Vec<MsdfInstance>,
+    sweep: &Sweep,
+    p: &GlyphPlacement,
+    effects: &BlockEffects,
+    kind: usize,
+) {
     let px_range = sweep.px_range;
     // Effects are capped to the field's reach, so they follow the glyph
     // instead of filling its tile.
     let safe = field_reach(p.font_size, px_range, p.tile.ref_px);
     let style = match kind {
         0 => {
-            let Some((color, offset, softness)) = p.shadow else {
+            let Some((color, offset, softness)) = effects.shadow else {
                 return;
             };
             // A shadow is a fill with widened AA.
@@ -340,7 +352,7 @@ fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacemen
             }
         }
         1 => {
-            let Some((color, radius)) = p.glow else {
+            let Some((color, radius)) = effects.glow else {
                 return;
             };
             // The glow is a grown, soft, fill-less halo; its band (width +
@@ -357,7 +369,7 @@ fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacemen
             }
         }
         _ => {
-            let (outline, outline_width) = p.outline.unwrap_or(([0.0; 4], 0.0));
+            let (outline, outline_width) = effects.outline.unwrap_or(([0.0; 4], 0.0));
             QuadStyle {
                 fill: p.fill,
                 outline,
@@ -367,7 +379,7 @@ fn push_sweep_quad(out: &mut Vec<MsdfInstance>, sweep: &Sweep, p: &GlyphPlacemen
             }
         }
     };
-    push_glyph_quad(out, p, px_range, &style);
+    push_glyph_quad(out, p, effects.clip, px_range, &style);
 }
 
 #[cfg(all(test, feature = "bundled-font"))]
