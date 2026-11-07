@@ -53,7 +53,7 @@ fn main() {
         // check, since a harness that silently drew nothing would be fast.
         {
             let mut list = DrawList::with_font_system(fonts.clone());
-            build(&mut list, &grid, &labels, 0, true);
+            build(&mut list, &grid, &labels, 0, Mode::Animated);
             let mut encoder = device.create_command_encoder(&Default::default());
             ui.begin_frame();
             let stats = ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
@@ -69,10 +69,10 @@ fn main() {
             );
             check_frame("gameui", n, &read_target(&device, &queue, &target, size));
         }
-        for (scenario, animated) in [("static", false), ("animated", true)] {
+        for (scenario, mode) in MODES {
             let stats = measure(|frame| {
                 let mut list = DrawList::with_font_system(fonts.clone());
-                build(&mut list, &grid, &labels, frame, animated);
+                build(&mut list, &grid, &labels, frame, mode);
                 let mut encoder = device.create_command_encoder(&Default::default());
                 ui.begin_frame();
                 ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
@@ -83,14 +83,96 @@ fn main() {
             report("gameui", scenario, n, &stats);
         }
     }
+
+    if text_scenes_wanted() {
+        let doc: Vec<TextContent> = (0..DOC_LINES).map(|i| doc_line(i).into()).collect();
+        let para: TextContent = para_text().into();
+        let scenes: [(&str, &dyn Fn(&mut DrawList, u64)); 3] = [
+            ("scroll", &|list, frame| scroll_lines(list, &doc, frame)),
+            ("churn", &|list, frame| churn_lines(list, frame)),
+            ("para", &|list, frame| paragraph(list, &para, frame)),
+        ];
+        for (name, scene) in scenes {
+            {
+                let mut list = DrawList::with_font_system(fonts.clone());
+                scene(&mut list, 40);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                ui.begin_frame();
+                ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
+                queue.submit(Some(encoder.finish()));
+                check_text_frame("gameui", name, &read_target(&device, &queue, &target, size));
+            }
+            let stats = measure(|frame| {
+                let mut list = DrawList::with_font_system(fonts.clone());
+                scene(&mut list, frame);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                ui.begin_frame();
+                ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
+                queue.submit(Some(encoder.finish()));
+                device.poll(wgpu::Maintain::Poll);
+            });
+            device.poll(wgpu::Maintain::Wait);
+            report_scene("gameui", name, &stats);
+        }
+    }
+}
+
+fn background(list: &mut DrawList) {
+    let [r, g, b] = TEXT_BG;
+    list.rounded_rect(
+        Rect::new(0.0, 0.0, WIDTH, HEIGHT),
+        0.0,
+        [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
+    );
+}
+
+fn line(content: impl Into<TextContent>, x: f32, y: f32) -> TextBlock {
+    let mut block = TextBlock::new(content, x, y)
+        .with_line_height(LINE_H)
+        .with_max_width(LINE_COL_W);
+    block.font_size = LINE_PX;
+    block
+}
+
+/// Lines of retained text scrolling past: the strings repeat from frame to
+/// frame, only their positions move.
+fn scroll_lines(list: &mut DrawList, doc: &[TextContent], frame: u64) {
+    background(list);
+    for c in 0..LINE_COLS {
+        for r in 0..LINE_ROWS {
+            let (i, y) = scrolled_line(c, r, frame);
+            list.text(line(doc[i].clone(), c as f32 * LINE_COL_W, y));
+        }
+    }
+}
+
+/// Lines whose text is new every frame, so none can be found in a cache.
+fn churn_lines(list: &mut DrawList, frame: u64) {
+    background(list);
+    for c in 0..LINE_COLS {
+        for r in 0..LINE_ROWS {
+            let (i, y) = scrolled_line(c, r, 0);
+            list.text(line(churn_line(i, frame), c as f32 * LINE_COL_W, y));
+        }
+    }
+}
+
+/// One large wrapped block, partly off screen, scrolled by moving it.
+fn paragraph(list: &mut DrawList, text: &TextContent, frame: u64) {
+    background(list);
+    let mut block = TextBlock::new(text.clone(), PARA_X, para_y(frame))
+        .with_line_height(PARA_LINE_H)
+        .with_max_width(PARA_W);
+    block.font_size = PARA_PX;
+    list.text(block);
 }
 
 /// The scene as a `DrawList`: a rounded rectangle and a label per cell.
-fn build(list: &mut DrawList, grid: &Grid, labels: &[TextContent], frame: u64, animated: bool) {
+fn build(list: &mut DrawList, grid: &Grid, labels: &[TextContent], frame: u64, mode: Mode) {
     let (w, h) = grid.size();
     for i in 0..grid.n {
         let (x, y) = grid.origin(i);
-        let [r, g, b] = fill(i, frame, animated);
+        let [r, g, b] = fill_in(mode, i, frame);
         list.rounded_rect(
             Rect::new(x, y, w, h),
             grid.radius,

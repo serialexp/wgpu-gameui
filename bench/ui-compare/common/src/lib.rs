@@ -113,6 +113,144 @@ fn hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
     ]
 }
 
+/// What changes between frames of the grid scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Nothing changes.
+    Static,
+    /// Every cell's colour changes every frame.
+    Animated,
+    /// Only cell 0's colour changes: a mostly static UI with one live element
+    /// (a clock, a counter). A library that can reuse what did not change
+    /// should be far cheaper here than in `Animated`.
+    One,
+}
+
+/// The grid scenarios every harness runs, with the name they are reported as.
+pub const MODES: [(&str, Mode); 3] = [
+    ("static", Mode::Static),
+    ("animated", Mode::Animated),
+    ("one", Mode::One),
+];
+
+/// [`fill`] for a scenario [`Mode`].
+pub fn fill_in(mode: Mode, i: usize, frame: u64) -> [u8; 3] {
+    match mode {
+        Mode::Static => fill(i, frame, false),
+        Mode::Animated => fill(i, frame, true),
+        Mode::One => fill(i, frame, i == 0),
+    }
+}
+
+// ---- Text scenes -----------------------------------------------------------
+//
+// The grid draws short labels. These scenes draw text the way documents, logs
+// and lists do: many long lines, and one large wrapped paragraph. All of them
+// sit on the same dark background in the same white text, at the same size.
+
+/// Background of the text scenes (8-bit RGB).
+pub const TEXT_BG: [u8; 3] = [24, 26, 32];
+/// Text size and line spacing of the line scenes, in logical pixels.
+pub const LINE_PX: f32 = 13.0;
+pub const LINE_H: f32 = 16.0;
+/// Columns of lines, side by side across the window.
+pub const LINE_COLS: usize = 4;
+/// Rows drawn in each column: enough to fill the window plus one for scrolling.
+pub const LINE_ROWS: usize = (HEIGHT / LINE_H) as usize + 2;
+/// Scroll speed of the `scroll` scene, in logical pixels per frame.
+pub const SCROLL_PX: f32 = 3.0;
+
+/// How many distinct lines the line document has before it repeats.
+pub const DOC_LINES: usize = 4_000;
+
+/// Line `i` of the line document: unique text of about 60 characters.
+pub fn doc_line(i: usize) -> String {
+    format!(
+        "{i:05}  the quick brown fox jumps over {} lazy dogs, then rests",
+        i % 97
+    )
+}
+
+/// The same line with a frame counter in it, so its text is new every frame.
+pub fn churn_line(i: usize, frame: u64) -> String {
+    format!(
+        "{i:05}  the quick brown fox jumps over {} lazy dogs at {frame:06}",
+        i % 97
+    )
+}
+
+/// Where the line at screen row `r` of column `c` is on `frame` of the scroll
+/// scene: the document line to draw and its y position. Each column shows a
+/// different part of the document.
+pub fn scrolled_line(c: usize, r: usize, frame: u64) -> (usize, f32) {
+    let offset = frame as f32 * SCROLL_PX;
+    let first = (offset / LINE_H) as usize;
+    let shift = offset % LINE_H;
+    ((first + r + c * 997) % DOC_LINES, r as f32 * LINE_H - shift)
+}
+
+/// Width of one column of lines.
+pub const LINE_COL_W: f32 = WIDTH / LINE_COLS as f32;
+
+/// Paragraph scene: one block of wrapped text, scrolled through the window.
+pub const PARA_PX: f32 = 14.0;
+pub const PARA_LINE_H: f32 = 20.0;
+pub const PARA_X: f32 = 360.0;
+pub const PARA_W: f32 = 1200.0;
+/// Scroll speed of the paragraph, in logical pixels per frame.
+pub const PARA_SCROLL_PX: f32 = 2.0;
+/// The paragraph's scroll offset is kept below this, so it is always on screen.
+pub const PARA_SCROLL_MAX: f32 = 1_400.0;
+
+/// About 24,000 characters of prose, wrapped to [`PARA_W`] this is a bit over
+/// 2,500 px tall: more than twice the window.
+pub fn para_text() -> String {
+    const SENTENCES: [&str; 6] = [
+        "The interface is drawn again every frame, from nothing but the state the caller holds.",
+        "A label that did not change should cost no more than looking it up.",
+        "Long documents scroll through a window much smaller than they are.",
+        "Wrapping decides where every line ends, and the lines decide how tall it all is.",
+        "Most of the glyphs of a paragraph that large are never on screen at one time.",
+        "Measure the cost of the worst frame as well as the average one.",
+    ];
+    let mut out = String::new();
+    let mut i = 0;
+    while out.len() < 24_000 {
+        out.push_str(SENTENCES[i % SENTENCES.len()]);
+        out.push(if i % 5 == 4 { '\n' } else { ' ' });
+        i += 1;
+    }
+    out
+}
+
+/// The paragraph's y on `frame`: it scrolls up and wraps back to the top.
+pub fn para_y(frame: u64) -> f32 {
+    20.0 - (frame as f32 * PARA_SCROLL_PX) % PARA_SCROLL_MAX
+}
+
+/// Check a text-scene frame: the background fills it and a real amount of it
+/// is text (light ink on the dark background).
+pub fn check_text_frame(library: &str, scene: &str, rgba: &[u8]) {
+    let lit = lit_fraction(rgba);
+    let ink = rgba
+        .chunks_exact(4)
+        .filter(|p| p[0] > 160 && p[1] > 160 && p[2] > 160)
+        .count() as f64
+        / (rgba.len() / 4) as f64;
+    assert!(
+        lit > 0.9 && ink > 0.003,
+        "{library} {scene}: {:.0}% lit, {:.2}% ink",
+        lit * 100.0,
+        ink * 100.0
+    );
+    save_png(library, scene, rgba);
+    eprintln!(
+        "{library} {scene}: {:.0}% lit, {:.2}% ink",
+        lit * 100.0,
+        ink * 100.0
+    );
+}
+
 /// Frames timed per case after the warm-up.
 const SAMPLES: usize = 200;
 /// Frames run before timing, so caches, atlases and buffers are warm.
@@ -183,6 +321,26 @@ pub fn report(library: &str, scenario: &str, n: usize, s: &Stats) {
     );
 }
 
+/// Print one result line for a text scene (no cell count), in the same
+/// columns as [`report`].
+pub fn report_scene(library: &str, scene: &str, s: &Stats) {
+    println!(
+        "{library:<10} {scene:<9} {:>6}        {:>4} frames  mean {:>8.3} ms  p50 {:>8.3} ms  p99 {:>8.3} ms  max {:>8.3} ms",
+        "-",
+        s.frames,
+        s.mean_us / 1e3,
+        s.p50_us / 1e3,
+        s.p99_us / 1e3,
+        s.max_us / 1e3,
+    );
+}
+
+/// Whether the text scenes should run: not when the first argument asks for
+/// one grid size.
+pub fn text_scenes_wanted() -> bool {
+    std::env::args().nth(1).is_none()
+}
+
 /// Counts to run: all of them, or the one given as the first argument.
 pub fn counts() -> Vec<usize> {
     match std::env::args().nth(1).and_then(|a| a.parse().ok()) {
@@ -211,9 +369,16 @@ pub fn check_frame(library: &str, n: usize, rgba: &[u8]) {
         "{library}: only {:.0}% of the frame is lit for {n} cells",
         lit * 100.0
     );
+    save_png(library, &n.to_string(), rgba);
+    eprintln!("{library} {n} cells: {:.0}% of the frame lit", lit * 100.0);
+}
+
+/// Save an RGBA frame as `shots/<library>-<name>.png` (next to the harness).
+pub fn save_png(library: &str, name: &str, rgba: &[u8]) {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../shots");
     std::fs::create_dir_all(&dir).expect("create shots");
-    let file = std::fs::File::create(dir.join(format!("{library}-{n}.png"))).expect("create png");
+    let file =
+        std::fs::File::create(dir.join(format!("{library}-{name}.png"))).expect("create png");
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), WIDTH as u32, HEIGHT as u32);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
@@ -221,5 +386,4 @@ pub fn check_frame(library: &str, n: usize, rgba: &[u8]) {
         .expect("png header")
         .write_image_data(rgba)
         .expect("png data");
-    eprintln!("{library} {n} cells: {:.0}% of the frame lit", lit * 100.0);
 }

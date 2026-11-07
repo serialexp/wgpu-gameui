@@ -287,3 +287,38 @@ The shares in the profile table above are from one
 profile; the per-phase ms were taken on a machine at load average 25 to 50,
 which moves absolute numbers but not these shares much (two phase runs agreed
 within 3%).
+
+## More scenes (gameui, egui, iced)
+
+The grid draws many short labels, redrawn in full. The scenes below cost
+differently, so they say different things about a renderer. They run in the
+gameui, egui and iced harnesses (not yet in BUI, gpui or Rune) after the grid
+counts, unless one grid size is asked for on the command line. Each is checked
+the same way as the grid: a frame is read back and must be lit and carry a real
+amount of light ink (`check_text_frame`; the PNGs land in `shots/`).
+
+| scene | what it draws | what it exposes |
+| --- | --- | --- |
+| `one` (grid) | the grid, where only cell 0 changes colour | whether unchanged work is reused; in an immediate-mode library it should cost the same as `animated` |
+| `scroll` | 4 columns of 69 unique ~60-char lines, scrolling 3 px per frame; strings repeat from frame to frame | warm layout lookup, glyph preparation, many mid-size text blocks |
+| `churn` | the same lines, but each line's text changes every frame | cold shaping and layout, atlas lookups, no cache can help |
+| `para` | one wrapped ~24,000-character block, 2,500 px tall, scrolled through a 1,080 px window | whole-block work when most of the block is off screen (culling) |
+
+`iced` has no absolute positioning, so its `scroll` scene pads each column's
+top by the sub-line offset and draws rows 1.., and its `para` is a
+`scrollable` set to the frame's offset with `scroll_to`.
+
+### Results, 2026-11-08 (load average about 3; mean CPU ms per frame)
+
+| scene | gameui | egui+wgpu | iced |
+| --- | ---: | ---: | ---: |
+| grid 3,000 `one` | 1.22 | 1.72 | 1.33 |
+| `scroll` | 1.07 | 0.25 | 1.43 (p50 0.80) |
+| `churn` | 5.24 | 2.40 | 3.85 |
+| `para` | 1.39 | 0.13 | 0.40 |
+
+On text-heavy scenes gameui is the slowest of the three: egui's galley cache
+lets a scrolled block cost almost nothing (`para` 0.13 ms), and gameui prepares
+every glyph of a block whether or not it is on screen. These are the scenes
+the structural items in `TODO.md` (cull text against the viewport, retained
+prepared text) should be judged on.

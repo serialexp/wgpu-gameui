@@ -9,7 +9,7 @@
 //! nothing changed; here a frame is forced either way, so `static` shows what
 //! a forced redraw costs.
 
-use iced_core::{Background, Border, Color, Length, Pixels, Size, mouse, renderer};
+use iced_core::{Background, Border, Color, Length, Padding, Pixels, Size, mouse, renderer};
 use iced_graphics::{Shell, Viewport};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use iced_wgpu::wgpu;
@@ -83,8 +83,8 @@ fn main() {
 
         // One frame; returns the user interface's cache for the next one.
         let mut cache = Some(Cache::new());
-        let mut frame_fn = |renderer: &mut Renderer, frame: u64, animated: bool| {
-            let element = view_of(&grid, &labels, frame, animated);
+        let mut frame_fn = |renderer: &mut Renderer, frame: u64, mode: Mode| {
+            let element = view_of(&grid, &labels, frame, mode);
             let mut ui = UserInterface::build(element, bounds, cache.take().unwrap(), renderer);
             ui.draw(renderer, &theme, &style, mouse::Cursor::Unavailable);
             cache = Some(ui.into_cache());
@@ -93,19 +93,117 @@ fn main() {
         };
 
         // The frame must contain the scene: look at what was drawn.
-        frame_fn(&mut renderer, 0, true);
+        frame_fn(&mut renderer, 0, Mode::Animated);
         check_frame("iced", n, &renderer.screenshot(&viewport, Color::BLACK));
 
-        for (scenario, animated) in [("static", false), ("animated", true)] {
-            let stats = measure(|frame| frame_fn(&mut renderer, frame, animated));
+        for (scenario, mode) in MODES {
+            let stats = measure(|frame| frame_fn(&mut renderer, frame, mode));
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
             report("iced", scenario, n, &stats);
         }
     }
+
+    if text_scenes_wanted() {
+        let doc: Vec<String> = (0..DOC_LINES).map(doc_line).collect();
+        let para = para_text();
+        for name in ["scroll", "churn", "para"] {
+            let mut cache = Some(Cache::new());
+            let mut frame_fn = |renderer: &mut Renderer, frame: u64| {
+                let element = text_view(name, frame, &doc, &para);
+                let mut ui = UserInterface::build(element, bounds, cache.take().unwrap(), renderer);
+                if name == "para" {
+                    // Scroll the paragraph's scrollable to this frame's offset.
+                    let offset = 20.0 - para_y(frame);
+                    ui.operate(
+                        renderer,
+                        &mut iced_core::widget::operation::scrollable::scroll_to(
+                            PARA_ID.into(),
+                            iced_core::widget::operation::scrollable::AbsoluteOffset {
+                                x: None,
+                                y: Some(offset),
+                            },
+                        ),
+                    );
+                }
+                ui.draw(renderer, &theme, &style, mouse::Cursor::Unavailable);
+                cache = Some(ui.into_cache());
+                renderer.present(Some(Color::BLACK), format, &view, &viewport);
+                let _ = device.poll(wgpu::PollType::Poll);
+            };
+            for frame in 0..4 {
+                frame_fn(&mut renderer, 40 + frame);
+            }
+            check_text_frame("iced", name, &renderer.screenshot(&viewport, Color::BLACK));
+            let stats = measure(|frame| frame_fn(&mut renderer, frame));
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            report_scene("iced", name, &stats);
+        }
+    }
+}
+
+const PARA_ID: &str = "para";
+
+/// One text scene (see the common crate) as an iced element tree.
+fn text_view<'a>(scene: &str, frame: u64, doc: &'a [String], para: &'a str) -> Element<'a> {
+    let [r, g, b] = TEXT_BG;
+    let bg = Color::from_rgb8(r, g, b);
+    let content: Element<'a> =
+        if scene == "para" {
+            let body = text(para)
+                .size(PARA_PX)
+                .line_height(Pixels(PARA_LINE_H))
+                .width(Length::Fixed(PARA_W));
+            container(
+                iced_widget::scrollable(body)
+                    .id(PARA_ID)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .padding(Padding {
+                left: PARA_X,
+                ..Padding::ZERO
+            })
+            .into()
+        } else {
+            let mut cols = row![];
+            for c in 0..LINE_COLS {
+                let mut lines = column![];
+                for r in 1..LINE_ROWS {
+                    let (i, _) = scrolled_line(c, r, if scene == "scroll" { frame } else { 0 });
+                    let line: iced_widget::Text<'a, Theme, Renderer> = if scene == "scroll" {
+                        text(doc[i].as_str())
+                    } else {
+                        text(churn_line(i, frame))
+                    };
+                    lines = lines.push(
+                        line.size(LINE_PX)
+                            .line_height(Pixels(LINE_H))
+                            .wrapping(iced_core::text::Wrapping::None),
+                    );
+                }
+                // The first row is `scrolled_line(c, 1, ..)`, so its y is the top padding.
+                let top = scrolled_line(c, 1, if scene == "scroll" { frame } else { 0 }).1;
+                cols = cols.push(container(lines).width(Length::Fixed(LINE_COL_W)).padding(
+                    Padding {
+                        top,
+                        ..Padding::ZERO
+                    },
+                ));
+            }
+            cols.into()
+        };
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(bg)),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// The scene as an iced element tree.
-fn view_of<'a>(grid: &Grid, labels: &'a [String], frame: u64, animated: bool) -> Element<'a> {
+fn view_of<'a>(grid: &Grid, labels: &'a [String], frame: u64, mode: Mode) -> Element<'a> {
     let (w, h) = grid.size();
     let radius = grid.radius;
     let mut rows = column![].spacing(GAP);
@@ -116,7 +214,7 @@ fn view_of<'a>(grid: &Grid, labels: &'a [String], frame: u64, animated: bool) ->
             if i >= grid.n {
                 break;
             }
-            let [red, green, blue] = fill(i, frame, animated);
+            let [red, green, blue] = fill_in(mode, i, frame);
             let color = Color::from_rgb8(red, green, blue);
             let cell = container(text(labels[i].as_str()).size(grid.font_px))
                 .width(Length::Fixed(w))
