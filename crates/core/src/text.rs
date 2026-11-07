@@ -3097,6 +3097,19 @@ pub fn vcentered_line_y(top: f32, height: f32, font_size: f32) -> f32 {
     top + (height - font_size * LINE_HEIGHT_RATIO) / 2.0
 }
 
+/// The empty range lists every plain block starts with: one shared allocation
+/// handed out by reference count, so a block with no styled ranges (nearly
+/// all of them) allocates nothing for them.
+fn no_style_ranges() -> std::sync::Arc<Vec<TextStyleRange>> {
+    static EMPTY: OnceLock<std::sync::Arc<Vec<TextStyleRange>>> = OnceLock::new();
+    std::sync::Arc::clone(EMPTY.get_or_init(Default::default))
+}
+
+fn no_face_ranges() -> std::sync::Arc<Vec<FaceRange>> {
+    static EMPTY: OnceLock<std::sync::Arc<Vec<FaceRange>>> = OnceLock::new();
+    std::sync::Arc::clone(EMPTY.get_or_init(Default::default))
+}
+
 /// A block of text to render.
 #[derive(Clone)]
 pub struct TextBlock {
@@ -3203,9 +3216,9 @@ impl TextBlock {
             weight: Weight::NORMAL,
             style: Style::Normal,
             spans: Vec::new(),
-            style_ranges: std::sync::Arc::new(Vec::new()),
+            style_ranges: no_style_ranges(),
             style_range_tint: [1.0; 4],
-            face_ranges: std::sync::Arc::new(Vec::new()),
+            face_ranges: no_face_ranges(),
             wrap: WrapMode::default(),
             vertical: false,
             selectable: None,
@@ -3405,7 +3418,7 @@ impl TextBlock {
     /// must share the block's global font attributes).
     pub fn with_spans(mut self, spans: Vec<TextSpan>) -> Self {
         self.spans = spans;
-        self.style_ranges = std::sync::Arc::new(Vec::new());
+        self.style_ranges = no_style_ranges();
         self
     }
 
@@ -3480,6 +3493,23 @@ mod tests {
     use crate::render::{GlyphSizing, MAX_HINTED_PX};
     use crate::shaping::{LayoutSpec, LayoutStats, shape_layout};
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
+
+    #[test]
+    fn plain_blocks_share_their_empty_range_lists_and_styled_ones_do_not() {
+        let (a, b) = (TextBlock::new("a", 0.0, 0.0), TextBlock::new("b", 0.0, 0.0));
+        assert!(std::sync::Arc::ptr_eq(&a.style_ranges, &b.style_ranges));
+        assert!(std::sync::Arc::ptr_eq(&a.face_ranges, &b.face_ranges));
+        assert!(a.style_ranges.is_empty() && a.face_ranges.is_empty());
+
+        let styled = TextBlock::new("c", 0.0, 0.0).with_face_ranges(vec![super::FaceRange {
+            range: 0..1,
+            font: None,
+            weight: Weight::BOLD,
+            style: Style::Normal,
+        }]);
+        assert_eq!(styled.face_ranges.len(), 1);
+        assert!(a.face_ranges.is_empty(), "the shared list is untouched");
+    }
 
     /// A grid at `scale` device pixels per logical pixel, viewing the canvas
     /// from `origin`.
