@@ -141,10 +141,12 @@ impl SharedFontSystem {
         &'s self,
         content: &'s str,
     ) -> impl Iterator<Item = &'s ShapedLayout> + 's {
-        self.layouts
+        let cache = &self.layouts;
+        cache
             .map
             .values()
             .filter_map(move |inner| inner.get(content))
+            .filter_map(move |&slot| cache.slots[slot].as_ref())
             .map(|entry| &entry.layout)
     }
 
@@ -459,7 +461,9 @@ struct CachedLayout {
 /// Layouts keyed by spec, then content, so a lookup borrows the content as
 /// `&str` and allocates nothing. Every text block of every frame looks up
 /// here, so both levels hash with Fx rather than SipHash (the key is a few
-/// plain integers and the keys are not attacker-chosen).
+/// plain integers and the keys are not attacker-chosen). The maps hold slot
+/// numbers into `slots`, so a hit is one lookup per level whose result no
+/// borrow of the maps outlives.
 ///
 /// Small and large layouts (over a quarter of the budget) share the map but
 /// are budgeted apart, each kind to `budget`, and eviction drops only layouts
@@ -467,9 +471,13 @@ struct CachedLayout {
 struct LayoutCache {
     map: HashMap<
         LayoutKey,
-        HashMap<String, CachedLayout, rustc_hash::FxBuildHasher>,
+        HashMap<String, usize, rustc_hash::FxBuildHasher>,
         rustc_hash::FxBuildHasher,
     >,
+    /// The kept layouts, by the slot numbers `map` holds; evicted ones leave
+    /// `None` and their number in `free`.
+    slots: Vec<Option<CachedLayout>>,
+    free: Vec<usize>,
     /// The bytes kept of each kind before its least recently used layouts go
     /// ([`LAYOUT_BUDGET`]), and what eviction trims down to.
     budget: usize,
@@ -494,6 +502,8 @@ impl LayoutCache {
     fn with_budget(budget: usize) -> Self {
         Self {
             map: HashMap::default(),
+            slots: Vec::new(),
+            free: Vec::new(),
             budget,
             low_water: low_water(budget),
             uses: 0,
@@ -517,6 +527,8 @@ impl LayoutCache {
 
     fn clear(&mut self) {
         self.map.clear();
+        self.slots.clear();
+        self.free.clear();
         self.len = 0;
         self.bytes = [0; 2];
     }
@@ -545,12 +557,9 @@ impl LayoutCache {
     ) -> &mut CachedLayout {
         let key = spec.key();
         self.uses += 1;
-        let kept = self
-            .map
-            .get(&key)
-            .is_some_and(|inner| inner.contains_key(content));
-        if kept {
+        let slot = if let Some(slot) = self.find(&key, content) {
             self.hits += 1;
+            slot
         } else {
             self.shaped += 1;
             let layout = if let Some(max_width) = spec.cut_width() {
@@ -572,25 +581,41 @@ impl LayoutCache {
             }
             self.len += 1;
             self.bytes[usize::from(large)] += bytes;
-            self.map.entry(key).or_default().insert(
-                content.to_owned(),
-                CachedLayout {
-                    layout,
-                    carets: None,
-                    visual: None,
-                    last_used: self.uses,
-                    bytes,
-                    large,
-                },
-            );
-        }
-        let entry = self
-            .map
-            .get_mut(&key)
-            .and_then(|inner| inner.get_mut(content))
-            .expect("the layout was kept or just shaped");
+            let cached = CachedLayout {
+                layout,
+                carets: None,
+                visual: None,
+                last_used: self.uses,
+                bytes,
+                large,
+            };
+            let slot = match self.free.pop() {
+                Some(slot) => {
+                    self.slots[slot] = Some(cached);
+                    slot
+                }
+                None => {
+                    self.slots.push(Some(cached));
+                    self.slots.len() - 1
+                }
+            };
+            self.map
+                .entry(key)
+                .or_default()
+                .insert(content.to_owned(), slot);
+            slot
+        };
+        let entry = self.slots[slot]
+            .as_mut()
+            .expect("the slot is kept or just filled");
         entry.last_used = self.uses;
         entry
+    }
+
+    /// The slot of the layout of `content` under `key`, if it is kept: one
+    /// hash of the key and one of the content, whichever way it goes.
+    fn find(&self, key: &LayoutKey, content: &str) -> Option<usize> {
+        self.map.get(key)?.get(content).copied()
     }
 
     /// Where `content`, ellipsized under `spec`, is cut to fit `max_width`
@@ -646,6 +671,7 @@ impl LayoutCache {
             .get(key)?
             .iter()
             .filter(|(donor, _)| paragraphs::is_long(donor))
+            .filter_map(|(donor, &slot)| Some((donor, self.slots[slot].as_ref()?)))
             .max_by_key(|(_, entry)| entry.last_used)?;
         paragraphs::reshape(font_system, spec, content, donor, &entry.layout)
     }
@@ -682,9 +708,9 @@ impl LayoutCache {
     /// `in_use`, if any, stays, as a new layout does when it alone is over.
     fn evict(&mut self, large: bool, in_use: Option<u64>) {
         let mut uses: Vec<(u64, usize)> = self
-            .map
-            .values()
-            .flat_map(|inner| inner.values())
+            .slots
+            .iter()
+            .flatten()
             .filter(|entry| entry.large == large)
             .map(|entry| (entry.last_used, entry.bytes))
             .collect();
@@ -700,7 +726,8 @@ impl LayoutCache {
         };
         let (mut len, mut total) = (0, 0);
         for inner in self.map.values_mut() {
-            inner.retain(|_, entry| {
+            inner.retain(|_, &mut slot| {
+                let entry = self.slots[slot].as_ref().expect("a mapped slot is filled");
                 let keep = entry.large != large
                     || entry.last_used > cutoff
                     || Some(entry.last_used) == in_use;
@@ -709,6 +736,9 @@ impl LayoutCache {
                     if entry.large == large {
                         total += entry.bytes;
                     }
+                } else {
+                    self.slots[slot] = None;
+                    self.free.push(slot);
                 }
                 keep
             });
@@ -949,6 +979,7 @@ mod tests {
             .map
             .values()
             .find_map(|inner| inner.get(content))
+            .and_then(|&slot| cache.slots[slot].as_ref())
             .map_or(0, |entry| entry.bytes)
     }
 
