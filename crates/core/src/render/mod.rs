@@ -32,6 +32,7 @@ mod draw_box;
 mod draw_order;
 mod draw_plan;
 mod frame_arena;
+mod frame_diff;
 mod glyph_msdf;
 #[cfg(feature = "phosphor-icons")]
 mod icon_font;

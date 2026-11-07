@@ -14,14 +14,17 @@
 
 use crate::layout::Rect;
 use crate::render::batch_draws::{BatchDraw, BatchDraws};
-use crate::render::draw_box::Target;
+use crate::render::draw_box::{PixelBox, Target};
+use crate::render::draw_order::BatchKey;
+use crate::render::draw_order::tests_support::Rng;
 use crate::render::draw_plan::tests_support::Lists;
 use crate::render::draw_plan::{Batch, DrawPlan, PlannedUnit};
+use crate::render::frame_diff::{ContextKey, FrameDiff, FrameSnapshot};
 use crate::text::{MsdfInstance, MsdfPrepared, PrepareWork, TextBlock};
 use crate::widgets::{AnalyticInstance, CircleInstance, DrawList};
 
 /// Everything a frame's CPU side produces, as plain data to compare.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Fingerprint {
     units: Vec<PlannedUnit>,
     batches: Vec<Batch>,
@@ -34,6 +37,8 @@ struct Fingerprint {
     circles: Vec<CircleInstance>,
     text: Vec<MsdfInstance>,
     draws: Vec<BatchDraw>,
+    /// Every unit's key and boxes, in paint order.
+    boxes: Vec<(BatchKey, Vec<PixelBox>)>,
 }
 
 impl Fingerprint {
@@ -54,6 +59,7 @@ impl Fingerprint {
             circles: draws.circles.clone(),
             text: draws.text.clone(),
             draws: draws.draws.clone(),
+            boxes: plan.checked.clone().unwrap_or_default(),
         }
     }
 }
@@ -64,6 +70,8 @@ pub(crate) struct Work {
     pub(crate) text: PrepareWork,
     pub(crate) boxes_computed: u64,
     pub(crate) units: usize,
+    /// How the list differed from the frame before, as `FrameSnapshot` saw it.
+    pub(crate) diff: FrameDiff,
 }
 
 /// State kept from frame to frame, checked against a recompute from nothing.
@@ -75,6 +83,9 @@ pub(crate) struct Oracle {
     fresh_plan: DrawPlan,
     fresh_draws: BatchDraws,
     fresh_prepared: MsdfPrepared,
+    /// The frame before, and what it was compared against.
+    snapshot: FrameSnapshot,
+    last: Option<Fingerprint>,
 }
 
 impl Oracle {
@@ -82,13 +93,17 @@ impl Oracle {
         let mut kept_plan = DrawPlan::new();
         // The order of every plan is checked against the brute-force oracle too.
         kept_plan.set_check(true);
+        let mut fresh_plan = DrawPlan::new();
+        fresh_plan.set_check(true);
         Self {
             kept: Lists::new(),
             kept_plan,
             kept_draws: BatchDraws::default(),
-            fresh_plan: DrawPlan::new(),
+            fresh_plan,
             fresh_draws: BatchDraws::default(),
             fresh_prepared: MsdfPrepared::default(),
+            snapshot: FrameSnapshot::default(),
+            last: None,
         }
     }
 
@@ -99,6 +114,14 @@ impl Oracle {
     /// Plan `list` on the kept state and on state that has seen nothing, and
     /// panic unless they agree. Returns the work the kept state did.
     pub(crate) fn step(&mut self, list: &DrawList, target: &Target) -> Work {
+        let context = ContextKey {
+            grid: Lists::grid(target),
+            viewport: target.size,
+            fonts: 0,
+            resolution: 0,
+        };
+        let diff = self.snapshot.compare(list, &context);
+        self.snapshot.keep(list, &context);
         self.kept.plan(list, target, &mut self.kept_plan);
         self.kept_plan.check();
         self.kept_draws
@@ -108,6 +131,7 @@ impl Oracle {
             text: self.kept.prepared.work,
             boxes_computed: self.kept_plan.boxes_computed(),
             units: self.kept_plan.units().len(),
+            diff,
         };
 
         // The same cpu, so the same atlas; a prepared list, plan and draws of
@@ -120,7 +144,38 @@ impl Oracle {
         std::mem::swap(&mut self.kept.prepared, &mut self.fresh_prepared);
 
         assert_eq!(kept, fresh, "the kept state drew a different frame");
+        if let Some(previous) = &self.last {
+            check_diff(&diff, previous, &kept);
+        }
+        self.last = Some(kept);
         work
+    }
+}
+
+/// What a comparison may promise, checked against the plans it was about:
+///
+/// - when it says every record is where it was, the plan is the plan: keys and
+///   boxes, orders, batches, unit and instance layout, and the draws' ranges;
+/// - when it says the frame is the last one again, everything is, byte for byte.
+///
+/// It may be wrong the other way (call a frame changed that was not); these are
+/// the two ways it must not be wrong.
+fn check_diff(diff: &FrameDiff, previous: &Fingerprint, now: &Fingerprint) {
+    if diff.keeps_places() {
+        assert_eq!(previous.boxes, now.boxes, "{diff:?}: keys or boxes moved");
+        assert_eq!(previous.units, now.units, "{diff:?}: orders or units moved");
+        assert_eq!(previous.batches, now.batches, "{diff:?}: batches moved");
+        assert_eq!(previous.text_units, now.text_units, "{diff:?}: text units");
+        assert_eq!(previous.text_commands, now.text_commands, "{diff:?}");
+        assert_eq!(previous.block_sweeps, now.block_sweeps, "{diff:?}: sweeps");
+        assert_eq!(previous.draws, now.draws, "{diff:?}: draw ranges");
+        assert_eq!(previous.text_instances.len(), now.text_instances.len());
+        assert_eq!(previous.analytic.len(), now.analytic.len());
+        assert_eq!(previous.circles.len(), now.circles.len());
+        assert_eq!(previous.indices, now.indices, "{diff:?}: soup indices");
+    }
+    if diff.identical() {
+        assert_eq!(previous, now, "{diff:?}: a frame called identical differs");
     }
 }
 
@@ -306,4 +361,317 @@ fn the_oracle_tells_two_different_frames_apart() {
     oracle.step(&list, &t);
     let two = Fingerprint::of(&oracle.kept_plan, &oracle.kept.prepared, &oracle.kept_draws);
     assert_ne!(one, two, "a colour change must show in the fingerprint");
+}
+
+/// A list described as data, so a frame can be changed a little and drawn again.
+#[derive(Clone, Debug)]
+struct Cell {
+    kind: Kind,
+    rect: Rect,
+    colour: [f32; 4],
+    text: String,
+    size: f32,
+    shadow: Option<[u8; 4]>,
+    glow: Option<[u8; 4]>,
+    clip: Option<Rect>,
+    sprite: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Chrome,
+    Circle,
+    Text,
+    Sprite,
+    NineSlice,
+    Soup,
+}
+
+const KINDS: [Kind; 6] = [
+    Kind::Chrome,
+    Kind::Circle,
+    Kind::Text,
+    Kind::Sprite,
+    Kind::NineSlice,
+    Kind::Soup,
+];
+
+impl Cell {
+    fn draw(&self, list: &mut DrawList) {
+        let r = self.rect;
+        if let Some(clip) = self.clip {
+            list.push_clip(clip);
+        }
+        match self.kind {
+            Kind::Chrome => list.chrome_rect(r, 3.0, 1.0, self.colour, [0.5; 4]),
+            Kind::Circle => list.circle((r.x, r.y), r.width * 0.3, self.colour),
+            Kind::Text => {
+                let mut block = TextBlock::new(self.text.as_str(), r.x, r.y)
+                    .with_size(self.size)
+                    .with_color_f32(self.colour);
+                if let Some([r, g, b, a]) = self.shadow {
+                    block = block.with_shadow(r, g, b, a, 1.0, 1.0, 1.0);
+                }
+                if let Some([r, g, b, a]) = self.glow {
+                    block = block.with_glow(r, g, b, a, 3.0);
+                }
+                list.text(block);
+            }
+            Kind::Sprite => {
+                list.icon(self.sprite, r.x, r.y, r.width, r.height);
+                // `icon` takes no tint, so its record is tinted after the fact.
+                if let Some(last) = list.icons.last_mut() {
+                    last.tint = self.colour;
+                }
+            }
+            Kind::NineSlice => {
+                list.nine_slice(r.x, r.y, r.width, r.height, self.sprite);
+                if let Some(last) = list.nine_slices.last_mut() {
+                    last.tint = self.colour;
+                }
+            }
+            Kind::Soup => list.rounded_rect(r, 4.0, self.colour),
+        }
+        if self.clip.is_some() {
+            list.pop_clip();
+        }
+    }
+}
+
+fn random_cell(rng: &mut Rng, kind: Kind) -> Cell {
+    let unit = |rng: &mut Rng, n: u32| rng.below(n) as f32;
+    let colour = [
+        unit(rng, 100) / 100.0,
+        unit(rng, 100) / 100.0,
+        unit(rng, 100) / 100.0,
+        0.4 + unit(rng, 60) / 100.0,
+    ];
+    Cell {
+        kind,
+        rect: Rect::new(
+            unit(rng, 560),
+            unit(rng, 420),
+            20.0 + unit(rng, 80),
+            14.0 + unit(rng, 40),
+        ),
+        colour,
+        text: format!("cell {}", rng.below(1000)),
+        size: 10.0 + unit(rng, 8),
+        shadow: (rng.below(4) == 0).then_some([0, 0, 0, 180]),
+        glow: (rng.below(8) == 0).then_some([0, 120, 255, 200]),
+        clip: (rng.below(4) == 0).then(|| {
+            Rect::new(
+                unit(rng, 400),
+                unit(rng, 300),
+                60.0 + unit(rng, 200),
+                40.0 + unit(rng, 120),
+            )
+        }),
+        sprite: ["a", "b", "video", "missing"][rng.below(4) as usize],
+    }
+}
+
+fn draw_cells(oracle: &Oracle, cells: &[Cell]) -> DrawList {
+    let mut list = oracle.list();
+    for cell in cells {
+        cell.draw(&mut list);
+    }
+    list
+}
+
+/// Change a cell the way a frame to frame change does, in `how`: a look
+/// (colour), or anything.
+fn change_look(rng: &mut Rng, cell: &mut Cell) {
+    cell.colour = [
+        rng.below(100) as f32 / 100.0,
+        rng.below(100) as f32 / 100.0,
+        rng.below(100) as f32 / 100.0,
+        0.4 + rng.below(60) as f32 / 100.0,
+    ];
+    if let Some(shadow) = &mut cell.shadow {
+        shadow[3] = 100 + rng.below(150) as u8;
+    }
+}
+
+fn change_anything(rng: &mut Rng, cell: &mut Cell) {
+    match rng.below(9) {
+        0 => cell.rect.x += 1.0 + rng.below(20) as f32,
+        1 => cell.rect.y -= 1.0 + rng.below(20) as f32,
+        2 => cell.rect.width += 1.0 + rng.below(10) as f32,
+        3 => cell.text = format!("changed {}", rng.below(1000)),
+        4 => cell.size += 1.0,
+        5 => cell.shadow = cell.shadow.is_none().then_some([0, 0, 0, 200]),
+        6 => cell.glow = cell.glow.is_none().then_some([255, 0, 0, 200]),
+        7 => {
+            cell.clip = cell
+                .clip
+                .is_none()
+                .then(|| Rect::new(30.0, 30.0, 200.0, 100.0))
+        }
+        _ => cell.sprite = ["a", "b", "video", "missing"][rng.below(4) as usize],
+    }
+}
+
+/// Frames mutated at random: nothing, only looks, or anything, with cells
+/// added and removed now and then. `step` checks each against the plan.
+#[test]
+fn what_the_comparison_promises_holds_over_random_changes() {
+    let t = target();
+    let (mut identical, mut keeps, mut moved, mut reshaped, mut frames) = (0, 0, 0, 0, 0);
+    for seed in 0..6u64 {
+        let mut rng = Rng(100 + seed);
+        let mut oracle = Oracle::new();
+        let mut cells: Vec<Cell> = (0..40)
+            .map(|i| random_cell(&mut rng, KINDS[i % KINDS.len()]))
+            .collect();
+        for _ in 0..60 {
+            match rng.below(5) {
+                0 => {}
+                1 | 2 => {
+                    for _ in 0..1 + rng.below(6) {
+                        let i = rng.below(cells.len() as u32) as usize;
+                        change_look(&mut rng, &mut cells[i]);
+                    }
+                }
+                3 => {
+                    let i = rng.below(cells.len() as u32) as usize;
+                    change_anything(&mut rng, &mut cells[i]);
+                }
+                _ => {
+                    if rng.below(2) == 0 && cells.len() > 5 {
+                        cells.remove(rng.below(cells.len() as u32) as usize);
+                    } else {
+                        let kind = KINDS[rng.below(KINDS.len() as u32) as usize];
+                        cells.insert(
+                            rng.below(cells.len() as u32) as usize,
+                            random_cell(&mut rng, kind),
+                        );
+                    }
+                }
+            }
+            let list = draw_cells(&oracle, &cells);
+            let diff = oracle.step(&list, &t).diff;
+            frames += 1;
+            identical += usize::from(diff.identical());
+            keeps += usize::from(diff.keeps_places() && !diff.identical());
+            moved += usize::from(diff.compared && diff.topology_same && diff.place > 0);
+            reshaped += usize::from(diff.compared && !diff.topology_same);
+        }
+    }
+    // The promises were tested on every kind of frame, not only the easy ones.
+    assert!(identical > 20, "{identical} identical of {frames}");
+    assert!(keeps > 20, "{keeps} kept their places of {frames}");
+    assert!(moved > 20, "{moved} moved of {frames}");
+    assert!(reshaped > 20, "{reshaped} changed shape of {frames}");
+}
+
+/// The other half: a colour is a look in every family, so the plan is kept.
+#[test]
+fn a_colour_change_in_any_family_is_a_look_and_a_move_is_a_place() {
+    let t = target();
+    for kind in KINDS {
+        let mut rng = Rng(5);
+        let mut oracle = Oracle::new();
+        let mut cell = random_cell(&mut rng, kind);
+        cell.clip = None;
+        cell.shadow = None;
+        cell.glow = None;
+        // Opaque, so that nothing about the colour could make it not draw.
+        cell.colour = [0.2, 0.4, 0.6, 1.0];
+        oracle.step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t);
+
+        let again = oracle.step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t);
+        assert!(again.diff.identical(), "{kind:?}: {:?}", again.diff);
+
+        cell.colour = [0.9, 0.1, 0.3, 0.8];
+        let looked = oracle.step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t);
+        let d = looked.diff;
+        assert!(
+            d.keeps_places() && !d.identical() && d.look == 1,
+            "{kind:?}: {d:?}"
+        );
+
+        cell.rect.x += 7.0;
+        let moved = oracle.step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t);
+        let d = moved.diff;
+        assert!(
+            d.compared && d.topology_same && !d.keeps_places() && d.place == 1,
+            "{kind:?}: {d:?}"
+        );
+    }
+}
+
+#[test]
+fn a_text_effect_colour_is_a_look_and_its_size_is_a_place() {
+    let t = target();
+    let mut oracle = Oracle::new();
+    let mut rng = Rng(9);
+    let mut cell = random_cell(&mut rng, Kind::Text);
+    cell.clip = None;
+    cell.shadow = Some([0, 0, 0, 200]);
+    cell.glow = Some([0, 100, 255, 200]);
+    oracle.step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t);
+    cell.shadow = Some([200, 0, 0, 90]);
+    cell.glow = Some([255, 255, 0, 255]);
+    let d = oracle
+        .step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t)
+        .diff;
+    assert!(d.keeps_places() && d.look == 1, "{d:?}");
+    cell.glow = None;
+    let d = oracle
+        .step(&draw_cells(&oracle, std::slice::from_ref(&cell)), &t)
+        .diff;
+    assert!(d.compared && d.topology_same && d.place == 1, "{d:?}");
+}
+
+#[test]
+fn a_changed_target_or_a_changed_shape_is_not_compared_one_for_one() {
+    let mut oracle = Oracle::new();
+    let mut rng = Rng(3);
+    let cells: Vec<Cell> = (0..10)
+        .map(|i| random_cell(&mut rng, KINDS[i % 6]))
+        .collect();
+    let list = draw_cells(&oracle, &cells);
+    let first = oracle.step(&list, &target()).diff;
+    assert!(!first.compared, "nothing to compare the first frame with");
+    // Another scale: the records are the same, the context is not.
+    let rescaled = oracle
+        .step(&list, &Target::new((640, 480), 1.5, [0.0, 0.0]))
+        .diff;
+    assert!(rescaled.compared && !rescaled.context_same && !rescaled.keeps_places());
+    assert_eq!(rescaled.place, 0, "{rescaled:?}");
+    // One cell fewer: the paint stream has another shape.
+    let list = draw_cells(&oracle, &cells[1..]);
+    let fewer = oracle
+        .step(&list, &Target::new((640, 480), 1.5, [0.0, 0.0]))
+        .diff;
+    assert!(fewer.compared && !fewer.topology_same);
+    assert_eq!((fewer.same, fewer.look, fewer.place), (0, 0, 0));
+}
+
+#[test]
+fn a_frame_that_moved_everywhere_is_given_up_part_way() {
+    let t = target();
+    let mut oracle = Oracle::new();
+    let mut rng = Rng(21);
+    let mut cells: Vec<Cell> = (0..400)
+        .map(|_| random_cell(&mut rng, Kind::Chrome))
+        .collect();
+    oracle.step(&draw_cells(&oracle, &cells), &t);
+    for cell in &mut cells {
+        cell.rect.x += 1.0;
+    }
+    let d = oracle.step(&draw_cells(&oracle, &cells), &t).diff;
+    assert!(d.abandoned && !d.keeps_places(), "{d:?}");
+    assert!(d.place < 400, "gave up after {} of 400", d.place);
+    // A still header and a moving body is given up inside the body.
+    for cell in &mut cells {
+        cell.rect.x -= 1.0;
+    }
+    oracle.step(&draw_cells(&oracle, &cells), &t);
+    for cell in &mut cells[100..] {
+        cell.rect.y += 1.0;
+    }
+    let d = oracle.step(&draw_cells(&oracle, &cells), &t).diff;
+    assert!(d.abandoned && d.same >= 100, "{d:?}");
 }

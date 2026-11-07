@@ -1,6 +1,6 @@
 # Frame-to-frame reuse
 
-Status: partial — Phase 0 landed except the memory counter, which waits for a kept frame (2026-11-08); no reuse implemented
+Status: partial — Phases 0 and 1 landed (2026-11-08): frames are kept and compared, opt-in, and nothing consumes the result yet; no reuse implemented
 Owner: Bart
 Last updated: 2026-11-08
 
@@ -61,12 +61,49 @@ Tick items as they land.
       that no size is too small. It is a lower bound: the real comparison also
       names which stage's inputs changed.
 
+- [x] **Phase 1 — snapshot, context key and stage-wise comparison**
+      (`render/frame_diff.rs`; `UiRenderer::set_frame_comparison`, default off).
+      Each render call keeps the records of its list (up to 8 places per frame:
+      the base list and the layers over it) with the context key (pixel grid,
+      viewport, font-system generation, texture resolution epoch), and compares
+      the next list with it record by record: `Same` (bit-identical), `Look`
+      (only a colour or tint differs) or `Place`. `FrameDiff::identical()`
+      means plan, instances and draws are unchanged; `keeps_places()` means
+      keys, boxes, orders, batches and instance counts are unchanged (bytes may
+      differ). The comparison gives up after 64 records when over half changed
+      place. `RenderStats` reports lists compared / identical / keeping places,
+      records by class and `snapshot_bytes` (this closes the Phase 0 memory
+      counter). The classification is checked against the real pipeline rather
+      than argued: `draw_box` fuzz contracts (inputs it calls the same give an
+      equal `PixelBox`, with NaN, infinity and negative zero in every float),
+      the headless oracle checks every step's diff against the planned result,
+      a seeded random-mutation fuzz exercises all six record families with
+      clips, effects, inserts and removals, and the GPU oracle checks the
+      renderer's reported counts. Found on the way: the box of a chrome record
+      reads no colour, but the first mask compared slot 5 for every kind (a
+      segment's reaches, a chrome record's *border colour*), which made a
+      recoloured filled rect a `Place`; the mask is now per kind, and the
+      contract test covers each kind.
+      Costs, measured (`benches/frame_compare.rs`, comparison on, every frame
+      differing from the last; one run, load not controlled):
+
+      | cells | recompute | + comparison, colour only | + comparison, all moved |
+      | --- | --- | --- | --- |
+      | 100 | 42.8 µs | 50.1 µs (+17%) | 47.7 µs (+12%) |
+      | 1,000 | 330 µs | 390 µs (+18%) | 367 µs (+11%) |
+      | 10,000 | 3.27 ms | 4.33 ms (+33%) | 4.23 ms (+29%) |
+
+      This is over the 5% budget for an all-changed frame, which is why the
+      comparison stays opt-in until Phase 2 consumes it. Nearly all of it is
+      keeping the frame, not comparing: copying 10,000 `TextBlock`s (a large
+      struct with several `Arc`s and `Vec`s) is about 0.7 ms of the ~1.1 ms;
+      the compare is about 0.1 ms. The records are copied because the renderer
+      is handed a borrowed list it cannot keep.
+
 ### Outstanding
 
-- [ ] **Phase 0 — memory counter.** Reported once there is a kept frame (Phase 1);
-      nothing to count before it. Held with Phase 1.
-- [ ] **Phase 1 — snapshot and the stage-wise comparison.** What a frame keeps, the
-      context key, and a comparison that says *which stage's inputs* changed.
+- [ ] **Phase 1 — bring the keep cost inside the budget** before the comparison
+      is on by default. Options in the section "Cost of keeping a frame" below.
 - [ ] **Phase 2 — whole-plan replay.** When every unit's key and box are as last
       frame, reuse order, sorted layout and batches (colour-only changes included).
 - [ ] **Phase 3 — reuse draw boxes** for units whose records are unchanged.
@@ -205,6 +242,33 @@ window and stops when it is high, so a list with a static header and an
 animating body (the common game UI) is not compared in full and then recomputed
 in full. Whether the stage-wise answers can be had for less than recompute is
 measured in Phase 0, not assumed: 100 cells costs 0.07 ms in total.
+
+### Cost of keeping a frame
+
+Measured in Phase 1: keeping a frame is nearly the whole cost of the comparison
+(see the table in Done), and it is the copy of the text blocks. A fully reused
+frame saves far more than this costs, but a frame where everything changed pays
+it for nothing, and the budget is 5%. Options, none chosen:
+
+1. **Keep a compact text key, not the block.** Only the fields the comparison
+   reads, as `Copy` data plus the `Arc`s it compares by identity (a clone of an
+   `Arc` is an atomic add, so it is not free, but a `TextBlock` also has
+   `Option`s for effects, a `Vec` of spans and a font handle). A pointer alone
+   cannot stand for an `Arc`: the allocation can be freed and reused by another
+   string, so the key must hold the `Arc`.
+2. **Take the list's buffers instead of copying them.** The caller builds a new
+   `DrawList` each frame and drops it after `render`; a `render` that took the
+   list by value (or a `DrawList` that gives up its buffers when rendered) could
+   swap the last frame's buffers in, with no copy and the same buffers reused
+   for the next build. This changes the signature callers use, which the
+   no-API-change goal rules out for the first version, but it removes the copy
+   rather than shrinking it.
+3. **Keep a frame only when it is likely to pay.** Skip keeping while the last
+   few frames were abandoned (all moved), and keep again when the content
+   settles. Costs one frame of latency to notice a still scene.
+4. **Accept it on the compare-and-recompute path** and rely on Phase 2 to pay
+   for it where frames are alike; the 5% budget is then judged on a mixed
+   workload, not on the worst case alone.
 
 ### Phase 2 — whole-plan replay
 

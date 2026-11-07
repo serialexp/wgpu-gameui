@@ -504,3 +504,55 @@ fn both(run: &mut Run, a: &DrawList, b: &DrawList) -> Vec<u8> {
         ui.render(&device, &queue, encoder, view, SIZE, 1.0, b);
     })
 }
+
+/// The renderer's own account of how each list compares with the last frame's,
+/// per place in the render call, through the stats it reports.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn the_renderer_reports_how_each_list_compares_with_last_frame() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    run.gpu.renderer().set_frame_comparison(true);
+    let over = |run: &Run, frame: usize, colour: f32, x: f32| {
+        let mut b = run.list();
+        b.chrome_rect(
+            Rect::new(x, 20.0, 150.0, 90.0),
+            6.0,
+            2.0,
+            [colour, 0.1, 0.1, 0.8],
+            [1.0; 4],
+        );
+        b.text(TextBlock::new(format!("Over {frame}"), 30.0, 40.0).with_size(18.0));
+        b
+    };
+    let mut stats = Vec::new();
+    // (base frame, colour of the second list, its x)
+    for (base, colour, x) in [
+        (0, 0.1, 20.0), // nothing to compare with
+        (0, 0.1, 20.0), // both again
+        (0, 0.5, 20.0), // the second list recoloured
+        (0, 0.5, 33.0), // the second list moved
+        (1, 0.5, 33.0), // the first list changed
+    ] {
+        let mut a = run.list();
+        scene(&mut a, &run.art, None, base);
+        let b = over(&run, 0, colour, x);
+        both(&mut run, &a, &b);
+        stats.push(run.gpu.renderer().frame_stats());
+    }
+    let counts: Vec<_> = stats
+        .iter()
+        .map(|s| (s.lists_compared, s.lists_identical, s.lists_keeping_places))
+        .collect();
+    assert_eq!(
+        counts,
+        [(0, 0, 0), (2, 2, 2), (2, 1, 2), (2, 1, 1), (2, 1, 1)],
+        "lists compared, identical and keeping their places, per frame: {stats:#?}"
+    );
+    assert!(
+        stats[1].snapshot_bytes > 0,
+        "the kept frames hold something"
+    );
+    assert!(stats[1].records_same > 0 && stats[1].records_place == 0);
+    assert!(stats[2].records_look > 0 && stats[2].records_place == 0);
+    assert!(stats[3].records_place > 0);
+}

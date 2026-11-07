@@ -1452,3 +1452,132 @@ fn the_pixel_range_agrees_with_the_floor_and_ceil_formula() {
         }
     }
 }
+
+/// A float for a test record: mostly modest, sometimes large or negative.
+fn random_float(rng: &mut crate::render::draw_order::tests_support::Rng) -> f32 {
+    let v = rng.below(4000) as f32 / 10.0 - 200.0;
+    if rng.below(8) == 0 { v * 40.0 } else { v }
+}
+
+fn random_analytic(
+    rng: &mut crate::render::draw_order::tests_support::Rng,
+    kind: u32,
+) -> AnalyticInstance {
+    let mut payload = [[0.0; 4]; 10];
+    for slot in &mut payload {
+        for lane in slot.iter_mut() {
+            *lane = random_float(rng);
+        }
+    }
+    // Chrome with no transform is the common case, and takes the fast path.
+    if rng.below(2) == 0 {
+        payload[0] = IDENTITY;
+    }
+    // Radii that `DrawList` could have recorded.
+    for lane in &mut payload[6] {
+        *lane = lane.abs();
+    }
+    payload[1][2] = rng.below(2) as f32;
+    AnalyticInstance {
+        payload,
+        kind,
+        padding: [0; 3],
+    }
+}
+
+/// The contract `same_analytic_box_inputs` makes with `analytic`: two records
+/// it calls the same have the same box. Every float of a random record is
+/// replaced in turn by a finite value, NaN, infinity and negative zero.
+#[test]
+fn records_with_the_same_box_inputs_have_the_same_box() {
+    use crate::render::draw_order::tests_support::Rng;
+    let mut rng = Rng(11);
+    let targets = [
+        Target::new((300, 200), 1.0, [0.0, 0.0]),
+        Target::new((300, 200), 1.25, [3.0, -2.0]),
+    ];
+    let (mut same, mut different) = (0, 0);
+    for round in 0..400 {
+        let kind = [
+            ANALYTIC_KIND_CHROME,
+            ANALYTIC_KIND_SHADOW,
+            ANALYTIC_KIND_STRIPES,
+            ANALYTIC_KIND_SEGMENT,
+        ][round % 4];
+        let a = random_analytic(&mut rng, kind);
+        for slot in 0..10 {
+            for lane in 0..4 {
+                let finite = random_float(&mut rng);
+                for value in [finite, f32::NAN, f32::INFINITY, -0.0] {
+                    let mut b = a;
+                    b.payload[slot][lane] = value;
+                    if same_analytic_box_inputs(&a, &b) {
+                        same += 1;
+                        for t in &targets {
+                            assert_eq!(
+                                analytic(t, &a),
+                                analytic(t, &b),
+                                "kind {kind}, slot {slot} lane {lane} set to {value}"
+                            );
+                        }
+                    } else {
+                        different += 1;
+                    }
+                }
+            }
+        }
+        // Another kind is another box.
+        let mut other = a;
+        other.kind = (kind + 1) % 4;
+        assert!(!same_analytic_box_inputs(&a, &other));
+    }
+    assert!(
+        same > 1000 && different > 1000,
+        "{same} same, {different} different"
+    );
+}
+
+#[test]
+fn circles_and_vertices_with_the_same_box_inputs_have_the_same_box() {
+    use crate::render::draw_order::tests_support::Rng;
+    let mut rng = Rng(12);
+    let t = Target::new((300, 200), 1.25, [3.0, -2.0]);
+    let four = |rng: &mut Rng| [0; 4].map(|_| random_float(rng));
+    for _ in 0..300 {
+        let mut c = CircleInstance {
+            center: four(&mut rng),
+            color: four(&mut rng),
+            clip: four(&mut rng),
+            params: [rng.below(2) as f32, 0.0, 0.0, 0.0],
+        };
+        c.center[2] = c.center[2].abs();
+        for lane in 0..4 {
+            for value in [random_float(&mut rng), f32::NAN, f32::INFINITY, -0.0] {
+                let mut d = c;
+                d.color[lane] = value;
+                assert!(same_circle_box_inputs(&c, &d));
+                assert_eq!(circle(&t, &c), circle(&t, &d), "colour {lane} = {value}");
+                let mut moved = c;
+                moved.center[lane] = value;
+                if same_circle_box_inputs(&c, &moved) {
+                    assert_eq!(circle(&t, &c), circle(&t, &moved));
+                }
+            }
+        }
+
+        let vertex = |rng: &mut Rng| Vertex {
+            position: [random_float(rng), random_float(rng)],
+            color: [0; 4].map(|_| random_float(rng)),
+            clip: [0; 4].map(|_| random_float(rng)),
+            clip_enabled: rng.below(2) as f32,
+        };
+        let tri = [vertex(&mut rng), vertex(&mut rng), vertex(&mut rng)];
+        let mut tinted = tri;
+        for v in &mut tinted {
+            v.color = [f32::NAN, 0.5, f32::INFINITY, -0.0];
+            assert!(same_vertex_box_inputs(&tri[0], v) || v.color != tri[0].color);
+        }
+        let all = [0, 1, 2];
+        assert_eq!(soup(&t, &tri, &all), soup(&t, &tinted, &all));
+    }
+}

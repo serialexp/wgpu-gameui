@@ -31,12 +31,18 @@ const COUNTS: [usize; 3] = [100, 1_000, 10_000];
 
 /// One list: a cell and a label per `i`, laid out in rows. `shade` colours the
 /// cell, `nudge` moves cell `0`'s label.
-fn build(gpu: &HeadlessGpu, labels: &[TextContent], shade: f32, nudge: f32) -> DrawList {
+fn build(
+    gpu: &HeadlessGpu,
+    labels: &[TextContent],
+    shade: f32,
+    nudge: f32,
+    shift: f32,
+) -> DrawList {
     let mut list = gpu.draw_list();
     let columns = 100;
     for (i, label) in labels.iter().enumerate() {
         let (x, y) = (
-            4.0 + 18.0 * (i % columns) as f32,
+            4.0 + shift + 18.0 * (i % columns) as f32,
             4.0 + 12.0 * (i / columns) as f32,
         );
         list.chrome_rect(
@@ -108,10 +114,11 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("frame_compare");
     for n in COUNTS {
         let labels: Vec<TextContent> = (0..n).map(|i| format!("{}", i % 97).into()).collect();
-        let before = build(&gpu, &labels, 0.4, 0.0);
-        let identical = build(&gpu, &labels, 0.4, 0.0);
-        let colour_only = build(&gpu, &labels, 0.6, 0.0);
-        let one_moved = build(&gpu, &labels, 0.4, 2.0);
+        let before = build(&gpu, &labels, 0.4, 0.0, 0.0);
+        let identical = build(&gpu, &labels, 0.4, 0.0, 0.0);
+        let colour_only = build(&gpu, &labels, 0.6, 0.0, 0.0);
+        let one_moved = build(&gpu, &labels, 0.4, 2.0, 0.0);
+        let all_moved = build(&gpu, &labels, 0.4, 0.0, 1.0);
         assert!(same(&before, &identical));
         assert!(!same(&before, &colour_only));
         assert!(!same(&before, &one_moved));
@@ -139,6 +146,34 @@ fn bench(c: &mut Criterion) {
                 device.poll(wgpu::Maintain::Poll);
             })
         });
+        // The renderer with its frame comparison on, which compares the list
+        // with the last one, keeps it, and (until a later phase consumes the
+        // result) recomputes regardless. The extra over `recompute` is the
+        // comparison's whole cost; the doc's budget is 5% when all changed.
+        for (name, next) in [
+            ("with_comparison_identical", &identical),
+            ("with_comparison_colour_only", &colour_only),
+            ("with_comparison_all_moved", &all_moved),
+        ] {
+            group.bench_with_input(BenchmarkId::new(name, n), &n, |b, _| {
+                let ui = gpu.renderer();
+                ui.set_frame_comparison(true);
+                // Alternate with `before`, so every frame differs from the
+                // last the way `next` does from `before` (and back).
+                let mut flip = false;
+                b.iter(|| {
+                    flip = !flip;
+                    let list = if flip { next } else { &before };
+                    ui.begin_frame();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, list);
+                    queue.submit(Some(encoder.finish()));
+                    device.poll(wgpu::Maintain::Poll);
+                });
+                ui.set_frame_comparison(false);
+            });
+            device.poll(wgpu::Maintain::Wait);
+        }
         device.poll(wgpu::Maintain::Wait);
     }
     group.finish();

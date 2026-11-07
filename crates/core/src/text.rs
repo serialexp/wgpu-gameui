@@ -972,9 +972,15 @@ impl TextRenderer {
 
     /// The device-pixel grid glyph origins round onto, from the view origin and
     /// the scale factor of the last [`resize`](Self::resize).
-    fn pixel_grid(&self) -> PixelGrid {
+    pub(crate) fn pixel_grid(&self) -> PixelGrid {
         PixelGrid::new(self.snap, self.scale_factor, self.view_origin, self.hint)
             .with_target(self.width, self.height)
+    }
+
+    /// The font system's generation: it moves on when fonts load or default
+    /// families change, which is when shaped text goes stale.
+    pub(crate) fn font_generation(&self) -> u64 {
+        self.cpu.font_generation()
     }
 
     /// Generate small text from outlines **hinted** for the size they are drawn

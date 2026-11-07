@@ -17,6 +17,7 @@ use crate::render::composite::{Offscreen, TargetPlan};
 use crate::render::draw_box::Target;
 use crate::render::draw_plan::{DrawPlan, ResolveTextures};
 use crate::render::frame_arena::FrameArena;
+use crate::render::frame_diff::{ContextKey, FrameSnapshot};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
 use crate::render::textures::{
     self, AtlasId, Binding, Placement, Resolved, Sampling, SpriteError, SpriteId, Textures,
@@ -417,6 +418,23 @@ pub struct RenderStats {
     pub text_instances_built: usize,
     /// Draw boxes computed for units, culled ones included.
     pub boxes_computed: u64,
+    /// Lists compared with the frame kept for their place in the render call
+    /// (see [`UiRenderer::set_frame_comparison`]).
+    pub lists_compared: usize,
+    /// Of those, lists that were the last frame's again to the byte.
+    pub lists_identical: usize,
+    /// Of those, lists in which nothing moved, resized or changed family:
+    /// at most colours differ.
+    pub lists_keeping_places: usize,
+    /// Records of compared lists that were as they were. A list whose shape
+    /// changed counts none, in this or the two below.
+    pub records_same: usize,
+    /// Records that differed only in how they draw (a colour, a tint).
+    pub records_look: usize,
+    /// Records that differed in anything else.
+    pub records_place: usize,
+    /// Bytes the kept frames hold, about.
+    pub snapshot_bytes: usize,
     /// Soup/chrome/circle/shadow batches.
     pub color_runs: usize,
     /// Analytic shadow instances submitted.
@@ -576,6 +594,17 @@ pub struct UiRenderer {
     // Nine-slice registry
     nine_slices: Vec<NineSliceMeta>,
     nine_slice_names: HashMap<String, NineSliceId>,
+    /// Counts the nine-slices registered, which is the only way a name comes to
+    /// resolve to another sprite or border.
+    nine_slice_epoch: u64,
+    /// Whether each list is compared with the last frame's
+    /// (`set_frame_comparison`).
+    compare_frames: bool,
+    /// The records of the last frame's lists, one per place in a render call
+    /// (the base list, then each layer).
+    snapshots: Vec<FrameSnapshot>,
+    /// The next place in this frame's render calls, from `begin_frame`.
+    next_snapshot: usize,
 
     // Decoded-image cache (path/key -> sprite + dimensions)
     image_cache: ImageCache,
@@ -929,6 +958,10 @@ impl UiRenderer {
             sampler,
             nine_slices: Vec::new(),
             nine_slice_names: HashMap::new(),
+            nine_slice_epoch: 0,
+            compare_frames: false,
+            snapshots: Vec::new(),
+            next_snapshot: 0,
             image_cache: ImageCache::new(),
             color_vbo,
             color_ibo,
@@ -1284,6 +1317,7 @@ impl UiRenderer {
         border: [u32; 4],
     ) -> NineSliceId {
         let id = self.nine_slices.len() as NineSliceId;
+        self.nine_slice_epoch += 1;
         self.nine_slices.push(NineSliceMeta { sprite, border });
         self.nine_slice_names.insert(name.to_string(), id);
         id
@@ -1348,6 +1382,57 @@ impl UiRenderer {
     #[cfg(feature = "paint-order-oracle")]
     pub fn set_check_plan(&mut self, on: bool) {
         self.draw_plan.set_check(on);
+    }
+
+    /// Compare each list with the one drawn last frame at the same place in the
+    /// render call, and report how it differs in [`RenderStats`]
+    /// (`lists_compared` and the `records_*` counts). Off by default. Nothing is
+    /// reused yet; this is the measurement frame-to-frame reuse is built on
+    /// (`docs/design/frame-reuse.md`), and keeping a frame costs a copy of its
+    /// records.
+    pub fn set_frame_comparison(&mut self, on: bool) {
+        self.compare_frames = on;
+        if !on {
+            self.snapshots.clear();
+        }
+    }
+
+    /// What a list's plan and instances depend on besides the list.
+    fn frame_context(&self) -> ContextKey {
+        ContextKey {
+            grid: self.text_renderer.pixel_grid(),
+            viewport: self.pass_target.size,
+            fonts: self.text_renderer.font_generation(),
+            resolution: self.textures.epoch() + self.nine_slice_epoch,
+        }
+    }
+
+    /// Compare `draw_list` with the frame kept for its place, count what
+    /// differs, and keep it in its place.
+    fn compare_with_last_frame(&mut self, draw_list: &DrawList) {
+        /// Places kept: the base list and the layers over it. Lists past them
+        /// are not compared.
+        const SLOTS: usize = 8;
+        let slot = self.next_snapshot;
+        self.next_snapshot += 1;
+        if slot >= SLOTS {
+            return;
+        }
+        let context = self.frame_context();
+        if self.snapshots.len() <= slot {
+            self.snapshots.resize_with(slot + 1, FrameSnapshot::default);
+        }
+        let snapshot = &mut self.snapshots[slot];
+        let diff = snapshot.compare(draw_list, &context);
+        snapshot.keep(draw_list, &context);
+        let stats = &mut self.frame_stats;
+        stats.lists_compared += usize::from(diff.compared);
+        stats.lists_identical += usize::from(diff.identical());
+        stats.lists_keeping_places += usize::from(diff.keeps_places());
+        stats.records_same += diff.same as usize;
+        stats.records_look += diff.look as usize;
+        stats.records_place += diff.place as usize;
+        stats.snapshot_bytes = self.snapshots.iter().map(FrameSnapshot::bytes).sum();
     }
 
     /// Whether lists are drawn in paint order (see `set_paint_order`).
@@ -1482,6 +1567,7 @@ impl UiRenderer {
     /// reallocate every frame, which trips the sustained-render-pressure warning, and a
     /// single frame crossing [`ARENA_SANITY_CAP`] logs a dedicated message.
     pub fn begin_frame(&mut self) {
+        self.next_snapshot = 0;
         // Judge the *previous* frame here rather than at the end of a render call: the
         // counters describe a whole frame, and a frame can contain several calls.
         let previous = self.frame_stats;
@@ -1871,6 +1957,9 @@ impl UiRenderer {
         view: &wgpu::TextureView,
         draw_list: &DrawList,
     ) {
+        if self.compare_frames {
+            self.compare_with_last_frame(draw_list);
+        }
         // Place the whole list's glyphs and icons, and build their instances,
         // before any batch captures an atlas bind group: the atlas it binds
         // has to hold every glyph the list draws.

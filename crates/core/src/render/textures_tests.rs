@@ -385,3 +385,36 @@ fn yuv_rows_may_be_padded_as_decoders_give_them() {
         })
     );
 }
+
+#[test]
+fn the_epoch_moves_when_what_a_sprite_resolves_to_may_have_changed() {
+    let mut textures = Textures::new(8192);
+    let atlas = textures.create_atlas(256);
+    let start = textures.epoch();
+    assert_eq!(textures.epoch(), start, "asking changes nothing");
+    let a = textures
+        .insert(Some("a"), 16, 16, pixels(16, 16), Placement::Atlas(atlas))
+        .unwrap();
+    let loaded = textures.epoch();
+    assert_ne!(loaded, start, "a sprite loaded");
+    textures.resolve(a).unwrap();
+    textures.id_for("a");
+    assert_eq!(textures.epoch(), loaded, "resolving changes nothing");
+    // The same name again is another sprite.
+    textures
+        .insert(Some("a"), 16, 16, pixels(16, 16), Placement::Atlas(atlas))
+        .unwrap();
+    let reloaded = textures.epoch();
+    assert_ne!(reloaded, loaded);
+    let b = textures
+        .insert(Some("b"), 16, 16, pixels(16, 16), Placement::Own)
+        .unwrap();
+    assert_ne!(textures.epoch(), reloaded);
+    let before_remove = textures.epoch();
+    assert!(textures.remove(b));
+    assert_ne!(textures.epoch(), before_remove, "a sprite unloaded");
+    // Compacting an atlas moves sprites only when it has anything to repack.
+    let before_compact = textures.epoch();
+    let moved = textures.compact(atlas);
+    assert_eq!(textures.epoch() != before_compact, moved);
+}

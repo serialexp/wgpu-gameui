@@ -166,6 +166,14 @@ pub(super) fn glyphs_in_clip(
 }
 
 impl MsdfCpu {
+    /// The font system's generation (see `SharedFontSystem::generation`).
+    pub(super) fn font_generation(&self) -> u64 {
+        self.font_system
+            .lock()
+            .expect("FontSystem poisoned")
+            .generation()
+    }
+
     pub(crate) fn new(font_system: FontSystemHandle) -> Self {
         Self {
             font_system,

@@ -290,6 +290,9 @@ struct Shared {
 pub(crate) struct Textures {
     /// The GPU's largest texture edge.
     max_dimension: u32,
+    /// Counts the changes to what a name or id resolves to: a sprite loaded
+    /// or unloaded, an atlas repacked. Pixels updated in place don't count.
+    epoch: u64,
     /// Indexed by [`SpriteId`]; `None` is an unloaded sprite's slot, reused
     /// through `free`.
     sprites: Vec<Option<Sprite>>,
@@ -311,6 +314,7 @@ impl Textures {
             names: HashMap::new(),
             atlases: Vec::new(),
             pending: Vec::new(),
+            epoch: 0,
         }
     }
 
@@ -342,9 +346,17 @@ impl Textures {
     /// `false` for an unknown id, or when the repacked sprites wouldn't fit
     /// (the atlas then stays as it was).
     pub fn compact(&mut self, id: AtlasId) -> bool {
-        self.atlases
+        let moved = self
+            .atlases
             .get_mut(id.0 as usize)
-            .is_some_and(|shared| shared.atlas.compact())
+            .is_some_and(|shared| shared.atlas.compact());
+        self.epoch += u64::from(moved);
+        moved
+    }
+
+    /// Counts the changes to what a sprite resolves to (see the field).
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Load a `width`×`height` RGBA8 sprite where `placement` says. A `name`
@@ -500,6 +512,7 @@ impl Textures {
     /// Give a loaded sprite an id (and `name`, taking it from the sprite that
     /// had it), and queue a texture of its own for its first upload.
     fn add(&mut self, name: Option<&str>, width: u32, height: u32, home: Home) -> SpriteId {
+        self.epoch += 1;
         if let Some(previous) = name.and_then(|name| self.names.get(name).copied()) {
             self.remove(previous);
         }
@@ -549,14 +562,20 @@ impl Textures {
             home: Home::External { bind_group },
         };
         if let Some(id) = self.names.get(name).copied() {
-            if let Some(old) = self.sprites[id as usize].take()
-                && let Home::Atlas { atlas, slot } = old.home
-            {
-                self.atlases[atlas.0 as usize].atlas.remove(slot);
+            if let Some(old) = self.sprites[id as usize].take() {
+                // A view registered again every frame at its size resolves
+                // as it did; a new size, or another kind of sprite, does not.
+                let same = (old.width, old.height) == (width, height)
+                    && matches!(old.home, Home::External { .. });
+                self.epoch += u64::from(!same);
+                if let Home::Atlas { atlas, slot } = old.home {
+                    self.atlases[atlas.0 as usize].atlas.remove(slot);
+                }
             }
             self.sprites[id as usize] = Some(sprite);
             return Ok(id);
         }
+        self.epoch += 1;
         let id = if let Some(id) = self.free.pop() {
             self.sprites[id as usize] = Some(sprite);
             id
@@ -572,6 +591,7 @@ impl Textures {
     /// finished any work already submitted with it), an atlas slot is
     /// reclaimed. Returns `false` for an unknown or already unloaded id.
     pub fn remove(&mut self, id: SpriteId) -> bool {
+        self.epoch += 1;
         let Some(sprite) = self.sprites.get_mut(id as usize).and_then(Option::take) else {
             return false;
         };

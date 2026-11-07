@@ -392,6 +392,66 @@ pub(crate) fn analytic(target: &Target, record: &AnalyticInstance) -> PixelBox {
     content.intersect(clip).pixels(target)
 }
 
+/// The payload slots of an [`AnalyticInstance`] of `kind` that [`analytic`]
+/// reads: the transform and its clip flag (slots 0 and 1), the rect (2) and
+/// the clip (8), plus the radii a chrome or stripes record's reach is checked
+/// against (6) or the reaches of a stroke segment (5). Everything else is
+/// colour, widths, patterns and phases, which draw differently without moving
+/// the box. Slot 5 is a chrome record's border colour, so it must not be
+/// compared for chrome: a filled rect has its own colour there.
+///
+/// Keep this in step with [`analytic`] and [`segment_quad`]: a slot read there
+/// belongs here, and `records_with_the_same_box_inputs_have_the_same_box` is
+/// the check.
+fn analytic_box_slots(kind: u32) -> &'static [usize] {
+    match kind {
+        ANALYTIC_KIND_CHROME | ANALYTIC_KIND_STRIPES => &[0, 1, 2, 6, 8],
+        ANALYTIC_KIND_SEGMENT => &[0, 1, 2, 5, 8],
+        // A shadow, and a kind not known: a shadow reads the fewest slots, an
+        // unknown one falls to the padded quad of chrome.
+        ANALYTIC_KIND_SHADOW => &[0, 1, 2, 8],
+        _ => &[0, 1, 2, 5, 6, 8],
+    }
+}
+
+/// Whether `a` and `b` have the same box on any target: they are one kind,
+/// agree bit for bit on every slot [`analytic`] reads for it, and either both
+/// or neither has a non-finite float, which is what sends a chrome or stripe
+/// record to its padded fallback ([`reach_holds`]).
+pub(crate) fn same_analytic_box_inputs(a: &AnalyticInstance, b: &AnalyticInstance) -> bool {
+    let finite = |r: &AnalyticInstance| {
+        r.payload
+            .as_flattened()
+            .iter()
+            .fold(true, |ok, v| ok & v.is_finite())
+    };
+    a.kind == b.kind
+        && analytic_box_slots(a.kind).iter().all(|&slot| {
+            a.payload[slot]
+                .iter()
+                .zip(&b.payload[slot])
+                .all(|(x, y)| x.to_bits() == y.to_bits())
+        })
+        && finite(a) == finite(b)
+}
+
+/// Whether `a` and `b` have the same box: [`circle`] reads the centre and
+/// radius, the clip and its flag, never the colour.
+pub(crate) fn same_circle_box_inputs(a: &CircleInstance, b: &CircleInstance) -> bool {
+    let bits = |v: &[f32; 4]| v.map(f32::to_bits);
+    bits(&a.center) == bits(&b.center)
+        && bits(&a.clip) == bits(&b.clip)
+        && bits(&a.params) == bits(&b.params)
+}
+
+/// Whether `a` and `b` give a triangle the same box: [`soup`] reads a vertex's
+/// position, clip and clip flag, never its colour.
+pub(crate) fn same_vertex_box_inputs(a: &Vertex, b: &Vertex) -> bool {
+    a.position.map(f32::to_bits) == b.position.map(f32::to_bits)
+        && a.clip.map(f32::to_bits) == b.clip.map(f32::to_bits)
+        && a.clip_enabled.to_bits() == b.clip_enabled.to_bits()
+}
+
 /// Whether [`CHROME_REACH`] bounds what a chrome or stripe record draws past
 /// its rect. It holds for corner radii of 0 or more, which `DrawList` clamps
 /// to; a negative radius pulls the corner's field outwards and reaches

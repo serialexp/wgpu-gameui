@@ -79,10 +79,18 @@ impl Lists {
         DrawList::with_font_system(Arc::clone(&self.fs))
     }
 
+    /// The grid the renderer places glyphs on for `target`.
+    pub(crate) fn grid(target: &Target) -> PixelGrid {
+        PixelGrid::new(GlyphSnap::default(), target.scale, target.origin, true).with_target(
+            target.size.0 as f32 / target.scale,
+            target.size.1 as f32 / target.scale,
+        )
+    }
+
     /// Prepare `list`'s text and icons as the renderer does for `target`, and
     /// plan it.
     pub(crate) fn plan(&mut self, list: &DrawList, target: &Target, plan: &mut DrawPlan) {
-        let grid = PixelGrid::new(GlyphSnap::default(), target.scale, target.origin, true);
+        let grid = Self::grid(target);
         let commands = list.paint_cmds.iter().filter_map(|cmd| match cmd {
             PaintCmd::Text { draws } => Some(draws.clone()),
             _ => None,

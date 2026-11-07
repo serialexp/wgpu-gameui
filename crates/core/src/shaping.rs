@@ -51,6 +51,11 @@ pub struct SharedFontSystem {
     /// `(family_hash, weight, style_disc)`. Sampled once per font (a one-glyph
     /// shaping pass + a ttf-parser metric read), then reused every frame.
     vmetrics: HashMap<(u64, u16, u8), FontVMetrics>,
+    /// Counts the times the fonts may have changed (every
+    /// [`clear_caches`](Self::clear_caches)): anything derived from a layout
+    /// is stale once it has moved on. Evicting a layout to stay in budget does
+    /// not count, since shaping it again gives the same layout.
+    generation: u64,
 }
 
 impl SharedFontSystem {
@@ -60,7 +65,15 @@ impl SharedFontSystem {
             font_system,
             layouts: LayoutCache::default(),
             vmetrics: HashMap::new(),
+            generation: 0,
         }
+    }
+
+    /// How many times the fonts, or what resolves to them, may have changed
+    /// (see [`db_mut`](Self::db_mut)). Text prepared at another generation may
+    /// have been shaped with other faces.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The font system, for shaping. Change its fonts through
@@ -86,6 +99,7 @@ impl SharedFontSystem {
     /// Drop every kept layout and font metric, so each block is shaped again
     /// when next measured or drawn.
     pub fn clear_caches(&mut self) {
+        self.generation += 1;
         self.layouts.clear();
         self.vmetrics.clear();
     }
@@ -1010,6 +1024,20 @@ mod tests {
         let cut = shared.layout(&spec(TextAlign::Center), long);
         assert!(cut.size.0 <= 200.0 && cut.size.1 < 20.0, "{:?}", cut.size);
         assert!(cut.glyphs[0].rel_x >= 0.0);
+    }
+
+    #[test]
+    fn the_generation_moves_when_fonts_may_have_changed() {
+        let mut shared = SharedFontSystem::new(FontSystem::new());
+        let start = shared.generation();
+        shared.font_system();
+        shared.db();
+        assert_eq!(shared.generation(), start, "reading changes nothing");
+        shared.db_mut();
+        assert_ne!(shared.generation(), start, "the database may be edited");
+        let loaded = shared.generation();
+        shared.clear_caches();
+        assert_ne!(shared.generation(), loaded);
     }
 
     #[test]
