@@ -24,7 +24,7 @@ pub(crate) struct MsdfCpu {
     pub(super) icon_atlas: MsdfGlyphAtlas,
     /// Stable per-font keys for the atlas, assigned on first sighting. Decouples
     /// the atlas from cosmic-text's `fontdb::ID`.
-    font_keys: HashMap<fontdb::ID, u64>,
+    font_keys: HashMap<fontdb::ID, u64, rustc_hash::FxBuildHasher>,
     next_font_key: u64,
     /// The registered icon fonts' bytes, refreshed per list.
     #[cfg(feature = "phosphor-icons")]
@@ -142,7 +142,7 @@ impl MsdfCpu {
             // shared shader's AA math is unchanged.
             #[cfg(feature = "phosphor-icons")]
             icon_atlas: MsdfGlyphAtlas::with_params(ICON_REF_PX, DEFAULT_PX_RANGE),
-            font_keys: HashMap::new(),
+            font_keys: HashMap::default(),
             next_font_key: 0,
             #[cfg(feature = "phosphor-icons")]
             icon_fonts: Vec::new(),

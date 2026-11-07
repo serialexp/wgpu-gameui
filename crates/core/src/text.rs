@@ -1335,7 +1335,7 @@ pub(crate) fn style_disc(style: Style) -> u8 {
 /// `font_keys`/`next_font_key` fields can be borrowed disjointly from the rest of
 /// the renderer during shaping.
 fn resolve_font_key(
-    font_keys: &mut HashMap<fontdb::ID, u64>,
+    font_keys: &mut HashMap<fontdb::ID, u64, rustc_hash::FxBuildHasher>,
     next_font_key: &mut u64,
     id: fontdb::ID,
 ) -> u64 {
@@ -1509,7 +1509,7 @@ impl PixelGrid {
 #[allow(clippy::too_many_arguments)]
 fn append_placements(
     atlas: &mut MsdfGlyphAtlas,
-    font_keys: &mut HashMap<fontdb::ID, u64>,
+    font_keys: &mut HashMap<fontdb::ID, u64, rustc_hash::FxBuildHasher>,
     next_font_key: &mut u64,
     font_system: &mut FontSystem,
     block: &TextBlock,
