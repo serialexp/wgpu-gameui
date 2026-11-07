@@ -206,6 +206,11 @@ name = "ui_stress"
 harness = false
 
 [[bench]]
+name = "frame_compare"
+harness = false
+required-features = ["headless"]
+
+[[bench]]
 name = "markdown"
 harness = false
 required-features = ["markdown"]

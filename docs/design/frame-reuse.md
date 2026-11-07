@@ -1,6 +1,6 @@
 # Frame-to-frame reuse
 
-Status: partial — Phase 0 counters and headless oracle landed (2026-11-08); no reuse implemented
+Status: partial — Phase 0 landed except the memory counter, which waits for a kept frame (2026-11-08); no reuse implemented
 Owner: Bart
 Last updated: 2026-11-08
 
@@ -30,13 +30,41 @@ Tick items as they land.
       instances and draws; every plan is also checked against the brute-force
       order oracle. Shares fixtures with the plan tests (`draw_plan_support.rs`).
 
+- [x] **Phase 0 — pixel oracle** (`tests/frame_oracle.rs`, `--ignored`, GPU).
+      Sequences played on a long-lived `HeadlessGpu` against one rebuilt from
+      nothing in the same state, per frame: a scene across scales and families,
+      sprites updated in place, unloaded and reloaded under a name (ids reused),
+      a nine-slice re-registered, an atlas compacted, fonts loaded mid-run, the
+      glyph atlas growing, and two renders recorded before one submit. Checked
+      to fail: a fresh run that ignores the sprite changes is reported. Found on
+      the way, and not a bug of reuse: text drawn from another place in the glyph
+      atlas can come out one level off in a channel (the sampler quantises
+      bilinear weights), so a fresh renderer and a long-lived one already differ
+      by that before any reuse. The oracle allows exactly that for text
+      (`Tolerance::AtlasSampling`) and nothing for the rest (`Exact`); the
+      headless oracle, which shares the atlas, is exact on instances.
+- [x] **Phase 0 — comparison cost** (`benches/frame_compare.rs`, Criterion). A
+      stand-in for the per-record comparison (chrome records as bytes; each text
+      block's layout and placement fields, its shared lists by `Arc` identity)
+      against the renderer's CPU cost for the same list (cells with a label,
+      GPU not waited for), one run under load 6, so read the ratios:
+
+      | cells | compare, identical (full walk) | compare, text moved (stops early) | recompute |
+      | --- | --- | --- | --- |
+      | 100 | 0.45 µs | 0.15 µs | 51 µs |
+      | 1,000 | 4.6 µs | 1.4 µs | 320 µs |
+      | 10,000 | 67 µs | 28 µs | 7.4 ms |
+
+      The full walk costs about 1% of a recompute at each size, so the budget
+      (an all-changed frame within 5% of today) holds even if the comparison
+      never stops early; and the "below some list size" question has the answer
+      that no size is too small. It is a lower bound: the real comparison also
+      names which stage's inputs changed.
+
 ### Outstanding
 
-- [ ] **Phase 0 — remainder.** The oracle's pixel level (GPU, `--ignored`) and the
-      sequences it cannot reach headless: font change, texture replacement, atlas
-      growth and compaction, several differing renders before one submit; the memory
-      counter once there is a kept frame; the comparison-cost measurement at 100,
-      1,000 and 10,000 cells that the budgets in "Goals" depend on.
+- [ ] **Phase 0 — memory counter.** Reported once there is a kept frame (Phase 1);
+      nothing to count before it. Held with Phase 1.
 - [ ] **Phase 1 — snapshot and the stage-wise comparison.** What a frame keeps, the
       context key, and a comparison that says *which stage's inputs* changed.
 - [ ] **Phase 2 — whole-plan replay.** When every unit's key and box are as last
@@ -266,8 +294,7 @@ and holds the all-changed frame within the budget.
       measure at 10k units rather than guess.
 - [ ] What decides a block was *moved* rather than rebuilt, if Phase 4 keeps any
       position-dependent shortcut (a runtime predicate, not "the oracle decides").
-- [ ] Whether the comparison is worth it below some list size (at 100 cells a
-      whole render is 0.07 ms).
+- [x] Whether the comparison is worth it below some list size: measured, about 1% of a recompute at 100, 1,000 and 10,000 cells (Phase 0).
 
 ## Review
 
