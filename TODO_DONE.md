@@ -2472,3 +2472,17 @@ editor. Coverage 85 of 91.
       pressed. The list and the message are drawn by
       `CodeEditor::draw_layers` on tooltip layers, so they never take the
       keyboard from the editor.
+
+## Performance review follow-ups (Codex + Antigravity, 2026-11-08)
+
+- [x] **Fill-only `build_unit`.** A text command whose blocks have no shadow or
+      glow builds each block with `MsdfPrepared::build_fill_unit`, which walks the
+      placements once (the fill sweep) and records the same empty shadow and glow
+      ranges the three-sweep path did.
+- [x] **Compact `GlyphPlacement`.** A placement is `tile`, pen, baseline, size and
+      fill (about 76 B, was about 176). The block's clip, outline, shadow and glow
+      are one `BlockEffects` per block, in `MsdfPrepared::block_effects`.
+- [x] **`draw_box::analytic` fast path.** Untransformed chrome and stripes take
+      their bound from `Points::translated_rect` (the same corner values and float
+      margin as the four-corner path) and `reach_holds` checks its floats without
+      a branch apiece. Measured gain at 10,000 cells is within noise (about 1%).

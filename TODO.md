@@ -22,14 +22,6 @@ reviewers' guesses. Scene = `bench/ui-compare` (10k rounded rects + 2-char label
 
 Frame cost in the 10k scene (both reviewers agree, or only Antigravity):
 
-- [ ] **Fill-only `build_unit`** (`text_prep.rs` ~218-297): with no shadow/glow it still
-      walks the placements three times; the shadow and glow passes emit nothing.
-- [ ] **Compact `GlyphPlacement`** (`text.rs` ~1591): ~180 B per glyph, of which `clip`,
-      `outline`, `shadow`, `glow` are block-level. Keep them per block; ~3.6 MB written
-      and read back per frame at 10k cells.
-- [ ] **`draw_box::analytic` fast path** (`draw_box.rs` ~310-369): `reach_holds` checks 40
-      floats and the identity-linear case still builds four corners. Compute the bounds
-      directly for untransformed chrome and check only the six geometry floats.
 - [ ] **`Option<Arc<[…]>>` text ranges** (`text.rs` ~3246, 3341): empty ranges still cost
       two atomic increments at build and two decrements at drop per block.
 - [ ] **`DrawOrder::highest()` and cell storage** (`draw_order.rs` ~165-328): per-cell
