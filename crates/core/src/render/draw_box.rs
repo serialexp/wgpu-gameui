@@ -228,6 +228,25 @@ impl Points {
         self.hi = [self.hi[0].max(p[0]), self.hi[1].max(p[1])];
     }
 
+    /// The points of `rect` (`[x, y, width, height]`) moved by `translation`:
+    /// what [`Points::add`] gathers from its four corners, worked out from the
+    /// two that differ per axis. The values are the same ones (`x + width`
+    /// then `+ translation`), so the bound is too; this only skips the
+    /// per-corner bookkeeping, which untransformed chrome pays for 10,000
+    /// times a frame.
+    fn translated_rect(rect: [f32; 4], translation: [f32; 2]) -> Self {
+        let [x, y, w, h] = rect;
+        let (x0, x1) = (x + translation[0], (x + w) + translation[0]);
+        let (y0, y1) = (y + translation[1], (y + h) + translation[1]);
+        let all = [x, y, w, h, x0, x1, y0, y1, translation[0], translation[1]];
+        Self {
+            lo: [x0.min(x1), y0.min(y1)],
+            hi: [x0.max(x1), y0.max(y1)],
+            magnitude: all.iter().fold(0.0, |m: f32, v| m.max(v.abs())),
+            finite: all.iter().fold(true, |ok, v| ok & v.is_finite()),
+        }
+    }
+
     /// The bound on the target, widened by `reach` physical px past the
     /// points (an edge's own reach) and by the float margin.
     fn bound(&self, target: &Target, reach: f32) -> Bound {
@@ -312,13 +331,7 @@ pub(crate) fn analytic(target: &Target, record: &AnalyticInstance) -> PixelBox {
         ANALYTIC_KIND_CHROME | ANALYTIC_KIND_STRIPES
             if linear == [1.0, 0.0, 0.0, 1.0] && reach_holds(record) =>
         {
-            let mut points = Points::new();
-            points.inputs(&rect);
-            for c in rect_corners(rect[0], rect[1], rect[2], rect[3]) {
-                points.add([c[0] + translation[0], c[1] + translation[1]]);
-            }
-            points.inputs(&translation);
-            points.bound(target, CHROME_REACH)
+            Points::translated_rect(rect, translation).bound(target, CHROME_REACH)
         }
         // A shadow's quad is its raster rect.
         ANALYTIC_KIND_SHADOW => quad_through(
@@ -363,8 +376,14 @@ pub(crate) fn analytic(target: &Target, record: &AnalyticInstance) -> PixelBox {
 /// `analytic_instances` is public, so a record edited by hand can be either.
 fn reach_holds(record: &AnalyticInstance) -> bool {
     let p = &record.payload;
-    p.iter().flatten().all(|v| v.is_finite())
-        && (record.kind != ANALYTIC_KIND_CHROME || p[6].iter().all(|&r| r >= 0.0))
+    // Folded with `&`, not `all`, so the 40 floats are checked without a
+    // branch apiece.
+    let finite = p
+        .as_flattened()
+        .iter()
+        .fold(true, |ok, v| ok & v.is_finite());
+    finite
+        && (record.kind != ANALYTIC_KIND_CHROME || p[6].iter().fold(true, |ok, &r| ok & (r >= 0.0)))
 }
 
 /// A stroke segment's quad, as `vs_analytic` builds it: along the segment,
