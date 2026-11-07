@@ -7,7 +7,7 @@
 
 use ui_compare_common::*;
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{DrawList, TextBlock, UiRenderer};
+use wgpu_gameui::{DrawList, TextBlock, TextContent, UiRenderer};
 
 fn main() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -48,7 +48,7 @@ fn main() {
 
     for n in counts() {
         let grid = Grid::new(n);
-        let labels: Vec<String> = (0..n).map(label).collect();
+        let labels: Vec<TextContent> = (0..n).map(|i| label(i).into()).collect();
         // The frame must contain the scene: the renderer's own stats are the
         // check, since a harness that silently drew nothing would be fast.
         {
@@ -86,7 +86,7 @@ fn main() {
 }
 
 /// The scene as a `DrawList`: a rounded rectangle and a label per cell.
-fn build(list: &mut DrawList, grid: &Grid, labels: &[String], frame: u64, animated: bool) {
+fn build(list: &mut DrawList, grid: &Grid, labels: &[TextContent], frame: u64, animated: bool) {
     let (w, h) = grid.size();
     for i in 0..grid.n {
         let (x, y) = grid.origin(i);
@@ -96,7 +96,7 @@ fn build(list: &mut DrawList, grid: &Grid, labels: &[String], frame: u64, animat
             grid.radius,
             [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
         );
-        let mut block = TextBlock::new(labels[i].as_str(), x + 1.0, y + 1.0)
+        let mut block = TextBlock::new(labels[i].clone(), x + 1.0, y + 1.0)
             .with_line_height(grid.font_px * 1.25)
             .with_max_width(w);
         block.font_size = grid.font_px;

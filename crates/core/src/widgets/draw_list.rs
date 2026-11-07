@@ -2686,7 +2686,7 @@ impl DrawList {
         // span texts, so the shape cache and the caret calls all operate on
         // the same string.
         if let Some(content) = span_content(&block) {
-            block.content = content;
+            block.content = content.into();
         }
 
         // Apply tint to the block colour and to per-span colour/underline

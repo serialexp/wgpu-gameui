@@ -187,7 +187,7 @@ pub struct DebugNode {
     /// Effective clip rect in world space, when clipped.
     pub clip: Option<Rect>,
     /// Text content, for text nodes.
-    pub text: Option<String>,
+    pub text: Option<crate::TextContent>,
     /// Primitives this node accounts for (a scope includes its descendants').
     pub counts: PrimCounts,
     /// False when a rotation or shear was active, meaning `bounds` is an
@@ -877,7 +877,7 @@ struct RawNode {
     declared: Option<Rect>,
     text_box: Option<Rect>,
     clip: Option<Rect>,
-    text: Option<String>,
+    text: Option<crate::TextContent>,
     counts: PrimCounts,
     axis_aligned: bool,
     effects: Vec<&'static str>,

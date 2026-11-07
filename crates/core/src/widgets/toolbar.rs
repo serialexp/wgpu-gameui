@@ -2095,7 +2095,12 @@ mod tests {
             .find(|l| l.kind == crate::layer::LayerKind::Tooltip)?;
         Some(Tip {
             rect: layer.rect,
-            texts: layer.list.texts.iter().map(|t| t.content.clone()).collect(),
+            texts: layer
+                .list
+                .texts
+                .iter()
+                .map(|t| t.content.to_string())
+                .collect(),
         })
     }
 

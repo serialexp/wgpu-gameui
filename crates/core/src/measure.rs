@@ -282,7 +282,7 @@ impl<'a> MeasureContext<'a> {
     }
 
     /// Build body text from the resolved style, then apply the active font stack.
-    pub fn text_block(&self, content: impl Into<String>) -> TextBlock {
+    pub fn text_block(&self, content: impl Into<crate::TextContent>) -> TextBlock {
         let mut block = self.styles.text_block(content, 0.0, 0.0);
         block.font_size = self.font.size;
         block.line_height = self.font.size * 1.25;

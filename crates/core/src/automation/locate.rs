@@ -49,7 +49,7 @@ pub fn find_one<'r>(report: &'r DebugReport, locator: &Locator) -> Result<Match<
 /// tree order, joined by spaces.
 pub fn text_of(report: &DebugReport, node: &DebugNode) -> String {
     if let Some(text) = &node.text {
-        return text.clone();
+        return text.to_string();
     }
     report
         .nodes

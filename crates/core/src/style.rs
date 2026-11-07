@@ -1114,7 +1114,7 @@ impl<'a> StyleResolver<'a> {
     /// A body [`TextBlock`] styled through the resolver: [`FontSize`](StyleKey::FontSize)
     /// size, [`Text`](StyleKey::Text) color, and the theme font. The overlay-aware
     /// counterpart of [`Theme::text`](crate::Theme::text).
-    pub fn text_block(&self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
+    pub fn text_block(&self, content: impl Into<crate::TextContent>, x: f32, y: f32) -> TextBlock {
         let c = self.color(StyleKey::Text);
         TextBlock::new(content, x, y)
             .with_size(self.scalar(StyleKey::FontSize))
@@ -1136,7 +1136,7 @@ impl<'a> StyleResolver<'a> {
     /// theme font.
     pub fn sans_block(
         &self,
-        content: impl Into<String>,
+        content: impl Into<crate::TextContent>,
         x: f32,
         y: f32,
         step: TextSize,
@@ -1153,7 +1153,7 @@ impl<'a> StyleResolver<'a> {
     /// readouts.
     pub fn mono_block(
         &self,
-        content: impl Into<String>,
+        content: impl Into<crate::TextContent>,
         x: f32,
         y: f32,
         step: TextSize,
@@ -1205,7 +1205,7 @@ impl<'a> StyleResolver<'a> {
     /// A title [`TextBlock`] styled through the resolver: [`FontSizeTitle`](StyleKey::FontSizeTitle)
     /// size, [`Text`](StyleKey::Text) color, and the theme font. The overlay-aware
     /// counterpart of [`Theme::title`](crate::Theme::title).
-    pub fn title_block(&self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
+    pub fn title_block(&self, content: impl Into<crate::TextContent>, x: f32, y: f32) -> TextBlock {
         let c = self.color(StyleKey::Text);
         TextBlock::new(content, x, y)
             .with_size(self.scalar(StyleKey::FontSizeTitle))

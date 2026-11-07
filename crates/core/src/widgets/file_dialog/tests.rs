@@ -136,7 +136,7 @@ impl Rig {
         self.texts = list
             .texts
             .iter()
-            .map(|t| (t.content.clone(), t.x, t.y))
+            .map(|t| (t.content.to_string(), t.x, t.y))
             .collect();
         out
     }

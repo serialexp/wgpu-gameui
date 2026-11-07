@@ -656,7 +656,7 @@ fn the_text_shown_stays_put_while_nothing_changes() {
     let shown = |list: &DrawList| {
         list.texts
             .iter()
-            .map(|block| (block.content.clone(), block.y))
+            .map(|block| (block.content.to_string(), block.y))
             .collect::<Vec<_>>()
     };
     frame_into(&mut list, &mut ti, &mut focus, &idle, true);
@@ -682,7 +682,7 @@ fn a_click_lands_on_the_paragraph_drawn_under_it() {
     let rows: Vec<(String, f32)> = list
         .texts
         .iter()
-        .map(|block| (block.content.clone(), block.y))
+        .map(|block| (block.content.to_string(), block.y))
         .filter(|(_, y)| *y >= 0.0 && *y + 20.0 <= 120.0)
         .collect();
     assert!(!rows.is_empty());

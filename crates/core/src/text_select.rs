@@ -34,7 +34,9 @@ use std::sync::Arc;
 use crate::layer::{LayerKind, LayerStack};
 use crate::layout::Rect;
 use crate::shaping::{LayoutSpec, ShapedLayout};
-use crate::text::{FaceRange, FontHandle, FontSystemHandle, TextBlock, TextDirection, WrapMode};
+use crate::text::{
+    FaceRange, FontHandle, FontSystemHandle, TextBlock, TextContent, TextDirection, WrapMode,
+};
 use crate::text_units::floor_boundary;
 use crate::{InputState, TextAlign, TextUnit};
 
@@ -117,7 +119,7 @@ struct Drawn {
 /// it. Kept apart from [`TextBlock`] so each frame's [`TextSelection::collect`]
 /// overwrites last frame's copy in place instead of cloning whole blocks.
 struct DrawnBlock {
-    content: String,
+    content: TextContent,
     x: f32,
     y: f32,
     clip: Option<Rect>,
@@ -241,7 +243,7 @@ pub struct TextSelection {
     font_system: Option<FontSystemHandle>,
     /// The content of every block in the selection's scope drawn since it
     /// began, for [`text`](Self::text).
-    contents: BTreeMap<TextKey, String>,
+    contents: BTreeMap<TextKey, TextContent>,
     /// How many times `contents` was emptied (see [`began`](Self::began)).
     began: u64,
 }
@@ -342,7 +344,8 @@ impl TextSelection {
     /// block is in the selection's scope and wasn't drawn: the host's copy of
     /// text it never drew while the selection was made. A block drawn later
     /// replaces it with what was drawn.
-    pub fn remember(&mut self, key: TextKey, content: String) {
+    pub fn remember(&mut self, key: TextKey, content: impl Into<TextContent>) {
+        let content = content.into();
         if self
             .anchor
             .is_some_and(|anchor| anchor.key.scope == key.scope)
@@ -853,10 +856,10 @@ mod tests {
         assert!(!selection.has_text_in(key(1)..key(2)));
         assert!(selection.has_text_in(key(0)..key(1)));
 
-        selection.remember(key(1), "middle".into());
+        selection.remember(key(1), "middle");
         // A drawn block keeps what was drawn, and another scope is ignored.
-        selection.remember(key(0), "not drawn".into());
-        selection.remember(TextKey::new(OTHER, 0), "elsewhere".into());
+        selection.remember(key(0), "not drawn");
+        selection.remember(TextKey::new(OTHER, 0), "elsewhere");
         assert!(selection.has_text_in(key(1)..key(2)));
         assert_eq!(selection.text().as_deref(), Some("first\nmiddle\nlast"));
 

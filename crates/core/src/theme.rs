@@ -944,7 +944,7 @@ impl Theme {
     }
 
     /// Create a text block with theme styling
-    pub fn text(&self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
+    pub fn text(&self, content: impl Into<crate::TextContent>, x: f32, y: f32) -> TextBlock {
         TextBlock::new(content, x, y)
             .with_size(self.font_size)
             .with_color_f32(self.text)
@@ -952,7 +952,7 @@ impl Theme {
     }
 
     /// Create a title text block
-    pub fn title(&self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
+    pub fn title(&self, content: impl Into<crate::TextContent>, x: f32, y: f32) -> TextBlock {
         TextBlock::new(content, x, y)
             .with_size(self.font_size_title)
             .with_color_f32(self.text)

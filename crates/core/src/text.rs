@@ -3097,6 +3097,149 @@ pub fn vcentered_line_y(top: f32, height: f32, font_size: f32) -> f32 {
     top + (height - font_size * LINE_HEIGHT_RATIO) / 2.0
 }
 
+/// The text of a [`TextBlock`]: a string shared by reference count, so a label
+/// kept from frame to frame is handed to every block drawing it without being
+/// copied (`TextBlock::new(label.clone(), ..)` on a `TextContent` or `Arc<str>`
+/// allocates nothing); a `&str` or `String` is copied once, as before.
+///
+/// It reads like a `str`: it derefs to one and compares equal to strings.
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TextContent(std::sync::Arc<str>);
+
+impl TextContent {
+    /// The text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for TextContent {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for TextContent {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for TextContent {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TextContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&*self.0, f)
+    }
+}
+
+impl std::fmt::Debug for TextContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
+impl From<&str> for TextContent {
+    fn from(s: &str) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<String> for TextContent {
+    fn from(s: String) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<&String> for TextContent {
+    fn from(s: &String) -> Self {
+        Self(s.as_str().into())
+    }
+}
+
+impl From<Box<str>> for TextContent {
+    fn from(s: Box<str>) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<std::borrow::Cow<'_, str>> for TextContent {
+    fn from(s: std::borrow::Cow<'_, str>) -> Self {
+        Self(s.into())
+    }
+}
+
+impl From<std::sync::Arc<str>> for TextContent {
+    fn from(s: std::sync::Arc<str>) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&std::sync::Arc<str>> for TextContent {
+    fn from(s: &std::sync::Arc<str>) -> Self {
+        Self(std::sync::Arc::clone(s))
+    }
+}
+
+impl From<&TextContent> for TextContent {
+    fn from(c: &TextContent) -> Self {
+        c.clone()
+    }
+}
+
+impl From<TextContent> for std::sync::Arc<str> {
+    fn from(c: TextContent) -> Self {
+        c.0
+    }
+}
+
+impl From<TextContent> for String {
+    fn from(c: TextContent) -> Self {
+        c.0.to_string()
+    }
+}
+
+impl PartialEq<str> for TextContent {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for TextContent {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for TextContent {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<TextContent> for str {
+    fn eq(&self, other: &TextContent) -> bool {
+        self == &*other.0
+    }
+}
+
+impl PartialEq<TextContent> for &str {
+    fn eq(&self, other: &TextContent) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl PartialEq<TextContent> for String {
+    fn eq(&self, other: &TextContent) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
 /// The empty range lists every plain block starts with: one shared allocation
 /// handed out by reference count, so a block with no styled ranges (nearly
 /// all of them) allocates nothing for them.
@@ -3115,7 +3258,7 @@ fn no_face_ranges() -> std::sync::Arc<Vec<FaceRange>> {
 pub struct TextBlock {
     /// The text to render. When [`spans`](Self::spans) is non-empty, this is
     /// derived from the concatenated span texts at draw time.
-    pub content: String,
+    pub content: TextContent,
     /// Left edge of the block (the pen origin, in screen pixels).
     pub x: f32,
     /// Top edge of the block (in screen pixels).
@@ -3195,7 +3338,7 @@ pub struct TextBlock {
 impl TextBlock {
     /// A white block at `(x, y)` with default metrics (16px, 1.25× line height,
     /// 800px max width) and no effects. Use the `with_*` builders to customize.
-    pub fn new(content: impl Into<String>, x: f32, y: f32) -> Self {
+    pub fn new(content: impl Into<TextContent>, x: f32, y: f32) -> Self {
         Self {
             content: content.into(),
             x,
@@ -3493,6 +3636,29 @@ mod tests {
     use crate::render::{GlyphSizing, MAX_HINTED_PX};
     use crate::shaping::{LayoutSpec, LayoutStats, shape_layout};
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight};
+
+    #[test]
+    fn a_shared_label_is_handed_to_blocks_without_copying_and_reads_like_a_str() {
+        let label: super::TextContent = "42".into();
+        let (a, b) = (
+            TextBlock::new(label.clone(), 0.0, 0.0),
+            TextBlock::new(&label, 0.0, 0.0),
+        );
+        assert!(std::ptr::eq(a.content.as_ptr(), label.as_ptr()));
+        assert!(std::ptr::eq(b.content.as_ptr(), label.as_ptr()));
+
+        let owned = String::from("42");
+        assert_eq!(a.content, "42");
+        assert_eq!(a.content, owned);
+        assert_eq!("42", a.content);
+        assert_eq!(a.content.len(), 2);
+        assert_eq!(a.content.to_string(), "42");
+        assert_eq!(format!("{:?}", a.content), "\"42\"");
+        // Text given by value or by reference is copied once.
+        let copied = TextBlock::new(&owned, 0.0, 0.0);
+        assert!(!std::ptr::eq(copied.content.as_ptr(), owned.as_ptr()));
+        assert_eq!(copied.content, owned);
+    }
 
     #[test]
     fn plain_blocks_share_their_empty_range_lists_and_styled_ones_do_not() {

@@ -44,7 +44,7 @@ pub(super) struct FieldText {
 
 impl FieldText {
     /// `content` laid out as the field draws it, at (`x`, `y`).
-    pub fn block(self, content: impl Into<String>, x: f32, y: f32) -> TextBlock {
+    pub fn block(self, content: impl Into<crate::TextContent>, x: f32, y: f32) -> TextBlock {
         TextBlock::new(content, x, y)
             .with_size(self.font_size)
             .with_wrap(self.wrap)
