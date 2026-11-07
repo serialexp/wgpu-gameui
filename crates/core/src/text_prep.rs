@@ -225,7 +225,7 @@ impl MsdfCpu {
                 out.build_unit(&sweep, blocks);
             } else {
                 for block in blocks {
-                    out.build_unit(&sweep, block..block + 1);
+                    out.build_fill_unit(&sweep, block);
                 }
             }
             out.text_commands
@@ -293,6 +293,27 @@ impl MsdfPrepared {
         self.text_units.push(TextUnit {
             blocks,
             instances: start..self.text_instances.len() as u32,
+        });
+    }
+}
+
+impl MsdfPrepared {
+    /// [`build_unit`](Self::build_unit) for one block that has no shadow and
+    /// no glow (the caller has checked): only the fill sweep has anything to
+    /// emit, so the other two are not walked. The recorded sweeps are what
+    /// `build_unit` records for such a block: empty shadow and glow ranges at
+    /// the block's start, then the fills.
+    fn build_fill_unit(&mut self, sweep: &Sweep, block: u32) {
+        let from = self.text_instances.len() as u32;
+        let glyphs = self.block_glyphs[block as usize].clone();
+        for p in &self.placements[glyphs.start as usize..glyphs.end as usize] {
+            push_sweep_quad(&mut self.text_instances, sweep, p, 2);
+        }
+        let end = self.text_instances.len() as u32;
+        self.block_sweeps[block as usize] = [from..from, from..from, from..end];
+        self.text_units.push(TextUnit {
+            blocks: block..block + 1,
+            instances: from..end,
         });
     }
 }
