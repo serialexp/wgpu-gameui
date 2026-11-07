@@ -35,6 +35,10 @@ Frame cost in the 10k scene (both reviewers agree, or only Antigravity):
 - [ ] **`push_chrome_instance` identity fast path** (`draw_list.rs` ~2034): 30-float
       finiteness check and a matrix inverse per rect even for identity transforms.
 
+Reuse across frames (the same-interface design, reviewed 2026-11-08):
+[docs/design/frame-reuse.md](docs/design/frame-reuse.md) replaces the "frozen/prepared list"
+item below.
+
 Structural (larger designs; judge on the new ui-compare scenarios first):
 
 - [ ] **Frozen/prepared list**: unchanged geometry and text repeat the whole prepare,
