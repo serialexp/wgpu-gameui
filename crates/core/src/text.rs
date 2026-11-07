@@ -510,12 +510,34 @@ impl MsdfInstance {
     /// A quad over `corners` (top-left, top-right, bottom-left; the fourth
     /// completes the parallelogram) showing `tile`.
     fn new(
+        corners: [[f32; 2]; 3],
+        tile: &AtlasRegion,
+        fill: [f32; 4],
+        outline: [f32; 4],
+        clip: Option<[f32; 4]>,
+        shape: [f32; 3],
+    ) -> Self {
+        Self::new_memo(
+            corners,
+            tile,
+            fill,
+            outline,
+            clip,
+            shape,
+            &mut QuadMemo::default(),
+        )
+    }
+
+    /// [`new`](Self::new), converting the colours and parameters through
+    /// `memo`, which a run of quads that share them (a block's glyphs) reuses.
+    fn new_memo(
         [tl, tr, bl]: [[f32; 2]; 3],
         tile: &AtlasRegion,
         fill: [f32; 4],
         outline: [f32; 4],
         clip: Option<[f32; 4]>,
         [px_range, outline_width, softness]: [f32; 3],
+        memo: &mut QuadMemo,
     ) -> Self {
         let texel = |v: u32| u16::try_from(v).expect("MSDF atlas is at most 4096 px");
         let clip_on = if clip.is_some() { 1.0 } else { 0.0 };
@@ -530,10 +552,9 @@ impl MsdfInstance {
                 texel(tile.x + tile.w),
                 texel(tile.y + tile.h),
             ],
-            fill: srgb8(fill),
-            outline: srgb8(outline),
-            params: [clip_on, px_range, outline_width, softness]
-                .map(|v| half::f16::from_f32(v).to_bits()),
+            fill: memo.fill.convert(fill),
+            outline: memo.outline.convert(outline),
+            params: memo.params(clip_on, px_range, outline_width, softness),
         }
     }
 
@@ -571,6 +592,57 @@ impl MsdfInstance {
     /// Whether [`clip`](Self::clip) applies.
     pub(crate) fn clip_enabled(&self) -> bool {
         half::f16::from_bits(self.params[0]).to_f32() > 0.5
+    }
+}
+
+/// The last colour and parameter conversions an [`MsdfInstance`] needed, kept
+/// so the next quad with the same inputs (every glyph of a block shares its
+/// colours and, nearly always, its parameters) doesn't convert them again:
+/// rounding eight channels and narrowing four floats to half precision cost
+/// more than the rest of building the quad. Keyed on the exact bits, so a hit
+/// returns what the conversion would.
+#[derive(Default)]
+pub(crate) struct QuadMemo {
+    fill: ColorMemo,
+    outline: ColorMemo,
+    params: Option<([u32; 4], [u16; 4])>,
+}
+
+#[derive(Default)]
+struct ColorMemo(Option<([u32; 4], [u8; 4])>);
+
+impl ColorMemo {
+    fn convert(&mut self, color: [f32; 4]) -> [u8; 4] {
+        let key = color.map(f32::to_bits);
+        match self.0 {
+            Some((k, v)) if k == key => v,
+            _ => {
+                let v = srgb8(color);
+                self.0 = Some((key, v));
+                v
+            }
+        }
+    }
+}
+
+impl QuadMemo {
+    fn params(
+        &mut self,
+        clip_on: f32,
+        px_range: f32,
+        outline_width: f32,
+        softness: f32,
+    ) -> [u16; 4] {
+        let values = [clip_on, px_range, outline_width, softness];
+        let key = values.map(f32::to_bits);
+        match self.params {
+            Some((k, v)) if k == key => v,
+            _ => {
+                let v = values.map(|v| half::f16::from_f32(v).to_bits());
+                self.params = Some((key, v));
+                v
+            }
+        }
     }
 }
 
@@ -1660,6 +1732,7 @@ fn push_glyph_quad(
     clip: Option<[f32; 4]>,
     px_range: f32,
     style: &QuadStyle,
+    memo: &mut QuadMemo,
 ) {
     let m = &p.tile.metrics;
     let font_size = p.font_size;
@@ -1670,13 +1743,14 @@ fn push_glyph_quad(
     let y0 = p.baseline_y - m.top_em * font_size + oy;
     let y1 = p.baseline_y - m.bottom_em * font_size + oy;
 
-    out.push(MsdfInstance::new(
+    out.push(MsdfInstance::new_memo(
         [[x0, y0], [x1, y0], [x0, y1]],
         &p.tile.region,
         style.fill,
         style.outline,
         clip,
         [px_range, style.outline_width, style.softness],
+        memo,
     ));
 }
 

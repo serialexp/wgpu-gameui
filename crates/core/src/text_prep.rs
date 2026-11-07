@@ -45,6 +45,8 @@ pub(crate) struct TextUnit {
 #[derive(Default)]
 pub(crate) struct MsdfPrepared {
     placements: Vec<GlyphPlacement>,
+    /// The conversions the last quad needed, for the next.
+    memo: QuadMemo,
     /// What each text block's glyphs share.
     block_effects: Vec<BlockEffects>,
     /// Each text block's glyphs in `placements`.
@@ -299,7 +301,14 @@ impl MsdfPrepared {
                 let glyphs = self.block_glyphs[block as usize].clone();
                 let effects = &self.block_effects[block as usize];
                 for p in &self.placements[glyphs.start as usize..glyphs.end as usize] {
-                    push_sweep_quad(&mut self.text_instances, sweep, p, effects, kind);
+                    push_sweep_quad(
+                        &mut self.text_instances,
+                        &mut self.memo,
+                        sweep,
+                        p,
+                        effects,
+                        kind,
+                    );
                 }
                 self.block_sweeps[block as usize][kind] = from..self.text_instances.len() as u32;
             }
@@ -322,7 +331,14 @@ impl MsdfPrepared {
         let glyphs = self.block_glyphs[block as usize].clone();
         let effects = &self.block_effects[block as usize];
         for p in &self.placements[glyphs.start as usize..glyphs.end as usize] {
-            push_sweep_quad(&mut self.text_instances, sweep, p, effects, 2);
+            push_sweep_quad(
+                &mut self.text_instances,
+                &mut self.memo,
+                sweep,
+                p,
+                effects,
+                2,
+            );
         }
         let end = self.text_instances.len() as u32;
         self.block_sweeps[block as usize] = [from..from, from..from, from..end];
@@ -337,6 +353,7 @@ impl MsdfPrepared {
 /// and outline. Nothing for a shadow or glow the glyph doesn't have.
 fn push_sweep_quad(
     out: &mut Vec<MsdfInstance>,
+    memo: &mut QuadMemo,
     sweep: &Sweep,
     p: &GlyphPlacement,
     effects: &BlockEffects,
@@ -388,7 +405,7 @@ fn push_sweep_quad(
             }
         }
     };
-    push_glyph_quad(out, p, effects.clip, px_range, &style);
+    push_glyph_quad(out, p, effects.clip, px_range, &style, memo);
 }
 
 #[cfg(all(test, feature = "bundled-font"))]

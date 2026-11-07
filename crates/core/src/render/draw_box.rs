@@ -166,19 +166,43 @@ impl Bound {
         };
         // Pixel `i`'s centre is `i + 0.5`, so the centres in `lo..=hi` are
         // `ceil(lo - 0.5)..=floor(hi - 0.5)`.
-        let axis = |lo: f32, hi: f32, size: u32| -> (u32, u32) {
-            let size = size as f32;
-            let first = (lo - 0.5).ceil().clamp(0.0, size);
-            let end = ((hi - 0.5).floor() + 1.0).clamp(0.0, size);
-            (first as u32, end as u32)
-        };
-        let (x0, x1) = axis(lo[0], hi[0], target.size.0);
-        let (y0, y1) = axis(lo[1], hi[1], target.size.1);
+        let (x0, x1) = pixel_range(lo[0], hi[0], target.size.0);
+        let (y0, y1) = pixel_range(lo[1], hi[1], target.size.1);
         if x0 >= x1 || y0 >= y1 {
             return PixelBox::EMPTY;
         }
         PixelBox { x0, y0, x1, y1 }
     }
+}
+
+/// The pixels `first..end` of an axis `size` px long whose centres lie in
+/// `lo..=hi`: `ceil(lo - 0.5)` and `floor(hi - 0.5) + 1`, each cut to
+/// `0..=size`, and 0 for a NaN. Done with a truncation instead of `ceil` and
+/// `floor`, which without SSE4.1 are library calls, and this runs for every
+/// glyph. [`pixel_range_by_floor`] is the formula it must agree with.
+fn pixel_range(lo: f32, hi: f32, size: u32) -> (u32, u32) {
+    let max = size as f32;
+    // `ceil` of a value already cut to 0..=size. NaN converts to 0.
+    let c = (lo - 0.5).clamp(0.0, max);
+    let t = c as u32;
+    let first = t + u32::from(c > t as f32);
+    // `floor(d) + 1` for `d >= 0` is `trunc(d) + 1`; below 0 it is at most 0.
+    let d = hi - 0.5;
+    let end = if d >= 0.0 {
+        (d as u32).saturating_add(1).min(size)
+    } else {
+        0
+    };
+    (first, end)
+}
+
+/// The formula [`pixel_range`] computes, written with `ceil` and `floor`.
+#[cfg(test)]
+fn pixel_range_by_floor(lo: f32, hi: f32, size: u32) -> (u32, u32) {
+    let size = size as f32;
+    let first = (lo - 0.5).ceil().clamp(0.0, size);
+    let end = ((hi - 0.5).floor() + 1.0).clamp(0.0, size);
+    (first as u32, end as u32)
 }
 
 /// The float margin for a bound whose inputs reach `magnitude` (the largest

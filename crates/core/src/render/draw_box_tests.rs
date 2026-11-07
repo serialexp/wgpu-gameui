@@ -1405,3 +1405,50 @@ mod gpu {
         }
     }
 }
+
+#[test]
+fn the_pixel_range_agrees_with_the_floor_and_ceil_formula() {
+    let edge = [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        0.0,
+        -0.0,
+        0.5,
+        0.4999,
+        0.5001,
+        -0.5,
+        -1.0,
+        1.0,
+        1.5,
+        1079.5,
+        1080.0,
+        1080.5,
+        1919.49,
+        1920.0,
+        1e9,
+        -1e9,
+        16_777_216.0,
+        f32::MAX,
+        f32::MIN,
+    ];
+    let mut values = edge.to_vec();
+    // A sweep across and beyond the target, in steps that land on, just
+    // below and just above every half pixel.
+    let mut v = -3.0f32;
+    while v < 2000.0 {
+        values.push(v);
+        v += 0.0625;
+    }
+    for size in [0, 1, 7, 1080, 1920] {
+        for &lo in &values {
+            for &hi in edge.iter().chain(&values[edge.len()..]).step_by(7) {
+                assert_eq!(
+                    super::pixel_range(lo, hi, size),
+                    super::pixel_range_by_floor(lo, hi, size),
+                    "lo {lo} hi {hi} size {size}"
+                );
+            }
+        }
+    }
+}
