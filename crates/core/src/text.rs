@@ -894,6 +894,7 @@ impl TextRenderer {
     /// the scale factor of the last [`resize`](Self::resize).
     fn pixel_grid(&self) -> PixelGrid {
         PixelGrid::new(self.snap, self.scale_factor, self.view_origin, self.hint)
+            .with_target(self.width, self.height)
     }
 
     /// Generate small text from outlines **hinted** for the size they are drawn
@@ -1434,6 +1435,9 @@ pub(crate) struct PixelGrid {
     /// Generate each glyph's field from an outline hinted for the size it will
     /// be drawn at, rather than from one shared scalable field.
     hint: bool,
+    /// The target's size in physical px, when known: glyphs wholly outside it
+    /// are not placed. `None` places every glyph.
+    target: Option<[f32; 2]>,
 }
 
 impl PixelGrid {
@@ -1443,7 +1447,22 @@ impl PixelGrid {
             scale,
             view_origin,
             hint,
+            target: None,
         }
+    }
+
+    /// This grid, for a target of `width` by `height` physical px.
+    pub(crate) fn with_target(mut self, width: f32, height: f32) -> Self {
+        self.target = Some([width, height]);
+        self
+    }
+
+    /// The canvas rect the target shows, `[left, top, right, bottom]` in
+    /// logical px, if the target's size is known.
+    pub(crate) fn viewport(&self) -> Option<[f32; 4]> {
+        let [w, h] = self.target?;
+        let [x, y] = self.view_origin;
+        Some([x, y, x + w / self.scale, y + h / self.scale])
     }
 
     /// Round `v` — a canvas coordinate along `axis` (0 = x, 1 = y) — to the
@@ -3696,6 +3715,7 @@ mod tests {
             scale,
             view_origin: [origin, origin],
             hint: true,
+            target: None,
         }
     }
 
@@ -5136,6 +5156,7 @@ mod tests {
                 scale: 1.0,
                 view_origin: [0.0, 0.0],
                 hint: true,
+                target: None,
             };
             self.cpu.prepare_texts(
                 &mut self.prepared,

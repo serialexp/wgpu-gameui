@@ -8,6 +8,7 @@ fn grid() -> PixelGrid {
         scale: 1.0,
         view_origin: [0.0, 0.0],
         hint: true,
+        target: None,
     }
 }
 
@@ -234,4 +235,83 @@ mod icons {
         assert_eq!(many.icon_atlas.width(), final_size);
         assert_eq!(out.icon_instances, built);
     }
+}
+
+#[test]
+fn glyphs_outside_the_target_are_not_placed_and_those_in_view_are_unchanged() {
+    let (mut cpu, font) = cpu(None);
+    let text = vec!["abcdefgh"; 60].join("\n");
+    let tall = [block(&text, &font, 0.0).with_max_width(300.0)];
+
+    let mut all = MsdfPrepared::default();
+    cpu.prepare_texts(&mut all, grid(), &tall, once(0..1));
+
+    // A target 100 px tall shows the first few of the sixty lines (18 px
+    // font, so about 23 px a line); a taller block starting above the target
+    // shows a middle slice.
+    let mut seen = MsdfPrepared::default();
+    cpu.prepare_texts(
+        &mut seen,
+        grid().with_target(300.0, 100.0),
+        &tall,
+        once(0..1),
+    );
+    assert!(!seen.text_instances.is_empty());
+    assert!(
+        seen.text_instances.len() * 4 < all.text_instances.len(),
+        "{} of {} glyphs placed for a target showing a few lines",
+        seen.text_instances.len(),
+        all.text_instances.len()
+    );
+    assert_eq!(
+        seen.text_instances[..],
+        all.text_instances[..seen.text_instances.len()],
+        "the glyphs placed are the same ones, quad for quad"
+    );
+
+    // Scrolled so the target shows a slice from the middle: every glyph that
+    // could touch the target is placed, and none of the first lines is.
+    let scrolled = [block(&text, &font, -600.0).with_max_width(300.0)];
+    let mut middle = MsdfPrepared::default();
+    cpu.prepare_texts(
+        &mut middle,
+        grid().with_target(300.0, 100.0),
+        &scrolled,
+        once(0..1),
+    );
+    let mut whole = MsdfPrepared::default();
+    cpu.prepare_texts(&mut whole, grid(), &scrolled, once(0..1));
+    assert!(!middle.text_instances.is_empty());
+    assert!(middle.text_instances.len() * 4 < whole.text_instances.len());
+    for quad in &middle.text_instances {
+        assert!(
+            whole.text_instances.contains(quad),
+            "a placed glyph is one the whole block places"
+        );
+    }
+    // Every quad of the whole block that overlaps the target is among them.
+    for quad in &whole.text_instances {
+        let ys = quad.corners().map(|c| c[1]);
+        let (top, bottom) = (
+            ys.iter().cloned().fold(f32::MAX, f32::min),
+            ys.iter().cloned().fold(f32::MIN, f32::max),
+        );
+        if bottom > 0.0 && top < 100.0 {
+            assert!(
+                middle.text_instances.contains(quad),
+                "a glyph that reaches the target was dropped"
+            );
+        }
+    }
+
+    // A block wholly outside the target places nothing.
+    let away = [block(&text, &font, 5_000.0).with_max_width(300.0)];
+    let mut none = MsdfPrepared::default();
+    cpu.prepare_texts(
+        &mut none,
+        grid().with_target(300.0, 100.0),
+        &away,
+        once(0..1),
+    );
+    assert!(none.text_instances.is_empty());
 }

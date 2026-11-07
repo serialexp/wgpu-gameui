@@ -85,10 +85,24 @@ impl MsdfPrepared {
 
 /// The box a glyph of `block` has to reach into to show: its clip, widened
 /// by how far a glyph draws past its line box and cell (ink above the line or
-/// left of the pen, an italic's overhang) and by the block's effects. `None`
-/// for a block without a clip, all of which can show.
-pub(super) fn cull_bounds(block: &TextBlock) -> Option<[f32; 4]> {
-    let clip = block.clip?;
+/// left of the pen, an italic's overhang) and by the block's effects. The clip
+/// is cut to the target's `view` (`[left, top, right, bottom]`) when that is
+/// known, since nothing outside it shows either. `None` for a block with
+/// neither, all of which can show.
+pub(super) fn cull_bounds(block: &TextBlock, view: Option<[f32; 4]>) -> Option<[f32; 4]> {
+    let clip = block
+        .clip
+        .map(|c| [c.x, c.y, c.x + c.width, c.y + c.height]);
+    let [left, top, right, bottom] = match (clip, view) {
+        (Some(c), Some(v)) => [
+            c[0].max(v[0]),
+            c[1].max(v[1]),
+            c[2].min(v[2]),
+            c[3].min(v[3]),
+        ],
+        (Some(b), None) | (None, Some(b)) => b,
+        (None, None) => return None,
+    };
     let mut reach = block.font_size.max(block.line_height);
     if let Some(outline) = &block.outline {
         reach += outline.width_px;
@@ -99,12 +113,7 @@ pub(super) fn cull_bounds(block: &TextBlock) -> Option<[f32; 4]> {
     if let Some(glow) = &block.glow {
         reach += glow.radius_px;
     }
-    Some([
-        clip.x - reach,
-        clip.y - reach,
-        clip.x + clip.width + reach,
-        clip.y + clip.height + reach,
-    ])
+    Some([left - reach, top - reach, right + reach, bottom + reach])
 }
 
 /// The glyphs of `layout` on the lines whose box meets `bounds`
@@ -197,7 +206,7 @@ impl MsdfCpu {
             if !block.content.is_empty() {
                 let (layout, fs) =
                     shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
-                let bounds = cull_bounds(block);
+                let bounds = cull_bounds(block, grid.viewport());
                 append_placements(
                     &mut self.atlas,
                     &mut self.font_keys,
