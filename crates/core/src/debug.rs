@@ -3584,6 +3584,7 @@ mod tests {
             textures_created: 1,
             small_texture_batches: 40,
             buffer_reallocations: 1,
+            ..RenderStats::default()
         };
         let report = plain.with_render_stats(stats);
         let text = report.to_text();

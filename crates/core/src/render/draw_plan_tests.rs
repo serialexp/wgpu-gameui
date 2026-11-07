@@ -89,100 +89,13 @@ fn plans_keep_overlaps_in_paint_order_and_match_the_brute_force_batch_count() {
 /// Real widget lists, with their text prepared on the CPU in the bundled font.
 #[cfg(feature = "bundled-font")]
 mod lists {
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
     use super::*;
     use crate::layout::Rect;
-    use crate::render::AtlasRegion;
+    use crate::render::draw_plan::tests_support::{FakeTextures, Lists};
     use crate::style::StyleResolver;
-    use crate::text::{
-        FontSystemHandle, GlyphSnap, MsdfCpu, PixelGrid, TextBlock, register_bundled_fonts,
-        shared_font_system,
-    };
+    use crate::text::TextBlock;
     use crate::widgets::{Button, DrawContext, ScrollState, ScrollView};
     use crate::{FocusState, InputState, Theme};
-
-    /// Sprites stand in a texture per name; "video" is YUV, "missing" doesn't
-    /// resolve.
-    struct FakeTextures(HashMap<&'static str, Binding>);
-
-    impl FakeTextures {
-        fn new() -> Self {
-            Self(HashMap::from([
-                ("a", Binding::Own(1)),
-                ("b", Binding::Own(2)),
-                ("a again", Binding::Own(1)),
-                ("video", Binding::Yuv(3)),
-            ]))
-        }
-    }
-
-    /// A 16 px sprite in a texture of its own size, drawn from `binding`.
-    fn resolved(binding: Binding) -> Resolved {
-        Resolved {
-            binding,
-            region: AtlasRegion {
-                x: 0,
-                y: 0,
-                w: 16,
-                h: 16,
-            },
-            texture: (16, 16),
-        }
-    }
-
-    impl ResolveTextures for FakeTextures {
-        fn sprite(&self, draw: &IconDraw) -> Option<Resolved> {
-            self.0.get(draw.icon_key.as_str()).copied().map(resolved)
-        }
-
-        fn nine_slice(&self, draw: &NineSliceDraw) -> Option<(Resolved, [u32; 4])> {
-            let at = resolved(*self.0.get(draw.texture_key.as_str())?);
-            Some((at, [4; 4]))
-        }
-    }
-
-    /// A list's CPU side: a font system shared with its lists, and the text and
-    /// icons prepared from them.
-    struct Lists {
-        fs: FontSystemHandle,
-        cpu: MsdfCpu,
-        prepared: MsdfPrepared,
-        textures: FakeTextures,
-    }
-
-    impl Lists {
-        fn new() -> Self {
-            let fs = shared_font_system();
-            register_bundled_fonts(&fs).expect("register bundled fonts");
-            Self {
-                cpu: MsdfCpu::new(Arc::clone(&fs)),
-                fs,
-                prepared: MsdfPrepared::default(),
-                textures: FakeTextures::new(),
-            }
-        }
-
-        fn list(&self) -> DrawList {
-            DrawList::with_font_system(Arc::clone(&self.fs))
-        }
-
-        /// Prepare `list`'s text and icons as the renderer does for `target`, and
-        /// plan it.
-        fn plan(&mut self, list: &DrawList, target: &Target, plan: &mut DrawPlan) {
-            let grid = PixelGrid::new(GlyphSnap::default(), target.scale, target.origin, true);
-            let commands = list.paint_cmds.iter().filter_map(|cmd| match cmd {
-                PaintCmd::Text { draws } => Some(draws.clone()),
-                _ => None,
-            });
-            self.cpu
-                .prepare_texts(&mut self.prepared, grid, &list.texts, commands);
-            #[cfg(feature = "phosphor-icons")]
-            self.cpu.prepare_icons(&mut self.prepared, &list.icons_msdf);
-            plan.build(list, target, &self.prepared, &self.textures);
-        }
-    }
 
     fn units_of(plan: &DrawPlan) -> Vec<UnitRef> {
         let mut units: Vec<_> = plan.units().to_vec();

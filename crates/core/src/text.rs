@@ -43,6 +43,8 @@ use cosmic_text::{
 
 #[path = "text_prep.rs"]
 mod prep;
+#[cfg(all(test, feature = "bundled-font"))]
+pub(crate) use prep::PrepareWork;
 pub(crate) use prep::{MsdfCpu, MsdfPrepared};
 
 const MSDF_SHADER: &str = include_str!("render/ui_msdf.wgsl");

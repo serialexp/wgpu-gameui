@@ -407,6 +407,16 @@ pub struct RenderStats {
     pub order_overlap_tests: u64,
     /// Grid cells ordering the units visited.
     pub order_cell_visits: u64,
+    /// Text blocks looked up in the layout cache. With the counts below, the
+    /// work a frame that changed little should not repeat
+    /// (`docs/design/frame-reuse.md`).
+    pub text_blocks_looked_up: usize,
+    /// Glyphs placed on the pixel grid.
+    pub glyphs_placed: usize,
+    /// Text instances built.
+    pub text_instances_built: usize,
+    /// Draw boxes computed for units, culled ones included.
+    pub boxes_computed: u64,
     /// Soup/chrome/circle/shadow batches.
     pub color_runs: usize,
     /// Analytic shadow instances submitted.
@@ -1904,6 +1914,11 @@ impl UiRenderer {
         self.frame_stats.units_ordered += order.units_ordered as usize;
         self.frame_stats.order_overlap_tests += order.overlap_tests;
         self.frame_stats.order_cell_visits += order.cell_visits;
+        self.frame_stats.boxes_computed += self.draw_plan.boxes_computed();
+        let work = prepared.work;
+        self.frame_stats.text_blocks_looked_up += work.blocks_looked_up as usize;
+        self.frame_stats.glyphs_placed += work.glyphs_placed as usize;
+        self.frame_stats.text_instances_built += work.instances_built as usize;
 
         if self.batch_draws.draws.is_empty() {
             return;

@@ -40,10 +40,25 @@ pub(crate) struct TextUnit {
     pub instances: Range<u32>,
 }
 
+/// What preparing a list's text did, counted for the last call to
+/// [`MsdfCpu::prepare_texts`]. The work a frame-to-frame reuse would save
+/// (`docs/design/frame-reuse.md`) is measured by these, not by the clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PrepareWork {
+    /// Blocks with text, each looked up in the layout cache.
+    pub(crate) blocks_looked_up: u32,
+    /// Glyphs placed on the pixel grid.
+    pub(crate) glyphs_placed: u32,
+    /// Instances built for drawing, from every sweep.
+    pub(crate) instances_built: u32,
+}
+
 /// A list's text and icons as prepared for drawing, kept until they are
 /// uploaded. Reused from list to list: cleared, never freed.
 #[derive(Default)]
 pub(crate) struct MsdfPrepared {
+    /// What the last [`MsdfCpu::prepare_texts`] did.
+    pub(crate) work: PrepareWork,
     placements: Vec<GlyphPlacement>,
     /// The conversions the last quad needed, for the next.
     memo: QuadMemo,
@@ -194,6 +209,7 @@ impl MsdfCpu {
         out.block_sweeps.clear();
         out.text_units.clear();
         out.text_commands.clear();
+        out.work = PrepareWork::default();
 
         // Place every block. The layouts come from the font system shared with
         // the measurers, which shapes through cosmic-text only for a layout it
@@ -212,6 +228,7 @@ impl MsdfCpu {
             let start = out.placements.len() as u32;
             out.block_effects.push(BlockEffects::of(block));
             if !block.content.is_empty() {
+                out.work.blocks_looked_up += 1;
                 let (layout, fs) =
                     shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
                 let bounds = cull_bounds(block, grid.viewport());
@@ -252,6 +269,8 @@ impl MsdfCpu {
             out.text_commands
                 .push(start..out.text_instances.len() as u32);
         }
+        out.work.glyphs_placed = out.placements.len() as u32;
+        out.work.instances_built = out.text_instances.len() as u32;
     }
 
     /// Prepare `icons` for drawing. Like text, every icon's glyph goes into the

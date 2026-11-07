@@ -113,6 +113,9 @@ pub(crate) struct DrawPlan {
     batch_cmd: u32,
     /// Planning in paint order: no boxes, no culling, a batch per command.
     paint_order: bool,
+    /// Boxes handed to ordering since [`begin`](Self::begin): the draw-box
+    /// work of the plan.
+    boxes_computed: u64,
     /// Every unit's key and boxes in paint order, culled ones included, kept
     /// for [`check`](Self::check) while checking is on.
     #[cfg(any(test, feature = "paint-order-oracle"))]
@@ -280,6 +283,7 @@ impl DrawPlan {
         self.cmd = 0;
         self.batch_cmd = 0;
         self.paint_order = false;
+        self.boxes_computed = 0;
         #[cfg(any(test, feature = "paint-order-oracle"))]
         if let Some(checked) = &mut self.checked {
             checked.clear();
@@ -318,6 +322,7 @@ impl DrawPlan {
             }
             return true;
         }
+        self.boxes_computed += self.boxes.len() as u64;
         let order = self.order.add(key, &self.boxes);
         self.boxes.clear();
         let Some(order) = order else {
@@ -384,6 +389,11 @@ impl DrawPlan {
     /// The work ordering took, and how many units it ordered.
     pub(crate) fn stats(&self) -> OrderStats {
         self.order.stats()
+    }
+
+    /// Boxes computed for the last plan's units, culled ones included.
+    pub(crate) fn boxes_computed(&self) -> u64 {
+        self.boxes_computed
     }
 
     /// Keep every unit's key and boxes from the next plan on, and check each
@@ -453,6 +463,14 @@ pub(crate) fn brute_force_batch_count(units: &[(BatchKey, Vec<PixelBox>)]) -> us
     }
     count
 }
+
+#[cfg(all(test, feature = "bundled-font"))]
+#[path = "draw_plan_support.rs"]
+pub(crate) mod tests_support;
+
+#[cfg(all(test, feature = "bundled-font"))]
+#[path = "frame_oracle.rs"]
+mod frame_oracle;
 
 #[cfg(test)]
 #[path = "draw_plan_tests.rs"]

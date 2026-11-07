@@ -1,6 +1,6 @@
 # Frame-to-frame reuse
 
-Status: draft, reviewed (Codex and Antigravity, 2026-11-08), not yet implemented
+Status: partial — Phase 0 counters and headless oracle landed (2026-11-08); no reuse implemented
 Owner: Bart
 Last updated: 2026-11-08
 
@@ -19,10 +19,24 @@ Tick items as they land.
       screen at a scale above 1 was not placed); fixed with a test at scale 2
       (`fix(text)`, 2026-11-08).
 
+- [x] **Phase 0 — counters.** `RenderStats` reports `text_blocks_looked_up`,
+      `glyphs_placed`, `text_instances_built` and `boxes_computed` (a reuse phase is
+      judged by these dropping, not by the clock); the `ui-compare` gameui harness
+      prints them per scene.
+- [x] **Phase 0 — headless oracle.** `render/frame_oracle.rs` plans sequences of lists
+      (colour-only, insert/remove/reorder, empty to visible, shadow regrouping,
+      scrolling across the edge, scale/origin/size changes, moving overlaps) on kept
+      state and on state that has seen nothing, and requires the same plan,
+      instances and draws; every plan is also checked against the brute-force
+      order oracle. Shares fixtures with the plan tests (`draw_plan_support.rs`).
+
 ### Outstanding
 
-- [ ] **Phase 0 — oracle, counters, budgets.** An oracle that recomputes every stage
-      independently and compares, counters, and the budgets in "Goals".
+- [ ] **Phase 0 — remainder.** The oracle's pixel level (GPU, `--ignored`) and the
+      sequences it cannot reach headless: font change, texture replacement, atlas
+      growth and compaction, several differing renders before one submit; the memory
+      counter once there is a kept frame; the comparison-cost measurement at 100,
+      1,000 and 10,000 cells that the budgets in "Goals" depend on.
 - [ ] **Phase 1 — snapshot and the stage-wise comparison.** What a frame keeps, the
       context key, and a comparison that says *which stage's inputs* changed.
 - [ ] **Phase 2 — whole-plan replay.** When every unit's key and box are as last

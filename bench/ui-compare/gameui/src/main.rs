@@ -59,8 +59,15 @@ fn main() {
             let stats = ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
             queue.submit(Some(encoder.finish()));
             eprintln!(
-                "gameui {n} cells: paint_runs={} draw_calls={} primitives={}",
-                stats.paint_runs, stats.draw_calls, stats.primitives
+                "gameui {n} cells: paint_runs={} draw_calls={} primitives={} \
+                 blocks_looked_up={} glyphs_placed={} text_instances_built={} boxes_computed={}",
+                stats.paint_runs,
+                stats.draw_calls,
+                stats.primitives,
+                stats.text_blocks_looked_up,
+                stats.glyphs_placed,
+                stats.text_instances_built,
+                stats.boxes_computed
             );
             assert!(
                 stats.primitives >= n,
@@ -101,8 +108,15 @@ fn main() {
                 scene(&mut list, 40);
                 let mut encoder = device.create_command_encoder(&Default::default());
                 ui.begin_frame();
-                ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
+                let stats = ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
                 queue.submit(Some(encoder.finish()));
+                eprintln!(
+                    "gameui {name}: blocks_looked_up={} glyphs_placed={} text_instances_built={} boxes_computed={}",
+                    stats.text_blocks_looked_up,
+                    stats.glyphs_placed,
+                    stats.text_instances_built,
+                    stats.boxes_computed
+                );
                 check_text_frame("gameui", name, &read_target(&device, &queue, &target, size));
             }
             let stats = measure(|frame| {
