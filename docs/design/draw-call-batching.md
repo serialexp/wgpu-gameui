@@ -388,8 +388,14 @@ button grid:
   see the note on glyph tiles above.)
 
 The lookup has to find the highest order among earlier overlapping units
-quickly. It uses a reused uniform grid over the target in physical pixels,
-64 px cells to start:
+quickly. It uses a reused uniform grid over the target in physical pixels.
+The cell is 16, 32 or 64 px, whichever has been cheapest for the lists before
+(`CellTuner`: cell visits plus overlap tests, counted exactly, one neighbour
+tried at a time and everything measured afresh every 120 lists or when the
+list's size changes by a quarter). Small disjoint boxes, such as a grid of
+labelled buttons, want small cells; boxes that overlap anyway, such as shadows
+with their blur, want 64 px, where a smaller cell only adds visits. The grid
+only finds overlaps, so the cell never changes an order:
 - Each cell keeps the units whose boxes touch it, plus two summaries: the
   highest (order, key) among them, and the highest order among units whose
   key differs from that one.

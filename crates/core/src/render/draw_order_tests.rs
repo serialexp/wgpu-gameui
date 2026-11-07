@@ -203,7 +203,18 @@ fn ordering_again_starts_afresh_whatever_the_target() {
     assert_eq!(first.0, [Some(0), Some(1), Some(2)]);
     // A smaller target, then the first again: nothing is left from before.
     assert_eq!(run((64, 64)).0, [Some(0), Some(1), Some(2)]);
-    assert_eq!(run((640, 320)), first);
+    // The work depends on the cell the tuner has by now; the orders don't.
+    let again = run((640, 320));
+    assert_eq!(again.0, first.0);
+    assert_eq!(again.1.units_ordered, first.1.units_ordered);
+    // Beginning leaves every cell empty, though only those written are reset.
+    order.begin((640, 320));
+    assert!(
+        order
+            .cells
+            .iter()
+            .all(|c| c.entries.is_empty() && c.top.is_none() && c.other.is_none())
+    );
 }
 
 #[test]
@@ -218,6 +229,159 @@ fn orders_match_the_brute_force_on_random_layouts() {
         let ordered = orders.iter().filter(|o| o.is_some()).count();
         assert_eq!(order.stats().units_ordered as usize, ordered);
     }
+}
+
+#[test]
+fn orders_match_the_brute_force_whatever_the_cell_size() {
+    let mut rng = Rng(23);
+    for layout in 0..200 {
+        let (size, units) = random_units(&mut rng);
+        for shift in CellShift::MIN..=CellShift::MAX {
+            let mut order = DrawOrder::default();
+            order.cell = CellShift(shift);
+            order.begin(size);
+            let orders: Vec<_> = units.iter().map(|(k, b)| order.add(*k, b)).collect();
+            assert_eq!(
+                orders,
+                brute_force_orders(&units),
+                "layout {layout}, {}px cells",
+                1 << shift
+            );
+        }
+    }
+}
+
+#[test]
+fn a_reused_order_adapts_its_cells_and_keeps_the_orders() {
+    let mut rng = Rng(29);
+    let mut order = DrawOrder::default();
+    let mut seen = std::collections::BTreeSet::new();
+    for layout in 0..300 {
+        let (size, units) = random_units(&mut rng);
+        order.begin(size);
+        seen.insert(order.cell.px());
+        let orders: Vec<_> = units.iter().map(|(k, b)| order.add(*k, b)).collect();
+        assert_eq!(orders, brute_force_orders(&units), "layout {layout}");
+    }
+    assert!(seen.len() > 1, "the cell never changed: {seen:?}");
+}
+
+fn tuned(tuner: &mut CellTuner, cell: u32, cost: u64) -> u32 {
+    tuner.next(CellShift(cell), cost, 1000).0
+}
+
+#[test]
+fn the_tuner_tries_a_smaller_cell_and_keeps_it_while_it_is_cheaper() {
+    let mut tuner = CellTuner::default();
+    // 64 px cost 900: try 32; that cost 500: stay and try 16; that cost 300:
+    // stay, all three are known.
+    assert_eq!(tuned(&mut tuner, 6, 900), 5);
+    assert_eq!(tuned(&mut tuner, 5, 500), 4);
+    assert_eq!(tuned(&mut tuner, 4, 300), 4);
+    assert_eq!(tuned(&mut tuner, 4, 300), 4);
+}
+
+#[test]
+fn the_tuner_goes_back_from_a_cell_that_cost_more() {
+    let mut tuner = CellTuner::default();
+    assert_eq!(tuned(&mut tuner, 6, 100), 5);
+    // 32 px cost more: back to 64, and 16 is not worth trying from there.
+    assert_eq!(tuned(&mut tuner, 5, 400), 6);
+    assert_eq!(tuned(&mut tuner, 6, 100), 6);
+}
+
+#[test]
+fn the_tuner_prefers_the_larger_cell_of_equal_costs() {
+    let mut tuner = CellTuner::default();
+    assert_eq!(tuned(&mut tuner, 6, 100), 5);
+    assert_eq!(tuned(&mut tuner, 5, 100), 6);
+}
+
+#[test]
+fn the_tuner_measures_afresh_when_the_list_changes_size_and_every_so_often() {
+    let mut tuner = CellTuner::default();
+    assert_eq!(tuned(&mut tuner, 6, 100), 5);
+    assert_eq!(tuned(&mut tuner, 5, 500), 6);
+    assert_eq!(tuned(&mut tuner, 6, 100), 6);
+    // Twice the units: what 32 px cost no longer says anything, so it is tried
+    // again.
+    assert_eq!(tuner.next(CellShift(6), 100, 2000).0, 5);
+
+    let mut tuner = CellTuner::default();
+    assert_eq!(tuned(&mut tuner, 6, 100), 5);
+    assert_eq!(tuned(&mut tuner, 5, 500), 6);
+    for _ in 0..RETUNE_AFTER - 2 {
+        assert_eq!(tuned(&mut tuner, 6, 100), 6);
+    }
+    assert_eq!(tuned(&mut tuner, 6, 100), 5, "it tries the neighbour again");
+}
+
+/// A button grid: a plate and a label in it, `cols` by `rows` of them, none
+/// overlapping another.
+fn button_grid(cols: u32, rows: u32, (w, h): (u32, u32)) -> Vec<Unit> {
+    let mut units = Vec::new();
+    for i in 0..cols * rows {
+        let (x, y) = ((i % cols) * w, (i / cols) * h);
+        units.push((A, vec![px(x, y, x + w - 1, y + h - 1)]));
+        units.push((B, vec![px(x + 3, y + 3, x + w - 4, y + h - 4)]));
+    }
+    units
+}
+
+/// The same, each with a shadow behind that reaches into its neighbours.
+fn shadowed_grid(cols: u32, rows: u32, (w, h): (u32, u32)) -> Vec<Unit> {
+    let mut units = Vec::new();
+    for i in 0..cols * rows {
+        let (x, y) = ((i % cols) * (w + 8) + 30, (i / cols) * (h + 8) + 30);
+        units.push((A, vec![px(x - 24, y - 24, x + w + 24, y + h + 24)]));
+        units.push((B, vec![px(x, y, x + w, y + h)]));
+    }
+    units
+}
+
+/// Orders `units` `frames` times with one `DrawOrder`, checking every frame
+/// against the brute force, and returns it with the work each frame took.
+fn tuned_frames(units: &[Unit], size: (u32, u32), frames: usize) -> (DrawOrder, Vec<u64>) {
+    let expected = brute_force_orders(units);
+    let mut order = DrawOrder::default();
+    let mut work = Vec::new();
+    for _ in 0..frames {
+        order.begin(size);
+        let orders: Vec<_> = units.iter().map(|(k, b)| order.add(*k, b)).collect();
+        assert_eq!(orders, expected);
+        let stats = order.stats();
+        work.push(stats.cell_visits + stats.overlap_tests);
+    }
+    (order, work)
+}
+
+#[test]
+fn a_grid_of_small_disjoint_boxes_settles_on_smaller_cells_and_does_less_work() {
+    let units = button_grid(40, 20, (33, 21));
+    let (mut order, work) = tuned_frames(&units, (1920, 1080), 8);
+    order.begin((1920, 1080));
+    assert!(order.cell.px() < 64, "{}px", order.cell.px());
+    assert!(
+        work.last() < work.first(),
+        "{work:?}: the work should fall as the cell is tuned"
+    );
+}
+
+#[test]
+fn boxes_that_overlap_anyway_stay_on_large_cells() {
+    let units = shadowed_grid(20, 20, (60, 30));
+    let (mut order, work) = tuned_frames(&units, (1920, 1080), 8);
+    order.begin((1920, 1080));
+    assert_eq!(order.cell.px(), 64, "{work:?}");
+}
+
+#[test]
+fn a_large_target_gets_larger_cells_rather_than_too_many() {
+    let mut order = DrawOrder::default();
+    order.cell = CellShift(CellShift::MIN);
+    order.begin((7680, 4320));
+    assert!(u64::from(order.cols) * u64::from(order.rows) <= CellShift::MAX_CELLS);
+    assert_eq!(order.cell.px(), 32);
 }
 
 #[test]

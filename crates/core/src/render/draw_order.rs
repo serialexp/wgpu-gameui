@@ -14,7 +14,8 @@
 //! nothing between them share an order, and so a draw call.
 //!
 //! Finding the earlier units a box overlaps goes through a uniform grid of
-//! [`CELL_PX`] cells over the target. Each cell keeps the boxes touching it
+//! square cells over the target ([`CellShift`] picks their side from the
+//! boxes of the list before). Each cell keeps the boxes touching it
 //! and two summaries that bound what scanning it could find, so a cell that
 //! can't raise the order is skipped. The summaries only make it faster; the
 //! order is the same as [`brute_force_orders`] gives.
@@ -27,8 +28,103 @@
 
 use super::draw_box::PixelBox;
 
-/// The side of a grid cell, in physical px.
-pub(crate) const CELL_PX: u32 = 64;
+/// The side of a grid cell, as a power of two, from 16 to 64 px. A box reads
+/// and writes every cell it touches, so a cell much bigger than the boxes
+/// holds many that don't overlap (each lookup tests them all), and one much
+/// smaller makes a box visit many cells. Which is cheaper depends on the list:
+/// a grid of small disjoint boxes wants small cells, boxes that overlap their
+/// neighbours anyway (shadows) want large ones. [`CellTuner`] picks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CellShift(u32);
+
+impl CellShift {
+    const MIN: u32 = 4;
+    const MAX: u32 = 6;
+    /// The most cells a grid is allowed, whatever the target's size: larger
+    /// targets get larger cells.
+    const MAX_CELLS: u64 = 1 << 15;
+
+    /// Where in [`CellTuner::cost`] this cell's cost is kept.
+    fn slot(self) -> usize {
+        (self.0 - Self::MIN) as usize
+    }
+
+    /// This cell, or the smallest larger one that keeps a grid over `size`
+    /// within [`MAX_CELLS`](Self::MAX_CELLS).
+    fn fitting(mut self, size: (u32, u32)) -> Self {
+        let cells = |shift: u32| {
+            u64::from(size.0.div_ceil(1 << shift).max(1))
+                * u64::from(size.1.div_ceil(1 << shift).max(1))
+        };
+        while self.0 < Self::MAX && cells(self.0) > Self::MAX_CELLS {
+            self.0 += 1;
+        }
+        self
+    }
+
+    /// The side of a cell, in physical px.
+    pub(crate) fn px(self) -> u32 {
+        1 << self.0
+    }
+}
+
+impl Default for CellShift {
+    fn default() -> Self {
+        Self(Self::MAX)
+    }
+}
+
+/// Picks the grid's cell by trying them. How much work ordering a list takes,
+/// in cell visits plus overlap tests ([`OrderStats`]), is counted exactly, so
+/// the cost of a cell is the cost the list before it had with that cell.
+/// Lists that follow one another in a UI are alike, so it moves to the cheapest
+/// cell it has measured, tries a neighbour it hasn't, and measures afresh
+/// every [`RETUNE_AFTER`] lists and when the number of units changes much. The
+/// grid only finds overlaps, so a trial of a worse cell costs time and never
+/// changes an order.
+#[derive(Debug, Default)]
+struct CellTuner {
+    /// The cost of a list at each cell size (16, 32, 64 px) when last tried.
+    cost: [Option<u64>; 3],
+    /// Units in the list the costs are of.
+    units: u32,
+    /// Lists since the costs were taken afresh.
+    age: u32,
+}
+
+/// Lists between measuring every cell again, so a UI that settles into a
+/// different shape is followed.
+const RETUNE_AFTER: u32 = 120;
+
+impl CellTuner {
+    /// The cell for the next list, after one of `units` units cost `cost` with
+    /// `cell`.
+    fn next(&mut self, cell: CellShift, cost: u64, units: u32) -> CellShift {
+        self.age += 1;
+        // A list a quarter longer or shorter is another list.
+        if self.age >= RETUNE_AFTER || units.abs_diff(self.units) * 4 > self.units {
+            self.cost = [None; 3];
+            self.age = 0;
+        }
+        self.units = units;
+        self.cost[cell.slot()] = Some(cost);
+        // The cheapest measured; of equal ones the larger cell, which needs
+        // fewer cells.
+        let cheapest = (CellShift::MIN..=CellShift::MAX)
+            .filter_map(|s| Some((self.cost[CellShift(s).slot()]?, CellShift::MAX - s)))
+            .min()
+            .map_or(cell.0, |(_, from_max)| CellShift::MAX - from_max);
+        if cheapest != cell.0 {
+            return CellShift(cheapest);
+        }
+        [cell.0.checked_sub(1), cell.0.checked_add(1)]
+            .into_iter()
+            .flatten()
+            .filter(|s| (CellShift::MIN..=CellShift::MAX).contains(s))
+            .find(|&s| self.cost[CellShift(s).slot()].is_none())
+            .map_or(cell, CellShift)
+    }
+}
 
 /// What units must share to be drawn in one call: the pipeline and what it
 /// samples (see `DrawPlan`). Units sort by it within an order, so its value
@@ -82,6 +178,9 @@ struct Cell {
 #[derive(Debug, Default)]
 pub(crate) struct DrawOrder {
     cells: Vec<Cell>,
+    /// The cells written since [`begin`](Self::begin), so the next list resets
+    /// those rather than every cell of a grid that may be mostly untouched.
+    written: Vec<u32>,
     cols: u32,
     rows: u32,
     entries: Vec<Entry>,
@@ -90,19 +189,35 @@ pub(crate) struct DrawOrder {
     /// paint order.
     pending: Vec<PixelBox>,
     stats: OrderStats,
+    cell: CellShift,
+    tuner: CellTuner,
 }
 
 impl DrawOrder {
     /// Start ordering a list drawn onto a target of `size` physical px.
     pub(crate) fn begin(&mut self, size: (u32, u32)) {
-        self.cols = size.0.div_ceil(CELL_PX).max(1);
-        self.rows = size.1.div_ceil(CELL_PX).max(1);
-        let cells = (self.cols * self.rows) as usize;
-        for cell in self.cells.iter_mut().take(cells) {
+        for index in self.written.drain(..) {
+            let cell = &mut self.cells[index as usize];
             cell.entries.clear();
             cell.top = None;
             cell.other = None;
         }
+        // Only a list that used the grid says what its cell cost.
+        if self.keys == Keys::Many {
+            let OrderStats {
+                units_ordered,
+                overlap_tests,
+                cell_visits,
+            } = self.stats;
+            self.cell = self
+                .tuner
+                .next(self.cell, cell_visits + overlap_tests, units_ordered);
+        }
+        self.cell = self.cell.fitting(size);
+        let px = self.cell.px();
+        self.cols = size.0.div_ceil(px).max(1);
+        self.rows = size.1.div_ceil(px).max(1);
+        let cells = (self.cols * self.rows) as usize;
         if self.cells.len() < cells {
             self.cells.resize_with(cells, Cell::default);
         }
@@ -219,10 +334,12 @@ impl DrawOrder {
         for row in cy {
             for col in cx.clone() {
                 self.stats.cell_visits += 1;
-                let cell = &mut self.cells[(row * self.cols + col) as usize];
+                let at = row * self.cols + col;
+                let cell = &mut self.cells[at as usize];
                 cell.entries.push(index);
                 let Some(top) = cell.top else {
                     cell.top = Some(index);
+                    self.written.push(at);
                     continue;
                 };
                 let top = self.entries[top as usize];
@@ -241,8 +358,9 @@ impl DrawOrder {
     /// The columns and rows of the cells `pixels` touches. Boxes come cut to
     /// the target; one that isn't is held to its last cells.
     fn cell_span(&self, pixels: PixelBox) -> (std::ops::Range<u32>, std::ops::Range<u32>) {
-        let col = |x: u32| (x / CELL_PX).min(self.cols - 1);
-        let row = |y: u32| (y / CELL_PX).min(self.rows - 1);
+        let shift = self.cell.0;
+        let col = |x: u32| (x >> shift).min(self.cols - 1);
+        let row = |y: u32| (y >> shift).min(self.rows - 1);
         (
             col(pixels.x0)..col(pixels.x1 - 1) + 1,
             row(pixels.y0)..row(pixels.y1 - 1) + 1,
