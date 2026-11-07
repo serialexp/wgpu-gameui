@@ -33,6 +33,16 @@ of N cells at 100 / 1k / 3k / 10k; a separate workspace in `bench/ui-compare/`
   the reason: bounding a whole text block from its layout size (not exact for
   clipped or partly off-screen blocks; ~7% of the frame is `msdf` at most).
   All committed locally (`f8dc974`..`c1ef0ae`), nothing pushed.
+- 2026-11-08: Codex and Antigravity reviewed the renderer; their findings are in
+  `TODO.md` ("Performance review follow-ups"). New ui-compare scenes (`one`,
+  `scroll`, `churn`, `para`; README "More scenes") for gameui, egui and iced
+  (not yet BUI, gpui, Rune); `ui-compare-gameui text` runs only those. On them
+  gameui is the slowest of the three (`para` 1.4 ms vs egui 0.13, iced 0.40), so
+  the structural TODO items (cull text before layout, retained prepared text)
+  are the ones they should be judged on. Done from the review: fill-only
+  `build_unit`, compact `GlyphPlacement` (about 3 to 5% on text scenes),
+  `draw_box::analytic` fast path (about 1%, within noise); all in `TODO_DONE.md`.
+  Remaining cheap items are listed first in `TODO.md`.
 - Next: rerun everything on a quiet machine (the load average was 20 to 40
   for the last measurements, and Rune's headless numbers moved by 2x at 100
   cells between two runs at different load); GPU timing (timestamp queries,
