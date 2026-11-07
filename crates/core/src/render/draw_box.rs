@@ -537,18 +537,20 @@ pub(crate) fn soup(target: &Target, vertices: &[Vertex], indices: &[u32]) -> Pix
 pub(crate) fn msdf(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
     let mut out = PixelBox::EMPTY;
     // The clip of the previous quad and its bound.
-    let mut clip: Option<([f32; 4], bool, Bound)> = None;
+    // The quad's clip flag is a half float; it is read only when it or the
+    // clip changes, not for every quad.
+    let mut clip: Option<([f32; 4], u16, Bound)> = None;
     for quad in instances {
-        let on = quad.clip_enabled();
+        let flag = quad.clip_flag_bits();
         let clip = match clip {
-            Some((c, o, bound)) if o == on && c == quad.clip => bound,
+            Some((c, f, bound)) if f == flag && c == quad.clip => bound,
             _ => {
-                let bound = if on {
+                let bound = if quad.clip_enabled() {
                     clip_bound(target, quad.clip)
                 } else {
                     Bound::Whole
                 };
-                clip = Some((quad.clip, on, bound));
+                clip = Some((quad.clip, flag, bound));
                 bound
             }
         };

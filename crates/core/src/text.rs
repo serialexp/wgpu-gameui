@@ -589,6 +589,12 @@ impl MsdfInstance {
         ]
     }
 
+    /// The bits [`clip_enabled`](Self::clip_enabled) is read from: equal bits,
+    /// equal answer.
+    pub(crate) fn clip_flag_bits(&self) -> u16 {
+        self.params[0]
+    }
+
     /// Whether [`clip`](Self::clip) applies.
     pub(crate) fn clip_enabled(&self) -> bool {
         half::f16::from_bits(self.params[0]).to_f32() > 0.5
@@ -1541,7 +1547,7 @@ impl PixelGrid {
     /// nearest whole device pixel.
     fn round(&self, v: f32, axis: usize) -> f32 {
         let origin = self.view_origin[axis];
-        ((v - origin) * self.scale).round() / self.scale + origin
+        round_half_away((v - origin) * self.scale) / self.scale + origin
     }
 
     /// The pen x a glyph should be placed at, given where its ink starts
@@ -1578,11 +1584,34 @@ impl PixelGrid {
             return GlyphSizing::Scalable;
         }
         // Hinting targets *device* pixels, so the DPI scale is part of the size.
-        let device_px = (font_size * self.scale).round();
+        let device_px = round_half_away(font_size * self.scale);
         if !(device_px >= 1.0 && device_px <= MAX_HINTED_PX as f32) {
             return GlyphSizing::Scalable;
         }
         GlyphSizing::Hinted(device_px as u16)
+    }
+}
+
+/// `v.round()`, without the library call that is without SSE4.1: halves round
+/// away from zero. Every placed glyph rounds twice, so this is hot.
+fn round_half_away(v: f32) -> f32 {
+    // Below 2^23 every f32 has a fractional part, and `v - trunc(v)` is exact.
+    if v.abs() < 8_388_608.0 {
+        let t = v as i32 as f32;
+        let f = v - t;
+        if f >= 0.5 {
+            t + 1.0
+        } else if f <= -0.5 {
+            t - 1.0
+        } else if t == 0.0 {
+            // Keep the sign of a zero, as `round` does (`-0.3` rounds to `-0.0`).
+            0.0f32.copysign(v)
+        } else {
+            t
+        }
+    } else {
+        // Whole numbers already, or not numbers at all.
+        v.round()
     }
 }
 
@@ -1611,6 +1640,7 @@ fn append_placements(
     out: &mut Vec<GlyphPlacement>,
 ) {
     let block_fill = color_to_rgba(block.color);
+    let mut last: Option<(fontdb::ID, f32, u64, GlyphSizing)> = None;
 
     for g in shaped {
         // A glyph that can't reach into the clip isn't placed (see
@@ -1621,8 +1651,18 @@ fn append_placements(
                 continue;
             }
         }
-        let font_key = resolve_font_key(font_keys, next_font_key, g.font_id);
-        let sizing = grid.sizing(g.font_size);
+        // A run of glyphs is nearly always one face at one size.
+        let (font_key, sizing) = match last {
+            Some((id, size, key, sizing)) if id == g.font_id && size == g.font_size => {
+                (key, sizing)
+            }
+            _ => {
+                let key = resolve_font_key(font_keys, next_font_key, g.font_id);
+                let sizing = grid.sizing(g.font_size);
+                last = Some((g.font_id, g.font_size, key, sizing));
+                (key, sizing)
+            }
+        };
         let tile = match atlas.cached(font_key, g.glyph_id, sizing) {
             Some(tile) => tile,
             None => font_system
@@ -3790,6 +3830,46 @@ mod tests {
             view_origin: [origin, origin],
             hint: true,
             target: None,
+        }
+    }
+
+    #[test]
+    fn rounding_without_the_library_call_matches_round_bit_for_bit() {
+        let mut values = vec![
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            0.49999997,
+            -0.49999997,
+            1.5,
+            -1.5,
+            2.5,
+            -2.5,
+            8_388_607.5,
+            -8_388_607.5,
+            8_388_608.0,
+            16_777_216.0,
+            1e30,
+            -1e30,
+            f32::MAX,
+            f32::MIN,
+            f32::MIN_POSITIVE,
+        ];
+        let mut v = -40.0f32;
+        while v < 40.0 {
+            values.push(v);
+            v += 0.03125;
+        }
+        for v in values {
+            let (a, b) = (super::round_half_away(v), v.round());
+            assert!(
+                a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()),
+                "{v}: {a} vs {b}"
+            );
         }
     }
 
