@@ -313,9 +313,21 @@ top by the sub-line offset and draws rows 1.., and its `para` is a
 | scene | gameui | egui+wgpu | iced |
 | --- | ---: | ---: | ---: |
 | grid 3,000 `one` | 1.22 | 1.72 | 1.33 |
-| `scroll` | 1.07 | 0.25 | 1.43 (p50 0.80) |
-| `churn` | 5.24 | 2.40 | 3.85 |
-| `para` | 1.39 | 0.13 | 0.40 |
+| `scroll` | 1.07 → 0.66 | 0.25 | 1.43 (p50 0.80) |
+| `churn` | 5.24 → 4.80 | 2.40 | 3.85 |
+| `para` | 1.39 → 0.39 | 0.13 | 0.40 |
+
+The gameui arrows are before and after the text work of 2026-11-08, measured
+by alternating the two binaries at load 6 to 23 (egui and iced were measured
+once, before it; the 10,000-cell animated grid went from about 5.7 to 5.0 ms
+in the same alternation). What changed, each its own commit: glyphs the target
+cannot show are not placed (`para` 1.4 to 0.6), a quad's pixel range is found
+by truncation instead of `ceil`/`floor` (library calls without SSE4.1) and a
+block's glyphs reuse the colour and half-float conversions of the one before
+(`scroll` 1.0 to 0.72, `para` to 0.44), and `round` goes the same way with a
+remembered font key and size (about 10% more on the text scenes). `churn` is
+cold shaping: about two thirds of it is cosmic-text's `shape`, which gameui
+calls once per new string.
 
 On text-heavy scenes gameui is the slowest of the three: egui's galley cache
 lets a scrolled block cost almost nothing (`para` 0.13 ms), and gameui prepares

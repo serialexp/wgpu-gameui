@@ -42,7 +42,13 @@ of N cells at 100 / 1k / 3k / 10k; a separate workspace in `bench/ui-compare/`
   are the ones they should be judged on. Done from the review: fill-only
   `build_unit`, compact `GlyphPlacement` (about 3 to 5% on text scenes),
   `draw_box::analytic` fast path (about 1%, within noise); all in `TODO_DONE.md`.
-  Remaining cheap items are listed first in `TODO.md`.
+  Then, on Bart's "improve these": glyph culling to the target (`para` 1.4 to
+  0.4 ms), no libm `ceil`/`floor`/`round` per glyph, memoised colour/f16
+  conversions and font key (`scroll` 1.04 to 0.66, 10k grid 5.7 to 5.0); numbers
+  in the README. `churn` (4.8 ms vs egui 2.4) is two thirds cosmic-text's
+  `shape`; a faster path (ASCII, one face, no ligature or kerning difference)
+  would change shaping behaviour, so it is Bart's call. Remaining cheap items
+  are listed first in `TODO.md`.
 - Next: rerun everything on a quiet machine (the load average was 20 to 40
   for the last measurements, and Rune's headless numbers moved by 2x at 100
   cells between two runs at different load); GPU timing (timestamp queries,
