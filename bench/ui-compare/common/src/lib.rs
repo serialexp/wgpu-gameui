@@ -338,11 +338,15 @@ pub fn report_scene(library: &str, scene: &str, s: &Stats) {
 /// Whether the text scenes should run: not when the first argument asks for
 /// one grid size.
 pub fn text_scenes_wanted() -> bool {
-    std::env::args().nth(1).is_none()
+    matches!(std::env::args().nth(1).as_deref(), None | Some("text"))
 }
 
-/// Counts to run: all of them, or the one given as the first argument.
+/// Counts to run: all of them, the one given as the first argument, or none
+/// when that argument is `text` (only the text scenes).
 pub fn counts() -> Vec<usize> {
+    if std::env::args().nth(1).as_deref() == Some("text") {
+        return Vec::new();
+    }
     match std::env::args().nth(1).and_then(|a| a.parse().ok()) {
         Some(n) => vec![n],
         None => COUNTS.to_vec(),
