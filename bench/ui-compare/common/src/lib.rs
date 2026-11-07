@@ -341,6 +341,12 @@ pub fn text_scenes_wanted() -> bool {
     matches!(std::env::args().nth(1).as_deref(), None | Some("text"))
 }
 
+/// Whether the text scene `name` should run: all of them, or the one given as
+/// the second argument (`text para`).
+pub fn scene_wanted(name: &str) -> bool {
+    std::env::args().nth(2).is_none_or(|a| a == name)
+}
+
 /// Counts to run: all of them, the one given as the first argument, or none
 /// when that argument is `text` (only the text scenes).
 pub fn counts() -> Vec<usize> {

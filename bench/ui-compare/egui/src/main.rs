@@ -179,6 +179,9 @@ fn main() {
         let doc: Vec<String> = (0..DOC_LINES).map(doc_line).collect();
         let para = para_text();
         for name in ["scroll", "churn", "para"] {
+            if !scene_wanted(name) {
+                continue;
+            }
             let scene = |c: &egui::Context, frame: u64| run_text(c, name, frame, &doc, &para);
             for frame in 0..4 {
                 gpu_frame(&|c| scene(c, 40 + frame));

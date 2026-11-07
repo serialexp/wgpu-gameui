@@ -93,6 +93,9 @@ fn main() {
             ("para", &|list, frame| paragraph(list, &para, frame)),
         ];
         for (name, scene) in scenes {
+            if !scene_wanted(name) {
+                continue;
+            }
             {
                 let mut list = DrawList::with_font_system(fonts.clone());
                 scene(&mut list, 40);

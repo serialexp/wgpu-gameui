@@ -107,6 +107,9 @@ fn main() {
         let doc: Vec<String> = (0..DOC_LINES).map(doc_line).collect();
         let para = para_text();
         for name in ["scroll", "churn", "para"] {
+            if !scene_wanted(name) {
+                continue;
+            }
             let mut cache = Some(Cache::new());
             let mut frame_fn = |renderer: &mut Renderer, frame: u64| {
                 let element = text_view(name, frame, &doc, &para);
