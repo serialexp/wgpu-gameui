@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phase 0 landed (`DrawList::append`, 2026-11-10); Phases 1 to 6 outstanding. A prototype.
+Status: partial — Phases 0 and 1 landed (`DrawList::append`, `append_translated`, 2026-11-10); Phases 2 to 6 outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-10
 
@@ -19,20 +19,28 @@ Tick items as they land.
       compared array by array and by the renderer's `FrameSnapshot::compare`
       (`identical()`). Checked to fail when the leading soup flush is removed
       (`db9af2f`).
+- [x] **Phase 1a — translation-invariant snapping in core.** The underline's
+      record-time `round()` became `floor(x + 0.5)`; stroke snapping was already
+      invariant (`(e - 0.5).ceil()`). The test moves an underline on a half
+      pixel by whole pixels across zero, and fails with `round` (`efb2a40`).
+- [x] **Phase 1b — `DrawList::append_translated`.** Per record kind as in the
+      table below, shadows recording would have culled dropped, soup committed
+      only before a record kept (a culled shadow commits none when recorded),
+      `viewport_clips` moved and clipped. Oracle in `render/append_oracle.rs`:
+      300 random placements (quarter-pixel coordinates either side of zero,
+      stripes, joined and snapped polylines, underlines, tint, a dyadic scale
+      over every transform-keeping kind, viewport clips) against the same calls
+      recorded inside `push_clip` and `translate`; nested placements against
+      nested recording; a culled shadow between soup; placing with no move is
+      appending; and the empty nested clip exception pinned. Each of six
+      mutations (no culling, eager soup commits, neighbours unmoved, stale chrome
+      clip flag, translate-only chrome moved by its translation, viewport and
+      text clips unmoved) fails at least one test.
+- [x] **Phase 1c — `append`'s repaint request documented as relative** to when
+      `other` was recorded, with what a keeper of lists should do instead.
 
 ### Outstanding
 
-- [ ] **Phase 1a — translation-invariant snapping in core.** The underline's
-      record-time `round()` becomes `floor(x + 0.5)`; stroke snapping is already
-      invariant (`(e - 0.5).ceil()`).
-- [ ] **Phase 1b — `DrawList::append_translated`.** Append `other` as if its calls
-      had been recorded inside `translate(dx, dy)` and `push_clip(clip)` on this
-      list, per record kind (table below), dropping the shadows recording would
-      have culled; `viewport_clips` moved and clipped too. Oracle as Phase 0,
-      extended (stripes, transforms, tint, underlines, viewport clips, negative
-      and fractional dyadic coordinates).
-- [ ] **Phase 1c — `append`'s repaint request documented as relative** to when
-      `other` was recorded.
 - [ ] **Phase 2 — signals.** Signals and memos with mark-then-pull propagation
       (no glitches with dynamic dependencies), equality guards, owners and
       disposal with edges removed both ways, cycle detection.

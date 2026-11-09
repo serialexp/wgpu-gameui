@@ -818,7 +818,10 @@ impl DrawList {
     /// stacks are not applied to them. Its debug scopes are not copied, and
     /// neither is anything a text highlight would add now, since the
     /// highlight was painted (or not) when `other` was recorded. Its repaint
-    /// request is kept: the earlier of the two wins.
+    /// request is kept: the earlier of the two wins. That request is in
+    /// seconds from when `other` was recorded, so a list kept and appended on
+    /// later frames asks too late; whatever keeps it should keep the deadline
+    /// as a time of its own and ask again with what is left of it.
     pub fn append(&mut self, other: &DrawList) {
         // `other`'s first command flushed whatever soup came before it, which
         // here includes this list's own trailing soup. Soup `other` recorded
@@ -896,6 +899,193 @@ impl DrawList {
             self.push_paint_cmd(cmd);
         }
         self.soup_committed_indices = index_base + other.soup_committed_indices;
+    }
+
+    /// [`append`](Self::append) `other` moved by `offset` and cut by `clip`:
+    /// the list its calls would have recorded, made on this list inside
+    /// `push_transform(); translate(offset)` and, when `clip` is `Some`,
+    /// `push_clip(clip)`. `offset` and `clip` are in this list's world space,
+    /// and the offset applies outside any transform `other`'s calls pushed,
+    /// which is what a piece recorded at its own origin needs to be drawn
+    /// somewhere else.
+    ///
+    /// Each record moves the way recording would have placed it: a
+    /// translate-only rect with the offset folded into its position, an
+    /// affine one through its transform's translation; its clip is moved and
+    /// intersected with `clip`, as a nested `push_clip` intersects. Shadows
+    /// whose blur box misses the resulting clip are dropped, as recording
+    /// drops them, and the paint runs are rebuilt as recording builds them.
+    ///
+    /// The result is exactly the recorded list when the offset and
+    /// coordinates add without rounding (whole pixels on positions that are
+    /// fractions of a power of two), and otherwise equal to within the
+    /// rounding of a sum taken in another order. Record-time snapping (stroke
+    /// edges, underlines) is translation-invariant, so whole-pixel offsets
+    /// keep it exact. Two clips are approximated: a clip that already showed
+    /// nothing keeps its own origin rather than the one nested recording would
+    /// have given it (it still shows nothing), and a screen-space clip
+    /// (`push_clip_exact`, a [`TextBlock::clip`] set by the caller) moves with
+    /// the rest instead of staying put. A repaint request is copied as
+    /// [`append`](Self::append) copies it.
+    ///
+    /// Records are copied one at a time, so this costs a pass over `other`'s
+    /// records; [`append`](Self::append) is the cheaper call when nothing
+    /// moves and nothing is cut.
+    pub fn append_translated(&mut self, other: &DrawList, offset: [f32; 2], clip: Option<Rect>) {
+        let place = Placement {
+            dx: offset[0],
+            dy: offset[1],
+            clip,
+        };
+        let vertex_base = self.vertices.len() as u32;
+        let index_base = self.indices.len() as u32;
+        let text_base = self.texts.len() as u32;
+
+        self.vertices
+            .extend(other.vertices.iter().map(|vertex| place.vertex(*vertex)));
+        self.indices
+            .extend(other.indices.iter().map(|index| index + vertex_base));
+        self.selectable.extend(
+            other
+                .selectable
+                .iter()
+                .map(|&(key, index)| (key, index + text_base)),
+        );
+        self.viewport_clips.extend(
+            other
+                .viewport_clips
+                .iter()
+                .filter_map(|&rect| place.clip(Some(rect))),
+        );
+        self.dropped_degenerate += other.dropped_degenerate;
+        if let Some(seconds) = other.next_repaint {
+            self.repaint_after(seconds);
+        }
+
+        if other.paint_cmds.is_empty() {
+            // Filled through the public arrays alone: there is no order to
+            // keep, only records to move.
+            for record in &other.analytic_instances {
+                if let Some(record) = place.analytic(record) {
+                    self.push_analytic_record(record);
+                }
+            }
+            self.circle_instances
+                .extend(other.circle_instances.iter().map(|c| place.circle(*c)));
+            self.nine_slices
+                .extend(other.nine_slices.iter().map(|n| place.nine_slice(n)));
+            self.icons
+                .extend(other.icons.iter().map(|icon| place.icon(icon)));
+            #[cfg(feature = "phosphor-icons")]
+            self.icons_msdf
+                .extend(other.icons_msdf.iter().map(|icon| place.icon_msdf(*icon)));
+            self.texts
+                .extend(other.texts.iter().map(|text| place.text(text)));
+            return;
+        }
+
+        // Soup is committed when the next record is drawn, so it is committed
+        // here before each record kept, up to the end of the soup `other`
+        // drew before it. A dropped shadow commits nothing, so the soup either
+        // side of it stays one run, as it would have been recorded.
+        let mut soup_end = index_base;
+        let ranged = |range: &std::ops::Range<u32>| range.start as usize..range.end as usize;
+        for cmd in &other.paint_cmds {
+            match cmd {
+                PaintCmd::Soup { indices } => soup_end = index_base + indices.end,
+                PaintCmd::Analytic { instances } => {
+                    for record in &other.analytic_instances[ranged(instances)] {
+                        if let Some(record) = place.analytic(record) {
+                            self.commit_soup(soup_end);
+                            let at = self.analytic_instances.len() as u32;
+                            self.push_analytic_record(record);
+                            self.push_paint_cmd(PaintCmd::Analytic {
+                                instances: at..at + 1,
+                            });
+                        }
+                    }
+                }
+                PaintCmd::Circle { instances } => {
+                    self.commit_soup(soup_end);
+                    let at = self.circle_instances.len() as u32;
+                    self.circle_instances.extend(
+                        other.circle_instances[ranged(instances)]
+                            .iter()
+                            .map(|c| place.circle(*c)),
+                    );
+                    let end = self.circle_instances.len() as u32;
+                    self.push_paint_cmd(PaintCmd::Circle { instances: at..end });
+                }
+                PaintCmd::NineSlice { draws } => {
+                    self.commit_soup(soup_end);
+                    let at = self.nine_slices.len() as u32;
+                    self.nine_slices.extend(
+                        other.nine_slices[ranged(draws)]
+                            .iter()
+                            .map(|n| place.nine_slice(n)),
+                    );
+                    let end = self.nine_slices.len() as u32;
+                    self.push_paint_cmd(PaintCmd::NineSlice { draws: at..end });
+                }
+                PaintCmd::Icon { draws } => {
+                    self.commit_soup(soup_end);
+                    let at = self.icons.len() as u32;
+                    self.icons.extend(
+                        other.icons[ranged(draws)]
+                            .iter()
+                            .map(|icon| place.icon(icon)),
+                    );
+                    let end = self.icons.len() as u32;
+                    self.push_paint_cmd(PaintCmd::Icon { draws: at..end });
+                }
+                #[cfg(feature = "phosphor-icons")]
+                PaintCmd::IconMsdf { draws } => {
+                    self.commit_soup(soup_end);
+                    let at = self.icons_msdf.len() as u32;
+                    self.icons_msdf.extend(
+                        other.icons_msdf[ranged(draws)]
+                            .iter()
+                            .map(|icon| place.icon_msdf(*icon)),
+                    );
+                    let end = self.icons_msdf.len() as u32;
+                    self.push_paint_cmd(PaintCmd::IconMsdf { draws: at..end });
+                }
+                PaintCmd::Text { draws } => {
+                    self.commit_soup(soup_end);
+                    let at = self.texts.len() as u32;
+                    self.texts.extend(
+                        other.texts[ranged(draws)]
+                            .iter()
+                            .map(|text| place.text(text)),
+                    );
+                    let end = self.texts.len() as u32;
+                    self.push_paint_cmd(PaintCmd::Text { draws: at..end });
+                }
+            }
+        }
+    }
+
+    /// Commit the soup up to index position `end` as a run, as
+    /// [`flush_soup`](Self::flush_soup) commits all of it.
+    fn commit_soup(&mut self, end: u32) {
+        if end > self.soup_committed_indices {
+            self.push_paint_cmd(PaintCmd::Soup {
+                indices: self.soup_committed_indices..end,
+            });
+            self.soup_committed_indices = end;
+        }
+    }
+
+    /// Store an analytic record and count it under its kind.
+    fn push_analytic_record(&mut self, record: AnalyticInstance) {
+        match record.kind {
+            ANALYTIC_KIND_CHROME => self.analytic_chrome_count += 1,
+            ANALYTIC_KIND_SHADOW => self.analytic_shadow_count += 1,
+            ANALYTIC_KIND_STRIPES => self.analytic_stripe_count += 1,
+            ANALYTIC_KIND_SEGMENT => self.analytic_segment_count += 1,
+            kind => unreachable!("unknown analytic kind {kind}"),
+        }
+        self.analytic_instances.push(record);
     }
 
     /// What was just drawn changes on its own `seconds` from now (a spinner's
@@ -3144,6 +3334,161 @@ impl DrawList {
         self.push_paint_cmd(PaintCmd::NineSlice {
             draws: start..start + 1,
         });
+    }
+}
+
+/// Where [`DrawList::append_translated`] puts a list's records: moved by
+/// `(dx, dy)` and cut by `clip`, both in world space.
+#[derive(Clone, Copy)]
+struct Placement {
+    dx: f32,
+    dy: f32,
+    clip: Option<Rect>,
+}
+
+impl Placement {
+    /// A record's clip, `stored`, as recording it under the placement would
+    /// have left it: moved, then narrowed by the placement's clip the way
+    /// [`DrawList::push_clip`] narrows a nested one.
+    fn clip(&self, stored: Option<Rect>) -> Option<Rect> {
+        let Some(own) = stored else {
+            return self.clip;
+        };
+        let own = Rect::new(own.x + self.dx, own.y + self.dy, own.width, own.height);
+        Some(match self.clip {
+            Some(outer) => outer
+                .intersection(own)
+                .unwrap_or_else(|| Rect::new(own.x, own.y, 0.0, 0.0)),
+            None => own,
+        })
+    }
+
+    /// [`clip`](Self::clip) for a clip stored as a rect and an enable flag.
+    fn packed_clip(&self, rect: [f32; 4], enabled: f32) -> ([f32; 4], f32) {
+        let stored = (enabled > 0.5).then(|| Rect::new(rect[0], rect[1], rect[2], rect[3]));
+        match self.clip(stored) {
+            Some(c) => ([c.x, c.y, c.width, c.height], 1.0),
+            None => ([0.0; 4], 0.0),
+        }
+    }
+
+    fn vertex(&self, mut vertex: Vertex) -> Vertex {
+        vertex.position[0] += self.dx;
+        vertex.position[1] += self.dy;
+        (vertex.clip, vertex.clip_enabled) = self.packed_clip(vertex.clip, vertex.clip_enabled);
+        vertex
+    }
+
+    /// The analytic record moved, or `None` for a shadow recording would
+    /// have culled: one whose blur box misses its clip.
+    fn analytic(&self, record: &AnalyticInstance) -> Option<AnalyticInstance> {
+        let mut record = *record;
+        let kind = record.kind;
+        let p = &mut record.payload;
+        // Translate-only records carry an identity linear part and their
+        // position folded into their coordinates; the rest, a transform.
+        let translate_only = p[0] == [1.0, 0.0, 0.0, 1.0];
+        let (clip, enabled) = self.packed_clip(p[8], p[1][2]);
+        p[8] = clip;
+        p[1][2] = enabled;
+        let move_translation = |p: &mut [[f32; 4]; 10]| {
+            p[1][0] += self.dx;
+            p[1][1] += self.dy;
+        };
+        match kind {
+            ANALYTIC_KIND_CHROME | ANALYTIC_KIND_STRIPES => {
+                if translate_only {
+                    p[2][0] += self.dx;
+                    p[2][1] += self.dy;
+                } else {
+                    move_translation(p);
+                }
+                if kind == ANALYTIC_KIND_CHROME {
+                    p[9][2] = enabled;
+                }
+            }
+            ANALYTIC_KIND_SHADOW => {
+                // Shadow rects stay local even when translate-only.
+                move_translation(p);
+                if enabled > 0.5 {
+                    let raster = Rect::new(p[2][0], p[2][1], p[2][2], p[2][3]);
+                    let [a, b, c, d] = p[0];
+                    let raster_world = if translate_only {
+                        Rect::new(
+                            raster.x + p[1][0],
+                            raster.y + p[1][1],
+                            raster.width,
+                            raster.height,
+                        )
+                    } else {
+                        Affine2::new(a, b, p[1][0], c, d, p[1][1]).transform_rect_aabb(raster)
+                    };
+                    let clip = Rect::new(clip[0], clip[1], clip[2], clip[3]);
+                    clip.intersection(raster_world)?;
+                }
+            }
+            ANALYTIC_KIND_SEGMENT => {
+                if translate_only {
+                    for end in [0, 2] {
+                        p[2][end] += self.dx;
+                        p[2][end + 1] += self.dy;
+                    }
+                    // A neighbour is a point only where its end is a join;
+                    // elsewhere it is a zero placeholder.
+                    for (side, at) in [(0, 0), (1, 2)] {
+                        if p[5][side] >= stroke::STYLE_ROUND_JOIN {
+                            p[4][at] += self.dx;
+                            p[4][at + 1] += self.dy;
+                        }
+                    }
+                } else {
+                    move_translation(p);
+                }
+            }
+            kind => unreachable!("unknown analytic kind {kind}"),
+        }
+        Some(record)
+    }
+
+    fn circle(&self, mut circle: CircleInstance) -> CircleInstance {
+        circle.center[0] += self.dx;
+        circle.center[1] += self.dy;
+        (circle.clip, circle.params[0]) = self.packed_clip(circle.clip, circle.params[0]);
+        circle
+    }
+
+    fn icon(&self, icon: &IconDraw) -> IconDraw {
+        let mut icon = icon.clone();
+        for corner in &mut icon.corners {
+            corner[0] += self.dx;
+            corner[1] += self.dy;
+        }
+        icon.clip = self.clip(icon.clip);
+        icon
+    }
+
+    fn nine_slice(&self, draw: &NineSliceDraw) -> NineSliceDraw {
+        let mut draw = draw.clone();
+        draw.transform.tx += self.dx;
+        draw.transform.ty += self.dy;
+        draw.clip = self.clip(draw.clip);
+        draw
+    }
+
+    #[cfg(feature = "phosphor-icons")]
+    fn icon_msdf(&self, mut icon: IconMsdf) -> IconMsdf {
+        icon.transform.tx += self.dx;
+        icon.transform.ty += self.dy;
+        icon.clip = self.clip(icon.clip);
+        icon
+    }
+
+    fn text(&self, text: &TextBlock) -> TextBlock {
+        let mut text = text.clone();
+        text.x += self.dx;
+        text.y += self.dy;
+        text.clip = self.clip(text.clip);
+        text
     }
 }
 

@@ -15,6 +15,17 @@ still open.
 
 ---
 
+## Rustdoc links (found 2026-11-10)
+
+- [ ] **P2 — `RUSTDOCFLAGS="-D warnings" cargo doc -p wgpu-gameui --no-deps`
+      fails on 48 broken or private intra-doc links**, spread over `frame.rs`,
+      `frame_result.rs`, `text.rs`, `ui_context.rs`, `render/ui_renderer.rs` and
+      many widgets (e.g. `syntax_theme.rs:69` links `crate::SyntaxHighlighting`,
+      `text.rs:91` links the private `system_font_db`). Fix them and add the
+      doc check to the gate.
+
+---
+
 ## Performance review follow-ups (Codex + Antigravity, 2026-11-08)
 
 Static reviews of `f52ea97`; none of these were measured. Impact figures are the

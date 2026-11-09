@@ -2,6 +2,12 @@
 //! piece into its own list and the pieces appended in order, must be the list
 //! the same calls make when recorded into one list, record for record. This
 //! is what lets a retained piece of a frame be drawn again by appending it.
+//!
+//! `DrawList::append_translated` likewise: a piece recorded at its own origin
+//! and placed with an offset and a clip must be the list its calls make when
+//! recorded inside `push_clip(clip)` and `translate(offset)`. Coordinates here
+//! are quarter pixels and offsets whole ones, so every sum is exact and the
+//! comparison can be too.
 
 use crate::layout::Rect;
 use crate::render::draw_box::Target;
@@ -10,7 +16,7 @@ use crate::render::draw_plan::tests_support::Lists;
 use crate::render::frame_diff::{ContextKey, FrameSnapshot};
 use crate::text::TextBlock;
 use crate::text_select::TextKey;
-use crate::widgets::DrawList;
+use crate::widgets::{DrawList, Stroke};
 
 /// One drawing call, of every kind of record a list holds.
 #[derive(Clone, Copy, Debug)]
@@ -31,6 +37,12 @@ enum Op {
     ClipPush,
     ClipPop,
     Repaint,
+    Stripes,
+    Polyline,
+    Underlined,
+    Tinted,
+    Scaled,
+    ViewportClip,
 }
 
 const OPS: &[Op] = &[
@@ -50,7 +62,19 @@ const OPS: &[Op] = &[
     Op::ClipPush,
     Op::ClipPop,
     Op::Repaint,
+    Op::Stripes,
+    Op::Polyline,
+    Op::Underlined,
+    Op::Tinted,
+    Op::Scaled,
+    Op::ViewportClip,
 ];
+
+impl Op {
+    fn pushes_clip(self) -> bool {
+        matches!(self, Op::ClipPush | Op::ViewportClip)
+    }
+}
 
 /// A call and where it draws.
 #[derive(Clone, Copy, Debug)]
@@ -102,6 +126,67 @@ impl Call {
             Op::ClipPush => list.push_clip(Rect::new(x, y, 200.0, 120.0)),
             Op::ClipPop => list.pop_clip(),
             Op::Repaint => list.repaint_after((self.n % 5) as f32 * 0.25),
+            Op::Stripes => list.hatch(r, 6.0, colour),
+            // Axis-aligned and a whole pixel wide, so snapped to the grid,
+            // with a join whose neighbours are real points.
+            Op::Polyline => list.stroke_polyline(
+                &[[x, y], [x + 40.0, y], [x + 40.0, y + 25.0]],
+                &Stroke::new(1.0),
+                colour,
+            ),
+            Op::Underlined => list.text(
+                TextBlock::new(format!("under {}", self.n), x, y)
+                    .with_size(14.0)
+                    .with_style_ranges(vec![crate::TextStyleRange {
+                        range: 0..5,
+                        color: None,
+                        underline: crate::Underline::Color(colour),
+                    }]),
+            ),
+            Op::Tinted => {
+                list.push_tint();
+                list.multiply_tint([0.5, 1.0, 0.75, 0.5]);
+                list.chrome_rect(r, 2.0, 1.0, colour, [0.25; 4]);
+                list.quad(x, y, 10.0, 10.0, colour);
+                list.pop_tint();
+            }
+            // Every record kind that keeps a transform rather than baking a
+            // translation: a scale whose products stay exact.
+            Op::Scaled => {
+                list.push_transform();
+                list.translate(x, y);
+                list.scale(2.0, 0.5);
+                list.chrome_rect(Rect::new(0.0, 0.0, 20.0, 30.0), 3.0, 1.0, colour, [0.5; 4]);
+                list.line([0.0, 0.0], [25.0, 8.0], 2.0, colour);
+                list.stroke_polyline(
+                    &[[0.0, 0.0], [20.0, 0.0], [20.0, 16.0]],
+                    &Stroke::new(1.5),
+                    colour,
+                );
+                list.hatch(Rect::new(0.0, 0.0, 30.0, 20.0), 5.0, colour);
+                list.box_shadow_outset(
+                    Rect::new(0.0, 0.0, 20.0, 20.0),
+                    crate::shadow::CornerRadii::uniform(2.0),
+                    crate::shadow::BoxShadow {
+                        offset: [1.0, 1.0],
+                        blur: 4.0,
+                        spread: 0.0,
+                        color: [0.0, 0.0, 0.0, 0.5],
+                        inset: false,
+                    },
+                );
+                list.icon("missing", 0.0, 0.0, 8.0, 8.0);
+                list.nine_slice(0.0, 0.0, 16.0, 16.0, "panel");
+                #[cfg(feature = "phosphor-icons")]
+                list.phosphor_icon(
+                    Rect::new(0.0, 0.0, 12.0, 12.0),
+                    crate::PhosphorIcon::Gear,
+                    colour,
+                );
+                list.triangle((0.0, 0.0), (8.0, 0.0), (0.0, 8.0), colour);
+                list.pop_transform();
+            }
+            Op::ViewportClip => list.push_clip_viewport(Rect::new(x, y, 160.0, 90.0)),
         }
     }
 }
@@ -154,7 +239,7 @@ fn closed_points(calls: &[Call]) -> Vec<usize> {
             points.push(i);
         }
         match call.op {
-            Op::ClipPush => depth += 1,
+            op if op.pushes_clip() => depth += 1,
             Op::ClipPop => depth = (depth - 1).max(0),
             _ => {}
         }
@@ -213,6 +298,32 @@ fn assert_same(direct: &DrawList, pieces: &DrawList, what: &str) {
         pieces.dropped_degenerate(),
         "{what}: dropped"
     );
+    assert_eq!(
+        direct.viewport_clips(),
+        pieces.viewport_clips(),
+        "{what}: viewport clips"
+    );
+    let texts = |list: &DrawList| -> Vec<(f32, f32, Option<Rect>)> {
+        list.texts.iter().map(|t| (t.x, t.y, t.clip)).collect()
+    };
+    assert_eq!(texts(direct), texts(pieces), "{what}: text places");
+    let icons = |list: &DrawList| -> Vec<([[f32; 2]; 4], Option<Rect>)> {
+        list.icons.iter().map(|i| (i.corners, i.clip)).collect()
+    };
+    assert_eq!(icons(direct), icons(pieces), "{what}: icons");
+    let nine_slices = |list: &DrawList| -> Vec<(crate::Affine2, Option<Rect>)> {
+        list.nine_slices
+            .iter()
+            .map(|n| (n.transform, n.clip))
+            .collect()
+    };
+    assert_eq!(
+        nine_slices(direct),
+        nine_slices(pieces),
+        "{what}: nine-slices"
+    );
+    #[cfg(feature = "phosphor-icons")]
+    assert_eq!(direct.icons_msdf, pieces.icons_msdf, "{what}: msdf icons");
     // Every other record (text blocks, icons, nine-slices), compared the way
     // the renderer compares frames: identical means the plan, the instances
     // and the draws come out the same.
@@ -312,4 +423,266 @@ fn appending_an_empty_list_changes_nothing() {
     let mut empty = lists.list();
     empty.append(&direct);
     assert_same(&direct, &empty, "appended to empty");
+}
+/// Calls at quarter-pixel coordinates either side of the origin, with clips
+/// one level deep (see [`one_level`]).
+fn random_placed_calls(rng: &mut Rng, len: usize) -> Vec<Call> {
+    let calls = (0..len)
+        .map(|_| Call {
+            op: OPS[rng.below(OPS.len() as u32) as usize],
+            at: [
+                (rng.below(2400) as f32 - 600.0) * 0.25,
+                (rng.below(1800) as f32 - 400.0) * 0.25,
+            ],
+            n: rng.below(1000),
+        })
+        .collect();
+    one_level(calls)
+}
+
+/// `calls` with every clip closed and none inside another: a push inside a
+/// clip, or a pop outside one, becomes a quad, and a clip left open is
+/// popped at the end. A clip nested in one that shows nothing keeps an origin
+/// `append_translated` cannot know (it says so), so the oracle leaves that out
+/// and checks it on its own.
+fn one_level(calls: Vec<Call>) -> Vec<Call> {
+    let mut open = false;
+    let mut calls: Vec<Call> = calls
+        .into_iter()
+        .map(|mut call| {
+            if call.op.pushes_clip() {
+                if open {
+                    call.op = Op::Quad;
+                }
+                open = true;
+            } else if matches!(call.op, Op::ClipPop) {
+                if !open {
+                    call.op = Op::Quad;
+                }
+                open = false;
+            }
+            call
+        })
+        .collect();
+    if open {
+        calls.push(Call {
+            op: Op::ClipPop,
+            at: [0.0; 2],
+            n: 0,
+        });
+    }
+    calls
+}
+
+fn random_offset(rng: &mut Rng) -> [f32; 2] {
+    [rng.below(600) as f32 - 300.0, rng.below(600) as f32 - 300.0]
+}
+
+fn random_clip(rng: &mut Rng) -> Option<Rect> {
+    (rng.below(3) != 0).then(|| {
+        Rect::new(
+            rng.below(500) as f32 - 100.0,
+            rng.below(400) as f32 - 100.0,
+            20.0 + rng.below(400) as f32,
+            20.0 + rng.below(300) as f32,
+        )
+    })
+}
+
+/// A piece placed by recording: `body` inside `push_clip(clip)` and
+/// `translate(offset)`, between `before` and `after`.
+fn recorded_placed(
+    lists: &Lists,
+    [before, body, after]: [&[Call]; 3],
+    offset: [f32; 2],
+    clip: Option<Rect>,
+) -> DrawList {
+    let mut list = recorded(lists, before);
+    if let Some(clip) = clip {
+        list.push_clip(clip);
+    }
+    list.push_transform();
+    list.translate(offset[0], offset[1]);
+    for call in body {
+        call.draw(&mut list);
+    }
+    list.pop_transform();
+    if clip.is_some() {
+        list.pop_clip();
+    }
+    for call in after {
+        call.draw(&mut list);
+    }
+    list
+}
+
+/// The same piece recorded at its own origin and placed with
+/// `append_translated`.
+fn appended_placed(
+    lists: &Lists,
+    [before, body, after]: [&[Call]; 3],
+    offset: [f32; 2],
+    clip: Option<Rect>,
+) -> DrawList {
+    let mut list = recorded(lists, before);
+    list.append_translated(&recorded(lists, body), offset, clip);
+    for call in after {
+        call.draw(&mut list);
+    }
+    list
+}
+
+#[test]
+fn a_placed_list_is_the_list_recorded_inside_translate_and_clip() {
+    let lists = Lists::new();
+    let mut rng = Rng(23);
+    let mut shadows_dropped = 0;
+    for round in 0..300 {
+        let parts: Vec<Vec<Call>> = [3, 14, 3]
+            .iter()
+            .map(|&most| {
+                let len = rng.below(most + 1) as usize;
+                random_placed_calls(&mut rng, len)
+            })
+            .collect();
+        let parts = [&parts[0][..], &parts[1][..], &parts[2][..]];
+        let offset = random_offset(&mut rng);
+        let clip = random_clip(&mut rng);
+        let direct = recorded_placed(&lists, parts, offset, clip);
+        let placed = appended_placed(&lists, parts, offset, clip);
+        shadows_dropped += recorded(&lists, parts[1]).shadow_instance_count()
+            - (placed.shadow_instance_count()
+                - recorded(&lists, parts[0]).shadow_instance_count()
+                - recorded(&lists, parts[2]).shadow_instance_count());
+        assert_same(
+            &direct,
+            &placed,
+            &format!("round {round}, offset {offset:?}, clip {clip:?}, {parts:?}"),
+        );
+    }
+    // The clips did cut shadows, so dropping them was checked too.
+    assert!(shadows_dropped > 0);
+}
+
+#[test]
+fn a_shadow_the_clip_hides_is_dropped_and_the_soup_around_it_stays_one_run() {
+    let lists = Lists::new();
+    let call = |op| Call {
+        op,
+        at: [0.0, 0.0],
+        n: 1,
+    };
+    let body = [
+        call(Op::Triangle),
+        call(Op::Shadow),
+        call(Op::Triangle),
+        call(Op::Chrome),
+        call(Op::Triangle),
+        call(Op::Shadow),
+    ];
+    assert_eq!(recorded(&lists, &body).shadow_instance_count(), 2);
+    let clip = Some(Rect::new(1000.0, 1000.0, 50.0, 50.0));
+    for offset in [[3.0, 4.0], [-7.0, 0.0]] {
+        let parts = [&[][..], &body[..], &[][..]];
+        let direct = recorded_placed(&lists, parts, offset, clip);
+        let placed = appended_placed(&lists, parts, offset, clip);
+        assert_eq!(placed.shadow_instance_count(), 0);
+        assert_same(&direct, &placed, &format!("offset {offset:?}"));
+    }
+}
+
+#[test]
+fn placing_without_a_move_or_a_clip_is_appending() {
+    let lists = Lists::new();
+    let mut rng = Rng(5);
+    for round in 0..50 {
+        let before = random_placed_calls(&mut rng, 4);
+        let body = random_placed_calls(&mut rng, 10);
+        let mut appended = recorded(&lists, &before);
+        appended.append(&recorded(&lists, &body));
+        let mut placed = recorded(&lists, &before);
+        placed.append_translated(&recorded(&lists, &body), [0.0, 0.0], None);
+        assert_same(&appended, &placed, &format!("round {round}"));
+    }
+}
+
+#[test]
+fn placements_nest_as_recording_nests() {
+    let lists = Lists::new();
+    let mut rng = Rng(31);
+    // The outer clip holds everything or is absent: a nested clip that shows
+    // nothing is the documented exception.
+    let everything = Rect::new(-10_000.0, -10_000.0, 20_000.0, 20_000.0);
+    for round in 0..150 {
+        let around = random_placed_calls(&mut rng, 6);
+        let points = closed_points(&around);
+        let (above, below) = around.split_at(points[rng.below(points.len() as u32) as usize]);
+        let inner = random_placed_calls(&mut rng, 10);
+        let [outer_offset, inner_offset] = [random_offset(&mut rng), random_offset(&mut rng)];
+        let outer_clip = (rng.below(2) == 0).then_some(everything);
+        let inner_clip = random_clip(&mut rng);
+
+        let mut direct = lists.list();
+        if let Some(clip) = outer_clip {
+            direct.push_clip(clip);
+        }
+        direct.push_transform();
+        direct.translate(outer_offset[0], outer_offset[1]);
+        for call in above {
+            call.draw(&mut direct);
+        }
+        if let Some(clip) = inner_clip {
+            direct.push_clip(clip);
+        }
+        direct.push_transform();
+        direct.translate(inner_offset[0], inner_offset[1]);
+        for call in &inner {
+            call.draw(&mut direct);
+        }
+        direct.pop_transform();
+        if inner_clip.is_some() {
+            direct.pop_clip();
+        }
+        for call in below {
+            call.draw(&mut direct);
+        }
+        direct.pop_transform();
+        if outer_clip.is_some() {
+            direct.pop_clip();
+        }
+
+        let mut middle = recorded(&lists, above);
+        middle.append_translated(&recorded(&lists, &inner), inner_offset, inner_clip);
+        for call in below {
+            call.draw(&mut middle);
+        }
+        let mut placed = lists.list();
+        placed.append_translated(&middle, outer_offset, outer_clip);
+
+        assert_same(&direct, &placed, &format!("round {round}"));
+    }
+}
+
+#[test]
+fn a_nested_clip_that_shows_nothing_still_shows_nothing_when_placed() {
+    let lists = Lists::new();
+    let call = |op, at| Call { op, at, n: 2 };
+    // A clip inside another, overlapping it, placed where the outer clip
+    // misses both: recording keeps the inner clip's origin, placing keeps the
+    // overlap's. Both are empty.
+    let body = [
+        call(Op::ClipPush, [0.0, 0.0]),
+        call(Op::ClipPush, [-50.0, 10.0]),
+        call(Op::Chrome, [5.0, 15.0]),
+        call(Op::ClipPop, [0.0, 0.0]),
+        call(Op::ClipPop, [0.0, 0.0]),
+    ];
+    let clip = Some(Rect::new(900.0, 900.0, 10.0, 10.0));
+    let parts = [&[][..], &body[..], &[][..]];
+    let direct = recorded_placed(&lists, parts, [4.0, 4.0], clip);
+    let placed = appended_placed(&lists, parts, [4.0, 4.0], clip);
+    let clip_of = |list: &DrawList| list.chrome_instances().next().unwrap().clip;
+    let [recorded_clip, placed_clip] = [clip_of(&direct), clip_of(&placed)];
+    assert_eq!(recorded_clip, [-46.0, 14.0, 0.0, 0.0]);
+    assert_eq!(placed_clip, [4.0, 14.0, 0.0, 0.0]);
 }
