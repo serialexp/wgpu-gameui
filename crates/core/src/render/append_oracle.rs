@@ -473,8 +473,8 @@ fn appending_an_empty_list_changes_nothing() {
     empty.append(&direct);
     assert_same(&direct, &empty, "appended to empty");
 }
-/// Calls at quarter-pixel coordinates either side of the origin, with clips
-/// one level deep (see [`one_level`]).
+/// Calls at quarter-pixel coordinates either side of the origin, with every
+/// clip closed (see [`closed`]).
 fn random_placed_calls(rng: &mut Rng, len: usize) -> Vec<Call> {
     let calls = (0..len)
         .map(|_| Call {
@@ -486,34 +486,31 @@ fn random_placed_calls(rng: &mut Rng, len: usize) -> Vec<Call> {
             n: rng.below(1000),
         })
         .collect();
-    one_level(calls)
+    closed(calls)
 }
 
-/// `calls` with every clip closed and none inside another: a push inside a
-/// clip, or a pop outside one, becomes a quad, and a clip left open is
-/// popped at the end. A clip nested in one that shows nothing keeps an origin
-/// `append_translated` cannot know (it says so), so the oracle leaves that out
-/// and checks it on its own.
-fn one_level(calls: Vec<Call>) -> Vec<Call> {
-    let mut open = false;
+/// `calls` with every clip closed, nested or not: a pop with no clip open
+/// becomes a quad, and the clips left open are popped at the end. A placed
+/// list's records are placed under the clip it was placed with, so a piece
+/// must not pop what it did not push.
+fn closed(calls: Vec<Call>) -> Vec<Call> {
+    let mut open = 0u32;
     let mut calls: Vec<Call> = calls
         .into_iter()
         .map(|mut call| {
             if call.op.pushes_clip() {
-                if open {
-                    call.op = Op::Quad;
-                }
-                open = true;
+                open += 1;
             } else if matches!(call.op, Op::ClipPop) {
-                if !open {
+                if open == 0 {
                     call.op = Op::Quad;
+                } else {
+                    open -= 1;
                 }
-                open = false;
             }
             call
         })
         .collect();
-    if open {
+    for _ in 0..open {
         calls.push(Call {
             op: Op::ClipPop,
             at: [0.0; 2],
@@ -659,16 +656,13 @@ fn placing_without_a_move_or_a_clip_is_appending() {
 fn placements_nest_as_recording_nests() {
     let lists = Lists::new();
     let mut rng = Rng(31);
-    // The outer clip holds everything or is absent: a nested clip that shows
-    // nothing is the documented exception.
-    let everything = Rect::new(-10_000.0, -10_000.0, 20_000.0, 20_000.0);
     for round in 0..150 {
         let around = random_placed_calls(&mut rng, 6);
         let points = closed_points(&around);
         let (above, below) = around.split_at(points[rng.below(points.len() as u32) as usize]);
         let inner = random_placed_calls(&mut rng, 10);
         let [outer_offset, inner_offset] = [random_offset(&mut rng), random_offset(&mut rng)];
-        let outer_clip = (rng.below(2) == 0).then_some(everything);
+        let outer_clip = random_clip(&mut rng);
         let inner_clip = random_clip(&mut rng);
 
         let mut direct = lists.list();
@@ -713,12 +707,13 @@ fn placements_nest_as_recording_nests() {
 }
 
 #[test]
-fn a_nested_clip_that_shows_nothing_still_shows_nothing_when_placed() {
+fn a_nested_clip_that_shows_nothing_is_the_same_empty_clip_when_placed() {
     let lists = Lists::new();
     let call = |op, at| Call { op, at, n: 2 };
     // A clip inside another, overlapping it, placed where the outer clip
-    // misses both: recording keeps the inner clip's origin, placing keeps the
-    // overlap's. Both are empty.
+    // misses both. Recording meets the empty clip at the inner one, placing
+    // at the overlap of the two; an empty clip is stored at the origin, so
+    // the two agree.
     let body = [
         call(Op::ClipPush, [0.0, 0.0]),
         call(Op::ClipPush, [-50.0, 10.0]),
@@ -732,6 +727,7 @@ fn a_nested_clip_that_shows_nothing_still_shows_nothing_when_placed() {
     let placed = appended_placed(&lists, parts, [4.0, 4.0], clip);
     let clip_of = |list: &DrawList| list.chrome_instances().next().unwrap().clip;
     let [recorded_clip, placed_clip] = [clip_of(&direct), clip_of(&placed)];
-    assert_eq!(recorded_clip, [-46.0, 14.0, 0.0, 0.0]);
-    assert_eq!(placed_clip, [4.0, 14.0, 0.0, 0.0]);
+    assert_eq!(recorded_clip, [0.0; 4]);
+    assert_eq!(placed_clip, [0.0; 4]);
+    assert_same(&direct, &placed, "an empty nested clip");
 }

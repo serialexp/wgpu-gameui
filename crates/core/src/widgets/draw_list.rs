@@ -921,11 +921,11 @@ impl DrawList {
     /// fractions of a power of two), and otherwise equal to within the
     /// rounding of a sum taken in another order. Record-time snapping (stroke
     /// edges, underlines) is translation-invariant, so whole-pixel offsets
-    /// keep it exact. Two clips are approximated: a clip that already showed
-    /// nothing keeps its own origin rather than the one nested recording would
-    /// have given it (it still shows nothing), and a screen-space clip
-    /// (`push_clip_exact`, a [`TextBlock::clip`] set by the caller) moves with
-    /// the rest instead of staying put. A repaint request is copied as
+    /// keep it exact. A clip that shows nothing is stored at the origin, as
+    /// [`push_clip`](Self::push_clip) stores one, so it agrees too. One clip is
+    /// approximated: a screen-space one (`push_clip_exact`, a
+    /// [`TextBlock::clip`] set by the caller) moves with the rest instead of
+    /// staying put. A repaint request is copied as
     /// [`append`](Self::append) copies it.
     ///
     /// Records are copied one at a time, so this costs a pass over `other`'s
@@ -1478,6 +1478,12 @@ impl DrawList {
 
     /// Push a clipping rectangle. Nested clips are intersected with the current clip.
     ///
+    /// A clip that shows nothing (the intersection is empty, or `rect` has no
+    /// area) is stored as `Rect(0, 0, 0, 0)`, wherever it would have been: so
+    /// it is the same clip however it was reached, which is what lets a list
+    /// placed under a clip with [`append_translated`](Self::append_translated)
+    /// equal the same calls recorded under it.
+    ///
     /// **Note:** when the active transform has rotation or shear, the rect is
     /// transformed to its AABB before being intersected; clipping is therefore
     /// approximate (over-clips along the diagonal) under rotation. Document the
@@ -1496,12 +1502,10 @@ impl DrawList {
         }
         let world_rect = self.current_transform().transform_rect_aabb(rect);
         let clip = match self.current_clip() {
-            Some(current) => current
-                .intersection(world_rect)
-                .unwrap_or_else(|| Rect::new(world_rect.x, world_rect.y, 0.0, 0.0)),
-            None => world_rect,
+            Some(current) => current.intersection(world_rect),
+            None => shows_something(world_rect),
         };
-        self.clip_stack.push(clip);
+        self.clip_stack.push(clip.unwrap_or(NO_CLIP_AREA));
     }
 
     /// Push a clipping rectangle **without** intersecting the parent clip — the
@@ -3337,6 +3341,20 @@ impl DrawList {
     }
 }
 
+/// Where a clip that shows nothing is stored: one place, however it was
+/// reached, so that clips reached by nesting and by placing agree.
+const NO_CLIP_AREA: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: 0.0,
+    height: 0.0,
+};
+
+/// `rect` as it is, if it has area.
+fn shows_something(rect: Rect) -> Option<Rect> {
+    (rect.width > 0.0 && rect.height > 0.0).then_some(rect)
+}
+
 /// Where [`DrawList::append_translated`] puts a list's records: moved by
 /// `(dx, dy)` and cut by `clip`, both in world space.
 #[derive(Clone, Copy)]
@@ -3349,18 +3367,18 @@ struct Placement {
 impl Placement {
     /// A record's clip, `stored`, as recording it under the placement would
     /// have left it: moved, then narrowed by the placement's clip the way
-    /// [`DrawList::push_clip`] narrows a nested one.
+    /// [`DrawList::push_clip`] narrows a nested one. A clip that shows
+    /// nothing stays at the origin, where recording stores one.
     fn clip(&self, stored: Option<Rect>) -> Option<Rect> {
         let Some(own) = stored else {
             return self.clip;
         };
         let own = Rect::new(own.x + self.dx, own.y + self.dy, own.width, own.height);
-        Some(match self.clip {
-            Some(outer) => outer
-                .intersection(own)
-                .unwrap_or_else(|| Rect::new(own.x, own.y, 0.0, 0.0)),
-            None => own,
-        })
+        let clip = match self.clip {
+            Some(outer) => outer.intersection(own),
+            None => shows_something(own),
+        };
+        Some(clip.unwrap_or(NO_CLIP_AREA))
     }
 
     /// [`clip`](Self::clip) for a clip stored as a rect and an enable flag.

@@ -1335,9 +1335,11 @@ impl<'a> UiContext<'a> {
     }
 
     /// True when the world-space point `(x, y)` is inside the active clip region
-    /// (always true when nothing is clipped). Teardown's `UiIsInClipRegion`.
+    /// (always true when nothing is clipped, never when the clip shows
+    /// nothing). Teardown's `UiIsInClipRegion`.
     pub fn is_in_clip_region(&mut self, x: f32, y: f32) -> bool {
         match self.backend.list_mut().current_clip() {
+            Some(c) if c.width <= 0.0 || c.height <= 0.0 => false,
             Some(c) => x >= c.x && x <= c.x + c.width && y >= c.y && y <= c.y + c.height,
             None => true,
         }
@@ -4515,6 +4517,24 @@ mod tests {
         let (sx, sy) = ui.current_scale();
         assert!(approx(sx, 1.0));
         assert!(approx(sy, 1.0));
+    }
+
+    #[test]
+    fn a_clip_that_shows_nothing_holds_no_point() {
+        let mut list = DrawList::new();
+        list.push_clip(Rect::new(10.0, 10.0, 20.0, 20.0));
+        list.push_clip(Rect::new(50.0, 50.0, 5.0, 5.0));
+        assert_eq!(list.current_clip(), Some(Rect::new(0.0, 0.0, 0.0, 0.0)));
+        let mut ui = UiContext::new(&mut list);
+        assert!(!ui.is_in_clip_region(0.0, 0.0));
+        assert!(!ui.is_in_clip_region(52.0, 52.0));
+    }
+
+    #[test]
+    fn a_clip_with_no_area_is_stored_at_the_origin() {
+        let mut list = DrawList::new();
+        list.push_clip(Rect::new(30.0, 40.0, 0.0, 12.0));
+        assert_eq!(list.current_clip(), Some(Rect::new(0.0, 0.0, 0.0, 0.0)));
     }
 
     #[test]
