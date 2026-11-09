@@ -510,7 +510,9 @@ pub(crate) struct MsdfInstance {
 
 impl MsdfInstance {
     /// A quad over `corners` (top-left, top-right, bottom-left; the fourth
-    /// completes the parallelogram) showing `tile`.
+    /// completes the parallelogram) showing `tile`. Only icons draw one quad
+    /// at a time.
+    #[cfg(feature = "phosphor-icons")]
     fn new(
         corners: [[f32; 2]; 3],
         tile: &AtlasRegion,
@@ -530,8 +532,10 @@ impl MsdfInstance {
         )
     }
 
-    /// [`new`](Self::new), converting the colours and parameters through
-    /// `memo`, which a run of quads that share them (a block's glyphs) reuses.
+    /// A quad over `[tl, tr, bl]` (the fourth corner completes the
+    /// parallelogram) showing `tile`, converting the colours and parameters
+    /// through `memo`, which a run of quads that share them (a block's
+    /// glyphs) reuses.
     fn new_memo(
         [tl, tr, bl]: [[f32; 2]; 3],
         tile: &AtlasRegion,
