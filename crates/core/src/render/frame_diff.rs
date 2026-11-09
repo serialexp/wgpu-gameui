@@ -383,6 +383,155 @@ impl FrameSnapshot {
 
 /// Copy the records of `new` that `changes` says differ into `kept`, which
 /// holds the records they were compared with.
+impl DrawList {
+    /// The first part of what this list records that `other` records
+    /// differently, named and shown, or `None` when the two would draw the
+    /// same frame bit for bit: every record array compared byte for byte, in
+    /// order, and text blocks, icons and nine-slices as the renderer compares
+    /// frames (every field that reaches the screen). Also compared: the
+    /// repaint request, the viewport clips, the selectable texts' keys and
+    /// places, and the count of degenerate calls dropped. Debug scopes are
+    /// not.
+    ///
+    /// For tests: two ways of recording a frame (drawn again from pieces,
+    /// drawn from nothing) checked to agree.
+    pub fn difference(&self, other: &DrawList) -> Option<String> {
+        fn first<T: std::fmt::Debug>(
+            what: &str,
+            a: &[T],
+            b: &[T],
+            same: impl Fn(&T, &T) -> bool,
+        ) -> Option<String> {
+            if a.len() != b.len() {
+                return Some(format!("{what}: {} against {}", a.len(), b.len()));
+            }
+            let (k, (x, y)) = a
+                .iter()
+                .zip(b)
+                .enumerate()
+                .find(|(_, (x, y))| !same(x, y))?;
+            Some(format!("{what} {k}: {x:?} against {y:?}"))
+        }
+        fn bytes<T: bytemuck::Pod>(a: &T, b: &T) -> bool {
+            bytemuck::bytes_of(a) == bytemuck::bytes_of(b)
+        }
+        fn rect(r: &Rect) -> [u32; 4] {
+            [r.x, r.y, r.width, r.height].map(f32::to_bits)
+        }
+        fn block(t: &TextBlock) -> String {
+            format!(
+                "{:?} at ({}, {}) clip {:?}",
+                t.content.as_str(),
+                t.x,
+                t.y,
+                t.clip
+            )
+        }
+        #[cfg(feature = "phosphor-icons")]
+        fn msdf_icons(a: &DrawList, b: &DrawList) -> Option<String> {
+            first("MSDF icon", &a.icons_msdf, &b.icons_msdf, |a, b| {
+                icon_msdf_change(a, b) == Change::Same
+            })
+        }
+        #[cfg(not(feature = "phosphor-icons"))]
+        fn msdf_icons(_: &DrawList, _: &DrawList) -> Option<String> {
+            None
+        }
+        fn selectable(list: &DrawList) -> Vec<(crate::TextKey, u32, u32)> {
+            list.selectable_texts()
+                .map(|(key, t)| (key, t.x.to_bits(), t.y.to_bits()))
+                .collect()
+        }
+        first(
+            "paint command",
+            &self.paint_cmds,
+            &other.paint_cmds,
+            |a, b| a == b,
+        )
+        .or_else(|| {
+            (self.soup_committed_indices != other.soup_committed_indices).then(|| {
+                format!(
+                    "trailing soup from index {} against {}",
+                    self.soup_committed_indices, other.soup_committed_indices
+                )
+            })
+        })
+        .or_else(|| first("vertex", &self.vertices, &other.vertices, bytes))
+        .or_else(|| first("index", &self.indices, &other.indices, |a, b| a == b))
+        .or_else(|| {
+            first(
+                "analytic instance",
+                &self.analytic_instances,
+                &other.analytic_instances,
+                bytes,
+            )
+        })
+        .or_else(|| {
+            first(
+                "circle",
+                &self.circle_instances,
+                &other.circle_instances,
+                bytes,
+            )
+        })
+        .or_else(|| {
+            if self.texts.len() != other.texts.len() {
+                return Some(format!(
+                    "text: {} blocks against {}",
+                    self.texts.len(),
+                    other.texts.len()
+                ));
+            }
+            let (k, (a, b)) = self
+                .texts
+                .iter()
+                .zip(&other.texts)
+                .enumerate()
+                .find(|(_, (a, b))| text_change(a, b) != Change::Same)?;
+            Some(format!("text {k}: {} against {}", block(a), block(b)))
+        })
+        .or_else(|| {
+            first("icon", &self.icons, &other.icons, |a, b| {
+                icon_change(a, b) == Change::Same
+            })
+        })
+        .or_else(|| {
+            first(
+                "nine-slice",
+                &self.nine_slices,
+                &other.nine_slices,
+                |a, b| nine_slice_change(a, b) == Change::Same,
+            )
+        })
+        .or_else(|| msdf_icons(self, other))
+        .or_else(|| {
+            first(
+                "viewport clip",
+                self.viewport_clips(),
+                other.viewport_clips(),
+                |a, b| rect(a) == rect(b),
+            )
+        })
+        .or_else(|| {
+            first(
+                "selectable text",
+                &selectable(self),
+                &selectable(other),
+                |a, b| a == b,
+            )
+        })
+        .or_else(|| {
+            let (a, b) = (self.next_repaint(), other.next_repaint());
+            (a.map(f32::to_bits) != b.map(f32::to_bits))
+                .then(|| format!("repaint after {a:?} against {b:?}"))
+        })
+        .or_else(|| {
+            let (a, b) = (self.dropped_degenerate(), other.dropped_degenerate());
+            (a != b).then(|| format!("{a} degenerate calls dropped against {b}"))
+        })
+    }
+}
+
 fn update<T: Clone>(kept: &mut [T], new: &[T], changes: &[Change]) {
     debug_assert!(kept.len() == new.len() && changes.len() == new.len());
     for ((kept, new), change) in kept.iter_mut().zip(new).zip(changes) {

@@ -251,6 +251,7 @@ fn closed_points(calls: &[Call]) -> Vec<usize> {
 }
 
 fn assert_same(direct: &DrawList, pieces: &DrawList, what: &str) {
+    assert_eq!(direct.difference(pieces), None, "{what}: difference");
     assert_eq!(direct.paint_cmds, pieces.paint_cmds, "{what}: paint stream");
     assert_eq!(
         direct.soup_committed_indices, pieces.soup_committed_indices,
@@ -338,6 +339,54 @@ fn assert_same(direct: &DrawList, pieces: &DrawList, what: &str) {
     snapshot.keep(direct, &context);
     let diff = snapshot.compare(pieces, &context);
     assert!(diff.identical(), "{what}: {diff:?}");
+}
+
+#[test]
+fn difference_names_the_first_record_that_differs() {
+    let lists = Lists::new();
+    let draw = |list: &mut DrawList, colour: f32, text: &str, x: f32| {
+        // A quad (analytic instance 0), the chrome (1), the text.
+        list.quad(0.0, 0.0, 8.0, 8.0, [1.0, 0.0, 0.0, 1.0]);
+        list.chrome_rect(
+            Rect::new(x, 2.0, 20.0, 10.0),
+            3.0,
+            1.0,
+            [colour, 0.5, 0.5, 1.0],
+            [0.0; 4],
+        );
+        list.text(TextBlock::new(text, 4.0, 4.0));
+    };
+    let mut a = lists.list();
+    draw(&mut a, 0.25, "a", 2.0);
+    let mut same = lists.list();
+    draw(&mut same, 0.25, "a", 2.0);
+    assert_eq!(a.difference(&same), None);
+
+    let mut recoloured = lists.list();
+    draw(&mut recoloured, 0.75, "a", 2.0);
+    let found = a.difference(&recoloured).expect("a colour differs");
+    assert!(found.starts_with("analytic instance 1"), "{found}");
+
+    let mut moved = lists.list();
+    draw(&mut moved, 0.25, "a", 3.0);
+    let found = a.difference(&moved).expect("a place differs");
+    assert!(found.starts_with("analytic instance 1"), "{found}");
+
+    let mut retext = lists.list();
+    draw(&mut retext, 0.25, "b", 2.0);
+    let found = a.difference(&retext).expect("a text differs");
+    assert!(found.starts_with("text 0"), "{found}");
+
+    let mut longer = lists.list();
+    draw(&mut longer, 0.25, "a", 2.0);
+    longer.repaint_after(1.0);
+    let found = a.difference(&longer).expect("a repaint differs");
+    assert!(found.starts_with("repaint"), "{found}");
+
+    let mut more = lists.list();
+    draw(&mut more, 0.25, "a", 2.0);
+    more.quad(0.0, 0.0, 8.0, 8.0, [1.0, 0.0, 0.0, 1.0]);
+    assert!(a.difference(&more).is_some());
 }
 
 #[test]
