@@ -2888,7 +2888,11 @@ impl DrawList {
                 if snap {
                     // On whole pixels, like a browser's underline: a
                     // fractional one splits across two rows, neither solid.
-                    y = (y + m.ty).round() - m.ty;
+                    // `floor(x + 0.5)`, not `round`, so a list moved by
+                    // whole pixels draws its underlines where recording it
+                    // there would: `round` breaks a tie away from zero, which
+                    // goes up on one side of the origin and down on the other.
+                    y = (y + m.ty + 0.5).floor() - m.ty;
                 }
                 self.quad(
                     block.x + segment.x,
@@ -3739,6 +3743,36 @@ mod tests {
         let [a, d] = [list.vertices[0].position, list.vertices[3].position];
         let thickness = (a[0] - d[0]).hypot(a[1] - d[1]);
         assert!((thickness - 17.0 * 0.07).abs() < 1e-4, "{thickness}");
+    }
+
+    #[test]
+    fn an_underline_moves_with_a_whole_pixel_translation_even_on_a_tie() {
+        use crate::text::{TextBlock, Underline};
+        let block = || {
+            TextBlock::new("underlined", 3.3, 10.37)
+                .with_size(17.0)
+                .with_style_ranges(vec![range(0..10, Underline::Color([1.0; 4]))])
+        };
+        let mut list = DrawList::with_font_system(crate::shared_font_system());
+        let mut runs = vec![(0..10, [1.0; 4])];
+        let segment_y = list.underline_segments(&block(), &mut runs)[0].y;
+        let local = block().y + segment_y;
+        // Where the underline lands on a half pixel: exactly, since `local`
+        // and the offset share an exponent range.
+        let tie = -local - 0.5;
+        let mut drawn = Vec::new();
+        for k in -7..=7 {
+            list.clear();
+            list.push_transform();
+            list.translate(0.0, tie + k as f32);
+            list.text(block());
+            list.pop_transform();
+            let y = list.chrome_instances().next().unwrap().rect[1];
+            drawn.push(y - k as f32);
+        }
+        // Every whole-pixel move moves the underline by the same amount, on
+        // either side of zero.
+        assert!(drawn.iter().all(|&y| y == drawn[0]), "{drawn:?}");
     }
 
     /// The underline quads `block` emits, as `(x, width, colour)`.
