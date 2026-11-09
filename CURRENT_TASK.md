@@ -13,8 +13,8 @@ are in `docs/design/retained-mode.md`: keep that current as phases land.
   frame and layout oracles and a 10,000-row scale check (`ef7865b`).
 - Next: Phase 4, pointer input (hit testing by binary search in stacks, hover
   and press signals, clicks, wheel, hover kept current after layout).
-- Not yet run: agent-ui's desktop tests against the core clip change
-  (`f8613e8` moves the origin of a nested clip that shows nothing).
+- agent-ui's desktop tests pass against the core clip change (`f8613e8`):
+  1,054 passed, 2026-11-10.
 - The gameui release waits for a successful gothab deploy (Bart); agent-ui's
   desktop will then need its `wgpu-gameui` requirement moved off the yanked
   1.0.0.
