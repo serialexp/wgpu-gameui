@@ -146,6 +146,22 @@ fn bench(c: &mut Criterion) {
                 device.poll(wgpu::Maintain::Poll);
             })
         });
+        // The same alternation with the comparison off: what the frames cost
+        // by themselves, for the `with_comparison_*` runs to be read against.
+        group.bench_with_input(BenchmarkId::new("recompute_alternating", n), &n, |b, _| {
+            let ui = gpu.renderer();
+            let mut flip = false;
+            b.iter(|| {
+                flip = !flip;
+                let list = if flip { &all_moved } else { &before };
+                ui.begin_frame();
+                let mut encoder = device.create_command_encoder(&Default::default());
+                ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, list);
+                queue.submit(Some(encoder.finish()));
+                device.poll(wgpu::Maintain::Poll);
+            })
+        });
+        device.poll(wgpu::Maintain::Wait);
         // The renderer with its frame comparison on, which compares the list
         // with the last one, keeps it, and (until a later phase consumes the
         // result) recomputes regardless. The extra over `recompute` is the

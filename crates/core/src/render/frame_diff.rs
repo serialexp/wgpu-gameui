@@ -111,6 +111,13 @@ pub(crate) struct FrameSnapshot {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     soup_committed: u32,
+    /// The last [`compare`](Self::compare) answered for every record, so
+    /// [`keep`](Self::keep) need copy only the ones that changed.
+    complete: bool,
+    /// How many frames to rest for the next time a compare gives up, and how
+    /// many are left to rest (see [`resting`](Self::resting)).
+    backoff: u8,
+    rest: u8,
     analytic: Vec<AnalyticInstance>,
     circles: Vec<CircleInstance>,
     icons: Vec<IconDraw>,
@@ -135,6 +142,10 @@ struct Tally {
 /// moving is not worth reading to the end, and one with a still header and a
 /// moving body is given up inside the body.
 const ABANDON_AFTER: u32 = 64;
+
+/// The most frames a list rests for after a compare gave up. A list that
+/// settles is compared again within this many frames.
+const MAX_REST: u8 = 16;
 
 impl Tally {
     /// Count a record. `false` once the comparison should stop.
@@ -190,6 +201,7 @@ impl FrameSnapshot {
     /// How `list`, drawn in `context`, differs from the frame kept.
     pub(crate) fn compare(&mut self, list: &DrawList, context: &ContextKey) -> FrameDiff {
         let mut diff = FrameDiff::default();
+        self.complete = false;
         if !self.kept {
             return diff;
         }
@@ -275,7 +287,38 @@ impl FrameSnapshot {
         diff.look = tally.look;
         diff.place = tally.place;
         diff.abandoned = tally.abandoned;
+        self.complete = !tally.abandoned;
+        // A list that keeps changing place is not worth keeping and comparing
+        // every frame: rest for longer each time, and start again once one is
+        // not given up on.
+        self.backoff = if tally.abandoned {
+            (self.backoff * 2).clamp(1, MAX_REST)
+        } else {
+            0
+        };
+        if tally.abandoned {
+            self.rest = self.backoff;
+        }
         diff
+    }
+
+    /// Whether to skip this frame, neither comparing nor keeping it. Rests
+    /// after a compare gave up, so that a list in which everything moves pays
+    /// for the comparison on one frame in a few, not on every one. What was
+    /// kept is dropped, since the frames skipped make it stale.
+    pub(crate) fn resting(&mut self) -> bool {
+        if self.rest == 0 {
+            return false;
+        }
+        self.rest -= 1;
+        self.forget();
+        true
+    }
+
+    /// Drop the frame kept: the next list is kept without being compared.
+    pub(crate) fn forget(&mut self) {
+        self.kept = false;
+        self.complete = false;
     }
 
     /// Whether `list` is made of the same paint stream and arrays of the same
@@ -297,8 +340,29 @@ impl FrameSnapshot {
 
     /// Keep `list`'s records, drawn in `context`, to compare the next list with.
     /// Buffers are reused, so a frame of the size of the last allocates only
-    /// for the records that own heap data (a name, spans).
+    /// for the records that own heap data (a name, spans). When the last
+    /// compare answered for every record, only the records that changed are
+    /// copied: a list that is the last one again copies nothing.
     pub(crate) fn keep(&mut self, list: &DrawList, context: &ContextKey) {
+        self.context = Some(*context);
+        if self.kept && self.complete {
+            let c = &self.changes;
+            update(&mut self.analytic, &list.analytic_instances, &c.analytic);
+            update(&mut self.circles, &list.circle_instances, &c.circles);
+            update(&mut self.icons, &list.icons, &c.icons);
+            update(&mut self.nine_slices, &list.nine_slices, &c.nine_slices);
+            #[cfg(feature = "phosphor-icons")]
+            update(&mut self.icons_msdf, &list.icons_msdf, &c.icons_msdf);
+            update(&mut self.texts, &list.texts, &c.texts);
+            // The paint stream and where the soup was committed are what the
+            // compare found them to be. The soup is whole or not at all: its
+            // commands share one array of vertices.
+            if c.soup.iter().chain([&c.tail]).any(|&c| c != Change::Same) {
+                self.vertices.clone_from(&list.vertices);
+                self.indices.clone_from(&list.indices);
+            }
+            return;
+        }
         self.paint_cmds.clone_from(&list.paint_cmds);
         self.vertices.clone_from(&list.vertices);
         self.indices.clone_from(&list.indices);
@@ -310,8 +374,18 @@ impl FrameSnapshot {
         #[cfg(feature = "phosphor-icons")]
         self.icons_msdf.clone_from(&list.icons_msdf);
         self.texts.clone_from(&list.texts);
-        self.context = Some(*context);
         self.kept = true;
+    }
+}
+
+/// Copy the records of `new` that `changes` says differ into `kept`, which
+/// holds the records they were compared with.
+fn update<T: Clone>(kept: &mut [T], new: &[T], changes: &[Change]) {
+    debug_assert!(kept.len() == new.len() && changes.len() == new.len());
+    for ((kept, new), change) in kept.iter_mut().zip(new).zip(changes) {
+        if *change != Change::Same {
+            kept.clone_from(new);
+        }
     }
 }
 

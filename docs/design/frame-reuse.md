@@ -113,27 +113,45 @@ Tick items as they land.
       by the context key's resolution epoch rather than compared per unit; the
       epoch moves on any load, unload, rename, compaction or nine-slice
       registration, which is coarser than per unit and sound.
-      Measured with `benches/frame_compare.rs` (comparison on, every frame
-      differing from the last in the way named; same run as the recompute):
+      Measured with `benches/frame_compare.rs`: the comparison on, every frame
+      differing from the last in the way named, against the same frames with it
+      off (`recompute_alternating` for the all-moved column). Other agents'
+      load on the machine moves a run by several per cent and sometimes much
+      more, so these are the quiet runs, filtered to one size at a time:
 
       | cells | recompute | identical | colour only | all moved |
       | --- | --- | --- | --- | --- |
-      | 100 | 44.3 µs | 35.8 µs (−19%) | 36.7 µs (−17%) | 47.1 µs (+6%) |
-      | 1,000 | 327 µs | 200 µs (−39%) | 225 µs (−31%) | 369 µs (+13%) |
-      | 10,000 | 3.39 ms | 2.46 ms (−27%) | 2.53 ms (−25%) | 4.40 ms (+30%) |
+      | 100 | 42.5 µs | 30.1 µs (−29%) | 30.6 µs (−28%) | 43.8 µs (+0%) |
+      | 1,000 | 322 µs | 162 µs (−50%) | 168 µs (−48%) | 318 µs (−1%) |
+      | 10,000 | 3.13 ms | 1.55 ms (−50%) | 1.68 ms (−46%) | 3.41 ms (+8%) |
 
-      So a frame that keeps its places is a net saving of a quarter to two
-      fifths even after paying to keep and compare it, and an all-changed frame
-      still pays 6–30%. What is left in a replayed frame is text preparation
-      and the upload (Phases 4 and 5), so the saving grows with them. Break
-      even, from these numbers: about 1 reusable frame in 4 at 1,000 cells,
-      about 1 in 2 at 10,000, the difference being the text copy.
+      A frame that keeps its places costs about half what a recompute does, and
+      an all-moved frame pays nothing to 8%. What is left in a replayed frame
+      is text preparation and the upload (Phases 4 and 5), so the saving grows
+      with them. The +8% at 10,000 is unexplained: it does not shrink when the
+      rest between comparisons is raised from 16 to 200 frames, so it is not
+      the cost of keeping a frame, and no per-frame work in the resting path
+      accounts for it. Repeat it on a quiet machine before relying on it.
+- [x] **Phase 1 follow-up — the cost of keeping and comparing a frame**, which the
+      Phase 2 saving justified lowering. Two changes, no API change:
+      *incremental keep* (the compare already says which records changed, so
+      only those are copied: a list that is the last one again copies nothing)
+      and *rest after a give-up* (a list in which most records move is not kept
+      or compared on the next 1, 2, 4 … up to 16 frames, so it pays for the
+      comparison on one frame in a few; a list that settles is compared again
+      within 16 frames and a kept one, 18 at most). Keeping a frame cost 29–33%
+      before; the all-moved column above is what is left. Checked by the
+      headless oracle asserting after every keep that the kept frame compares
+      identical to the list (mutated: copying only `Place` records fails five
+      tests), and a test of the rest and the resume. `RenderStats::lists_skipped`
+      counts rests. `benches/frame_compare.rs` has the `recompute_alternating`
+      baseline.
 
 ### Outstanding
 
-- [ ] **Phase 1 — bring the keep cost inside the budget** before the comparison
-      is on by default. Phase 2 measured the saving it buys (above), so the
-      cost is now worth lowering; options in "Cost of keeping a frame" below.
+- [ ] **Turn the comparison on by default.** Waits for the +8% at 10,000 cells
+      above to be explained on a quiet machine, and for Phase 3 to have something
+      more to reuse.
 - [ ] **Phase 3 — reuse draw boxes** for units whose records are unchanged.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
       (`scroll`, `para`) hits too; plus pointer-identity layout hits.
@@ -272,6 +290,9 @@ in full. Whether the stage-wise answers can be had for less than recompute is
 measured in Phase 0, not assumed: 100 cells costs 0.07 ms in total.
 
 ### Cost of keeping a frame
+
+*Update, Phase 2: options 3 and the incremental form of 1 were built; see Done.
+What follows is the reasoning at the time.*
 
 Measured in Phase 1: keeping a frame is nearly the whole cost of the comparison
 (see the table in Done), and it is the copy of the text blocks. A fully reused

@@ -429,7 +429,10 @@ pub struct RenderStats {
     /// Lists compared with the frame kept for their place in the render call
     /// (see [`UiRenderer::set_frame_comparison`]).
     pub lists_compared: usize,
-    /// Of those, lists that were the last frame's again to the byte.
+    /// Lists not compared this frame, to save the cost of comparing a list in
+    /// which most records moved.
+    pub lists_skipped: usize,
+    /// Of those compared, lists that were the last frame's again to the byte.
     pub lists_identical: usize,
     /// Of those, lists in which nothing moved, resized or changed family:
     /// at most colours differ.
@@ -1460,8 +1463,20 @@ impl UiRenderer {
             }
         }
         let snapshot = &mut self.snapshots[slot];
+        if snapshot.resting() {
+            self.frame_stats.lists_skipped += 1;
+            return Some(PlanSlot {
+                index: slot,
+                keeps_places: false,
+            });
+        }
         let diff = snapshot.compare(draw_list, &context);
-        snapshot.keep(draw_list, &context);
+        // A list that is given up on is not kept: the next ones rest.
+        if diff.abandoned {
+            snapshot.forget();
+        } else {
+            snapshot.keep(draw_list, &context);
+        }
         let stats = &mut self.frame_stats;
         stats.lists_compared += usize::from(diff.compared);
         stats.lists_identical += usize::from(diff.identical());

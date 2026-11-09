@@ -122,6 +122,12 @@ impl Oracle {
         };
         let diff = self.snapshot.compare(list, &context);
         self.snapshot.keep(list, &context);
+        // What is kept is the list, however little of it was copied.
+        let again = self.snapshot.compare(list, &context);
+        assert!(
+            again.identical(),
+            "the kept frame is not the list: {again:?}"
+        );
         self.kept.plan(list, target, &mut self.kept_plan);
         self.kept_plan.check();
         self.kept_draws
@@ -674,4 +680,59 @@ fn a_frame_that_moved_everywhere_is_given_up_part_way() {
     }
     let d = oracle.step(&draw_cells(&oracle, &cells), &t).diff;
     assert!(d.abandoned && d.same >= 100, "{d:?}");
+}
+
+/// A list that keeps moving everywhere is compared on fewer and fewer frames,
+/// and one that settles is compared again within a few.
+#[test]
+fn a_list_that_keeps_moving_rests_between_comparisons_and_one_that_settles_resumes() {
+    let t = target();
+    let context = ContextKey {
+        grid: Lists::grid(&t),
+        viewport: t.size,
+        fonts: 0,
+        resolution: 0,
+    };
+    let oracle = Oracle::new();
+    let mut rng = Rng(8);
+    let mut cells: Vec<Cell> = (0..200)
+        .map(|_| random_cell(&mut rng, Kind::Chrome))
+        .collect();
+    let mut snapshot = FrameSnapshot::default();
+    // The renderer's protocol: rest, or compare and then keep unless given up.
+    let frame = |snapshot: &mut FrameSnapshot, cells: &[Cell]| {
+        let list = draw_cells(&oracle, cells);
+        if snapshot.resting() {
+            return None;
+        }
+        let diff = snapshot.compare(&list, &context);
+        if diff.abandoned {
+            snapshot.forget();
+        } else {
+            snapshot.keep(&list, &context);
+        }
+        Some(diff)
+    };
+    let mut compared = 0;
+    for _ in 0..60 {
+        for cell in &mut cells {
+            cell.rect.x += 1.0;
+        }
+        compared += frame(&mut snapshot, &cells).is_some_and(|d| d.compared) as usize;
+    }
+    assert!(
+        (3..=9).contains(&compared),
+        "{compared} of 60 frames compared"
+    );
+    // Now nothing moves: reuse is back within the longest rest and a frame to
+    // keep one.
+    let mut first_identical = None;
+    for n in 0..40 {
+        if frame(&mut snapshot, &cells).is_some_and(|d| d.identical()) {
+            first_identical = Some(n);
+            break;
+        }
+    }
+    let n = first_identical.expect("never compared the settled list");
+    assert!(n <= 20, "reuse resumed after {n} frames");
 }
