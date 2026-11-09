@@ -23,6 +23,9 @@
 //! buffer until the submission completes — around a thousand passes in one
 //! submission exhausted the queue and hung the frame.
 
+#[cfg(all(test, feature = "bundled-font"))]
+#[path = "append_oracle.rs"]
+mod append_oracle;
 mod atlas;
 mod batch_draws;
 mod blur;

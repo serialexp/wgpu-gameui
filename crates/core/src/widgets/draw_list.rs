@@ -802,6 +802,102 @@ impl DrawList {
         self.next_repaint = None;
     }
 
+    /// Add everything `other` recorded after what this list holds, so that
+    /// the result is the list one set of calls would have recorded: `other`'s
+    /// calls made on this list after its own. Every record array is extended,
+    /// soup indices and paint-run ranges are offset, and runs of one family
+    /// that meet are merged as recording merges them.
+    ///
+    /// This is how a recorded piece of a frame is drawn again without drawing
+    /// it: record it once into its own list, then append that list to each
+    /// frame's that shows it unchanged (a retained subtree, a panel that did
+    /// not change).
+    ///
+    /// `other`'s records are copied as they are, so it must have been
+    /// recorded in this list's space: this list's transform, clip and tint
+    /// stacks are not applied to them. Its debug scopes are not copied, and
+    /// neither is anything a text highlight would add now, since the
+    /// highlight was painted (or not) when `other` was recorded. Its repaint
+    /// request is kept: the earlier of the two wins.
+    pub fn append(&mut self, other: &DrawList) {
+        // `other`'s first command flushed whatever soup came before it, which
+        // here includes this list's own trailing soup. Soup `other` recorded
+        // with no command after it stays the trailing run, as it would have.
+        if !other.paint_cmds.is_empty() {
+            self.flush_soup();
+        }
+        let vertex_base = self.vertices.len() as u32;
+        let index_base = self.indices.len() as u32;
+        let analytic_base = self.analytic_instances.len() as u32;
+        let circle_base = self.circle_instances.len() as u32;
+        let nine_slice_base = self.nine_slices.len() as u32;
+        let icon_base = self.icons.len() as u32;
+        #[cfg(feature = "phosphor-icons")]
+        let icon_msdf_base = self.icons_msdf.len() as u32;
+        let text_base = self.texts.len() as u32;
+
+        self.vertices.extend_from_slice(&other.vertices);
+        self.indices
+            .extend(other.indices.iter().map(|index| index + vertex_base));
+        self.analytic_instances
+            .extend_from_slice(&other.analytic_instances);
+        self.analytic_chrome_count += other.analytic_chrome_count;
+        self.analytic_shadow_count += other.analytic_shadow_count;
+        self.analytic_stripe_count += other.analytic_stripe_count;
+        self.analytic_segment_count += other.analytic_segment_count;
+        self.circle_instances
+            .extend_from_slice(&other.circle_instances);
+        self.nine_slices.extend_from_slice(&other.nine_slices);
+        self.icons.extend_from_slice(&other.icons);
+        #[cfg(feature = "phosphor-icons")]
+        self.icons_msdf.extend_from_slice(&other.icons_msdf);
+        self.texts.extend_from_slice(&other.texts);
+        self.selectable.extend(
+            other
+                .selectable
+                .iter()
+                .map(|&(key, index)| (key, index + text_base)),
+        );
+        self.viewport_clips.extend_from_slice(&other.viewport_clips);
+        self.dropped_degenerate += other.dropped_degenerate;
+        if let Some(seconds) = other.next_repaint {
+            self.repaint_after(seconds);
+        }
+
+        if other.paint_cmds.is_empty() {
+            return;
+        }
+        let offset = |range: &std::ops::Range<u32>, base: u32| range.start + base..range.end + base;
+        for cmd in &other.paint_cmds {
+            let cmd = match cmd {
+                PaintCmd::Soup { indices } => PaintCmd::Soup {
+                    indices: offset(indices, index_base),
+                },
+                PaintCmd::Analytic { instances } => PaintCmd::Analytic {
+                    instances: offset(instances, analytic_base),
+                },
+                PaintCmd::Circle { instances } => PaintCmd::Circle {
+                    instances: offset(instances, circle_base),
+                },
+                PaintCmd::NineSlice { draws } => PaintCmd::NineSlice {
+                    draws: offset(draws, nine_slice_base),
+                },
+                PaintCmd::Icon { draws } => PaintCmd::Icon {
+                    draws: offset(draws, icon_base),
+                },
+                #[cfg(feature = "phosphor-icons")]
+                PaintCmd::IconMsdf { draws } => PaintCmd::IconMsdf {
+                    draws: offset(draws, icon_msdf_base),
+                },
+                PaintCmd::Text { draws } => PaintCmd::Text {
+                    draws: offset(draws, text_base),
+                },
+            };
+            self.push_paint_cmd(cmd);
+        }
+        self.soup_committed_indices = index_base + other.soup_committed_indices;
+    }
+
     /// What was just drawn changes on its own `seconds` from now (a spinner's
     /// next step, a clock's next second, a scroll still gliding): a host that
     /// only builds frames when something changed builds one by then. The
