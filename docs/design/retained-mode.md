@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 2 landed (`DrawList::append`, `append_translated`, signals; 2026-11-10); Phases 3 to 6 outstanding. A prototype.
+Status: partial — Phases 0 to 3 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing; 2026-11-10); Phases 4 to 6 outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-10
 
@@ -51,17 +51,45 @@ Tick items as they land.
       back pointers left stale, with "check" run as "dirty", and with the check
       walk skipped.
 
+- [x] **Core: canonical empty clips** (Bart, 2026-11-10; follow-up under
+      `append_translated`). `DrawList::difference` names the first record two
+      lists differ in, for the oracles (`656d39f`, `f8613e8`).
+- [x] **Phase 3 — the tree, layout and drawing.** `crates/retained`: `ui.rs`
+      (the tree, props bound or set, the frame, counters), `node.rs` (`Spec`,
+      `Size`, `Stack`, `Look`, `Text`, `Painter`), `layout.rs` (stack layout with
+      snapped edges, fill shares from fractional cursors, absolute children,
+      scroll containers with clamped offsets, layout dirt stopping at a node
+      whose size does not follow its content), `paint.rs` (a list per node with
+      children in local coordinates, placed with `append_translated`; culling by
+      binary search over the stack, widened by the children's paint reach;
+      paint marks stopping at a node marked this frame), `own_drawing.rs`.
+      External context (fonts generation, scale, viewport), clocked repaint
+      deadlines, volatile painters, work counters (`FrameStats`, `TreeStats`).
+      33 tests: each layout rule, dirt, counted frames (an unchanged frame does
+      nothing; one cell of a 10×10 grid records 4 lists; scrolling examines the
+      rows in view), shadows reaching into a clip from either side, culled nodes
+      already out of date, painters by value, clock and volatility, removal
+      disposal, a font change, an emptied scroll container, and the oracles:
+      40 random trees × 30 random changes (sets, adds, removes, scrolls, offsets,
+      viewports, a moving clock, clocked and volatile painters), each frame
+      against the tree drawn from nothing and laid out from nothing. At 10,000
+      rows a change in view costs 4 nodes visited, 3 lists recorded and the 20
+      rows in view examined (counted); timings print from an ignored test
+      (release, this machine: 57 µs per frame with a row changed, 3.4 µs per
+      scrolled frame, 11 ns unchanged, 45 ms to build). Checked to fail under
+      ten mutations (paint marks stopping at stale nodes or never resetting,
+      either side of the search unwidened, a clip's children's reach not
+      refreshed, layout dirt not walking up, the cached layout entering clean
+      children, deadlines or volatility ignored, absolute children left out of
+      the paint reach).
+
 ### Outstanding
 
-- [ ] **Phase 3 — the tree, layout and drawing.** `crates/retained`: nodes, props,
-      stack layout with snapped positions, scroll containers, per-container cached
-      lists in local coordinates replayed with `append_translated`, culling and hit
-      search by binary search in stacks, external context (fonts, scale), clocked
-      repaint deadlines, work counters. Oracle: every frame equals the same tree
-      drawn from nothing with the same culling.
-- [ ] **Phase 4 — pointer input.** Hit testing, hover and press as signals,
-      clicks, wheel scrolling, hover kept current after layout, press
-      cancellation.
+- [ ] **Phase 4 — pointer input.** Hit testing (binary search in stacks), hover
+      and press as signals, clicks, wheel scrolling, hover kept current after
+      layout, press cancellation.
+- [ ] **Icon content.** Phase 3 built text and custom painters; `Icon` is not
+      a content kind yet.
 - [ ] **Phase 5 — comparison.** `ui-compare-gameui-retained`: the grid scenes
       (`static`, `animated`, `one`) and a new `rows` scene (thousands of
       fixed-height rows in a scrolling column, one value changing; scrolling;
@@ -150,6 +178,7 @@ depending on `crates/core` by path. Core gains `DrawList::append`,
 | `node.rs` | `Node`, its props (`Prop<T>`), decoration and content kinds |
 | `layout.rs` | measure and arrange, with per-node cached sizes |
 | `paint.rs` | recording a node, the caches, replay, culling |
+| `own_drawing.rs` | a node's own drawing: shadow, box, text, painter |
 | `input.rs` | hit testing, hover and press signals, handlers, wheel |
 | `ui.rs` | `Ui`: the tree, the frame, the context, counters |
 
@@ -181,6 +210,13 @@ at the record's own clip origin, which is exact when `other` pushed one level of
 clip and otherwise differs only in the origin of a clip that shows nothing. Run
 merging and ranges are rebuilt as recording builds them, since a dropped shadow
 can split or join runs. A repaint request is copied as `append` copies it.
+
+Follow-up (Bart, 2026-11-10): the tree's frame oracle met that difference, so
+core now stores every clip that shows nothing as `Rect(0, 0, 0, 0)`, in
+`push_clip` and in placement alike, and placement keeps a record's clip as it is
+(not recomputed) when there is no outer clip. Placing is then exact for nested
+clips too, and the core oracle generates nested clips and random outer clips.
+`is_in_clip_region` is false inside a clip that shows nothing.
 
 ## Signals
 
@@ -239,6 +275,13 @@ can split or join runs. A repaint request is copied as `append` copies it.
   never replayed: a custom painter that says it is (time, external state), and
   any node that uses a screen-space clip (non-goals).
 
+Follow-up (Phase 3, 2026-11-10): a setter on a prop that is bound to a memo
+panics rather than replacing the binding; a bound prop is changed through what
+it reads. Removing a node costs O(its siblings) (its parent's child vector).
+A volatile painter is counted in each ancestor's `volatile_below`, and a list
+with any below it is recorded every frame; that counter is the only mechanism
+(an earlier per-frame paint mark of each volatile node did the same work twice).
+
 ## Layout
 
 - Sizes come from constraints: a parent gives each child the space available on
@@ -268,6 +311,15 @@ can split or join runs. A repaint request is copied as `append` copies it.
   the scale and the viewport. A new font generation marks every text node measure
   and paint dirty; a new viewport marks the root measure dirty. Every list the
   tree keeps shares the renderer's font system.
+
+Follow-up (Phase 3, 2026-11-10): as built, `Fill` in a parent whose size on that
+axis is not yet known (a `Hug` parent) is `Hug`, on both axes, not only the
+main one. Measure dirt stops at a node whose size does not follow its content
+(`Fixed`, or `Fill` given an exact size), which is wider than `Fixed` on both
+axes. A gap below 0 is 0. Scrolling is along the stack's main axis only.
+Absolute children are drawn after the stacked ones. The scale is part of the
+context: a new scale measures and draws every text again, as a new font
+generation does.
 
 ## Drawing and the cache
 
@@ -308,6 +360,13 @@ the node, so a cache recorded long ago never carries a stale relative time. When
 it comes the node is paint-dirty; removing the node drops it. A node culled out of
 view keeps its deadline but is not drawn until it is in view. The root list's
 `next_repaint` is the earliest deadline in view, relative to `now`.
+
+Follow-up (Phase 3, 2026-11-10): a clip encloses children, so a node with
+none draws none, including a scroll container whose last child went (it is
+then drawn into its parent's list as a leaf). Paint marks walk up to the first
+node already marked in the same frame, not to the first stale one: a culled
+node stays stale, and stopping there would keep a later change from reaching
+the lists above it.
 
 ## Pointer input
 
