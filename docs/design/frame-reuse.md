@@ -147,12 +147,46 @@ Tick items as they land.
       counts rests. `benches/frame_compare.rs` has the `recompute_alternating`
       baseline.
 
+- [x] **Phase 3 — reuse draw boxes** (`DrawPlan::build` takes the comparison's
+      `Changes`). In a frame where something moved, a unit whose record is
+      `Same` or `Look` takes its boxes from the plan before this one instead of
+      computing them; only the units that moved are boxed. `boxes_reused`
+      counts them and `boxes_computed` now counts only boxes computed. The plan
+      keeps the last plan's boxes beside its own. Two things found while
+      building it, both by the oracle rather than by thought: paint indices
+      cannot be the key, because a text block gaining a shadow regroups its
+      command and shifts every later unit's paint index; units that are not text
+      are therefore found by their place among such units (a regroup leaves
+      them alone) and a text unit by its first block, and only when the same
+      blocks make up the unit. Checked by the headless oracle (every step plans
+      with reuse and is compared, boxes included, with a plan made from nothing;
+      mutated: reusing the boxes of moved units fails five tests), a test that
+      moving one unit of each kind computes at most two boxes, and the GPU
+      oracle comparing pixels for frames in which a few units moved.
+      Measured by cycles and instructions (`perf stat`, user mode; wall clock was
+      useless with the machine at a load of 25–50), 1 text block moving in a
+      list of cells with a label each, comparison on against off:
+
+      | cells | instructions | cycles |
+      | --- | --- | --- |
+      | 1,000 | −12% | −18% |
+      | 10,000 | −11% | −7% to −12% |
+
+      and the same list repeated (Phase 2's replay): −60% / −61% instructions,
+      −51% / −54% cycles. Boxes are a small part of a frame: of the text
+      case's profile, `draw_box::msdf` and `analytic` are about a tenth, and
+      what remains after them is ordering (`DrawOrder::add`, `store`, the sort:
+      a quarter), text placement (`append_placements`, a sixth) and the
+      comparison itself (`text_change`, `compare`, the byte compares: about a
+      tenth), so Phase 3's saving on a partly changed frame is a tenth less the
+      comparison's cost. The next savings are in text (Phase 4) and ordering
+      (Phase 6).
+
 ### Outstanding
 
 - [ ] **Turn the comparison on by default.** Waits for the +8% at 10,000 cells
       above to be explained on a quiet machine, and for Phase 3 to have something
       more to reuse.
-- [ ] **Phase 3 — reuse draw boxes** for units whose records are unchanged.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
       (`scroll`, `para`) hits too; plus pointer-identity layout hits.
 - [ ] **Phase 5 — retained GPU storage**, then partial upload and replay on top.

@@ -90,6 +90,18 @@ impl Lists {
     /// Prepare `list`'s text and icons as the renderer does for `target`, and
     /// plan it.
     pub(crate) fn plan(&mut self, list: &DrawList, target: &Target, plan: &mut DrawPlan) {
+        self.plan_reusing(list, target, plan, None);
+    }
+
+    /// [`plan`](Self::plan), taking the boxes of units `changes` says did not
+    /// move from the plan `plan` last built.
+    pub(crate) fn plan_reusing(
+        &mut self,
+        list: &DrawList,
+        target: &Target,
+        plan: &mut DrawPlan,
+        changes: Option<&crate::render::frame_diff::Changes>,
+    ) {
         let grid = Self::grid(target);
         let commands = list.paint_cmds.iter().filter_map(|cmd| match cmd {
             PaintCmd::Text { draws } => Some(draws.clone()),
@@ -99,6 +111,6 @@ impl Lists {
             .prepare_texts(&mut self.prepared, grid, &list.texts, commands);
         #[cfg(feature = "phosphor-icons")]
         self.cpu.prepare_icons(&mut self.prepared, &list.icons_msdf);
-        plan.build(list, target, &self.prepared, &self.textures);
+        plan.build(list, target, &self.prepared, &self.textures, changes);
     }
 }

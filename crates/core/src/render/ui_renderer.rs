@@ -67,6 +67,9 @@ const ARENA_SANITY_CAP: u64 = 64 * 1024 * 1024;
 struct PlanSlot {
     index: usize,
     keeps_places: bool,
+    /// The list was compared with the last one, record for record, so units
+    /// that did not move can take their boxes from the last plan.
+    answered: bool,
 }
 
 fn frame_arena_within_cap(bytes: u64) -> bool {
@@ -426,6 +429,9 @@ pub struct RenderStats {
     pub text_instances_built: usize,
     /// Draw boxes computed for units, culled ones included.
     pub boxes_computed: u64,
+    /// Draw boxes taken from the last frame's plan instead of computed, for
+    /// units whose records did not move (with the frame comparison on).
+    pub boxes_reused: u64,
     /// Lists compared with the frame kept for their place in the render call
     /// (see [`UiRenderer::set_frame_comparison`]).
     pub lists_compared: usize,
@@ -1468,6 +1474,7 @@ impl UiRenderer {
             return Some(PlanSlot {
                 index: slot,
                 keeps_places: false,
+                answered: false,
             });
         }
         let diff = snapshot.compare(draw_list, &context);
@@ -1488,6 +1495,7 @@ impl UiRenderer {
         Some(PlanSlot {
             index: slot,
             keeps_places: diff.keeps_places(),
+            answered: diff.answered(),
         })
     }
 
@@ -2054,7 +2062,12 @@ impl UiRenderer {
             if paint_order {
                 plan.build_paint_order(draw_list, prepared, &resolver);
             } else {
-                plan.build(draw_list, &self.pass_target, prepared, &resolver);
+                // What did not move takes its boxes from the last plan of this
+                // place, which is the plan of the list it was compared with.
+                let changes = slot
+                    .filter(|slot| slot.answered && self.plan_current[slot.index])
+                    .map(|slot| &self.snapshots[slot.index].changes);
+                plan.build(draw_list, &self.pass_target, prepared, &resolver, changes);
                 #[cfg(feature = "paint-order-oracle")]
                 plan.check();
             }
@@ -2066,6 +2079,7 @@ impl UiRenderer {
             self.frame_stats.order_overlap_tests += order.overlap_tests;
             self.frame_stats.order_cell_visits += order.cell_visits;
             self.frame_stats.boxes_computed += plan.boxes_computed();
+            self.frame_stats.boxes_reused += plan.boxes_reused();
         }
         self.batch_draws.fill(plan, draw_list, prepared);
         // Soup recorded after the last paint command, or appended to the

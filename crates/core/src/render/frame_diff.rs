@@ -77,11 +77,14 @@ impl FrameDiff {
     /// instance counts) would come out as it did, though instance bytes may
     /// differ.
     pub(crate) fn keeps_places(&self) -> bool {
-        self.compared
-            && self.context_same
-            && self.topology_same
-            && !self.abandoned
-            && self.place == 0
+        self.answered() && self.place == 0
+    }
+
+    /// Every record was compared one for one on the same target, so
+    /// [`Changes`] says for each whether it moved, and what the last frame
+    /// derived from the ones that did not (their boxes) still holds.
+    pub(crate) fn answered(&self) -> bool {
+        self.compared && self.context_same && self.topology_same && !self.abandoned
     }
 }
 

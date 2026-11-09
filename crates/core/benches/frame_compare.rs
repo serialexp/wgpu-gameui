@@ -162,6 +162,25 @@ fn bench(c: &mut Criterion) {
             })
         });
         device.poll(wgpu::Maintain::Wait);
+        // And with one text block moving, which is where boxes are reused.
+        group.bench_with_input(
+            BenchmarkId::new("recompute_alternating_one_moved", n),
+            &n,
+            |b, _| {
+                let ui = gpu.renderer();
+                let mut flip = false;
+                b.iter(|| {
+                    flip = !flip;
+                    let list = if flip { &one_moved } else { &before };
+                    ui.begin_frame();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, list);
+                    queue.submit(Some(encoder.finish()));
+                    device.poll(wgpu::Maintain::Poll);
+                })
+            },
+        );
+        device.poll(wgpu::Maintain::Wait);
         // The renderer with its frame comparison on, which compares the list
         // with the last one, keeps it, and (until a later phase consumes the
         // result) recomputes regardless. The extra over `recompute` is the
@@ -170,6 +189,7 @@ fn bench(c: &mut Criterion) {
             ("with_comparison_identical", &identical),
             ("with_comparison_colour_only", &colour_only),
             ("with_comparison_all_moved", &all_moved),
+            ("with_comparison_one_moved", &one_moved),
         ] {
             group.bench_with_input(BenchmarkId::new(name, n), &n, |b, _| {
                 let ui = gpu.renderer();

@@ -69,6 +69,7 @@ impl Fingerprint {
 pub(crate) struct Work {
     pub(crate) text: PrepareWork,
     pub(crate) boxes_computed: u64,
+    pub(crate) boxes_reused: u64,
     pub(crate) units: usize,
     /// How the list differed from the frame before, as `FrameSnapshot` saw it.
     pub(crate) diff: FrameDiff,
@@ -121,6 +122,12 @@ impl Oracle {
             resolution: 0,
         };
         let diff = self.snapshot.compare(list, &context);
+        // Units that did not move take their boxes from the last plan, which
+        // is the plan of the list this one was compared with. The fresh plan
+        // below computes every box, and the two must agree on all of them.
+        let changes = diff.answered().then_some(&self.snapshot.changes);
+        self.kept
+            .plan_reusing(list, target, &mut self.kept_plan, changes);
         self.snapshot.keep(list, &context);
         // What is kept is the list, however little of it was copied.
         let again = self.snapshot.compare(list, &context);
@@ -128,7 +135,6 @@ impl Oracle {
             again.identical(),
             "the kept frame is not the list: {again:?}"
         );
-        self.kept.plan(list, target, &mut self.kept_plan);
         self.kept_plan.check();
         self.kept_draws
             .fill(&self.kept_plan, list, &self.kept.prepared);
@@ -136,6 +142,7 @@ impl Oracle {
         let work = Work {
             text: self.kept.prepared.work,
             boxes_computed: self.kept_plan.boxes_computed(),
+            boxes_reused: self.kept_plan.boxes_reused(),
             units: self.kept_plan.units().len(),
             diff,
         };
@@ -524,6 +531,7 @@ fn change_anything(rng: &mut Rng, cell: &mut Cell) {
 fn what_the_comparison_promises_holds_over_random_changes() {
     let t = target();
     let (mut identical, mut keeps, mut moved, mut reshaped, mut frames) = (0, 0, 0, 0, 0);
+    let (mut reused, mut computed) = (0, 0);
     for seed in 0..6u64 {
         let mut rng = Rng(100 + seed);
         let mut oracle = Oracle::new();
@@ -556,7 +564,10 @@ fn what_the_comparison_promises_holds_over_random_changes() {
                 }
             }
             let list = draw_cells(&oracle, &cells);
-            let diff = oracle.step(&list, &t).diff;
+            let work = oracle.step(&list, &t);
+            let diff = work.diff;
+            reused += work.boxes_reused;
+            computed += work.boxes_computed;
             frames += 1;
             identical += usize::from(diff.identical());
             keeps += usize::from(diff.keeps_places() && !diff.identical());
@@ -569,6 +580,12 @@ fn what_the_comparison_promises_holds_over_random_changes() {
     assert!(keeps > 20, "{keeps} kept their places of {frames}");
     assert!(moved > 20, "{moved} moved of {frames}");
     assert!(reshaped > 20, "{reshaped} changed shape of {frames}");
+    // Boxes were taken from the last plan on the frames that allowed it, and
+    // still computed for the units that moved.
+    assert!(
+        reused > 1000 && computed > 1000,
+        "{reused} reused, {computed} computed"
+    );
 }
 
 /// The other half: a colour is a look in every family, so the plan is kept.
@@ -735,4 +752,42 @@ fn a_list_that_keeps_moving_rests_between_comparisons_and_one_that_settles_resum
     }
     let n = first_identical.expect("never compared the settled list");
     assert!(n <= 20, "reuse resumed after {n} frames");
+}
+
+/// One cell moves among many: only its box is computed, and the plan is as a
+/// plan of everything from nothing makes it (the oracle checks that on every
+/// step).
+#[test]
+fn a_frame_in_which_one_unit_moved_takes_every_other_box_from_the_last() {
+    let t = target();
+    let mut oracle = Oracle::new();
+    let mut rng = Rng(31);
+    let mut cells: Vec<Cell> = (0..60)
+        .map(|i| random_cell(&mut rng, KINDS[i % KINDS.len()]))
+        .collect();
+    for cell in &mut cells {
+        cell.clip = None;
+    }
+    let first = oracle.step(&draw_cells(&oracle, &cells), &t);
+    assert_eq!(first.boxes_reused, 0, "nothing to take them from");
+    let units = first.boxes_computed;
+    // One of each kind moves in turn.
+    for i in 0..KINDS.len() {
+        cells[i].rect.x += 5.0;
+        let work = oracle.step(&draw_cells(&oracle, &cells), &t);
+        assert!(work.diff.compared && work.diff.place >= 1);
+        assert_eq!(
+            work.boxes_computed + work.boxes_reused,
+            units,
+            "{:?}",
+            work.diff
+        );
+        assert!(
+            work.boxes_computed <= 2 && work.boxes_reused >= units - 2,
+            "moving a {:?}: {} computed, {} reused of {units}",
+            KINDS[i],
+            work.boxes_computed,
+            work.boxes_reused
+        );
+    }
 }

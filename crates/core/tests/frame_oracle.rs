@@ -619,3 +619,44 @@ fn a_frame_drawn_from_a_kept_plan_looks_as_a_fresh_one_does() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert_eq!(replayed, [0, 1, 1, 1, 0, 1, 1], "plans replayed per frame");
 }
+
+/// A scene in which two units move and the rest stay: the boxes of the rest
+/// are taken from the last frame's plan.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_frame_in_which_a_few_units_moved_looks_as_a_fresh_one_does() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    let mut failures = Vec::new();
+    let mut reused = Vec::new();
+    for n in 0..6usize {
+        let mut list = run.list();
+        scene(&mut list, &run.art, None, 0);
+        let slide = n as f32 * 7.0;
+        list.chrome_rect(
+            Rect::new(10.0 + slide, 130.0, 40.0, 20.0),
+            3.0,
+            1.0,
+            [0.7, 0.2, 0.2, 1.0],
+            [1.0; 4],
+        );
+        list.text(TextBlock::new("Moving", 60.0 + slide, 132.0).with_size(14.0));
+        check(
+            &mut run,
+            &list,
+            1.0,
+            Tolerance::AtlasSampling,
+            &format!("step {n}"),
+            &mut failures,
+        );
+        let stats = run.gpu.renderer().frame_stats();
+        reused.push((stats.boxes_reused, stats.boxes_computed));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(reused[0].0, 0, "nothing to take boxes from the first frame");
+    for (n, (taken, computed)) in reused.iter().enumerate().skip(1) {
+        assert!(
+            *taken >= 8 && *computed <= 3,
+            "step {n}: {taken} boxes reused, {computed} computed"
+        );
+    }
+}

@@ -12,6 +12,7 @@ use std::ops::Range;
 
 use super::draw_box::{self, PixelBox, Target};
 use super::draw_order::{BatchKey, DrawOrder, OrderStats};
+use super::frame_diff::{Change, Changes};
 use super::textures::{Binding, Resolved};
 use crate::text::MsdfPrepared;
 use crate::widgets::{DrawList, IconDraw, NineSliceDraw, PaintCmd};
@@ -116,6 +117,30 @@ pub(crate) struct DrawPlan {
     /// Boxes handed to ordering since [`begin`](Self::begin): the draw-box
     /// work of the plan.
     boxes_computed: u64,
+    /// Boxes taken from the last plan instead (see [`build`](Self::build)).
+    boxes_reused: u64,
+    /// Whether the unit being planned took its boxes from the last plan.
+    unit_reused: bool,
+    /// Every unit's boxes, one after another, culled ones included, so a unit
+    /// whose records did not change can take its boxes from the plan before
+    /// it (kept as `prev_*`). Looked up without paint indices, which shift
+    /// when text regroups: a unit that is not text by its place among such
+    /// units (`unit_ranges`, a range of `unit_boxes` each), a text unit by its
+    /// first block (`text_ranges`: a range of `unit_boxes` and its block count).
+    unit_boxes: Vec<PixelBox>,
+    unit_ranges: Vec<[u32; 2]>,
+    text_ranges: Vec<[u32; 3]>,
+    prev_boxes: Vec<PixelBox>,
+    prev_ranges: Vec<[u32; 2]>,
+    prev_text_ranges: Vec<[u32; 3]>,
+    /// The next unit that is not text, among them.
+    next_other: u32,
+    /// The blocks of the text unit being planned, for [`add`](Self::add).
+    text_blocks: Option<Range<u32>>,
+    /// Whether `unit_boxes` / `prev_boxes` are those of a whole plan of a
+    /// list (not one planned in paint order, which has no boxes).
+    boxes_kept: bool,
+    prev_kept: bool,
     /// Every unit's key and boxes in paint order, culled ones included, kept
     /// for [`check`](Self::check) while checking is on.
     #[cfg(any(test, feature = "paint-order-oracle"))]
@@ -130,15 +155,24 @@ impl DrawPlan {
     /// Plan `list`'s paint stream onto `target`. `prepared` is its text and
     /// MSDF icons as prepared for that target, the text in one command per
     /// `Text` paint command, in paint order.
+    ///
+    /// The boxes of the units whose records `changes` says did not move are
+    /// taken from the plan before this one. That is sound only when `changes`
+    /// compares `list` with the list the last plan was built from, completely,
+    /// on the same target and with the same prepared text and sprites; the
+    /// frame comparison is what knows it (`docs/design/frame-reuse.md`,
+    /// Phase 3).
     pub(crate) fn build(
         &mut self,
         list: &DrawList,
         target: &Target,
         prepared: &MsdfPrepared,
         textures: &impl ResolveTextures,
+        changes: Option<&Changes>,
     ) {
         self.begin(target.size);
-        self.walk(list, Some(target), prepared, textures);
+        self.walk(list, Some(target), prepared, textures, changes);
+        self.boxes_kept = true;
         self.finish();
     }
 
@@ -156,34 +190,50 @@ impl DrawPlan {
     ) {
         self.begin((0, 0));
         self.paint_order = true;
-        self.walk(list, None, prepared, textures);
+        self.walk(list, None, prepared, textures, None);
     }
 
     /// Make a unit of every draw in `list`'s paint stream, in paint order,
-    /// boxed on `target` unless planning in paint order.
+    /// boxed on `target` unless planning in paint order. A unit whose records
+    /// `changes` calls the same or only recoloured takes its boxes from the
+    /// plan before this one.
     fn walk(
         &mut self,
         list: &DrawList,
         target: Option<&Target>,
         prepared: &MsdfPrepared,
         textures: &impl ResolveTextures,
+        changes: Option<&Changes>,
     ) {
+        // Only a plan with boxes has any to take.
+        let changes = changes.filter(|_| self.prev_kept && target.is_some());
+        let unmoved = |change: Option<&Change>| matches!(change, Some(Change::Same | Change::Look));
         let mut text_unit = 0;
+        let mut soup_command = 0;
         for (cmd, paint) in list.paint_cmds.iter().enumerate() {
             self.cmd = cmd as u32;
             match paint {
                 PaintCmd::Soup { indices } => {
                     if let Some(t) = target {
-                        let indices = &list.indices[indices.start as usize..indices.end as usize];
-                        self.boxes.push(draw_box::soup(t, &list.vertices, indices));
+                        let reused = changes.is_some_and(|c| unmoved(c.soup.get(soup_command)));
+                        if !(reused && self.reuse_boxes(None)) {
+                            let indices =
+                                &list.indices[indices.start as usize..indices.end as usize];
+                            self.boxes.push(draw_box::soup(t, &list.vertices, indices));
+                        }
                     }
+                    soup_command += 1;
                     self.add(Family::Soup.key(0), UnitRef::Soup { cmd: cmd as u32 });
                 }
                 PaintCmd::Analytic { instances } => {
                     for i in instances.clone() {
                         if let Some(t) = target {
-                            let record = &list.analytic_instances[i as usize];
-                            self.boxes.push(draw_box::analytic(t, record));
+                            let reused =
+                                changes.is_some_and(|c| unmoved(c.analytic.get(i as usize)));
+                            if !(reused && self.reuse_boxes(None)) {
+                                let record = &list.analytic_instances[i as usize];
+                                self.boxes.push(draw_box::analytic(t, record));
+                            }
                         }
                         self.add(Family::Analytic.key(0), UnitRef::Analytic(i));
                     }
@@ -191,8 +241,12 @@ impl DrawPlan {
                 PaintCmd::Circle { instances } => {
                     for i in instances.clone() {
                         if let Some(t) = target {
-                            let c = &list.circle_instances[i as usize];
-                            self.boxes.push(draw_box::circle(t, c));
+                            let reused =
+                                changes.is_some_and(|c| unmoved(c.circles.get(i as usize)));
+                            if !(reused && self.reuse_boxes(None)) {
+                                let c = &list.circle_instances[i as usize];
+                                self.boxes.push(draw_box::circle(t, c));
+                            }
                         }
                         self.add(Family::Circle.key(0), UnitRef::Circle(i));
                     }
@@ -210,7 +264,10 @@ impl DrawPlan {
                             Binding::Own(_) | Binding::Atlas(_) => Family::Sprite,
                         };
                         if let Some(t) = target {
-                            self.boxes.push(draw_box::icon(t, draw));
+                            let reused = changes.is_some_and(|c| unmoved(c.icons.get(i as usize)));
+                            if !(reused && self.reuse_boxes(None)) {
+                                self.boxes.push(draw_box::icon(t, draw));
+                            }
                         }
                         let unit = UnitRef::Sprite {
                             draw: i,
@@ -229,7 +286,11 @@ impl DrawPlan {
                             continue;
                         };
                         if let Some(t) = target {
-                            self.boxes.push(draw_box::nine_slice(t, draw));
+                            let reused =
+                                changes.is_some_and(|c| unmoved(c.nine_slices.get(i as usize)));
+                            if !(reused && self.reuse_boxes(None)) {
+                                self.boxes.push(draw_box::nine_slice(t, draw));
+                            }
                         }
                         let unit = UnitRef::NineSlice {
                             draw: i,
@@ -246,7 +307,11 @@ impl DrawPlan {
                         // An icon from an unregistered font has no vertices
                         // and its box is empty, so it isn't ordered.
                         if let Some(t) = target {
-                            self.boxes.push(draw_box::icon_msdf(t, prepared, i));
+                            let reused =
+                                changes.is_some_and(|c| unmoved(c.icons_msdf.get(i as usize)));
+                            if !(reused && self.reuse_boxes(None)) {
+                                self.boxes.push(draw_box::icon_msdf(t, prepared, i));
+                            }
                         }
                         self.add(Family::IconMsdf.key(0), UnitRef::IconMsdf(i));
                     }
@@ -259,17 +324,47 @@ impl DrawPlan {
                     {
                         debug_assert!(unit.blocks.start >= draws.start);
                         if let Some(t) = target {
-                            for block in unit.blocks.clone() {
-                                let b = draw_box::text_block(t, prepared, block as usize);
-                                self.boxes.push(b);
+                            let reused = changes.is_some_and(|c| {
+                                unit.blocks
+                                    .clone()
+                                    .all(|block| unmoved(c.texts.get(block as usize)))
+                            });
+                            if !(reused && self.reuse_boxes(Some(&unit.blocks))) {
+                                for block in unit.blocks.clone() {
+                                    let b = draw_box::text_block(t, prepared, block as usize);
+                                    self.boxes.push(b);
+                                }
                             }
                         }
+                        self.text_blocks = Some(unit.blocks.clone());
                         self.add(Family::Text.key(0), UnitRef::Text(text_unit as u32));
                         text_unit += 1;
                     }
                 }
             }
         }
+    }
+
+    /// Fill the boxes of the unit about to be added (a text unit, if `text`
+    /// has its blocks) from the plan before this one. `false`, with nothing
+    /// taken, when that plan has none for it.
+    fn reuse_boxes(&mut self, text: Option<&Range<u32>>) -> bool {
+        let found = match text {
+            None => self.prev_ranges.get(self.next_other as usize).copied(),
+            // The same blocks, as one unit: one box each.
+            Some(blocks) => self
+                .prev_text_ranges
+                .get(blocks.start as usize)
+                .filter(|r| r[2] == blocks.len() as u32 && r[1] - r[0] == r[2])
+                .map(|r| [r[0], r[1]]),
+        };
+        let Some([start, end]) = found else {
+            return false;
+        };
+        self.boxes
+            .extend_from_slice(&self.prev_boxes[start as usize..end as usize]);
+        self.unit_reused = true;
+        true
     }
 
     /// Start a plan on a target of `size` physical px.
@@ -284,6 +379,20 @@ impl DrawPlan {
         self.batch_cmd = 0;
         self.paint_order = false;
         self.boxes_computed = 0;
+        self.boxes_reused = 0;
+        self.unit_reused = false;
+        // This plan's boxes go where the last one's were, and the last one's
+        // become the ones to take from.
+        std::mem::swap(&mut self.unit_boxes, &mut self.prev_boxes);
+        std::mem::swap(&mut self.unit_ranges, &mut self.prev_ranges);
+        std::mem::swap(&mut self.text_ranges, &mut self.prev_text_ranges);
+        self.unit_boxes.clear();
+        self.unit_ranges.clear();
+        self.text_ranges.clear();
+        self.next_other = 0;
+        self.text_blocks = None;
+        self.prev_kept = self.boxes_kept;
+        self.boxes_kept = false;
         #[cfg(any(test, feature = "paint-order-oracle"))]
         if let Some(checked) = &mut self.checked {
             checked.clear();
@@ -322,7 +431,28 @@ impl DrawPlan {
             }
             return true;
         }
-        self.boxes_computed += self.boxes.len() as u64;
+        let start = self.unit_boxes.len() as u32;
+        self.unit_boxes.extend_from_slice(&self.boxes);
+        let end = self.unit_boxes.len() as u32;
+        match self.text_blocks.take() {
+            Some(blocks) => {
+                let first = blocks.start as usize;
+                if self.text_ranges.len() <= first {
+                    self.text_ranges.resize(first + 1, [0; 3]);
+                }
+                self.text_ranges[first] = [start, end, blocks.len() as u32];
+            }
+            None => {
+                self.unit_ranges.push([start, end]);
+                self.next_other += 1;
+            }
+        }
+        if self.unit_reused {
+            self.boxes_reused += self.boxes.len() as u64;
+        } else {
+            self.boxes_computed += self.boxes.len() as u64;
+        }
+        self.unit_reused = false;
         let order = self.order.add(key, &self.boxes);
         self.boxes.clear();
         let Some(order) = order else {
@@ -341,6 +471,10 @@ impl DrawPlan {
     /// nothing.
     fn skip(&mut self) {
         self.next_paint += 1;
+        if !self.paint_order {
+            self.unit_ranges.push([0, 0]);
+            self.next_other += 1;
+        }
         #[cfg(any(test, feature = "paint-order-oracle"))]
         if let Some(checked) = &mut self.checked {
             checked.push((BatchKey(0), Vec::new()));
@@ -394,6 +528,11 @@ impl DrawPlan {
     /// Boxes computed for the last plan's units, culled ones included.
     pub(crate) fn boxes_computed(&self) -> u64 {
         self.boxes_computed
+    }
+
+    /// Boxes the last plan took from the plan before it.
+    pub(crate) fn boxes_reused(&self) -> u64 {
+        self.boxes_reused
     }
 
     /// Keep every unit's key and boxes from the next plan on, and check each
