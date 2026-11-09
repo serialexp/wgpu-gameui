@@ -1,0 +1,11 @@
+[package]
+name = "wgpu-gameui-retained"
+version.workspace = true
+edition.workspace = true
+description = "A retained, signal-driven tree on top of wgpu-gameui's draw lists (prototype)"
+license.workspace = true
+repository.workspace = true
+# A prototype, to measure against immediate mode (docs/design/retained-mode.md).
+publish = false
+
+[dependencies]

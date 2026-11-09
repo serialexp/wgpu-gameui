@@ -1,7 +1,7 @@
 [workspace]
 # `designer/` is the theme designer, a binary built only from the library's
 # widgets.
-members = ["crates/core", "crates/media", "crates/code", "designer"]
+members = ["crates/core", "crates/media", "crates/code", "crates/retained", "designer"]
 resolver = "3"
 
 # Every crate is released together at one version (just-release bumps it here).

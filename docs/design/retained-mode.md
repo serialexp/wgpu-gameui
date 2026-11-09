@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 and 1 landed (`DrawList::append`, `append_translated`, 2026-11-10); Phases 2 to 6 outstanding. A prototype.
+Status: partial — Phases 0 to 2 landed (`DrawList::append`, `append_translated`, signals; 2026-11-10); Phases 3 to 6 outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-10
 
@@ -39,11 +39,20 @@ Tick items as they land.
 - [x] **Phase 1c — `append`'s repaint request documented as relative** to when
       `other` was recorded, with what a keeper of lists should do instead.
 
+- [x] **Phase 2 — signals.** `crates/retained/src/signal.rs`: a `Graph` of
+      signals and memos with mark-then-pull propagation, equality guards,
+      observers reported by key with a version per node, owners and disposal
+      with edges removed both ways in O(1) each, generations on handles, cycle
+      detection. 13 tests (laziness, equal writes, a diamond, propagation
+      stopped by an equal value, a branch switched in the same batch, sources
+      dropped, deduplicated reads past the scan limit, a cycle, disposal leaving
+      nothing, stale handles, disposing of what a live memo reads, 10,000 readers
+      of one signal removed one by one, slot reuse). Checked to fail with the
+      back pointers left stale, with "check" run as "dirty", and with the check
+      walk skipped.
+
 ### Outstanding
 
-- [ ] **Phase 2 — signals.** Signals and memos with mark-then-pull propagation
-      (no glitches with dynamic dependencies), equality guards, owners and
-      disposal with edges removed both ways, cycle detection.
 - [ ] **Phase 3 — the tree, layout and drawing.** `crates/retained`: nodes, props,
       stack layout with snapped positions, scroll containers, per-container cached
       lists in local coordinates replayed with `append_translated`, culling and hit
@@ -178,8 +187,9 @@ can split or join runs. A repaint request is copied as `append` copies it.
 - `ui.signal(value) -> Signal<T>` (a `Copy` handle: the graph's id, slot index,
   generation, type). `ui.set(signal, value)` stores it only if it differs
   (`T: PartialEq`); `ui.update(signal, |v| ..)` likewise.
-- `ui.memo(|r: &Reader| -> T) -> Memo<T>`: every `r.get(s)` inside it records `s`
-  (a signal or another memo) as a source. Sources are recorded again on every
+- `ui.memo(|r: &mut Reader| -> T) -> Memo<T>`: every `r.get(s)` inside it
+  records `s` (a signal or another memo) as a source; `r.untracked(s)` reads
+  without recording. A memo first runs when first read. Sources are recorded again on every
   run, so a memo that stops reading something (a branch not taken) stops
   depending on it.
 - **Propagation is mark, then pull.** A write marks the memos that read the signal
@@ -193,6 +203,12 @@ can split or join runs. A repaint request is copied as `append` copies it.
   frame. Reading a memo that is running (a cycle) panics with both memos named.
 - A memo whose new value equals its last does not count as changed, so nothing
   downstream runs.
+- **Observers.** A memo the tree draws from is observed under a key
+  (`observe(memo, key)`): it is reported once each time it goes from up to date
+  to marked, and the tree takes the reports (`take_notified`) at the frame. A
+  report means "read it again"; the memo's `version`, which moves only when its
+  value changes, says whether it did.
+- The graph is `Graph` in `signal.rs`; `Ui` holds one and forwards these.
 - **Owners.** Signals and memos belong to an owner: a node, or the `Ui` root. A
   memo created while a node is built belongs to that node; `ui.memo_in(owner, ..)`
   says so explicitly, and one shared by several nodes belongs to the root or to a
