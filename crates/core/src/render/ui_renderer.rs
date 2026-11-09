@@ -61,6 +61,14 @@ const UNIFORM_SIZE: u64 = std::mem::size_of::<Uniforms>() as u64;
 /// maximum-buffer validation failure.
 const ARENA_SANITY_CAP: u64 = 64 * 1024 * 1024;
 
+/// Where a list's snapshot and plan are kept, and whether its places are as
+/// they were.
+#[derive(Clone, Copy)]
+struct PlanSlot {
+    index: usize,
+    keeps_places: bool,
+}
+
 fn frame_arena_within_cap(bytes: u64) -> bool {
     bytes <= ARENA_SANITY_CAP
 }
@@ -435,6 +443,10 @@ pub struct RenderStats {
     pub records_place: usize,
     /// Bytes the kept frames hold, about.
     pub snapshot_bytes: usize,
+    /// Lists drawn from the plan kept for them: no boxes, order, sort or
+    /// batching ran for these (`boxes_computed`, `units_ordered` and the order
+    /// counts leave them out).
+    pub plans_replayed: usize,
     /// Soup/chrome/circle/shadow batches.
     pub color_runs: usize,
     /// Analytic shadow instances submitted.
@@ -605,6 +617,14 @@ pub struct UiRenderer {
     snapshots: Vec<FrameSnapshot>,
     /// The next place in this frame's render calls, from `begin_frame`.
     next_snapshot: usize,
+    /// The plan last built for each place's list, kept beside its snapshot so a
+    /// list that keeps its places can be drawn from it again.
+    plans: Vec<DrawPlan>,
+    /// Whether `plans[i]` is the plan of `snapshots[i]`'s list.
+    plan_current: Vec<bool>,
+    /// Whether the plans of the places are checked as they are built.
+    #[cfg(feature = "paint-order-oracle")]
+    check_plans: bool,
 
     // Decoded-image cache (path/key -> sprite + dimensions)
     image_cache: ImageCache,
@@ -962,6 +982,10 @@ impl UiRenderer {
             compare_frames: false,
             snapshots: Vec::new(),
             next_snapshot: 0,
+            plans: Vec::new(),
+            plan_current: Vec::new(),
+            #[cfg(feature = "paint-order-oracle")]
+            check_plans: false,
             image_cache: ImageCache::new(),
             color_vbo,
             color_ibo,
@@ -1382,18 +1406,25 @@ impl UiRenderer {
     #[cfg(feature = "paint-order-oracle")]
     pub fn set_check_plan(&mut self, on: bool) {
         self.draw_plan.set_check(on);
+        self.check_plans = on;
+        for plan in &mut self.plans {
+            plan.set_check(on);
+        }
     }
 
     /// Compare each list with the one drawn last frame at the same place in the
     /// render call, and report how it differs in [`RenderStats`]
-    /// (`lists_compared` and the `records_*` counts). Off by default. Nothing is
-    /// reused yet; this is the measurement frame-to-frame reuse is built on
-    /// (`docs/design/frame-reuse.md`), and keeping a frame costs a copy of its
-    /// records.
+    /// (`lists_compared` and the `records_*` counts), and draw a list in which
+    /// nothing moved, resized or changed family from the plan kept for it
+    /// (`plans_replayed`; the order, the sort and the batches are not run).
+    /// Off by default: keeping a frame costs a copy of its records
+    /// (`docs/design/frame-reuse.md`).
     pub fn set_frame_comparison(&mut self, on: bool) {
         self.compare_frames = on;
         if !on {
             self.snapshots.clear();
+            self.plans.clear();
+            self.plan_current.clear();
         }
     }
 
@@ -1408,19 +1439,25 @@ impl UiRenderer {
     }
 
     /// Compare `draw_list` with the frame kept for its place, count what
-    /// differs, and keep it in its place.
-    fn compare_with_last_frame(&mut self, draw_list: &DrawList) {
+    /// differs, and keep it in its place. The place, when the list has one.
+    fn compare_with_last_frame(&mut self, draw_list: &DrawList) -> Option<PlanSlot> {
         /// Places kept: the base list and the layers over it. Lists past them
         /// are not compared.
         const SLOTS: usize = 8;
         let slot = self.next_snapshot;
         self.next_snapshot += 1;
         if slot >= SLOTS {
-            return;
+            return None;
         }
         let context = self.frame_context();
         if self.snapshots.len() <= slot {
             self.snapshots.resize_with(slot + 1, FrameSnapshot::default);
+            self.plans.resize_with(slot + 1, DrawPlan::new);
+            self.plan_current.resize(slot + 1, false);
+            #[cfg(feature = "paint-order-oracle")]
+            for plan in &mut self.plans {
+                plan.set_check(self.check_plans);
+            }
         }
         let snapshot = &mut self.snapshots[slot];
         let diff = snapshot.compare(draw_list, &context);
@@ -1433,6 +1470,10 @@ impl UiRenderer {
         stats.records_look += diff.look as usize;
         stats.records_place += diff.place as usize;
         stats.snapshot_bytes = self.snapshots.iter().map(FrameSnapshot::bytes).sum();
+        Some(PlanSlot {
+            index: slot,
+            keeps_places: diff.keeps_places(),
+        })
     }
 
     /// Whether lists are drawn in paint order (see `set_paint_order`).
@@ -1957,9 +1998,11 @@ impl UiRenderer {
         view: &wgpu::TextureView,
         draw_list: &DrawList,
     ) {
-        if self.compare_frames {
-            self.compare_with_last_frame(draw_list);
-        }
+        let slot = if self.compare_frames {
+            self.compare_with_last_frame(draw_list)
+        } else {
+            None
+        };
         // Place the whole list's glyphs and icons, and build their instances,
         // before any batch captures an atlas bind group: the atlas it binds
         // has to hold every glyph the list draws.
@@ -1981,16 +2024,35 @@ impl UiRenderer {
             &self.warned,
         );
         let prepared = self.text_renderer.prepared();
-        if paint_order {
-            self.draw_plan
-                .build_paint_order(draw_list, prepared, &resolver);
+        // A list in which nothing moved, resized or changed family has the plan
+        // it had: the same units in the same order and batches. Only its bytes
+        // may differ, and those are filled below from the list itself.
+        let plan = match slot {
+            Some(slot) => &mut self.plans[slot.index],
+            None => &mut self.draw_plan,
+        };
+        let replay = !paint_order
+            && slot.is_some_and(|slot| slot.keeps_places && self.plan_current[slot.index]);
+        if replay {
+            self.frame_stats.plans_replayed += 1;
         } else {
-            self.draw_plan
-                .build(draw_list, &self.pass_target, prepared, &resolver);
-            #[cfg(feature = "paint-order-oracle")]
-            self.draw_plan.check();
+            if paint_order {
+                plan.build_paint_order(draw_list, prepared, &resolver);
+            } else {
+                plan.build(draw_list, &self.pass_target, prepared, &resolver);
+                #[cfg(feature = "paint-order-oracle")]
+                plan.check();
+            }
+            if let Some(slot) = slot {
+                self.plan_current[slot.index] = !paint_order;
+            }
+            let order = plan.stats();
+            self.frame_stats.units_ordered += order.units_ordered as usize;
+            self.frame_stats.order_overlap_tests += order.overlap_tests;
+            self.frame_stats.order_cell_visits += order.cell_visits;
+            self.frame_stats.boxes_computed += plan.boxes_computed();
         }
-        self.batch_draws.fill(&self.draw_plan, draw_list, prepared);
+        self.batch_draws.fill(plan, draw_list, prepared);
         // Soup recorded after the last paint command, or appended to the
         // public arrays after it, paints over everything else.
         let committed = draw_list.soup_committed_indices as usize;
@@ -1998,12 +2060,7 @@ impl UiRenderer {
             self.batch_draws.push_soup(tail);
         }
 
-        let order = self.draw_plan.stats();
-        self.frame_stats.batches += self.draw_plan.batches().len();
-        self.frame_stats.units_ordered += order.units_ordered as usize;
-        self.frame_stats.order_overlap_tests += order.overlap_tests;
-        self.frame_stats.order_cell_visits += order.cell_visits;
-        self.frame_stats.boxes_computed += self.draw_plan.boxes_computed();
+        self.frame_stats.batches += plan.batches().len();
         let work = prepared.work;
         self.frame_stats.text_blocks_looked_up += work.blocks_looked_up as usize;
         self.frame_stats.glyphs_placed += work.glyphs_placed as usize;

@@ -1,8 +1,8 @@
 # Frame-to-frame reuse
 
-Status: partial — Phases 0 and 1 landed (2026-11-08): frames are kept and compared, opt-in, and nothing consumes the result yet; no reuse implemented
+Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet
 Owner: Bart
-Last updated: 2026-11-08
+Last updated: 2026-11-09
 
 ## Implementation status
 
@@ -100,12 +100,40 @@ Tick items as they land.
       the compare is about 0.1 ms. The records are copied because the renderer
       is handed a borrowed list it cannot keep.
 
+- [x] **Phase 2 — whole-plan replay** (`UiRenderer`, with the comparison on). The
+      plan of each place's list is kept beside its snapshot; a list for which
+      `keeps_places()` holds is drawn from it again, so boxes, order, sort and
+      batching do not run, and only the instance bytes are filled from the new
+      list (`BatchDraws::fill`, then upload as before). `plans_replayed` counts
+      them, and `boxes_computed`, `units_ordered` and the order counts leave
+      them out. Checked by the GPU oracle with the comparison on in every run
+      (frames from a kept plan, recoloured and moved, against a renderer that
+      has seen nothing, in pixels), and by mutation: replaying whenever a plan
+      exists fails five of the eight oracle tests. Sprite bindings are guarded
+      by the context key's resolution epoch rather than compared per unit; the
+      epoch moves on any load, unload, rename, compaction or nine-slice
+      registration, which is coarser than per unit and sound.
+      Measured with `benches/frame_compare.rs` (comparison on, every frame
+      differing from the last in the way named; same run as the recompute):
+
+      | cells | recompute | identical | colour only | all moved |
+      | --- | --- | --- | --- | --- |
+      | 100 | 44.3 µs | 35.8 µs (−19%) | 36.7 µs (−17%) | 47.1 µs (+6%) |
+      | 1,000 | 327 µs | 200 µs (−39%) | 225 µs (−31%) | 369 µs (+13%) |
+      | 10,000 | 3.39 ms | 2.46 ms (−27%) | 2.53 ms (−25%) | 4.40 ms (+30%) |
+
+      So a frame that keeps its places is a net saving of a quarter to two
+      fifths even after paying to keep and compare it, and an all-changed frame
+      still pays 6–30%. What is left in a replayed frame is text preparation
+      and the upload (Phases 4 and 5), so the saving grows with them. Break
+      even, from these numbers: about 1 reusable frame in 4 at 1,000 cells,
+      about 1 in 2 at 10,000, the difference being the text copy.
+
 ### Outstanding
 
 - [ ] **Phase 1 — bring the keep cost inside the budget** before the comparison
-      is on by default. Options in the section "Cost of keeping a frame" below.
-- [ ] **Phase 2 — whole-plan replay.** When every unit's key and box are as last
-      frame, reuse order, sorted layout and batches (colour-only changes included).
+      is on by default. Phase 2 measured the saving it buys (above), so the
+      cost is now worth lowering; options in "Cost of keeping a frame" below.
 - [ ] **Phase 3 — reuse draw boxes** for units whose records are unchanged.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
       (`scroll`, `para`) hits too; plus pointer-identity layout hits.

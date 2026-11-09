@@ -79,6 +79,8 @@ impl Run {
             load_font_bytes(&gpu.font_system(), bytes).expect("font");
         }
         let ui = gpu.renderer();
+        // Frames drawn from a kept plan are what this oracle is to find out about.
+        ui.set_frame_comparison(true);
         let atlas = ui.create_atlas(256);
         let red = ui
             .load_sprite_rgba8("red", 8, 8, solid(look.red, 8, 8), Placement::Own)
@@ -548,6 +550,8 @@ fn the_renderer_reports_how_each_list_compares_with_last_frame() {
         [(0, 0, 0), (2, 2, 2), (2, 1, 2), (2, 1, 1), (2, 1, 1)],
         "lists compared, identical and keeping their places, per frame: {stats:#?}"
     );
+    let replayed: Vec<_> = stats.iter().map(|s| s.plans_replayed).collect();
+    assert_eq!(replayed, [0, 2, 2, 1, 1], "plans replayed, per frame");
     assert!(
         stats[1].snapshot_bytes > 0,
         "the kept frames hold something"
@@ -555,4 +559,63 @@ fn the_renderer_reports_how_each_list_compares_with_last_frame() {
     assert!(stats[1].records_same > 0 && stats[1].records_place == 0);
     assert!(stats[2].records_look > 0 && stats[2].records_place == 0);
     assert!(stats[3].records_place > 0);
+}
+
+/// The scene again with its colours changed: where everything is stays.
+fn tinted_scene(list: &mut DrawList, art: &Art, frame: usize, hue: f32) {
+    let shift = (frame % 7) as f32 * 3.0;
+    for i in 0..4 {
+        let x = 8.0 + 56.0 * i as f32;
+        list.chrome_rect(
+            Rect::new(x, 8.0 + shift, 50.0, 30.0),
+            4.0,
+            1.0,
+            [hue, 0.3 + 0.1 * i as f32, 0.5, 0.9],
+            [0.8 - hue * 0.5; 4],
+        );
+        list.text(
+            TextBlock::new(format!("Cell {}", i + frame), x + 4.0, 16.0 + shift)
+                .with_size(13.0)
+                .with_color_f32([1.0 - hue, hue, 0.4, 1.0]),
+        );
+    }
+    list.icon_sprite(art.red, 10.0, 60.0, 32.0, 32.0, [1.0, hue, hue, 1.0]);
+    list.icon_sprite(art.blue, 50.0, 60.0, 32.0, 32.0, [hue, 1.0, 1.0, 0.8]);
+    list.nine_slice(150.0, 56.0, 70.0, 44.0, "panel");
+}
+
+/// A frame drawn from the plan kept for it looks as one planned from nothing.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_frame_drawn_from_a_kept_plan_looks_as_a_fresh_one_does() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    let mut failures = Vec::new();
+    let mut replayed = Vec::new();
+    // (frame, hue): the same again, only recoloured, then moved, and again.
+    for (n, (frame, hue)) in [
+        (0, 0.0),
+        (0, 0.0),
+        (0, 0.3),
+        (0, 0.6),
+        (1, 0.6),
+        (1, 0.6),
+        (1, 0.9),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut list = run.list();
+        tinted_scene(&mut list, &run.art, frame, hue);
+        check(
+            &mut run,
+            &list,
+            1.0,
+            Tolerance::AtlasSampling,
+            &format!("step {n}"),
+            &mut failures,
+        );
+        replayed.push(run.gpu.renderer().frame_stats().plans_replayed);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(replayed, [0, 1, 1, 1, 0, 1, 1], "plans replayed per frame");
 }
