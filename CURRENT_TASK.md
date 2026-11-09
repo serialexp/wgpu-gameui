@@ -1,3 +1,23 @@
+# Current task: retained-mode prototype (2026-11-10)
+
+Bart asked for a retained, signal-driven usage mode for gameui, to compare with
+immediate mode on the same scenes. The design, its decisions and the checklist
+are in `docs/design/retained-mode.md`: keep that current as phases land.
+
+- Done (local commits, not pushed): Phase 0 `DrawList::append` (`db9af2f`),
+  the design doc (`27790c9`), Phase 1a underline snapping `floor(x + 0.5)`
+  (`efb2a40`), Phase 1b/1c `DrawList::append_translated` and its oracle
+  (`42f424b`), Phase 2 the signal graph in the new `crates/retained` (`ad2298a`).
+- Next: Phase 3, the tree, layout and drawing in `crates/retained` (nodes,
+  props as `Const` or a memo, stack layout with snapped positions, per-container
+  caches in local coordinates replayed with `append_translated`, culling, the
+  frame oracle against drawing the same tree from nothing).
+- The gameui release waits for a successful gothab deploy (Bart); agent-ui's
+  desktop will then need its `wgpu-gameui` requirement moved off the yanked
+  1.0.0.
+
+---
+
 # Current task: UI library comparison (2026-11-07)
 
 Bart asked for a performance comparison of gameui against gpui, BUI
