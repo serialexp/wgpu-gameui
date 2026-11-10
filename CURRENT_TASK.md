@@ -10,9 +10,12 @@ are in `docs/design/retained-mode.md`: keep that current as phases land.
   (`42f424b`), Phase 2 the signal graph in the new `crates/retained` (`ad2298a`),
   `DrawList::difference` (`656d39f`), canonical empty clips in core (Bart's
   choice; `f8613e8`), Phase 3 the tree, layout and cached drawing with its
-  frame and layout oracles and a 10,000-row scale check (`ef7865b`).
-- Next: Phase 4, pointer input (hit testing by binary search in stacks, hover
-  and press signals, clicks, wheel, hover kept current after layout).
+  frame and layout oracles and a 10,000-row scale check (`ef7865b`), Phase 4
+  pointer input (`167ca13`).
+- Waiting on Bart: four pointer choices made while he was away (Decisions in
+  the design doc: app-owned hover/press signals, hover on the topmost taker,
+  the wheel stopping at the innermost limit, `pressed` = press held).
+- Next: Phase 5, the comparison harness and its `rows` scene.
 - agent-ui's desktop tests pass against the core clip change (`f8613e8`):
   1,054 passed, 2026-11-10.
 - The gameui release waits for a successful gothab deploy (Bart); agent-ui's
