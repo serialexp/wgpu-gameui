@@ -1,8 +1,8 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 3 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing; 2026-11-10); Phases 4 to 6 outstanding. A prototype.
+Status: partial — Phases 0 to 4 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input; 2026-11-10 to 11); Phases 5 and 6 outstanding. A prototype.
 Owner: Bart
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 
 ## Implementation status
 
@@ -83,11 +83,36 @@ Tick items as they land.
       children, deadlines or volatility ignored, absolute children left out of
       the paint reach).
 
+- [x] **Phase 4 — pointer input.** `crates/retained/src/input.rs`:
+      `pointer_moved`, `pointer_button`, `pointer_left`, `cancel_pointer`,
+      `wheel`, `hit_test`, `hovered`; `Spec::hover(signal)`,
+      `Spec::press(signal)`, `Spec::on_click`. Hit testing in reverse paint
+      order, pruned at clips and by paint bounds elsewhere, with binary search
+      in every stack; hover found again after each layout round of a frame;
+      removal ending hover and presses. 14 tests in `input_tests.rs` (a prop
+      following hover, the topmost taker, pass-through, overflow hit and clip
+      not, children moved out of their rows, nothing hit before the first
+      frame, hover kept current by a scroll, a move and a removal, clicks,
+      per-button presses, three cancellations, a handler removing its node,
+      the wheel by axis and at its limit), and at 10,000 rows a hit enters 4
+      nodes (counted; 127 ns per pointer move in release on this machine).
+      `check` holds the hover and every hover and press signal against a hit
+      test from nothing after each frame, and the random oracle moves the
+      pointer (half the time onto a node), presses, cancels, leaves, scrolls
+      by wheel, removes what is hovered, compares 8 random hits per step with
+      the scan, and checks removed nodes' signals read false. Checked to fail
+      under eleven mutations (non-clipping stacks' child reach not marked, the
+      search unwidened on both sides and on the near side alone, open nodes pruned by their box, clips
+      not pruning, no hover refresh in the frame, removal forgetting the
+      pointer, a click on any release, stacked or absolute children searched
+      in the wrong order, the wheel ignoring the axis).
+
 ### Outstanding
 
-- [ ] **Phase 4 — pointer input.** Hit testing (binary search in stacks), hover
-      and press as signals, clicks, wheel scrolling, hover kept current after
-      layout, press cancellation.
+- [ ] **Bart to confirm the four pointer choices** made while he was away
+      (2026-11-11, under Decisions): app-owned hover/press signals, hover on
+      the topmost taker only, the wheel stopping at the innermost container's
+      limit, `pressed` meaning the press is held.
 - [ ] **Icon content.** Phase 3 built text and custom painters; `Icon` is not
       a content kind yet.
 - [ ] **Phase 5 — comparison.** `ui-compare-gameui-retained`: the grid scenes
@@ -392,6 +417,24 @@ the lists above it.
 - The wheel scrolls the innermost scroll container under the pointer by setting
   its offset signal, clamped to its content.
 
+Follow-up (Phase 4, 2026-11-11): as built, a node's hover and press go to
+signals the app makes and names in the spec (`Spec::hover(signal)`,
+`Spec::press(signal)`), not to signals `ui.hovered(node)` returns: props are
+given before the node exists, so a row's fill could not otherwise read the
+row's own hover. `ui.hovered()` names the hovered node. A node takes the
+pointer when it has either signal or a click handler; `on_click` gets the
+button. `pressed` is true from the press to its release or cancellation,
+wherever the pointer is. Removing a node writes its signals false, since they
+outlive it. The hover is found again after each layout round of a frame, not
+once after the frame's layout, so a scroll's new hover is drawn in the frame
+that draws the scroll; a hover that changes layout settles within the frame's
+four rounds. The wheel goes to the innermost scroll container under the
+pointer whose axis the wheel moved along (a vertical wheel over a horizontal
+row scroller goes to the column around it), and at its limit nowhere else.
+Hit testing prunes a node that does not clip by its paint bounds, which hold
+its children's boxes, and every node keeps its children's reach along the
+stack (`child_grow`) for the binary search, not only nodes that clip.
+
 ## Phasing
 
 0. `DrawList::append` and its oracle (done).
@@ -438,6 +481,13 @@ the lists above it.
   when dependencies change during a run (both reviews, 2026-11-10).
 - **Caches are in local coordinates, replayed with `append_translated` always**,
   so ancestor clips apply on every replay (both reviews, 2026-11-10).
+
+- **Pointer choices, provisional** (2026-11-11, made while Bart was away, to
+  confirm): hover and press go to signals the app makes (the alternatives:
+  binding a prop after the node exists, or spec closures given the node's own
+  signals); only the topmost node taking the pointer is hovered, not its
+  ancestors; the wheel stops at the innermost container's limit instead of
+  chaining outward; `pressed` means the press is held, not held and over it.
 
 ## Questions only building can answer
 

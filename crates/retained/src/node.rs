@@ -7,7 +7,9 @@
 
 use wgpu_gameui::{BoxShadow, DrawList, FontHandle, TextAlign, TextContent, Weight};
 
-use crate::signal::{Graph, Memo, Owner, Reader};
+use crate::input::{Button, Input};
+use crate::signal::{Graph, Memo, Owner, Reader, Signal};
+use crate::ui::Ui;
 
 /// A node of the tree. A `Copy` handle; using one after its node was removed
 /// panics.
@@ -400,7 +402,9 @@ pub(crate) enum SpecContent {
 /// gap, a fill colour and a [`Look`]. It shows either children, or text, or a
 /// custom painter (a node with text or a painter takes no children). It may
 /// clip its children to its box, scroll them along its stack, or sit at an
-/// offset in its parent instead of in the parent's stack.
+/// offset in its parent instead of in the parent's stack. It takes the
+/// pointer when it has a hover or press signal or a click handler; a node
+/// that takes none lets the pointer through to what is under it.
 pub struct Spec {
     pub(crate) width: Prop<Size>,
     pub(crate) height: Prop<Size>,
@@ -411,6 +415,7 @@ pub struct Spec {
     pub(crate) content: SpecContent,
     pub(crate) clip: bool,
     pub(crate) scroll: bool,
+    pub(crate) input: Option<Box<Input>>,
 }
 
 impl Default for Spec {
@@ -432,6 +437,7 @@ impl Spec {
             content: SpecContent::None,
             clip: false,
             scroll: false,
+            input: None,
         }
     }
 
@@ -497,5 +503,30 @@ impl Spec {
         self.clip = true;
         self.scroll = true;
         self
+    }
+
+    /// Writes whether the pointer is over it (it is the topmost node taking
+    /// the pointer there) to `hovered`, a signal the app made, so that its
+    /// own props can be memos reading it.
+    pub fn hover(mut self, hovered: Signal<bool>) -> Self {
+        self.input_mut().hover = Some(hovered);
+        self
+    }
+
+    /// Writes whether it holds a press (of any button, from the press that
+    /// landed on it until its release or cancellation) to `pressed`.
+    pub fn press(mut self, pressed: Signal<bool>) -> Self {
+        self.input_mut().press = Some(pressed);
+        self
+    }
+
+    /// Runs `click` when a button pressed on it is released on it.
+    pub fn on_click(mut self, click: impl FnMut(&mut Ui, Button) + 'static) -> Self {
+        self.input_mut().click = Some(Box::new(click));
+        self
+    }
+
+    fn input_mut(&mut self) -> &mut Input {
+        self.input.get_or_insert_with(Box::default)
     }
 }

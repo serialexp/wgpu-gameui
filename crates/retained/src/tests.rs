@@ -6,14 +6,15 @@
 use wgpu_gameui::{BoxShadow, DrawList, FontSystemHandle, TextAlign, shared_font_system};
 
 use crate::{
-    Align, Border, FrameContext, Insets, Look, Node, Painter, Size, Spec, Stack, Text, Ui,
+    Align, Border, Button, FrameContext, Insets, Look, Node, Painter, Signal, Size, Spec, Stack,
+    Text, Ui,
 };
 
-fn fonts() -> FontSystemHandle {
+pub(crate) fn fonts() -> FontSystemHandle {
     shared_font_system()
 }
 
-fn at(now: f64) -> FrameContext {
+pub(crate) fn at(now: f64) -> FrameContext {
     FrameContext {
         now,
         viewport: [640.0, 480.0],
@@ -28,22 +29,24 @@ thread_local! {
     static OUTSIDE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-fn fixed(w: f32, h: f32) -> Spec {
+pub(crate) fn fixed(w: f32, h: f32) -> Spec {
     Spec::new().width(Size::Fixed(w)).height(Size::Fixed(h))
 }
 
-/// The frame's list is the tree drawn from nothing, and its layout the
-/// layout from nothing.
-fn check(ui: &mut Ui) {
+/// The frame's list is the tree drawn from nothing, its layout the layout
+/// from nothing, and the pointer's state what that layout and the pointer
+/// give.
+pub(crate) fn check(ui: &mut Ui) {
     let fresh = ui.draw_from_nothing();
     let frame = ui.list().expect("a frame was drawn");
     if let Some(difference) = frame.difference(&fresh) {
         panic!("the frame differs from the tree drawn from nothing: {difference}");
     }
     ui.check_layout();
+    ui.check_pointer();
 }
 
-fn rect(ui: &Ui, node: Node) -> [f32; 4] {
+pub(crate) fn rect(ui: &Ui, node: Node) -> [f32; 4] {
     let (pos, size) = ui.rect(node);
     [pos[0], pos[1], size[0], size[1]]
 }
@@ -446,6 +449,11 @@ fn ten_thousand_rows_timings() {
         ui.frame(at(0.0));
     }
     println!("nothing changed, per frame: {:?}", start.elapsed() / 100);
+    let start = Instant::now();
+    for i in 0..1000 {
+        ui.pointer_moved(150.0, (i % 400) as f32);
+    }
+    println!("a pointer move, per event: {:?}", start.elapsed() / 1000);
     let tree = ui.tree_stats();
     println!("{tree:?}");
 }
@@ -618,6 +626,14 @@ impl Rng {
         let c = |r: &mut Rng| r.below(5) as f32 * 0.25;
         [c(self), c(self), c(self), self.pick(&[0.0, 0.5, 1.0])]
     }
+
+    /// A point in quarter pixels, over the viewport and a little beyond.
+    fn point(&mut self) -> [f32; 2] {
+        [
+            self.below(2_720) as f32 * 0.25 - 20.0,
+            self.below(2_080) as f32 * 0.25 - 20.0,
+        ]
+    }
 }
 
 fn random_size(rng: &mut Rng) -> Size {
@@ -748,16 +764,50 @@ fn random_spec(rng: &mut Rng, leaf: bool) -> Spec {
     spec
 }
 
+/// What the random oracle made: its nodes, and the hover and press signals
+/// it gave them.
+#[derive(Default)]
+struct Made {
+    nodes: Vec<Node>,
+    signals: Vec<(Node, Signal<bool>)>,
+}
+
 /// A random subtree under `parent`, `depth` levels at most.
-fn random_subtree(ui: &mut Ui, rng: &mut Rng, parent: Node, depth: u32, all: &mut Vec<Node>) {
+fn random_subtree(ui: &mut Ui, rng: &mut Rng, parent: Node, depth: u32, made: &mut Made) {
     let leaf = depth == 0 || rng.chance(3);
-    let node = ui.add(parent, random_spec(rng, leaf));
-    all.push(node);
+    let mut spec = random_spec(rng, leaf);
+    let mut signals = Vec::new();
+    if rng.chance(3) {
+        let hovered = ui.signal(false);
+        signals.push(hovered);
+        spec = spec.hover(hovered);
+    }
+    if rng.chance(4) {
+        let pressed = ui.signal(false);
+        signals.push(pressed);
+        spec = spec.press(pressed);
+    }
+    let node = ui.add(parent, spec);
+    made.nodes.push(node);
+    made.signals.extend(signals.into_iter().map(|s| (node, s)));
     if !leaf {
         for _ in 0..1 + rng.below(5) {
-            random_subtree(ui, rng, node, depth - 1, all);
+            random_subtree(ui, rng, node, depth - 1, made);
         }
     }
+}
+
+/// The middle of `node`'s box, in the root's coordinates.
+fn middle(ui: &Ui, node: Node) -> [f32; 2] {
+    let mut n = node.index;
+    let d = &ui.nodes[n as usize];
+    let mut at = [d.size[0] * 0.5, d.size[1] * 0.5];
+    while let Some(p) = ui.nodes[n as usize].parent() {
+        let o = crate::paint::offset(&ui.nodes[n as usize], ui.nodes[p as usize].scrolled());
+        at = [at[0] + o[0], at[1] + o[1]];
+        n = p;
+    }
+    at
 }
 
 fn is_live(ui: &Ui, node: Node) -> bool {
@@ -772,20 +822,21 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
     std::panic::set_hook(Box::new(|_| {}));
     for round in 0..40 {
         let mut ui = Ui::new(fonts.clone());
-        let mut all = Vec::new();
+        let mut made = Made::default();
         let root = ui.root();
         for _ in 0..3 {
-            random_subtree(&mut ui, &mut rng, root, 4, &mut all);
+            random_subtree(&mut ui, &mut rng, root, 4, &mut made);
         }
         let mut context = at(0.0);
         ui.frame(context);
         std::panic::set_hook(Box::new(|_| {}));
         for step in 0..30 {
-            all.retain(|&n| is_live(&ui, n));
+            made.nodes.retain(|&n| is_live(&ui, n));
+            let all = &made.nodes;
             let Some(&node) = all.get(rng.below(all.len().max(1) as u64) as usize) else {
                 break;
             };
-            match rng.below(11) {
+            match rng.below(14) {
                 0 => ui.set_fill(node, rng.colour()),
                 1 => ui.set_look(node, random_look(&mut rng)),
                 2 => ui.set_width(node, random_size(&mut rng)),
@@ -804,10 +855,14 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
                 6 => {
                     let d = &ui.nodes[node.index as usize];
                     if d.text.is_none() && d.custom.is_none() {
-                        random_subtree(&mut ui, &mut rng, node, 2, &mut all);
+                        random_subtree(&mut ui, &mut rng, node, 2, &mut made);
                     }
                 }
-                7 => ui.remove(node),
+                7 => match ui.hovered() {
+                    // Now and then what the pointer is on.
+                    Some(hovered) if hovered != root && rng.chance(2) => ui.remove(hovered),
+                    _ => ui.remove(node),
+                },
                 8 => {
                     if ui.nodes[node.index as usize].scroll.is_some() {
                         ui.scroll_by(node, rng.below(80) as f32 - 30.0);
@@ -816,6 +871,31 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
                 9 => {
                     if ui.nodes[node.index as usize].offset.is_some() {
                         ui.set_offset(node, [rng.below(80) as f32 - 20.0, 3.0]);
+                    }
+                }
+                11 => {
+                    // Half the time into the middle of a node.
+                    let [x, y] = if rng.chance(2) {
+                        middle(&ui, node)
+                    } else {
+                        rng.point()
+                    };
+                    ui.pointer_moved(x, y);
+                }
+                12 => {
+                    let delta = rng.below(90) as f32 - 30.0;
+                    if rng.chance(2) {
+                        ui.wheel(0.0, delta);
+                    } else {
+                        ui.wheel(delta, 0.0);
+                    }
+                }
+                13 => {
+                    let button = rng.pick(&[Button::Primary, Button::Secondary]);
+                    match rng.below(5) {
+                        0 => ui.pointer_left(),
+                        1 => ui.cancel_pointer(),
+                        _ => ui.pointer_button(button, rng.chance(2)),
                     }
                 }
                 _ => {
@@ -837,6 +917,28 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
                     .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_default();
                 panic!("round {round}, step {step}: {message}");
+            }
+            // A removed node is neither hovered nor pressed: its signals,
+            // which outlive it, say so.
+            for &(node, signal) in &made.signals {
+                if !is_live(&ui, node) {
+                    assert!(
+                        !ui.get(signal),
+                        "round {round}, step {step}: a removed node's signal"
+                    );
+                }
+            }
+            // Hit testing, by binary search and pruning, finds what a scan
+            // of every node finds.
+            for _ in 0..8 {
+                let p = rng.point();
+                for want in [crate::input::takes_pointer, |_: &crate::ui::NodeData| true] {
+                    assert_eq!(
+                        ui.hit(p, want),
+                        ui.hit_from_nothing(p, want),
+                        "round {round}, step {step}: the hit at {p:?}"
+                    );
+                }
             }
             // A frame after it with nothing changed does nothing.
             if !ui.needs_frame(context.now) {

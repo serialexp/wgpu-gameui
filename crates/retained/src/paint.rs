@@ -152,7 +152,7 @@ impl Ui {
         lo..hi.max(lo)
     }
 
-    fn refresh_child_grow(&mut self, n: u32) {
+    pub(crate) fn refresh_child_grow(&mut self, n: u32) {
         let m = self.nodes[n as usize].stack.value.direction.main();
         let kids = std::mem::take(&mut self.nodes[n as usize].children);
         let mut reach = [0.0f32; 2];
@@ -252,7 +252,7 @@ impl Ui {
 
 /// `child`'s place in its parent's list: its position less the parent's
 /// scroll.
-fn offset(child: &NodeData, scrolled: [f32; 2]) -> [f32; 2] {
+pub(crate) fn offset(child: &NodeData, scrolled: [f32; 2]) -> [f32; 2] {
     [child.pos[0] - scrolled[0], child.pos[1] - scrolled[1]]
 }
 

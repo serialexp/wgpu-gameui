@@ -3,6 +3,7 @@
 
 use wgpu_gameui::{DrawList, FontSystemHandle, TextMeasurer};
 
+use crate::input::{Input, Pointer};
 use crate::layout::Avail;
 use crate::node::{CustomPaint, Insets, Look, Node, Prop, Size, Spec, SpecContent, Stack, Text};
 use crate::signal::{Graph, Memo, Owner, Readable, Reader, Signal};
@@ -134,6 +135,7 @@ pub(crate) struct NodeData {
     pub(crate) custom: Option<Box<CustomNode>>,
     pub(crate) clip: bool,
     pub(crate) scroll: Option<Box<Scroll>>,
+    pub(crate) input: Option<Box<Input>>,
 
     // Layout.
     /// The room it was last laid out in.
@@ -165,8 +167,8 @@ pub(crate) struct NodeData {
     /// outside its box: its paint bounds.
     pub(crate) grow: Insets,
     pub(crate) grow_stale: bool,
-    /// For a node that clips: the most any stacked child's paint bounds
-    /// reach before and after it along the stack.
+    /// The most any stacked child's paint bounds reach before and after it
+    /// along the stack: for culling (in a node that clips) and hit testing.
     pub(crate) child_grow: [f32; 2],
     pub(crate) child_grow_stale: bool,
 }
@@ -215,6 +217,7 @@ pub struct Ui {
     live: usize,
     scratch: Vec<u32>,
     pub(crate) scratch_f32: Vec<f32>,
+    pub(crate) pointer: Pointer,
 }
 
 impl Ui {
@@ -246,6 +249,7 @@ impl Ui {
             live: 0,
             scratch: Vec::new(),
             scratch_f32: Vec::new(),
+            pointer: Pointer::default(),
         };
         let owner = ui.graph.root();
         ui.root = ui.create(NO_PARENT, owner, root);
@@ -415,6 +419,7 @@ impl Ui {
             custom,
             clip: spec.clip,
             scroll,
+            input: spec.input,
             avail: None,
             size: [0.0; 2],
             pos: [0.0; 2],
@@ -503,9 +508,13 @@ impl Ui {
         let mut stack = std::mem::take(&mut self.scratch);
         stack.push(n);
         while let Some(x) = stack.pop() {
-            let d = &mut self.nodes[x as usize];
+            let d = &self.nodes[x as usize];
             stack.extend_from_slice(&d.children);
             stack.extend_from_slice(&d.absolute);
+            if d.input.is_some() {
+                self.forget_pointer(x);
+            }
+            let d = &mut self.nodes[x as usize];
             d.live = false;
             d.generation = d.generation.wrapping_add(1);
             d.children = Vec::new();
@@ -515,6 +524,7 @@ impl Ui {
             d.custom = None;
             d.scroll = None;
             d.offset = None;
+            d.input = None;
             self.free.push(x);
             self.live -= 1;
         }
@@ -730,18 +740,15 @@ impl Ui {
     }
 
     /// `n`'s paint bounds may have changed: so may those of each node above
-    /// it up to the first that clips, which must look at its children's
-    /// again.
+    /// it up to the first that clips, and each of those must look at its
+    /// children's again.
     pub(crate) fn mark_grow(&mut self, n: u32) {
         self.nodes[n as usize].grow_stale = true;
         let mut p = self.nodes[n as usize].parent();
         while let Some(x) = p {
             let d = &mut self.nodes[x as usize];
-            if d.clip {
-                d.child_grow_stale = true;
-                break;
-            }
-            if d.grow_stale {
+            d.child_grow_stale = true;
+            if d.clip || d.grow_stale {
                 break;
             }
             d.grow_stale = true;
@@ -900,11 +907,14 @@ impl Ui {
             .viewport
             .map(|v| Avail::Exact(crate::layout::snap(v).max(0.0)));
         // Laying out can write signals (a scroll offset clamped to content
-        // that shrank), which can change what is laid out: settle, a few
-        // rounds at most.
+        // that shrank, the hover of what is now under the pointer), which
+        // can change what is laid out: settle, a few rounds at most.
         for _ in 0..4 {
             self.take_notifications();
             self.layout(self.root, viewport);
+            if self.pointer.at().is_some() {
+                self.refresh_hover();
+            }
             if self.graph.stats().notified == 0 {
                 break;
             }
