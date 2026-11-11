@@ -1180,7 +1180,7 @@ impl TextRenderer {
         texts: &[TextBlock],
         commands: impl IntoIterator<Item = std::ops::Range<u32>>,
         kept: Option<&[crate::render::Change]>,
-    ) {
+    ) -> bool {
         let grid = self.pixel_grid();
         let out = &mut self.prepared[self.current];
         let refreshed =
@@ -1189,6 +1189,7 @@ impl TextRenderer {
             self.cpu.prepare_texts(out, grid, texts, commands);
         }
         self.upload_atlas(device, queue);
+        refreshed
     }
 
     /// Prepare and upload the next list's text and icons in place `slot` of
@@ -1350,6 +1351,30 @@ impl TextRenderer {
         Some(PreparedMsdf {
             buffer: self.instances.buffer().clone(),
             offset: offset?,
+            instances: instances as u32,
+            atlas: atlas.clone(),
+            uniform: self.uniform.bind_group().clone(),
+            uniform_offset: self.uniform_offset as u32,
+        })
+    }
+
+    /// The run of the first `instances` instances of `buffer`, a buffer the
+    /// caller keeps, sampling `atlas` under this pass's uniform: nothing is
+    /// captured from an earlier frame. `None` when there are none.
+    pub(crate) fn run_over(
+        &self,
+        buffer: &wgpu::Buffer,
+        instances: usize,
+        atlas: MsdfAtlas,
+    ) -> Option<PreparedMsdf> {
+        let atlas = match atlas {
+            MsdfAtlas::Glyphs => &self.glyph_gpu.bind_group,
+            #[cfg(feature = "phosphor-icons")]
+            MsdfAtlas::Icons => &self.icon_gpu.bind_group,
+        };
+        (instances > 0).then(|| PreparedMsdf {
+            buffer: buffer.clone(),
+            offset: 0,
             instances: instances as u32,
             atlas: atlas.clone(),
             uniform: self.uniform.bind_group().clone(),

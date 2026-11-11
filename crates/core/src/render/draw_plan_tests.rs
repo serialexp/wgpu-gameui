@@ -346,7 +346,7 @@ mod lists {
         let mut plan = DrawPlan::new();
         lists.plan(&list, &target, &mut plan);
         let mut draws = BatchDraws::default();
-        draws.fill(&plan, &list, &lists.prepared);
+        draws.fill(&plan, &list, &lists.prepared, None);
         draws.push_soup(&[]);
         draws.push_soup(&[0, 1, 2]);
         let text = lists.prepared.text_instances.len() as u32;
@@ -378,7 +378,7 @@ mod lists {
         assert_eq!(draws.sprites, expected);
         assert_eq!(draws.text.len() as u32, text);
         // Filling again starts over.
-        draws.fill(&plan, &list, &lists.prepared);
+        draws.fill(&plan, &list, &lists.prepared, None);
         assert_eq!(draws.draws.len(), 4);
         assert_eq!(draws.sprites.len(), 4);
         assert!(draws.indices.is_empty());
@@ -430,14 +430,14 @@ mod lists {
         for _ in 0..2 {
             let list = frame(&lists);
             lists.plan(&list, &target, &mut plan);
-            draws.fill(&plan, &list, &lists.prepared);
+            draws.fill(&plan, &list, &lists.prepared, None);
             draws.push_soup(&list.indices[..3]);
         }
         // Recording the list is the caller's; planning and filling it is ours.
         let list = frame(&lists);
         let ((), allocations) = count_allocations(|| {
             lists.plan(&list, &target, &mut plan);
-            draws.fill(&plan, &list, &lists.prepared);
+            draws.fill(&plan, &list, &lists.prepared, None);
             draws.push_soup(&list.indices[..3]);
         });
         assert!(plan.batches().len() > 4, "{:?}", plan.batches().len());

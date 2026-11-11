@@ -43,6 +43,7 @@ mod image_cache;
 mod msdf_atlas;
 #[cfg(feature = "phosphor-icons")]
 mod phosphor;
+mod place_draws;
 mod text_contrast;
 pub(crate) mod textures;
 mod ui_renderer;

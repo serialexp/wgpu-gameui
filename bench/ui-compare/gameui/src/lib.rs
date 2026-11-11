@@ -156,8 +156,12 @@ pub fn library(name: &str) -> String {
 }
 
 /// What the renderer did in a scene's last frame.
-pub fn render_counts(r: &RenderStats) -> [(&'static str, u64); 9] {
+pub fn render_counts(r: &RenderStats) -> [(&'static str, u64); 13] {
     [
+        ("bytes_uploaded", r.buffer_bytes_uploaded),
+        ("write_calls", r.buffer_write_calls as u64),
+        ("records_rewritten", r.records_rewritten as u64),
+        ("place_bytes", r.place_bytes as u64),
         ("lists_compared", r.lists_compared as u64),
         ("lists_reported", r.lists_reported as u64),
         ("snapshot_bytes", r.snapshot_bytes as u64),

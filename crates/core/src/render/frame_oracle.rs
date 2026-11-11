@@ -137,7 +137,7 @@ impl Oracle {
         );
         self.kept_plan.check();
         self.kept_draws
-            .fill(&self.kept_plan, list, &self.kept.prepared);
+            .fill(&self.kept_plan, list, &self.kept.prepared, None);
         let kept = Fingerprint::of(&self.kept_plan, &self.kept.prepared, &self.kept_draws);
         let work = Work {
             text: self.kept.prepared.work,
@@ -152,7 +152,7 @@ impl Oracle {
         std::mem::swap(&mut self.kept.prepared, &mut self.fresh_prepared);
         self.kept.plan(list, target, &mut self.fresh_plan);
         self.fresh_draws
-            .fill(&self.fresh_plan, list, &self.kept.prepared);
+            .fill(&self.fresh_plan, list, &self.kept.prepared, None);
         let fresh = Fingerprint::of(&self.fresh_plan, &self.kept.prepared, &self.fresh_draws);
         std::mem::swap(&mut self.kept.prepared, &mut self.fresh_prepared);
 

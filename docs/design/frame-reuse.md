@@ -1,6 +1,6 @@
 # Frame-to-frame reuse
 
-Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept
+Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept; and Phase 5's retained GPU storage: each place keeps its records on the GPU, and a frame drawn from its kept plan uploads only the records whose look changed
 Owner: Bart
 Last updated: 2026-11-11
 
@@ -193,6 +193,36 @@ Tick items as they land.
       (`FrameSnapshot::reported`, `RenderStats::lists_reported`). The
       comparison stays as the oracle behind the `edit-oracle` feature. See
       the follow-up under Non-goals.
+- [x] **Phase 5 — retained GPU storage, partial upload** (2026-11-11; the
+      retained-mode comparison's item 5). Built as the follow-up under
+      Phase 5 below describes, with the differences noted there ("As
+      built"): `render/place_draws.rs` keeps, per place, the batch arrays,
+      where each record went in them (`batch_draws::Positions`, recorded by
+      `BatchDraws::fill`) and a GPU buffer per family; a replayed frame with
+      its text refreshed in place rewrites the `Look` records and writes
+      them in coalesced runs, anything else fills the place and uploads it
+      whole. `BatchUpload` names each family's buffer, so a draw reads a
+      place's buffers or the arenas alike. `RenderStats::records_rewritten`
+      and `place_bytes`. Tests: the GPU oracle's
+      `a_place_that_keeps_its_records_rewrites_only_what_changed` (a
+      recolour of each family, of a soup command, of the tail and of both,
+      text with a shadow and a glow, an MSDF icon, every family at once, a
+      move, all culled and recoloured, back, a frame without the place and
+      the one after it, each against a fresh renderer and with its count of
+      records rewritten; an identical frame uploads what a frame drawing
+      nothing does, one recoloured panel 176 bytes more in one more write)
+      and `nine_lists_and_the_comparison_turned_off_and_on`; with
+      `set_check_plan` on, every frame's place is compared byte for byte
+      with a fill from nothing (mutated: a wrong glyph quad in a rewrite
+      panics there). Measured in the retained bench (load about 12), bytes
+      uploaded per frame: grid `static` 2,976,176 → 176 (the uniforms),
+      `one` → 352 (one record), `animated` → 1,760,176 (the 10,000
+      recoloured panels; no glyph quads); deep `static` 1,760,176 → 176 and
+      `one` → 352; rows unchanged (113,360 on `rows-one`, whose plan is not
+      replayed). The places hold 9.4 MB on the grid (CPU copy and GPU
+      buffers). Frame means at that load: grid `static` 0.23 ms, `one`
+      0.24, `animated` 1.70; deep `static` 0.09, `one` 0.11, `animated`
+      1.75. Not yet compared with the build before it at the same load.
 
 ### Outstanding
 
@@ -201,7 +231,8 @@ Tick items as they land.
       more to reuse.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
       (`scroll`, `para`) hits too; plus pointer-identity layout hits.
-- [ ] **Phase 5 — retained GPU storage**, then partial upload and replay on top.
+- [ ] **Phase 5 — timings against the build before it**, at one load (the
+      counts above are exact; the frame means are not yet compared).
 - [ ] **Phase 6 — partial order reuse** (prefix, then propagation), only if the
       scenes show it pays.
 - [ ] **Phase 7 — cheaper list building** on the caller side.
@@ -416,6 +447,119 @@ submission, growth, current per-pass bindings) before any "upload only what
 changed" or "replay" is sound. A frame where all of one family's instances
 changed gains nothing from many small writes; ranges are coalesced.
 
+*Follow-up, 2026-11-11: the model, as built for the retained-mode
+comparison's item 5 (`TODO.md`).* Measured first: a replayed frame uploads
+every family again, 2.98 MB on the 10,000-cell grid (1.76 MB of analytic
+records, 1.2 MB of glyph quads) and 1.76 MB on the deep scene, whether one
+record changed or none, and copies it twice on the way (`BatchDraws::fill`,
+then `Queue::write_buffer`'s staging copy). A quarter of the retained
+grid run's samples are in `memmove`.
+
+- **Only lists with a place keep storage.** A list drawn in one of the
+  frame comparison's places (`compare_with_last_frame`, at most 8 a frame)
+  gets a `SlotDraws`: its `BatchDraws` (the family arrays in draw order, now
+  one per place rather than one shared), where each record went in them,
+  and a GPU buffer per family (soup vertices and indices, analytic, circles,
+  sprites, nine-slices, glyph quads, MSDF icons) that holds what the arrays
+  held when last drawn. Lists without a place (comparison off, past the
+  eighth, lists with no paint stream) go through the `FrameArena`s as
+  before.
+- **One version per place per submission.** A place is drawn at most once
+  between two `begin_frame` calls (places are numbered from 0 at each), and
+  `begin_frame` is once per submission by contract, so no submission holds
+  two versions of one place's buffers. A frame encoded but not submitted
+  before the next `begin_frame` breaks the arenas the same way today; the
+  contract does not change. Writes to a buffer an earlier submission reads
+  are ordered after it by the queue.
+- **Where each record went.** Filling a place from nothing (the soup tail
+  included) also records, per family, each list record's position in the
+  family array (none for a record the plan culled), the sprite and
+  nine-slice records' texture entries, for each text unit drawn the signed
+  shift from its prepared instances to the batch's (a unit's prepared
+  instances, `MsdfPrepared::text_units`, are in paint order and include
+  culled units, the batch's in batch order without them, so the shift can
+  be negative; a block's sweeps, `block_sweeps`, lie inside its unit's
+  range), and for each MSDF icon drawn its position and instance count.
+  About 4 bytes a record.
+- **A replayed frame rewrites only what changed.** When the plan is
+  replayed (every record kept its place) and the place's storage is
+  current, nothing is filled. Each record the frame's `Changes` class as
+  `Look` is built again into its position: analytic and circle records
+  copied, sprites and nine-slices rebuilt from their texture entry, a text
+  block's three sweeps copied through its unit's shift. Text needs
+  `prepare_texts` to have refreshed in place (it now says whether it did);
+  when it prepared everything again, instance counts and ranges may differ,
+  so the place is filled from nothing instead. MSDF icons are prepared again
+  every frame and nothing says their tiles stayed put (a font registered
+  since turns an icon of no instance into one), so each drawn icon's
+  instances are compared byte for byte with its kept ones; a count that
+  differs fills the place from nothing. The soup's vertices are written
+  once, whole, when any soup command or the tail is a `Look` (its indices
+  cannot change without a `Place`), and only if a soup draws.
+- **Coalesced writes.** The positions rewritten in each family are sorted
+  and written as runs, a run joined to the next when the gap between them
+  is under 4 KiB (the bytes, not a record count: an analytic record is
+  176 bytes, a glyph quad far fewer). When the runs of a family come to
+  more than half its bytes, the family is written whole instead. There is
+  no cap on the count of runs: scattered edits cost a write each, never an
+  upload of everything between them. An identical frame writes nothing but
+  its uniforms. The work is counted: `RenderStats::records_rewritten` (by
+  record) and the existing `buffer_*` counters (by write and byte).
+- **Any other frame in a place** (not replayed, or storage not current)
+  fills the place from nothing, records the positions and uploads every
+  family whole, growing a buffer to the next power of two when it is too
+  small. The old buffer is dropped, not retired: wgpu keeps a buffer that
+  encoded work uses alive until that work is done, and a place's buffers
+  are not read by anything encoded earlier in the same frame. Growth is
+  checked against the device's `max_buffer_size`; a list that would not
+  fit is drawn through the arenas.
+- **"Current" means** the place's arrays, positions and GPU buffers are
+  exactly what the last fill and rewrites made from the list last drawn
+  there, under the plan the place holds (`plan_current`). It is set at the
+  end of a fill and upload, a list with nothing to draw included, and
+  cleared whenever the place's plan is built anew without a fill, it is
+  drawn in paint order, it is released, or the comparison is turned off.
+- **Bindings per pass.** The text and icon runs are built every frame from
+  the place's buffer and the pass's own uniform and atlas bind groups, so
+  nothing captured last frame is reused.
+- **Released when unused.** A place not drawn in a frame lets its storage
+  go at the next `begin_frame` (a popup layer's place keeps nothing after
+  it closes), and `set_frame_comparison(false)` drops all of it. What the
+  places hold, CPU arrays and positions and GPU capacity, is reported
+  (`RenderStats::place_bytes`).
+- **Checked.** With `set_check_plan` on (the `paint-order-oracle` feature,
+  on in the crate's tests), each place's arrays after a partial rewrite are
+  compared with a fill from nothing, byte for byte (derived float equality
+  would miss a sign of zero and fail on a NaN). That check shares the plan
+  and the prepared text with what it checks; the plan oracle and the GPU
+  oracle, which draws sequences against renderers that have seen nothing,
+  check those. The sequences cover a recolour of one record of each family,
+  of a soup command and of the tail, text with shadows and glows,
+  everything culled and back, a place released and used again, the
+  comparison turned off and on, and the ninth list. Counted per family: an
+  identical frame rewrites no record and writes only its uniforms; one
+  recoloured chrome record rewrites one record of 176 bytes.
+
+*As built (2026-11-11).* Where the code differs from the model above:
+
+- The place is `PlaceDraws` (`render/place_draws.rs`), not `SlotDraws`; its
+  buffers are `PlaceBuffers`, one `Retained` buffer per family.
+- **No fallback to the arenas for a list too big.** A buffer grows to the
+  next power of two, capped at `max_buffer_size` but never below what it
+  must hold. The arenas grow to the whole frame's bytes, more than one
+  list's, so a list a place could not hold would not fit an arena either;
+  the fallback would never help.
+- **Every frame in a place is checked**, filled or rewritten, not only a
+  rewrite: the check costs a fill from nothing, and the tests want both.
+- **The `Look` records are found by scanning** the frame's `Changes`, a
+  byte a record per family, not from the owner's edit log: for a compared
+  list that is all there is, and for a reported list the log has already
+  been spread into `Changes`. Copying stays O(changed); the scan is
+  O(records) of one-byte compares.
+- "Current" is set by every fill, and every frame that does not rewrite
+  fills, so a place whose plan was built anew, or drawn in paint order, is
+  never left current over stale arrays.
+
 ### Phase 6 — partial order reuse (only if measured)
 
 The prefix rule is causally sound (units before the first changed one keep their
@@ -525,6 +669,48 @@ Not verified by either reviewer, so measured in Phase 0: the cost of the
 comparison against recompute at 100, 1,000 and 10,000 cells, the cost of many
 small `write_buffer` calls against one, and any caller that edits the public
 arrays in a way the comparison does not see.
+
+### Review of the Phase 5 model (2026-11-11)
+
+Codex and Antigravity reviewed the follow-up under Phase 5 against the code
+(both needed a retry). Accepted, and changed in the bullets above:
+
+- **A text prepare that did not refresh** (both): counts and ranges may
+  differ, so copying every glyph quad through the old mapping is wrong; the
+  place is filled from nothing, and `prepare_texts` says which it did.
+- **MSDF icons compared in list order** (Antigravity): prepared icons are in
+  list order and include culled ones, the batch's are not; compared through
+  each icon's position, and a count change (a font registered since) fills
+  the place.
+- **Rewritten positions out of batch order, and negative shifts**
+  (Antigravity, Codex): sorted before coalescing; shifts are signed and per
+  unit, since a block's sweeps sit inside its unit's range.
+- **Coalescing by record count** (both): 33 scattered edits would have
+  written 1.7 MB. Now joined by gap bytes, with no run cap, and whole only
+  past half the family's bytes.
+- **The soup** (both): the tail is part of the fill and of the check; the
+  vertices are written once a list, only when a soup draws.
+- **Lists with nothing to draw** (Antigravity): the early return would have
+  left storage never current; it is current with nothing in it.
+- **Retiring grown buffers** (both): with places released and used again the
+  renderer-lifetime retired list would grow each cycle; grown place buffers
+  are dropped, which wgpu makes safe for work already encoded.
+- **Memory and limits** (both): `place_bytes` reports what places hold;
+  growth is checked against `max_buffer_size`.
+- **"Current" undefined** (Codex): defined above.
+- **The check** (Codex): byte for byte; the sequences it must cover are
+  listed; counts per family and per record rather than "one record's bytes"
+  for every recolour (a text block rewrites its glyphs, a soup its vertices).
+
+Recorded in `TODO.md`, not changed here (they predate this and hold for the
+arenas too): a no-op atlas compaction or the removal of an unknown sprite
+moves the resolution epoch, which stops every replay (Codex); a tint or span
+colour change is classed `Place`, so a container's fade rebuilds the plan
+(Codex); a list with no paint stream takes no place, so an empty layer moves
+every later list to another place and their storage is rebuilt (both).
+Accepted as already true: a shared atlas mutated between two renders of one
+submission makes the first sample the second's pixels (Codex); that is a
+contract of `begin_frame`, not of this storage.
 
 ## References
 

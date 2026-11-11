@@ -26,20 +26,14 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P2 — keep instance data on the GPU, upload what changed
-      (renderer, `frame-reuse.md` Phase 5).** `FrameArena` resets each frame
-      (`frame_arena.rs:51`), so `BatchDraws::fill` (`batch_draws.rs:61-114`)
-      and `write_buffer` copy and upload everything (about 13.5% of the
-      replayed frame). Per-family persistent buffers with the plan's ranges,
-      not a buffer per node (10,000 draw calls would cost more than the frame).
-      The most work of these.
 - [ ] **P1 — text shaped twice (retained or core).** Measured at the offered
       width (`retained/src/layout.rs:276-280`), drawn at its own width
       (`:111-118`); `LayoutKey` includes `max_width` (`shaping.rs:327`). 512
       layouts in 230 `rows-one` frames against 229 immediate. Options: draw at
       the measured-at width (start-aligned only), or drop `max_width` from the
       key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
-      the `rows-one` gap (0.266 vs 0.206 ms).
+      the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
+      option is good enough; a third is needed before this is taken up.
 - [ ] **P1 — don't lay out children out of view (retained).**
       `layout_stack` lays out every child (`layout.rs:313-327`): the rows build
       shapes 10,000 labels, 108 ms. A scroll container with main-axis `Fixed`
@@ -66,6 +60,24 @@ none chosen yet (Bart).
       view keeps its list. Moot for the bench scenes since only clipping nodes
       keep lists (rows: 2 lists), but a long list of nested scroll panes would
       hold one per pane ever drawn.
+- [ ] **P2 — replays stopped by changes that change nothing (core, found
+      by Codex 2026-11-11).** `SpriteAtlas::compact` returns `true` with no
+      tombstones (`render/atlas.rs:247`) and `Textures::compact` takes that as
+      "moved" and bumps the resolution epoch (`render/textures.rs:348`);
+      removing an unknown sprite bumps it too (`:593`). Every place then plans
+      from nothing. Bump only when something moved.
+- [ ] **P2 — a tint or span colour change counts as `Place` (core, found by
+      Codex 2026-11-11).** Text recorded under a tint gets
+      `style_range_tint` (`widgets/draw_list.rs:3055`, `:3086`), and
+      `text_change` classes a change of it, or of a span's colour, as `Place`
+      (`render/frame_diff.rs:931`), though it only multiplies colours: a
+      container fading rebuilds the plan and uploads everything.
+- [ ] **P2 — an empty layer moves later lists to other places (core, found
+      by both reviewers 2026-11-11).** A list with no paint stream goes
+      through `render_unordered` and takes no comparison place
+      (`ui_renderer.rs:2040`), so the lists after it are compared, planned
+      and stored in the place of the one before. Correct, but a layer
+      emptying rebuilds every later one. Give such a list its place.
 - [ ] **P2 — test targets do not compile without default features (core,
       found 2026-11-11).** `cargo clippy -p wgpu-gameui --no-default-features
       --all-targets` fails: `tests/frame_oracle.rs` imports `HeadlessGpu`
@@ -161,6 +173,17 @@ New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios se
       waits for two queued pictures, then asserts what the decode worker has *not* done yet,
       which depends on how far that thread got; the test should hold the worker (or count its
       decodes) rather than race it.
+
+## Flaky allocation test (found 2026-11-11)
+
+- [ ] **`render::draw_plan::tests::lists::planning_a_warmed_frame_allocates_nothing`**
+      (`crates/core/src/render/draw_plan_tests.rs:415`) failed once in five
+      `cargo test --workspace` runs (`allocations` not 0) and passes alone and in the lib
+      suite. Likely cause, not yet confirmed: the measured frame's `prepare_icons` snapshots
+      the process-wide icon-font registry (`icon_font_snapshot`, `render/icon_font.rs:162`)
+      into a `Vec` that grows when a test on another thread (`icon_font::tests`) has just
+      registered a second font. The test should not share the registry (or should warm a
+      snapshot of a fixed set).
 
 ## UI scenario follow-ups (2026-10-23)
 

@@ -11,7 +11,7 @@ use crate::TextRenderer;
 use crate::color::{Clear, ColorSpace};
 use crate::layer::LayerStack;
 use crate::layout::Rect;
-use crate::render::batch_draws::{BatchDraws, DrawKind};
+use crate::render::batch_draws::{BatchDraw, BatchDraws, DrawKind};
 use crate::render::blur::{Backdrop, Blur, BlurParams};
 use crate::render::composite::{Offscreen, TargetPlan};
 use crate::render::draw_box::Target;
@@ -19,6 +19,7 @@ use crate::render::draw_plan::{DrawPlan, ResolveTextures};
 use crate::render::frame_arena::FrameArena;
 use crate::render::frame_diff::{ContextKey, FrameSnapshot};
 use crate::render::image_cache::{ImageCache, ImageEntry, ImageError, decode_rgba8};
+use crate::render::place_draws::PlaceDraws;
 use crate::render::textures::{
     self, AtlasId, Binding, Placement, Resolved, Sampling, SpriteError, SpriteId, Textures,
 };
@@ -85,18 +86,50 @@ pub const SMALL_TEXTURE_BATCHES_WARN: usize = 32;
 /// which sprites belong in an atlas.
 const SMALL_TEXTURE_NAMES: usize = 3;
 
-/// Where one list's batches were uploaded this frame: the byte offsets of each
-/// family's records in its buffer, and its text and icon vertices.
+/// Where one list's batches were uploaded: each family's buffer and the byte
+/// offset its records start at (this frame's arenas, or the buffers kept for
+/// the list's place), and its text and icon runs.
 struct BatchUpload {
-    vertex_offset: u64,
-    index_offset: u64,
-    analytic_offset: u64,
-    circle_offset: u64,
-    sprite_offset: u64,
-    nine_offset: u64,
+    vertices: Uploaded,
+    indices: Uploaded,
+    analytic: Uploaded,
+    circles: Uploaded,
+    sprites: Uploaded,
+    nine_slices: Uploaded,
     text: Option<PreparedMsdf>,
     #[cfg(feature = "phosphor-icons")]
     icons: Option<PreparedMsdf>,
+}
+
+/// A family's records in a buffer, from `offset`; no buffer for a family a
+/// place never held, which nothing then draws from.
+struct Uploaded {
+    buffer: Option<wgpu::Buffer>,
+    offset: u64,
+}
+
+impl Uploaded {
+    fn at(buffer: &wgpu::Buffer, offset: u64) -> Self {
+        Self {
+            buffer: Some(buffer.clone()),
+            offset,
+        }
+    }
+
+    fn kept(buffer: Option<&wgpu::Buffer>) -> Self {
+        Self {
+            buffer: buffer.cloned(),
+            offset: 0,
+        }
+    }
+
+    /// The records, for a draw that uses them.
+    fn slice(&self) -> wgpu::BufferSlice<'_> {
+        self.buffer
+            .as_ref()
+            .expect("a family drawn from was uploaded")
+            .slice(self.offset..)
+    }
 }
 
 /// What has been warned about, so each is said once.
@@ -463,6 +496,12 @@ pub struct RenderStats {
     /// batching ran for these (`boxes_computed`, `units_ordered` and the order
     /// counts leave them out).
     pub plans_replayed: usize,
+    /// Records of replayed lists written again into the GPU buffers kept for
+    /// their place, because their look changed; the rest were not uploaded.
+    /// A text block, an icon or the soup's vertices count one each.
+    pub records_rewritten: usize,
+    /// Bytes the places' kept records hold, on the CPU and the GPU, about.
+    pub place_bytes: usize,
     /// Soup/chrome/circle/shadow batches.
     pub color_runs: usize,
     /// Analytic shadow instances submitted.
@@ -638,6 +677,9 @@ pub struct UiRenderer {
     plans: Vec<DrawPlan>,
     /// Whether `plans[i]` is the plan of `snapshots[i]`'s list.
     plan_current: Vec<bool>,
+    /// Each place's records, kept on the GPU, so a list drawn from its kept
+    /// plan uploads only what changed (`docs/design/frame-reuse.md`, Phase 5).
+    places: Vec<PlaceDraws>,
     /// Whether the plans of the places are checked as they are built.
     #[cfg(feature = "paint-order-oracle")]
     check_plans: bool,
@@ -1004,6 +1046,7 @@ impl UiRenderer {
             next_snapshot: 0,
             plans: Vec::new(),
             plan_current: Vec::new(),
+            places: Vec::new(),
             #[cfg(feature = "paint-order-oracle")]
             check_plans: false,
             #[cfg(feature = "edit-oracle")]
@@ -1447,6 +1490,7 @@ impl UiRenderer {
             self.snapshots.clear();
             self.plans.clear();
             self.plan_current.clear();
+            self.places.clear();
             #[cfg(feature = "edit-oracle")]
             self.edit_oracle.clear();
         }
@@ -1478,6 +1522,7 @@ impl UiRenderer {
             self.snapshots.resize_with(slot + 1, FrameSnapshot::default);
             self.plans.resize_with(slot + 1, DrawPlan::new);
             self.plan_current.resize(slot + 1, false);
+            self.places.resize_with(slot + 1, PlaceDraws::default);
             #[cfg(feature = "paint-order-oracle")]
             for plan in &mut self.plans {
                 plan.set_check(self.check_plans);
@@ -1672,6 +1717,13 @@ impl UiRenderer {
     /// single frame crossing [`ARENA_SANITY_CAP`] logs a dedicated message.
     pub fn begin_frame(&mut self) {
         self.next_snapshot = 0;
+        // A place no list was drawn in last frame gives back what it kept.
+        for place in &mut self.places {
+            if !place.used {
+                *place = PlaceDraws::default();
+            }
+            place.used = false;
+        }
         // Judge the *previous* frame here rather than at the end of a render call: the
         // counters describe a whole frame, and a frame can contain several calls.
         let previous = self.frame_stats;
@@ -2080,8 +2132,9 @@ impl UiRenderer {
         let kept = slot
             .filter(|slot| slot.keeps_places)
             .map(|slot| self.snapshots[slot.index].changes.texts.as_slice());
-        self.text_renderer
-            .prepare_texts(device, queue, &draw_list.texts, text_commands, kept);
+        let refreshed =
+            self.text_renderer
+                .prepare_texts(device, queue, &draw_list.texts, text_commands, kept);
         #[cfg(feature = "phosphor-icons")]
         self.text_renderer
             .prepare_icons(device, queue, &draw_list.icons_msdf);
@@ -2128,13 +2181,10 @@ impl UiRenderer {
             self.frame_stats.boxes_computed += plan.boxes_computed();
             self.frame_stats.boxes_reused += plan.boxes_reused();
         }
-        self.batch_draws.fill(plan, draw_list, prepared);
         // Soup recorded after the last paint command, or appended to the
         // public arrays after it, paints over everything else.
         let committed = draw_list.soup_committed_indices as usize;
-        if let Some(tail) = draw_list.indices.get(committed..) {
-            self.batch_draws.push_soup(tail);
-        }
+        let tail = draw_list.indices.get(committed..).unwrap_or(&[]);
 
         self.frame_stats.batches += plan.batches().len();
         let work = prepared.work;
@@ -2142,13 +2192,76 @@ impl UiRenderer {
         self.frame_stats.glyphs_placed += work.glyphs_placed as usize;
         self.frame_stats.text_instances_built += work.instances_built as usize;
 
-        if self.batch_draws.draws.is_empty() {
+        let Some(slot) = slot else {
+            self.batch_draws.fill(plan, draw_list, prepared, None);
+            self.batch_draws.push_soup(tail);
+            if self.batch_draws.draws.is_empty() {
+                return;
+            }
+            let upload = self.upload_batches(device, queue, draw_list);
+            let draws = std::mem::take(&mut self.batch_draws.draws);
+            self.frame_stats.render_passes += 1;
+            let mut pass = super::load_pass(encoder, view, "ui paint stream pass");
+            self.draw_batches(&mut pass, &upload, &draws);
+            drop(pass);
+            self.batch_draws.draws = draws;
+            return;
+        };
+
+        // A list drawn from its place's kept plan, its text refreshed in
+        // place, rewrites only the records that changed in what the place
+        // keeps; any other fills it from nothing.
+        let place = &mut self.places[slot.index];
+        place.used = true;
+        let stats = &mut self.frame_stats;
+        let rewritten = if replay && refreshed && place.current {
+            let changes = &self.snapshots[slot.index].changes;
+            place.rewrite(queue, plan, draw_list, prepared, changes, stats)
+        } else {
+            None
+        };
+        match rewritten {
+            Some(records) => stats.records_rewritten += records,
+            None => place.fill(device, queue, plan, draw_list, prepared, tail, stats),
+        }
+        #[cfg(feature = "paint-order-oracle")]
+        if self.check_plans {
+            self.batch_draws.fill(plan, draw_list, prepared, None);
+            self.batch_draws.push_soup(tail);
+            if let Err(family) = place.draws.same_as(&self.batch_draws) {
+                let place = slot.index;
+                panic!("place {place}: kept {family} differ from a fresh fill");
+            }
+        }
+        stats.place_bytes = self.places.iter().map(PlaceDraws::bytes).sum();
+        let place = &mut self.places[slot.index];
+        if place.draws.draws.is_empty() {
             return;
         }
-        let upload = self.upload_batches(device, queue, draw_list);
+        let gpu = &place.gpu;
+        let upload = BatchUpload {
+            vertices: Uploaded::kept(gpu.vertices.buffer()),
+            indices: Uploaded::kept(gpu.indices.buffer()),
+            analytic: Uploaded::kept(gpu.analytic.buffer()),
+            circles: Uploaded::kept(gpu.circles.buffer()),
+            sprites: Uploaded::kept(gpu.sprites.buffer()),
+            nine_slices: Uploaded::kept(gpu.nine_slices.buffer()),
+            text: gpu.text.buffer().and_then(|buffer| {
+                self.text_renderer
+                    .run_over(buffer, place.draws.text.len(), MsdfAtlas::Glyphs)
+            }),
+            #[cfg(feature = "phosphor-icons")]
+            icons: gpu.icons.buffer().and_then(|buffer| {
+                self.text_renderer
+                    .run_over(buffer, place.draws.icons.len(), MsdfAtlas::Icons)
+            }),
+        };
+        let draws = std::mem::take(&mut place.draws.draws);
         self.frame_stats.render_passes += 1;
         let mut pass = super::load_pass(encoder, view, "ui paint stream pass");
-        self.draw_batches(&mut pass, &upload);
+        self.draw_batches(&mut pass, &upload, &draws);
+        drop(pass);
+        self.places[slot.index].draws.draws = draws;
     }
 
     /// Draw a list filled through the public arrays, with no paint stream:
@@ -2306,14 +2419,18 @@ impl UiRenderer {
         let draws = &self.batch_draws;
         let (retired, stats) = (&mut self.retired_buffers, &mut self.frame_stats);
         let mut write = |arena: &mut FrameArena, data: &[u8]| {
-            if data.is_empty() {
+            let offset = if data.is_empty() {
                 0
             } else {
                 arena.write(device, queue, data, retired, stats)
-            }
+            };
+            Uploaded::at(arena.buffer(), offset)
         };
-        let (vertex_offset, index_offset) = if draws.indices.is_empty() {
-            (0, 0)
+        let (vertices, indices) = if draws.indices.is_empty() {
+            (
+                Uploaded::at(self.color_vbo.buffer(), 0),
+                Uploaded::at(self.color_ibo.buffer(), 0),
+            )
         } else {
             (
                 write(
@@ -2323,13 +2440,13 @@ impl UiRenderer {
                 write(&mut self.color_ibo, bytemuck::cast_slice(&draws.indices)),
             )
         };
-        let analytic_offset = write(
+        let analytic = write(
             &mut self.analytic_insts,
             bytemuck::cast_slice(&draws.analytic),
         );
-        let circle_offset = write(&mut self.circle_insts, bytemuck::cast_slice(&draws.circles));
-        let sprite_offset = write(&mut self.icon_insts, bytemuck::cast_slice(&draws.sprites));
-        let nine_offset = write(
+        let circles = write(&mut self.circle_insts, bytemuck::cast_slice(&draws.circles));
+        let sprites = write(&mut self.icon_insts, bytemuck::cast_slice(&draws.sprites));
+        let nine_slices = write(
             &mut self.nine_insts,
             bytemuck::cast_slice(&draws.nine_slices),
         );
@@ -2347,24 +2464,28 @@ impl UiRenderer {
             MsdfAtlas::Icons,
         );
         BatchUpload {
-            vertex_offset,
-            index_offset,
-            analytic_offset,
-            circle_offset,
-            sprite_offset,
-            nine_offset,
+            vertices,
+            indices,
+            analytic,
+            circles,
+            sprites,
+            nine_slices,
             text,
             #[cfg(feature = "phosphor-icons")]
             icons,
         }
     }
 
-    /// Draw one list's batches, in draw order, into the list's pass.
-    fn draw_batches(&mut self, pass: &mut wgpu::RenderPass<'_>, upload: &BatchUpload) {
+    /// Draw one list's batches, `draws` over the records in `upload`, in draw
+    /// order, into the list's pass.
+    fn draw_batches(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        upload: &BatchUpload,
+        draws: &[BatchDraw],
+    ) {
         let quad = 0..QUAD_INDICES.len() as u32;
-        // Taken for the loop, so drawing can note small textures; put back after.
-        let draws = std::mem::take(&mut self.batch_draws.draws);
-        for draw in &draws {
+        for draw in draws {
             let range = draw.range.clone();
             // Text binds a uniform of its own at group 0, so every draw binds
             // what it needs.
@@ -2372,34 +2493,20 @@ impl UiRenderer {
                 DrawKind::Soup => {
                     pass.set_pipeline(&self.color_pipeline);
                     pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
-                    pass.set_vertex_buffer(
-                        0,
-                        self.color_vbo.buffer().slice(upload.vertex_offset..),
-                    );
-                    pass.set_index_buffer(
-                        self.color_ibo.buffer().slice(upload.index_offset..),
-                        wgpu::IndexFormat::Uint32,
-                    );
+                    pass.set_vertex_buffer(0, upload.vertices.slice());
+                    pass.set_index_buffer(upload.indices.slice(), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(range, 0, 0..1);
                     self.frame_stats.color_runs += 1;
                 }
                 DrawKind::Analytic | DrawKind::Circle => {
-                    let (pipeline, buffer, offset) = match draw.kind {
-                        DrawKind::Analytic => (
-                            &self.analytic_pipeline,
-                            self.analytic_insts.buffer(),
-                            upload.analytic_offset,
-                        ),
-                        _ => (
-                            &self.circle_pipeline,
-                            self.circle_insts.buffer(),
-                            upload.circle_offset,
-                        ),
+                    let (pipeline, records) = match draw.kind {
+                        DrawKind::Analytic => (&self.analytic_pipeline, &upload.analytic),
+                        _ => (&self.circle_pipeline, &upload.circles),
                     };
                     pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
                     pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                    pass.set_vertex_buffer(1, buffer.slice(offset..));
+                    pass.set_vertex_buffer(1, records.slice());
                     pass.set_index_buffer(
                         self.chrome_base_ibo.slice(..),
                         wgpu::IndexFormat::Uint16,
@@ -2418,28 +2525,18 @@ impl UiRenderer {
                     let Some(texture) = texture else {
                         continue;
                     };
-                    let (pipeline, buffer, offset) = match (draw.kind, binding) {
-                        (DrawKind::NineSlice(_), _) => (
-                            &self.nine_slice_pipeline,
-                            self.nine_insts.buffer(),
-                            upload.nine_offset,
-                        ),
-                        (_, Binding::Yuv(_)) => (
-                            &self.yuv_pipeline,
-                            self.icon_insts.buffer(),
-                            upload.sprite_offset,
-                        ),
-                        _ => (
-                            &self.icon_pipeline,
-                            self.icon_insts.buffer(),
-                            upload.sprite_offset,
-                        ),
+                    let (pipeline, records) = match (draw.kind, binding) {
+                        (DrawKind::NineSlice(_), _) => {
+                            (&self.nine_slice_pipeline, &upload.nine_slices)
+                        }
+                        (_, Binding::Yuv(_)) => (&self.yuv_pipeline, &upload.sprites),
+                        _ => (&self.icon_pipeline, &upload.sprites),
                     };
                     pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, self.uniform.bind_group(), &[self.pass_uniform_offset]);
                     pass.set_bind_group(1, texture, &[]);
                     pass.set_vertex_buffer(0, self.chrome_base_vbo.slice(..));
-                    pass.set_vertex_buffer(1, buffer.slice(offset..));
+                    pass.set_vertex_buffer(1, records.slice());
                     pass.set_index_buffer(
                         self.chrome_base_ibo.slice(..),
                         wgpu::IndexFormat::Uint16,
@@ -2471,7 +2568,6 @@ impl UiRenderer {
             }
             self.frame_stats.draw_calls += 1;
         }
-        self.batch_draws.draws = draws;
     }
 
     /// Upload icon/image instances, one instanced draw per stretch sampling one

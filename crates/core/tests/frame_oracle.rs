@@ -20,8 +20,8 @@
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::render::capture_with;
 use wgpu_gameui::{
-    AtlasId, DrawList, FontHandle, HeadlessGpu, PlacedLog, Placement, RecordSpan, SpriteId, Srgb,
-    TextBlock, load_font_bytes,
+    AtlasId, DrawList, FontHandle, HeadlessGpu, NineSliceId, PlacedLog, Placement, RecordSpan,
+    SpriteId, Srgb, TextBlock, load_font_bytes,
 };
 
 const SIZE: (u32, u32) = (240, 160);
@@ -52,6 +52,8 @@ struct Art {
     red: SpriteId,
     blue: SpriteId,
     panel: SpriteId,
+    /// The nine-slice "panel" is, to draw by id with a tint.
+    nine: NineSliceId,
 }
 
 fn solid(rgba: [u8; 4], w: u32, h: u32) -> Vec<u8> {
@@ -97,7 +99,7 @@ impl Run {
         let panel = ui
             .load_sprite_rgba8("panel", 12, 12, solid(look.panel, 12, 12), Placement::Own)
             .unwrap();
-        ui.register_nine_slice("panel", panel, [look.border; 4]);
+        let nine = ui.register_nine_slice("panel", panel, [look.border; 4]);
         let spare_atlas = ui.create_atlas(256);
         let spare = spare
             .iter()
@@ -116,7 +118,12 @@ impl Run {
             .collect();
         Self {
             gpu,
-            art: Art { red, blue, panel },
+            art: Art {
+                red,
+                blue,
+                panel,
+                nine,
+            },
             look: look.clone(),
             fonts: fonts.to_vec(),
             spare,
@@ -798,5 +805,305 @@ fn a_list_patched_in_place_that_reports_its_edits_looks_as_a_fresh_one_does() {
             (1, 1, 1),
         ],
         "plans replayed, lists keeping their places, identical lists, per step"
+    );
+}
+/// The colours of [`every_family`]'s records, one per family, and where it is
+/// drawn.
+#[derive(Clone, Copy)]
+struct Hues {
+    chrome: f32,
+    circle: f32,
+    sprite: f32,
+    nine: f32,
+    soup: f32,
+    tail: f32,
+    text: f32,
+    effects: f32,
+    #[cfg(feature = "phosphor-icons")]
+    icon: f32,
+    /// Across, in logical px: off the target, every record is culled.
+    x: f32,
+}
+
+impl Hues {
+    const BASE: Self = Self {
+        chrome: 0.2,
+        circle: 0.3,
+        sprite: 0.4,
+        nine: 0.5,
+        soup: 0.6,
+        tail: 0.7,
+        text: 0.8,
+        effects: 0.9,
+        #[cfg(feature = "phosphor-icons")]
+        icon: 0.1,
+        x: 0.0,
+    };
+
+    /// Every colour as [`BASE`](Self::BASE)'s, where it is drawn kept.
+    fn base_colours(&mut self) {
+        *self = Self {
+            x: self.x,
+            ..Self::BASE
+        };
+    }
+
+    fn soup_and_tail(&mut self, hue: f32) {
+        (self.soup, self.tail) = (hue, hue);
+    }
+}
+
+/// A record of every family in a hue of its own: a panel, a circle, a sprite,
+/// a nine-slice, a triangle in the soup, text plain and with a shadow and a
+/// glow, an MSDF icon, and a triangle after the last paint command (the soup's
+/// tail).
+fn every_family(run: &Run, h: Hues) -> DrawList {
+    let mut list = run.list();
+    let x = h.x;
+    list.chrome_rect(
+        Rect::new(x + 8.0, 8.0, 60.0, 30.0),
+        4.0,
+        1.0,
+        [h.chrome, 0.3, 0.5, 0.9],
+        [0.8; 4],
+    );
+    list.circle((x + 90.0, 24.0), 14.0, [0.2, h.circle, 0.7, 1.0]);
+    let tint = [1.0, h.sprite, 1.0, 1.0];
+    list.icon_sprite(run.art.red, x + 112.0, 8.0, 28.0, 28.0, tint);
+    let tint = [h.nine, 1.0, 1.0, 1.0];
+    list.nine_slice_id(run.art.nine, x + 150.0, 6.0, 70.0, 40.0, tint);
+    list.triangle(
+        (x + 10.0, 60.0),
+        (x + 40.0, 60.0),
+        (x + 25.0, 90.0),
+        [0.9, h.soup, 0.2, 1.0],
+    );
+    list.text(
+        TextBlock::new("Plain words", x + 50.0, 58.0)
+            .with_size(14.0)
+            .with_color_f32([1.0 - h.text, h.text, 0.4, 1.0]),
+    );
+    list.text(
+        TextBlock::new("Shadowed", x + 50.0, 84.0)
+            .with_size(16.0)
+            .with_color_f32([h.effects, 0.9, 0.9, 1.0])
+            .with_shadow((h.effects * 255.0) as u8, 0, 0, 200, 2.0, 2.0, 2.0)
+            .with_glow(0, (h.effects * 255.0) as u8, 0, 160, 3.0),
+    );
+    #[cfg(feature = "phosphor-icons")]
+    list.phosphor_icon(
+        Rect::new(x + 180.0, 70.0, 28.0, 28.0),
+        wgpu_gameui::PhosphorIcon::Folder,
+        [1.0, h.icon, 0.1, 1.0],
+    );
+    // Recorded last, so no paint command follows it: the soup's tail.
+    list.triangle(
+        (x + 10.0, 120.0),
+        (x + 60.0, 120.0),
+        (x + 35.0, 150.0),
+        [0.3, 0.3, h.tail, 1.0],
+    );
+    list
+}
+
+/// A place keeps its records on the GPU (`docs/design/frame-reuse.md`,
+/// Phase 5): a frame drawn from its kept plan writes again only the records
+/// whose look changed, and looks as a fresh renderer's frame does. The
+/// renderer checks, as it draws, that what each place keeps is what a fill
+/// from nothing would hold.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_place_that_keeps_its_records_rewrites_only_what_changed() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    run.gpu.renderer().set_check_plan(true);
+    /// What a step does to the frame before it.
+    type Edit = fn(&mut Hues);
+    // (what, the edit, `None` for a frame that draws nothing, and the records
+    // rewritten, or `None` for a place filled from nothing)
+    let mut steps: Vec<(&str, Option<Edit>, Option<usize>)> = vec![
+        ("first", Some(|_| {}), None),
+        ("again", Some(|_| {}), Some(0)),
+        ("panel", Some(|h| h.chrome = 0.9), Some(1)),
+        ("circle", Some(|h| h.circle = 0.9), Some(1)),
+        ("sprite", Some(|h| h.sprite = 0.9), Some(1)),
+        ("nine-slice", Some(|h| h.nine = 0.9), Some(1)),
+        ("soup", Some(|h| h.soup = 0.1), Some(1)),
+        ("tail", Some(|h| h.tail = 0.1), Some(1)),
+        // The soup's vertices are written once for both.
+        ("soup and tail", Some(|h| h.soup_and_tail(0.4)), Some(1)),
+        ("text", Some(|h| h.text = 0.1), Some(1)),
+        ("effects", Some(|h| h.effects = 0.1), Some(1)),
+    ];
+    #[cfg(feature = "phosphor-icons")]
+    steps.push(("icon", Some(|h| h.icon = 0.9), Some(1)));
+    // Panel, circle, sprite, nine-slice, the soup's vertices, two texts, and
+    // the icon.
+    let every = 7 + usize::from(cfg!(feature = "phosphor-icons"));
+    let base: Edit = Hues::base_colours;
+    steps.extend([
+        ("every family", Some(base), Some(every)),
+        ("moved", Some(|h| h.x = 3.0), None),
+        ("moved again", Some(|_| {}), Some(0)),
+        ("culled", Some(|h| h.x = 1000.0), None),
+        ("culled and recoloured", Some(|h| h.chrome = 0.1), Some(0)),
+        ("back", Some(|h| h.x = 0.0), None),
+        ("back and recoloured", Some(|h| h.chrome = 0.6), Some(1)),
+        // A frame in which the place draws nothing gives it back; the next
+        // frame replays the kept plan but fills the place from nothing.
+        ("empty", None, None),
+        ("after a frame without", Some(|_| {}), None),
+        ("then recoloured", Some(|h| h.chrome = 0.3), Some(1)),
+    ]);
+    let mut hues = Hues {
+        chrome: 0.25,
+        circle: 0.35,
+        ..Hues::BASE
+    };
+    let mut failures = Vec::new();
+    let mut seen = Vec::new();
+    let mut stats = std::collections::HashMap::new();
+    for (n, &(what, edit, want)) in steps.iter().enumerate() {
+        let list = match edit {
+            Some(edit) => {
+                edit(&mut hues);
+                every_family(&run, hues)
+            }
+            None => run.list(),
+        };
+        // A frame that draws nothing has nothing to compare.
+        if edit.is_some() && hues.x < SIZE.0 as f32 {
+            check(
+                &mut run,
+                &list,
+                1.0,
+                Tolerance::AtlasSampling,
+                &format!("step {n} ({what})"),
+                &mut failures,
+            );
+        } else {
+            run.gpu.capture_scaled(&list, SIZE, 1.0);
+        }
+        let s = run.gpu.renderer().frame_stats();
+        stats.insert(what, s);
+        // A replayed plan rewrites; anything else fills from nothing.
+        let rewrote = (s.plans_replayed > 0).then_some(s.records_rewritten);
+        let rewrote = match (want, what) {
+            (None, "after a frame without") => {
+                assert_eq!(s.plans_replayed, 1, "the kept plan is replayed");
+                (s.records_rewritten > 0).then_some(s.records_rewritten)
+            }
+            _ => rewrote,
+        };
+        seen.push((what, rewrote));
+        if edit.is_some() {
+            let keeps = s.place_bytes > 0;
+            assert!(keeps, "step {n} ({what}): the place keeps its records");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let want: Vec<_> = steps.iter().map(|&(what, _, want)| (what, want)).collect();
+    // `None` where the place was filled from nothing.
+    assert_eq!(seen, want, "records rewritten per step");
+    // Drawn again unchanged, a list uploads what a frame that draws nothing
+    // does: the passes' uniforms.
+    let uploaded = |what| {
+        let s: &wgpu_gameui::RenderStats = &stats[what];
+        (s.buffer_bytes_uploaded, s.buffer_write_calls)
+    };
+    let nothing = uploaded("empty");
+    assert_eq!(uploaded("again"), nothing, "bytes and writes");
+    assert_eq!(uploaded("moved again"), nothing, "bytes and writes");
+    // One panel recoloured uploads its record, in one write.
+    let (bytes, writes) = uploaded("again");
+    let panel = size_of::<wgpu_gameui::AnalyticInstance>() as u64;
+    let one = (bytes + panel, writes + 1);
+    assert_eq!(uploaded("panel"), one, "bytes and writes");
+    assert_eq!(panel, 176);
+}
+
+/// Draw `lists` one over another in one frame on `run`.
+fn layered(run: &mut Run, lists: &[DrawList]) -> Vec<u8> {
+    let device = run.gpu.device().clone();
+    let queue = run.gpu.queue().clone();
+    let ui = run.gpu.renderer();
+    ui.begin_frame();
+    capture_with(&device, &queue, SIZE, Srgb::TRANSPARENT, |encoder, view| {
+        for list in lists {
+            ui.render(&device, &queue, encoder, view, SIZE, 1.0, list);
+        }
+    })
+}
+
+/// Nine lists in a frame, the ninth past the places the renderer keeps, and
+/// the comparison turned off and on again: each frame looks as a fresh
+/// renderer's does, and only the lists with a place keep their records.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn nine_lists_and_the_comparison_turned_off_and_on() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    run.gpu.renderer().set_check_plan(true);
+    let lists = |run: &Run, hues: &[f32; 9]| -> Vec<DrawList> {
+        hues.iter()
+            .enumerate()
+            .map(|(i, &hue)| {
+                let mut list = run.list();
+                let (x, y) = (8.0 + 76.0 * (i % 3) as f32, 8.0 + 50.0 * (i / 3) as f32);
+                list.chrome_rect(
+                    Rect::new(x, y, 64.0, 40.0),
+                    4.0,
+                    1.0,
+                    [hue, 0.4, 0.6, 0.9],
+                    [0.8; 4],
+                );
+                list.text(TextBlock::new(format!("L{i}"), x + 6.0, y + 8.0).with_size(14.0));
+                list
+            })
+            .collect()
+    };
+    let base = [0.2; 9];
+    let mut recoloured = base;
+    recoloured[0] = 0.8;
+    recoloured[8] = 0.8;
+    // (what, hues, the comparison on)
+    let steps = [
+        ("first", base, true),
+        ("again", base, true),
+        ("first and ninth recoloured", recoloured, true),
+        ("comparison off", base, false),
+        ("comparison on", base, true),
+        ("again", base, true),
+        ("recoloured", recoloured, true),
+    ];
+    let mut failures = Vec::new();
+    let mut seen = Vec::new();
+    for (n, &(what, hues, on)) in steps.iter().enumerate() {
+        run.gpu.renderer().set_frame_comparison(on);
+        let lists = lists(&run, &hues);
+        let kept = layered(&mut run, &lists);
+        let s = run.gpu.renderer().frame_stats();
+        seen.push((s.plans_replayed, s.records_rewritten, s.place_bytes > 0));
+        let mut fresh = run.fresh();
+        let from_nothing = layered(&mut fresh, &lists);
+        if let Some((count, x, y)) = difference(&kept, &from_nothing, Tolerance::AtlasSampling) {
+            failures.push(format!(
+                "step {n} ({what}): {count} pixels differ, the first at ({x}, {y})"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(
+        seen,
+        [
+            (0, 0, true),
+            (8, 0, true),
+            // The ninth list has no place: only the first's record is rewritten.
+            (8, 1, true),
+            // Off, nothing is kept.
+            (0, 0, false),
+            (0, 0, true),
+            (8, 0, true),
+            (8, 1, true),
+        ],
+        "plans replayed, records rewritten, and whether places keep anything, per step"
     );
 }

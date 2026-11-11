@@ -113,6 +113,35 @@ then the dated batches in the order they were written.
       `one` 0.67 → 0.51, with the tree's share of `animated` up about
       0.08 ms (1.29 → 1.37) for classifying what it patches; rows and deep
       within the noise.
+- [x] **P2 — keep instance data on the GPU, upload what changed
+      (renderer, `frame-reuse.md` Phase 5).** `FrameArena` resets each frame
+      (`frame_arena.rs:51`), so `BatchDraws::fill` (`batch_draws.rs:61-114`)
+      and `write_buffer` copy and upload everything (about 13.5% of the
+      replayed frame). Per-family persistent buffers with the plan's ranges,
+      not a buffer per node (10,000 draw calls would cost more than the frame).
+      The most work of these.
+      **Done 2026-11-11.** Each place of the frame comparison keeps its batch
+      arrays, where each record went in them, and a GPU buffer per family
+      (`render/place_draws.rs`). A frame drawn from the place's kept plan,
+      its text refreshed in place, rewrites only the records classed `Look`
+      (analytic and circle records copied, sprites and nine-slices rebuilt
+      from their texture entries, text sweeps copied through their unit's
+      shift, MSDF icons compared byte for byte, the soup's vertices whole
+      when a soup command or the tail changed) and writes them in runs
+      joined across gaps under 4 KiB, or the family whole when the runs
+      exceed half of it; any other frame fills the place and uploads it
+      whole. A place unused for a frame is released at `begin_frame`, all of
+      them when the comparison is turned off; lists past the eighth use the
+      arenas as before. `RenderStats::records_rewritten`, `place_bytes`.
+      Tests: two GPU oracle sequences with their counts (a recolour per
+      family, soup and tail, shadowed and glowing text, an icon, all culled,
+      a place released and reused, the comparison toggled, nine lists), and
+      `set_check_plan` comparing every place with a fill from nothing, byte
+      for byte. Measured: bytes uploaded per replayed frame on the grid
+      2,976,176 → 176 (`static`), 352 (`one`, one record) and 1,760,176
+      (`animated`: the panels, no glyph quads); deep 1,760,176 → 176 /
+      352; rows unchanged. Frame means not yet compared with the build
+      before it at one load (`frame-reuse.md`, Outstanding).
 
 ---
 
