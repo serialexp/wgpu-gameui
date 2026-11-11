@@ -16,7 +16,7 @@ use crate::render::draw_plan::tests_support::Lists;
 use crate::render::frame_diff::{ContextKey, FrameSnapshot};
 use crate::text::TextBlock;
 use crate::text_select::TextKey;
-use crate::widgets::{DrawList, Stroke};
+use crate::widgets::{DrawList, ListShape, RecordCounts, RecordSpan, Stroke};
 
 /// One drawing call, of every kind of record a list holds.
 #[derive(Clone, Copy, Debug)]
@@ -635,6 +635,137 @@ fn a_shadow_the_clip_hides_is_dropped_and_the_soup_around_it_stays_one_run() {
         assert_eq!(placed.shadow_instance_count(), 0);
         assert_same(&direct, &placed, &format!("offset {offset:?}"));
     }
+}
+
+/// `span` cut in two, each kind of record at its middle.
+fn halves(span: RecordSpan) -> [RecordSpan; 2] {
+    let (s, e) = (span.start, span.end);
+    let mid = |a: u32, b: u32| a + (b - a) / 2;
+    let middle = RecordCounts {
+        vertices: mid(s.vertices, e.vertices),
+        indices: mid(s.indices, e.indices),
+        analytic: mid(s.analytic, e.analytic),
+        circles: mid(s.circles, e.circles),
+        nine_slices: mid(s.nine_slices, e.nine_slices),
+        icons: mid(s.icons, e.icons),
+        icons_msdf: mid(s.icons_msdf, e.icons_msdf),
+        texts: mid(s.texts, e.texts),
+        selectable: mid(s.selectable, e.selectable),
+        viewport_clips: mid(s.viewport_clips, e.viewport_clips),
+    };
+    [
+        RecordSpan {
+            start: s,
+            end: middle,
+        },
+        RecordSpan {
+            start: middle,
+            end: e,
+        },
+    ]
+}
+
+/// A placed piece recorded again with the shape it had, and patched where it
+/// was placed, is the list that placing the new piece makes, whether patched
+/// whole or in two spans. A patch the placement cannot take is declined.
+#[test]
+fn a_piece_patched_where_it_was_placed_is_the_new_piece_placed() {
+    let lists = Lists::new();
+    let mut rng = Rng(41);
+    let (mut patched, mut declined, mut reshaped) = (0, 0, 0);
+    for round in 0..400 {
+        let before = random_placed_calls(&mut rng, 3);
+        let after = random_placed_calls(&mut rng, 3);
+        let body = random_placed_calls(&mut rng, 12);
+        // The same calls, some recoloured or resized, some moved by quarter
+        // pixels: most keep the shape they had.
+        let mut next = body.clone();
+        for call in &mut next {
+            if rng.below(2) == 0 {
+                call.n = rng.below(1000);
+            }
+            if rng.below(3) == 0 {
+                call.at[0] += (rng.below(80) as f32 - 40.0) * 0.25;
+                call.at[1] += (rng.below(80) as f32 - 40.0) * 0.25;
+            }
+        }
+        let offset = random_offset(&mut rng);
+        let clip = random_clip(&mut rng);
+
+        let old = recorded(&lists, &body);
+        let mut list = recorded(&lists, &before);
+        let placed = list.append_translated(&old, offset, clip);
+        for call in &after {
+            call.draw(&mut list);
+        }
+        let mut shape = ListShape::default();
+        old.shape_into(&mut shape);
+        let new = recorded(&lists, &next);
+        if !new.has_shape(&shape) {
+            reshaped += 1;
+            continue;
+        }
+        let all = RecordSpan::all_of(&new);
+        let spans = if round % 2 == 0 {
+            vec![all]
+        } else {
+            halves(all).to_vec()
+        };
+        if !spans
+            .iter()
+            .all(|span| list.patch_translated(&placed, &new, span))
+        {
+            declined += 1;
+            continue;
+        }
+        patched += 1;
+        let fresh = appended_placed(&lists, [&before, &next, &after], offset, clip);
+        assert_same(
+            &fresh,
+            &list,
+            &format!("round {round}, offset {offset:?}, clip {clip:?}, {body:?} → {next:?}"),
+        );
+    }
+    assert!(
+        patched > 100 && declined > 0 && reshaped > 0,
+        "{patched} patched, {declined} declined, {reshaped} of another shape"
+    );
+}
+
+/// A placement whose clip culled a record cannot be patched; nor can a list
+/// of other counts.
+#[test]
+fn a_patch_declines_a_culled_placement_and_other_counts() {
+    let lists = Lists::new();
+    let call = |op, n| Call {
+        op,
+        at: [0.0, 0.0],
+        n,
+    };
+    let body = [call(Op::Chrome, 1), call(Op::Shadow, 1)];
+    let piece = recorded(&lists, &body);
+    let mut list = lists.list();
+    let hidden = Some(Rect::new(1000.0, 1000.0, 50.0, 50.0));
+    let placed = list.append_translated(&piece, [0.0, 0.0], hidden);
+    assert!(!placed.whole);
+    assert!(!list.patch_translated(&placed, &piece, &RecordSpan::all_of(&piece)));
+
+    let mut list = lists.list();
+    let placed = list.append_translated(&piece, [3.0, 4.0], None);
+    assert!(placed.whole);
+    let longer = recorded(&lists, &[call(Op::Chrome, 1), call(Op::Chrome, 2)]);
+    let more = recorded(
+        &lists,
+        &[
+            call(Op::Chrome, 1),
+            call(Op::Chrome, 2),
+            call(Op::Circle, 1),
+        ],
+    );
+    assert!(!list.patch_translated(&placed, &more, &RecordSpan::all_of(&more)));
+    // Of one shape, the shadow now a chrome rect: an analytic record of
+    // another kind is declined.
+    assert!(!list.patch_translated(&placed, &longer, &RecordSpan::all_of(&longer)));
 }
 
 #[test]

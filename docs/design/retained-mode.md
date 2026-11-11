@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11); Phase 6 and the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors' (2026-11-11); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-11
 
@@ -118,6 +118,27 @@ Tick items as they land.
       `UI_COMPARE_REUSE=1` runs either with the renderer's frame comparison on.
       Results and their reading in `bench/ui-compare/README.md` (under
       "Retained mode"); the questions below are answered from them.
+- [x] **Patching in place** (2026-11-11, beyond the plan; from the
+      comparison's follow-ups in `TODO.md`). Core: `append_translated` returns
+      a `Placed` (where each kind of record went, and whether none was culled);
+      `DrawList::patch_translated` overwrites a run of them with a list of the
+      same shape (`ListShape`: counts, paint runs, trailing soup, repaint
+      request, degenerate count), declining a culled placement, other counts, a
+      record now culled or an analytic record of another kind. The tree: a
+      paint mark records the node's list (a leaf's parent's) and queues each
+      list above it in its parent's `dirty_kids`; a list with only queued
+      children is brought up to date by patching their records where it
+      placed them, and hands the runs it patched up, so a change costs its
+      records at each level. Anything the patch cannot vouch for records the
+      parent instead. Oracles: 400 random patches in core against placing the
+      new piece (whole and in two spans), the declines pinned; the tree's random
+      oracle now makes three changes in some frames and asserts something was
+      patched. One grid cell: 1 list recorded, 2 records patched at each of
+      three levels, nothing placed (was 4 lists, 20 placements). Measured in
+      the comparison (10k grid, reuse on): the tree's share of `one` 0.89 →
+      0.001 ms, `deep-one` 0.145 → 0.001 ms, `rows-one` 0.065 → 0.027 ms;
+      `animated` unchanged (every cell still records its list). The cache
+      shape itself is still Bart's to choose (below).
 
 ### Outstanding
 
@@ -412,6 +433,21 @@ then drawn into its parent's list as a leaf). Paint marks walk up to the first
 node already marked in the same frame, not to the first stale one: a culled
 node stays stale, and stopping there would keep a later change from reaching
 the lists above it.
+
+Follow-up (2026-11-11, patching in place): rule 2 above no longer re-records a
+boundary only because something below it changed. A paint mark makes the node's
+own list stale (a leaf's, its parent's, since a leaf records into it), and every
+list above that is only queued, in its parent's `dirty_kids`. A list with nothing
+stale of its own is brought up to date child by child: a queued child is brought
+up to date, and if its list kept its shape (`DrawList::has_shape`) the records it
+changed are overwritten where this list placed them
+(`DrawList::patch_translated`), at the offset and under the clip they were placed
+with; the runs overwritten go up to this list's parent, which does the same. A
+child that is not placed in the list as it is (culled, or the list recorded
+since; a generation counter says which), moved, reshaped, or whose records the
+patch declines, records this list as rule 2 does. Marks still stop at a node
+marked in the same frame, and a node is queued once (`queued`), so a culled,
+changing subtree adds nothing per frame.
 
 ## Pointer input
 

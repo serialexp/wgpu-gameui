@@ -239,7 +239,7 @@ fn a_frame_with_nothing_changed_does_nothing_and_keeps_the_list() {
 }
 
 #[test]
-fn one_changed_cell_records_its_list_and_those_above_it_and_places_the_rest() {
+fn one_changed_cell_records_its_list_and_patches_those_above_it() {
     let mut ui = Ui::new(fonts());
     let cells = grid(&mut ui, 10, 10);
     ui.frame(at(0.0));
@@ -248,14 +248,40 @@ fn one_changed_cell_records_its_list_and_those_above_it_and_places_the_rest() {
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
     assert_eq!(stats.laid_out, 0);
+    // The cell alone: its box and its label.
+    assert_eq!((stats.recorded, stats.painted), (1, 2));
+    // Its list keeps its shape, so nothing is placed: its two records are
+    // overwritten where its row, the column and the root hold them.
+    assert_eq!((stats.placed, stats.copied), (0, 0));
+    assert_eq!(stats.patched, 2 * 3);
+    assert_eq!(stats.memo_runs, 1);
+    check(&mut ui);
+}
+
+/// A change that alters a list's shape records the lists above it, as far
+/// as one keeps its shape.
+#[test]
+fn a_change_of_shape_records_the_lists_above_it() {
+    let mut ui = Ui::new(fonts());
+    let cells = grid(&mut ui, 10, 10);
+    ui.frame(at(0.0));
+    // A transparent cell draws no box: one record fewer.
+    ui.set_fill(cells[37], [0.0; 4]);
+    ui.frame(at(0.0));
+    let stats = ui.frame_stats();
     // The cell, its row, the column and the root.
     assert_eq!(stats.recorded, 4);
-    // Their own drawing, and the cell's label.
-    assert_eq!(stats.painted, 5);
-    // The cell into its row, the row's ten cells, the column's ten rows,
-    // the column into the root.
-    assert_eq!(stats.placed, 1 + 10 + 10 + 1 - 1);
-    assert_eq!(stats.memo_runs, 1);
+    assert_eq!(stats.patched, 0);
+    check(&mut ui);
+    // Back: the same again, and the cell's list is recorded once more.
+    ui.set_fill(cells[37], [0.9, 0.1, 0.1, 1.0]);
+    ui.frame(at(0.0));
+    assert_eq!(ui.frame_stats().recorded, 4);
+    check(&mut ui);
+    // A recolour now keeps the shape.
+    ui.set_fill(cells[37], [0.1, 0.9, 0.1, 1.0]);
+    ui.frame(at(0.0));
+    assert_eq!(ui.frame_stats().recorded, 1);
     check(&mut ui);
 }
 
@@ -398,21 +424,20 @@ fn a_change_in_ten_thousand_rows_costs_the_rows_in_view() {
     assert_eq!(stats.laid_out, 2);
     // Those, the list and the root.
     assert_eq!(stats.visited, 4);
-    // The row, the list and the root.
-    assert_eq!(stats.recorded, 3);
-    // The list in the root, the twenty rows in view in the list, and the
-    // changed row's label.
-    assert_eq!(stats.examined, 1 + 20 + 1);
-    assert_eq!(stats.placed, 1 + 20);
+    // The row alone, looking at its label; its two records are patched in
+    // the list and the root.
+    assert_eq!((stats.recorded, stats.examined, stats.placed), (1, 1, 0));
+    assert_eq!(stats.patched, 2 * 2);
     check(&mut ui);
 
     // Out of view: its row is not drawn, but the list's view of it is
-    // recorded again.
+    // recorded again (the list cannot tell it stayed out of view), and the
+    // root patched with it.
     ui.set_text(labels[0], Text::new("changed", 12.0));
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
     assert_eq!((stats.measured, stats.laid_out, stats.visited), (1, 2, 4));
-    assert_eq!((stats.recorded, stats.examined, stats.placed), (2, 21, 21));
+    assert_eq!((stats.recorded, stats.examined, stats.placed), (1, 20, 20));
     check(&mut ui);
 }
 
@@ -529,10 +554,12 @@ fn a_painter_is_drawn_again_when_its_value_changes_and_at_the_time_it_asks() {
     assert_eq!(ui.next_repaint(), Some(2.0));
     check(&mut ui);
 
+    // The host and its painter; the root has the host's records patched.
     ui.set(tone, 0.75);
     ui.frame(at(1.5));
     let stats = ui.frame_stats();
-    assert_eq!((stats.painted, stats.memo_runs), (3, 1));
+    assert_eq!((stats.painted, stats.memo_runs), (2, 1));
+    assert_eq!(stats.patched, 1);
     check(&mut ui);
 }
 
@@ -852,6 +879,7 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let quiet = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
+    let mut patched = 0;
     for round in 0..40 {
         let mut ui = Ui::new(fonts.clone());
         let mut made = Made::default();
@@ -863,83 +891,89 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
         ui.frame(context);
         std::panic::set_hook(Box::new(|_| {}));
         for step in 0..30 {
-            made.nodes.retain(|&n| is_live(&ui, n));
-            let all = &made.nodes;
-            let Some(&node) = all.get(rng.below(all.len().max(1) as u64) as usize) else {
-                break;
-            };
-            match rng.below(14) {
-                0 => ui.set_fill(node, rng.colour()),
-                1 => ui.set_look(node, random_look(&mut rng)),
-                2 => ui.set_width(node, random_size(&mut rng)),
-                3 => ui.set_height(node, random_size(&mut rng)),
-                4 => ui.set_stack(node, random_stack(&mut rng)),
-                5 => {
-                    let has_text = ui.nodes[node.index as usize].text.is_some();
-                    if has_text {
-                        if rng.chance(2) {
-                            ui.set_text(node, random_text(&mut rng));
-                        } else {
-                            ui.set_text_color(node, rng.colour());
+            // One change a frame, or now and then three: a list with more
+            // than one child changed.
+            let changes = if rng.chance(3) { 3 } else { 1 };
+            for _ in 0..changes {
+                made.nodes.retain(|&n| is_live(&ui, n));
+                let all = &made.nodes;
+                let Some(&node) = all.get(rng.below(all.len().max(1) as u64) as usize) else {
+                    break;
+                };
+                match rng.below(14) {
+                    0 => ui.set_fill(node, rng.colour()),
+                    1 => ui.set_look(node, random_look(&mut rng)),
+                    2 => ui.set_width(node, random_size(&mut rng)),
+                    3 => ui.set_height(node, random_size(&mut rng)),
+                    4 => ui.set_stack(node, random_stack(&mut rng)),
+                    5 => {
+                        let has_text = ui.nodes[node.index as usize].text.is_some();
+                        if has_text {
+                            if rng.chance(2) {
+                                ui.set_text(node, random_text(&mut rng));
+                            } else {
+                                ui.set_text_color(node, rng.colour());
+                            }
                         }
                     }
-                }
-                6 => {
-                    let d = &ui.nodes[node.index as usize];
-                    if d.text.is_none() && d.custom.is_none() {
-                        random_subtree(&mut ui, &mut rng, node, 2, &mut made);
+                    6 => {
+                        let d = &ui.nodes[node.index as usize];
+                        if d.text.is_none() && d.custom.is_none() {
+                            random_subtree(&mut ui, &mut rng, node, 2, &mut made);
+                        }
                     }
-                }
-                7 => match ui.hovered() {
-                    // Now and then what the pointer is on.
-                    Some(hovered) if hovered != root && rng.chance(2) => ui.remove(hovered),
-                    _ => ui.remove(node),
-                },
-                8 => {
-                    if ui.nodes[node.index as usize].scroll.is_some() {
-                        ui.scroll_by(node, rng.below(80) as f32 - 30.0);
+                    7 => match ui.hovered() {
+                        // Now and then what the pointer is on.
+                        Some(hovered) if hovered != root && rng.chance(2) => ui.remove(hovered),
+                        _ => ui.remove(node),
+                    },
+                    8 => {
+                        if ui.nodes[node.index as usize].scroll.is_some() {
+                            ui.scroll_by(node, rng.below(80) as f32 - 30.0);
+                        }
                     }
-                }
-                9 => {
-                    if ui.nodes[node.index as usize].offset.is_some() {
-                        ui.set_offset(node, [rng.below(80) as f32 - 20.0, 3.0]);
+                    9 => {
+                        if ui.nodes[node.index as usize].offset.is_some() {
+                            ui.set_offset(node, [rng.below(80) as f32 - 20.0, 3.0]);
+                        }
                     }
-                }
-                11 => {
-                    // Half the time into the middle of a node.
-                    let [x, y] = if rng.chance(2) {
-                        middle(&ui, node)
-                    } else {
-                        rng.point()
-                    };
-                    ui.pointer_moved(x, y);
-                }
-                12 => {
-                    let delta = rng.below(90) as f32 - 30.0;
-                    if rng.chance(2) {
-                        ui.wheel(0.0, delta);
-                    } else {
-                        ui.wheel(delta, 0.0);
+                    11 => {
+                        // Half the time into the middle of a node.
+                        let [x, y] = if rng.chance(2) {
+                            middle(&ui, node)
+                        } else {
+                            rng.point()
+                        };
+                        ui.pointer_moved(x, y);
                     }
-                }
-                13 => {
-                    let button = rng.pick(&[Button::Primary, Button::Secondary]);
-                    match rng.below(5) {
-                        0 => ui.pointer_left(),
-                        1 => ui.cancel_pointer(),
-                        _ => ui.pointer_button(button, rng.chance(2)),
+                    12 => {
+                        let delta = rng.below(90) as f32 - 30.0;
+                        if rng.chance(2) {
+                            ui.wheel(0.0, delta);
+                        } else {
+                            ui.wheel(delta, 0.0);
+                        }
                     }
-                }
-                _ => {
-                    context.viewport = [
-                        rng.pick(&[640.0, 300.0, 151.5]),
-                        rng.pick(&[480.0, 200.0, 97.0]),
-                    ];
+                    13 => {
+                        let button = rng.pick(&[Button::Primary, Button::Secondary]);
+                        match rng.below(5) {
+                            0 => ui.pointer_left(),
+                            1 => ui.cancel_pointer(),
+                            _ => ui.pointer_button(button, rng.chance(2)),
+                        }
+                    }
+                    _ => {
+                        context.viewport = [
+                            rng.pick(&[640.0, 300.0, 151.5]),
+                            rng.pick(&[480.0, 200.0, 97.0]),
+                        ];
+                    }
                 }
             }
             OUTSIDE.set(OUTSIDE.get() + 1);
             context.now += rng.pick(&[0.0, 0.4, 1.0, 2.5]);
             ui.frame(context);
+            patched += ui.frame_stats().patched;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&mut ui)));
             if let Err(e) = result {
                 std::panic::set_hook(quiet);
@@ -985,4 +1019,7 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
         }
     }
     std::panic::set_hook(quiet);
+    // Lists kept their shape and were patched in their ancestors', so the
+    // oracle checked patching too.
+    assert!(patched > 0, "nothing was patched");
 }

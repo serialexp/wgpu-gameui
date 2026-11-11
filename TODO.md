@@ -26,14 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P1 — patch changed records in place in ancestors' lists (retained).**
-      Today a stale node re-records and every ancestor re-appends all its
-      children (`paint.rs:28-49`, `:91-108`; grid `one` copies 20,000 records).
-      Keep each placement's ranges per family; when a re-recorded child keeps
-      its counts and command shape, overwrite its translated records at each
-      ancestor, else fall back. Estimate: grid `one` tree 0.88 ms → µs, deep
-      `one` 0.135 ms → µs, `animated` 5 → ~1 ms. Check: `FrameStats::copied`,
-      the `draw_from_nothing` oracle.
 - [ ] **P1 — not every container keeps a list (retained).** 10,001 lists
       hold 30 MB for the grid's 20,000 records (about 2.3 KB per two-record
       list: `DrawList`'s 16 arrays and pre-pushed stacks,

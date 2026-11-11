@@ -178,6 +178,7 @@ impl Bench {
                 ("recorded", f.recorded as u64),
                 ("placed", f.placed as u64),
                 ("copied", f.copied),
+                ("patched", f.patched),
                 ("examined", f.examined as u64),
                 ("memo_runs", f.memo_runs),
             ],

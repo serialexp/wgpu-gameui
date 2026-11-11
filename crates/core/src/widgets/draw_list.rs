@@ -931,7 +931,33 @@ impl DrawList {
     /// Records are copied one at a time, so this costs a pass over `other`'s
     /// records; [`append`](Self::append) is the cheaper call when nothing
     /// moves and nothing is cut.
-    pub fn append_translated(&mut self, other: &DrawList, offset: [f32; 2], clip: Option<Rect>) {
+    ///
+    /// Returns where the records went, for
+    /// [`patch_translated`](Self::patch_translated).
+    pub fn append_translated(
+        &mut self,
+        other: &DrawList,
+        offset: [f32; 2],
+        clip: Option<Rect>,
+    ) -> Placed {
+        let at = self.record_counts();
+        self.append_translated_records(other, offset, clip);
+        let placed_analytic = self.analytic_instances.len() as u32 - at.analytic;
+        Placed {
+            offset,
+            clip,
+            at,
+            of: other.record_counts(),
+            whole: placed_analytic == other.analytic_instances.len() as u32,
+        }
+    }
+
+    fn append_translated_records(
+        &mut self,
+        other: &DrawList,
+        offset: [f32; 2],
+        clip: Option<Rect>,
+    ) {
         let place = Placement {
             dx: offset[0],
             dy: offset[1],
@@ -3602,6 +3628,10 @@ fn scaled_spec(block: &TextBlock, scale: f32) -> crate::shaping::LayoutSpec<'_> 
     spec.letter_spacing *= scale;
     spec
 }
+
+#[path = "draw_list_patch.rs"]
+mod patch;
+pub use patch::{ListShape, Placed, RecordCounts, RecordSpan};
 
 #[cfg(test)]
 #[path = "draw_list_caret_tests.rs"]

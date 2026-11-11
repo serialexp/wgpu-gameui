@@ -33,6 +33,27 @@ then the dated batches in the order they were written.
       `one` / `animated` 2.35 / 2.49 / 2.55 → about 1.6 / 1.7 / 1.8 ms;
       retained `static` 1.57 → 0.68 ms, renderer share of retained `one`
       1.81 → 1.12 ms; `glyphs_placed=0` on replayed frames.
+- [x] **P1 — patch changed records in place in ancestors' lists (retained).**
+      Today a stale node re-records and every ancestor re-appends all its
+      children (`paint.rs:28-49`, `:91-108`; grid `one` copies 20,000 records).
+      Keep each placement's ranges per family; when a re-recorded child keeps
+      its counts and command shape, overwrite its translated records at each
+      ancestor, else fall back. Estimate: grid `one` tree 0.88 ms → µs, deep
+      `one` 0.135 ms → µs, `animated` 5 → ~1 ms. Check: `FrameStats::copied`,
+      the `draw_from_nothing` oracle.
+      **Done 2026-11-11.** `append_translated` returns a `Placed`, and
+      `DrawList::patch_translated` overwrites a placed list's records with a
+      list of the same `ListShape`; the tree queues changed lists in their
+      parents' `dirty_kids` and patches them where they were placed, handing
+      the runs patched up (`retained/src/paint.rs`, `Ui::update`). Tests: the
+      core patch oracle (400 random rounds, whole and in two spans) and its
+      declines, the tree's random oracle with several changes a frame, and
+      the counted grid/rows/painter tests (one cell: 1 list recorded, 6
+      records patched, 0 placed). Measured against the tree before it (same
+      core, alternate runs, load 5 to 8): tree share of grid `one` 0.89 →
+      0.001 ms (whole frame with reuse 1.8 → 0.65 ms), `deep-one` 0.145 →
+      0.001 ms, `rows-one` 0.065 → 0.027 ms, `animated` unchanged (each cell
+      still records its own list).
 
 ---
 
