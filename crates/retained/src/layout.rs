@@ -356,7 +356,7 @@ impl Ui {
     }
 
     /// Lay out what is dirty in the stacked children of `n`, a scroll that
-    /// defers: the children it defers only within a viewport of its view,
+    /// defers: the children it defers only near its view (`near_margin`),
     /// any other wherever it is. Its children are in order along the stack,
     /// so when it defers them all the first near the view is found by
     /// binary search and the walk stops past the last.
@@ -367,7 +367,8 @@ impl Ui {
         let view = d.size[m];
         let s = d.scroll.as_ref().expect("a scrolling node");
         let (applied, mixed) = (s.applied, s.mixed);
-        let (lo, hi) = (applied - view, applied + 2.0 * view);
+        let margin = self.near_margin(view, m);
+        let (lo, hi) = (applied - margin, applied + view + margin);
         let kids = self.take_kids(n, false);
         let nodes = &self.nodes;
         let first = if mixed {
@@ -396,6 +397,15 @@ impl Ui {
             self.layout(c, room);
         }
         self.put_kids(n, false, kids);
+    }
+
+    /// How far past a scroll's view, before and after, its children are laid
+    /// out: a viewport (`view`, its length along axis `m`), but no less than
+    /// half the window's length along that axis, so that only long lists
+    /// put much off.
+    fn near_margin(&self, view: f32, m: usize) -> f32 {
+        let window = self.context.map_or(0.0, |c| snap(c.viewport[m]).max(0.0));
+        view.max(window * 0.5)
     }
 
     /// Lay out `n`'s children and return its content's size. A scroll that

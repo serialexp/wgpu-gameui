@@ -148,7 +148,7 @@ then the dated batches in the order they were written.
       children can defer their layout until in view; extent, clamping and hit
       testing must cope. Check: `measured` at build = 54.
       **Done 2026-11-12.** Bart's choices: automatic; laid out within one
-      viewport of the view either side; children fixed along the stack and
+      viewport of the view either side, at least half the window; children fixed along the stack and
       fixed, filling or start-hugging across it, in a scroll whose content
       is exact across; a far child that changes waits too. A scroll sizes
       those children without laying them out (`Ui::defer`), lays out the

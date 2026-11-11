@@ -180,7 +180,8 @@ Tick items as they land.
       exact length across it now sizes the stacked children it can without
       laying them out (`layout::deferrable`: fixed along the stack, and
       across it fixed, filling, or hugging at the start) and lays out only
-      those within a viewport of its view, before and after; the rest are
+      those within a viewport of its view, before and after, or half the
+      window when that is more (`near_margin`); the rest are
       laid out when a scroll brings them near (`layout_near_view`, reached
       through `mark_below` when the scroll moves). A child put off is
       flagged `deferred`, and is neither drawn nor hit until it is laid out;
@@ -196,7 +197,7 @@ Tick items as they land.
       content changes, the scroll's stack and size and the viewport: the
       frames and hits are the same, and the random oracle passes (30,542
       rows put off, 3,026 caught up with, 972 frames with rows it cannot
-      defer). Mutations caught: no mark when the scroll moves (five tests),
+      defer); `a_short_scroll_lays_out_to_half_the_window_past_its_view`. Mutations caught: no mark when the scroll moves (five tests),
       no paint mark when a row put off is resized (the twin test alone; the
       oracle from nothing reads the same stale data). The bench's rows build
       measures 108 labels in its first frame and 162 in its second (three
@@ -452,11 +453,13 @@ content's length across the stack is exact, a stacked child whose length
 along the stack is fixed, and across it fixed, filling, or hugging at the
 start (where its place does not depend on that length), is sized without
 being laid out; after the scroll is clamped, the children within one
-viewport of the view, before and after, are laid out, and the rest when a
-scroll brings them near. Extent and clamping need nothing else: they depend
+viewport of the view, before and after (but at least half the window's length
+along the scroll's axis), are laid out, and the rest when a scroll brings
+them near. Extent and clamping need nothing else: they depend
 on lengths along the stack, which are fixed. A child put off is neither drawn
-nor hit, so one whose drawing reaches more than a viewport past its box (a
-shadow longer than the view) is not drawn while it is that far away. A child
+nor hit, so one whose drawing reaches more than that margin past its box (a
+shadow longer than the view and half the window) is not drawn while it is
+that far away. A child
 laid out before that changes while far from the view keeps its last layout
 until it comes near; `Ui::rect` gives what is in it as last laid out.
 
@@ -649,6 +652,10 @@ stack (`child_grow`) for the binary search, not only nodes that clip.
   filling, or hugging at the start) in a scroll whose content's length
   across it is exact; and a child laid out before that changes while far
   from the view is put off too, not laid out at once.
+
+  Follow-up (Bart, 2026-11-12): the margin is no less than half the window's
+  length along the scroll's axis. The aim is to stop massive lists, not to
+  restrict scrolls shorter than half a screen.
 
 ## Questions only building can answer
 

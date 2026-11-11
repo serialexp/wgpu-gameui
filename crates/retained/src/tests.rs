@@ -569,6 +569,33 @@ fn a_scroll_lays_out_only_the_rows_near_its_view() {
     check(&mut ui);
 }
 
+/// A scroll shorter than half the window lays out its rows to half the
+/// window past its view, not to its own length.
+#[test]
+fn a_short_scroll_lays_out_to_half_the_window_past_its_view() {
+    let mut ui = Ui::new(fonts());
+    let list = ui.add(ui.root(), fixed(300.0, 100.0).scroll());
+    for i in 0..1_000 {
+        let row = ui.add(
+            list,
+            Spec::new().width(Size::Fill(1.0)).height(Size::Fixed(20.0)),
+        );
+        ui.add(
+            row,
+            Spec::new().text(Text::new(format!("row {i}"), 12.0), [1.0; 4]),
+        );
+    }
+    // In view: rows 0 to 4; half the window (240 px) past it: to row 16.
+    ui.frame(at(0.0));
+    assert_eq!(ui.frame_stats().measured, 17);
+    check(&mut ui);
+    // At row 500: rows 488 to 516.
+    ui.scroll_to(list, 10_000.0);
+    ui.frame(at(0.0));
+    assert_eq!(ui.frame_stats().measured, 29);
+    check(&mut ui);
+}
+
 /// What frames over ten thousand rows take on this machine. Prints only;
 /// run with `--ignored --nocapture` in release.
 #[test]
@@ -1202,24 +1229,15 @@ fn random_row_spec(rng: &mut Rng, m: usize, clips: bool) -> Spec {
     if clips { spec.clip() } else { spec }
 }
 
-/// A length for `scroll_of_rows`'s scroll: one that fills, hugs, or is 100
-/// to 300 pixels. Along the stack, the view is then no shorter than the
-/// viewport (97 pixels at least) or holds all the content, so what a row
-/// draws past its box (a shadow) does not reach the view from a viewport
-/// away, where the tree that defers would not draw it.
-fn list_size(rng: &mut Rng) -> Size {
-    match rng.below(4) {
-        0 => Size::Fill(1.0),
-        1 => Size::Hug,
-        _ => Size::Fixed(100.0 + rng.below(5) as f32 * 50.0),
-    }
-}
-
 /// A scroll, 100 to 300 pixels along its stack, of 30 to 180 random rows.
+/// Its sizes may change to any (`random_size`), a few pixels included: what
+/// a row draws past its box (a shadow, 15 pixels at most) still does not
+/// reach the view from where the tree that defers stops laying rows out,
+/// half the window (48.5 pixels at least) past it.
 fn scroll_of_rows(ui: &mut Ui, rng: &mut Rng) -> (Node, Vec<(Node, bool)>, Made) {
     let stack = random_stack(rng);
     let m = stack.direction.main();
-    let mut sizes = [list_size(rng); 2];
+    let mut sizes = [random_size(rng); 2];
     sizes[m] = Size::Fixed(100.0 + rng.below(5) as f32 * 50.0);
     let list = ui.add(
         ui.root(),
@@ -1378,7 +1396,7 @@ fn a_scroll_that_puts_rows_off_draws_what_one_laying_them_out_draws() {
                         both(&mut a, &mut b, |ui| ui.set_stack(list, stack));
                     }
                     11 => {
-                        let size = list_size(&mut rng);
+                        let size = random_size(&mut rng);
                         let width = rng.chance(2);
                         both(&mut a, &mut b, |ui| {
                             if width {
