@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 4 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input; 2026-11-10 to 11); Phases 5 and 6 outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11); Phase 6 and the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-11
 
@@ -106,6 +106,18 @@ Tick items as they land.
       not pruning, no hover refresh in the frame, removal forgetting the
       pointer, a click on any release, stacked or absolute children searched
       in the wrong order, the wheel ignoring the axis).
+- [x] **Phase 5 — comparison** (2026-11-11). `ui-compare-gameui-retained`, a
+      second binary in the bench's `gameui` package (which now keeps the GPU
+      setup in its `lib.rs`): the grid scenes, a `rows` scene (10,000 rows of
+      20 px scrolling through the window: static, one value changing, scrolling,
+      hovering) and, beyond the plan, a `deep` scene (10,000 leaves under four
+      levels of ten), all added to the immediate binary too. Per frame the
+      whole frame and the tree's share; builds; counters for the tree's work,
+      what it holds (`TreeStats` gained `list_bytes` and `node_bytes`, from the
+      new `DrawList::heap_bytes`), layouts shaped and the renderer's replays;
+      `UI_COMPARE_REUSE=1` runs either with the renderer's frame comparison on.
+      Results and their reading in `bench/ui-compare/README.md` (under
+      "Retained mode"); the questions below are answered from them.
 
 ### Outstanding
 
@@ -115,14 +127,22 @@ Tick items as they land.
       limit, `pressed` meaning the press is held.
 - [ ] **Icon content.** Phase 3 built text and custom painters; `Icon` is not
       a content kind yet.
-- [ ] **Phase 5 — comparison.** `ui-compare-gameui-retained`: the grid scenes
-      (`static`, `animated`, `one`) and a new `rows` scene (thousands of
-      fixed-height rows in a scrolling column, one value changing; scrolling;
-      hovering), gameui immediate against retained: time per frame, cold build,
-      work and memory counters.
 - [ ] **Phase 6 — an example in a window.** Scrolling list, hover styling, a click
       counter.
-- [ ] **Question: memory and copy cost of whole-subtree caches** (below).
+- [ ] **Bart to decide on the cache shape** now that it is measured (below,
+      under the first question): keep whole-subtree caches, or per-node lists
+      patched in place, or explicit boundaries.
+- [ ] **Text shaped twice** (found by the comparison): a text is measured at
+      the width offered and drawn at its measured width, and the layout cache
+      keys on the width, so each new or changed text is shaped twice (512
+      layouts in 230 `rows-one` frames against 229 in immediate mode).
+- [ ] **Builds shape every text, in view or not** (found by the comparison):
+      the rows build takes 108 ms, almost all shaping 10,000 labels in rows of
+      fixed height; immediate mode shapes the 54 in view.
+- [ ] **Small lists cost about 2.3 KB each** (found by the comparison): a grid
+      cell's list of two records, so 10,000 cells keep 23 MB of lists for
+      records the root holds again in 6.9 MB; and the node table is 576 bytes
+      a node.
 - [ ] **Defer: keyboard focus, text input, selection and highlight** in retained
       subtrees.
 - [ ] **Defer: virtualised lists** (an item count and a row factory instead of a
@@ -496,10 +516,30 @@ stack (`child_grow`) for the binary search, not only nodes that clip.
   record again at the root. Counted in the comparison (bytes held, records copied
   per frame) on the grid, the rows scene and a deep tree; settles whether the
   cache shape changes to per-node lists or explicit boundaries.
+
+  Measured (2026-11-11, `bench/ui-compare/README.md`): the grid of 10,000
+  cells holds 40,000 records (each twice) in 30 MB of lists against 6.9 MB
+  for immediate mode's one list, most of it the cells' own small lists; the
+  deep tree holds each leaf four times (40,000 records, 10.5 MB against 2.9).
+  One changed cell copies all 20,000 of the grid root's records (0.88 ms of
+  tree work at 10,000 cells), and one changed leaf of the deep tree copies
+  11,100 (0.135 ms). The decision on the shape is Bart's (Outstanding).
 - **The frame floor.** What a retained frame with one change costs next to an
   immediate one, at each size: the point of the prototype.
+
+  Measured: with one change the whole frame costs about what immediate mode's
+  does on the flat grid (4.75 against 4.56 ms at 10,000 cells, the render
+  being most of both), less in the deep tree (0.56 against 0.70), and more for
+  a changed label in the rows (0.266 against 0.206, from shaping it twice).
+  With nothing changed the tree does no work and a host can skip the frame.
+  With everything changed it costs about twice immediate mode at 10,000
+  cells.
 - **Prop storage.** Bound props allocate a memo each; at 10,000 cells with a bound
   colour each, whether that allocation shows in the cold build.
+
+  Not settled on its own: the rows scene binds a memo and a signal per row,
+  but its build is almost all text shaping, so the allocation does not show
+  in the profile.
 
 ## Review
 

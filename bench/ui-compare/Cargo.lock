@@ -2493,6 +2493,7 @@ dependencies = [
  "ui-compare-common",
  "wgpu 24.0.5",
  "wgpu-gameui",
+ "wgpu-gameui-retained",
 ]
 
 [[package]]
@@ -2983,6 +2984,13 @@ dependencies = [
  "ttf-parser",
  "unicode-segmentation",
  "wgpu 24.0.5",
+]
+
+[[package]]
+name = "wgpu-gameui-retained"
+version = "1.0.0"
+dependencies = [
+ "wgpu-gameui",
 ]
 
 [[package]]

@@ -7,5 +7,6 @@ publish.workspace = true
 [dependencies]
 ui-compare-common = { path = "../common" }
 wgpu-gameui = { path = "../../../crates/core" }
+wgpu-gameui-retained = { path = "../../../crates/retained" }
 wgpu = "24"
 pollster = "0.4"

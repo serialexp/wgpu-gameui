@@ -251,6 +251,126 @@ pub fn check_text_frame(library: &str, scene: &str, rgba: &[u8]) {
     );
 }
 
+// ---- Rows scene ------------------------------------------------------------
+//
+// A long list: thousands of fixed-height rows in a scrolling column that fills
+// the window, as a log, a file list or a transcript would be. Only the rows in
+// view are drawn by anything that culls; an immediate-mode caller finds them by
+// arithmetic, a retained tree by its own culling.
+
+/// Rows in the list.
+pub const ROWS: usize = 10_000;
+/// Height of a row, in logical pixels.
+pub const ROW_H: f32 = 20.0;
+/// Text size of a row's label.
+pub const ROW_PX: f32 = 13.0;
+/// Where a row's label sits inside the row (left, top).
+pub const ROW_PAD: [f32; 2] = [8.0, 3.0];
+/// The scroll offset the rows scenes start at: the middle of the list, so
+/// culling has rows on both sides.
+pub const ROW_START: f32 = 5_000.0 * ROW_H;
+/// The row whose value changes in `rows-one`; in view at [`ROW_START`].
+pub const ROW_CHANGING: usize = 5_010;
+/// Scroll speed of `rows-scroll`, in logical pixels per frame.
+pub const ROW_SCROLL_PX: f32 = 3.0;
+/// `rows-scroll` scrolls back to [`ROW_START`] after this far.
+pub const ROW_SCROLL_MAX: f32 = 2_000.0;
+/// Colour of a row's label (8-bit RGB).
+pub const ROW_TEXT: [u8; 3] = [230, 232, 238];
+
+/// What changes between frames of the rows scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowMode {
+    /// Nothing changes.
+    Static,
+    /// The value shown in row [`ROW_CHANGING`] changes every frame.
+    One,
+    /// The list scrolls by [`ROW_SCROLL_PX`] every frame.
+    Scroll,
+    /// The pointer moves down 3 px every frame and the row under it is
+    /// drawn in the hover colour.
+    Hover,
+}
+
+/// The rows scenarios, with the scene name they are reported as.
+pub const ROW_MODES: [(&str, RowMode); 4] = [
+    ("rows-stat", RowMode::Static),
+    ("rows-one", RowMode::One),
+    ("rows-scrl", RowMode::Scroll),
+    ("rows-hovr", RowMode::Hover),
+];
+
+/// The label of row `i` showing `value`.
+pub fn row_text(i: usize, value: u64) -> String {
+    format!("{i:05}   the value of this row is {value:06}")
+}
+
+/// The value row `i` shows on `frame`.
+pub fn row_value(mode: RowMode, i: usize, frame: u64) -> u64 {
+    if mode == RowMode::One && i == ROW_CHANGING {
+        frame
+    } else {
+        0
+    }
+}
+
+/// The list's scroll offset on `frame`.
+pub fn row_offset(mode: RowMode, frame: u64) -> f32 {
+    match mode {
+        RowMode::Scroll => ROW_START + (frame as f32 * ROW_SCROLL_PX) % ROW_SCROLL_MAX,
+        _ => ROW_START,
+    }
+}
+
+/// Where the pointer is on `frame` of `rows-hover`, in window coordinates.
+pub fn row_pointer(frame: u64) -> [f32; 2] {
+    [400.0, 1.0 + (frame as f32 * 3.0) % (HEIGHT - 2.0)]
+}
+
+/// The fill of row `i` (8-bit RGB), hovered or not.
+pub fn row_fill(i: usize, hovered: bool) -> [u8; 3] {
+    if hovered {
+        [70, 110, 160]
+    } else if i.is_multiple_of(2) {
+        [34, 36, 44]
+    } else {
+        [44, 47, 58]
+    }
+}
+
+// ---- Deep scene ------------------------------------------------------------
+//
+// The grid again, but as a tree: [`DEEP_FANOUT`] children per node,
+// [`DEEP_DEPTH`] levels, alternating rows and columns that share their
+// parent's room equally, with a filled box (no label) at each leaf. An
+// immediate-mode caller draws only the leaves; a tree that keeps a list per
+// node holds each leaf's records once per level above it.
+
+/// Children of each inner node.
+pub const DEEP_FANOUT: usize = 10;
+/// Levels of inner nodes above the leaves; the first stacks a row.
+pub const DEEP_DEPTH: u32 = 4;
+/// Leaves: `DEEP_FANOUT ^ DEEP_DEPTH`.
+pub const DEEP_LEAVES: usize = DEEP_FANOUT.pow(DEEP_DEPTH);
+
+/// The rectangle of leaf `i` (x, y, width, height), with leaves numbered in
+/// tree order: the first level's index is the most significant digit.
+pub fn deep_leaf(i: usize) -> [f32; 4] {
+    let mut r = [0.0, 0.0, WIDTH, HEIGHT];
+    let mut rest = i;
+    let mut div = DEEP_LEAVES;
+    for level in 0..DEEP_DEPTH {
+        div /= DEEP_FANOUT;
+        let k = (rest / div) as f32;
+        rest %= div;
+        let axis = (level % 2) as usize;
+        let share = r[2 + axis] / DEEP_FANOUT as f32;
+        r[axis] += k * share;
+        r[2 + axis] = share;
+    }
+    r
+}
+
 /// Frames timed per case after the warm-up.
 const SAMPLES: usize = 200;
 /// Frames run before timing, so caches, atlases and buffers are warm.
@@ -336,9 +456,36 @@ pub fn report_scene(library: &str, scene: &str, s: &Stats) {
 }
 
 /// Whether the text scenes should run: not when the first argument asks for
-/// one grid size.
+/// one grid size or another group of scenes.
 pub fn text_scenes_wanted() -> bool {
-    matches!(std::env::args().nth(1).as_deref(), None | Some("text"))
+    group_wanted("text")
+}
+
+/// Whether the scene group `name` (`text`, `rows`, `deep`) should run: all
+/// of them run when no argument is given, or only the one named first.
+pub fn group_wanted(name: &str) -> bool {
+    std::env::args().nth(1).is_none_or(|a| a == name)
+}
+
+/// Print one line of counters for a case: `library scene key=value ...`.
+pub fn report_counts(library: &str, scene: &str, counts: &[(&str, u64)]) {
+    let mut line = format!("{library:<10} {scene:<9} counts");
+    for (k, v) in counts {
+        line.push_str(&format!("  {k}={v}"));
+    }
+    println!("{line}");
+}
+
+/// Time `run` `samples` times, with no warm-up: for work done once (building
+/// a scene from nothing), where a warm-up would be the thing measured.
+pub fn measure_each(samples: usize, mut run: impl FnMut()) -> Stats {
+    let mut times = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let t = Instant::now();
+        run();
+        times.push(t.elapsed().as_secs_f64() * 1e6);
+    }
+    stats_from(times)
 }
 
 /// Whether the text scene `name` should run: all of them, or the one given as
@@ -350,7 +497,10 @@ pub fn scene_wanted(name: &str) -> bool {
 /// Counts to run: all of them, the one given as the first argument, or none
 /// when that argument is `text` (only the text scenes).
 pub fn counts() -> Vec<usize> {
-    if std::env::args().nth(1).as_deref() == Some("text") {
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("text" | "rows" | "deep")
+    ) {
         return Vec::new();
     }
     match std::env::args().nth(1).and_then(|a| a.parse().ok()) {
@@ -373,14 +523,19 @@ pub fn lit_fraction(rgba: &[u8]) -> f64 {
 /// Save an RGBA frame under `shots/<library>-<n>.png` (next to the harness),
 /// to look at, and check that the scene is really in it.
 pub fn check_frame(library: &str, n: usize, rgba: &[u8]) {
+    check_scene_frame(library, &n.to_string(), rgba);
+}
+
+/// [`check_frame`] for a scene saved as `shots/<library>-<scene>.png`.
+pub fn check_scene_frame(library: &str, scene: &str, rgba: &[u8]) {
     let lit = lit_fraction(rgba);
     assert!(
         lit > 0.5,
-        "{library}: only {:.0}% of the frame is lit for {n} cells",
+        "{library}: only {:.0}% of the frame is lit for {scene}",
         lit * 100.0
     );
-    save_png(library, &n.to_string(), rgba);
-    eprintln!("{library} {n} cells: {:.0}% of the frame lit", lit * 100.0);
+    save_png(library, scene, rgba);
+    eprintln!("{library} {scene}: {:.0}% of the frame lit", lit * 100.0);
 }
 
 /// Save an RGBA frame as `shots/<library>-<name>.png` (next to the harness).

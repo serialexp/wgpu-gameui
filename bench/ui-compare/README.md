@@ -26,6 +26,9 @@ cargo build --release                          # gameui, egui, iced
 (cd rune && cargo build --release)
 DISPLAY=:0 ./target/release/ui-compare-gameui   # or -egui, -iced
 DISPLAY=:0 ./target/release/ui-compare-egui 1000  # one cell count only
+DISPLAY=:0 ./target/release/ui-compare-gameui-retained      # gameui's retained tree
+DISPLAY=:0 ./target/release/ui-compare-gameui-retained rows # one scene group: rows, deep, text
+UI_COMPARE_REUSE=1 DISPLAY=:0 ./target/release/ui-compare-gameui  # renderer frame comparison on
 DISPLAY=:0 gpui/target/release/ui-compare-gpui
 DISPLAY=:0 rune/target/release/ui-compare-rune
 DISPLAY=:0 bui/target/release/ui-compare-bui           # headless, CPU raster
@@ -334,3 +337,134 @@ lets a scrolled block cost almost nothing (`para` 0.13 ms), and gameui prepares
 every glyph of a block whether or not it is on screen. These are the scenes
 the structural items in `TODO.md` (cull text against the viewport, retained
 prepared text) should be judged on.
+## Retained mode: `ui-compare-gameui-retained` (gameui only)
+
+The retained tree in `crates/retained` (`docs/design/retained-mode.md`) set
+beside immediate-mode gameui on the same scenes, drawn by the same renderer
+into the same target. Both binaries live in the `gameui` package, which keeps
+the GPU setup in its `lib.rs`. Two scenes were added for this, to both gameui
+binaries only:
+
+| scene | what it draws | what it exposes |
+| --- | --- | --- |
+| `rows-*` | 10,000 rows of 20 px in a column scrolling through the whole window (54 in view), each a box and a 13 px label; starting at row 5,000. `stat`: nothing changes. `one`: row 5,010's value changes every frame. `scrl`: 3 px of scroll a frame. `hovr`: the pointer moves down 3 px a frame and the row under it takes the hover colour | what a change costs next to what is in view; culling; hover |
+| `deep-*` | 10,000 filled leaves under four levels of inner nodes, ten children each, rows and columns in turn sharing their room (the grid's colours, no labels). `static`, `animated`, `one` as for the grid | what a tree holds and copies per level above a leaf |
+
+Immediate mode draws the rows in view, found by arithmetic, and the leaves
+where the tree would put them. The retained tree: grid cells are absolutely
+placed boxes with their label as a child; rows are a scrolling column of
+boxes, each with its fill a memo over its own hover signal and its label as a
+child; the deep scene is the tree itself. Changes are written the way an app
+would: `set_fill` per changed cell, `set_text`, `scroll_to`, `pointer_moved`.
+
+What is timed, per frame: `retained` is the changes, `Ui::frame` and the same
+`render` and `submit` as immediate mode; `ret-tree` is the tree's share of
+those same frames (the changes and `Ui::frame`). A frame is drawn even when
+`needs_frame` says nothing changed, as the immediate harness does; a host
+following `needs_frame` would draw none, so for `static` its real cost is 0.
+`build` is a scene made from nothing: the tree, its first frame (and, for the
+rows, the scroll to row 5,000 and a second layout), and that frame's render,
+timed five times with the renderer's caches warm. Immediate mode has nothing
+to build: its first frame is a frame.
+
+`UI_COMPARE_REUSE=1` turns on the renderer's frame comparison
+(`UiRenderer::set_frame_comparison`, off by default), which draws a list in
+which nothing moved from the plan kept for it; results are then named with
+`+r`. It matters here because a retained tree hands the renderer the same
+list, untouched, when nothing in it changed.
+
+Each case prints its counters: the tree's work in the last frame
+(`FrameStats`), what it holds (`TreeStats`, with `list_bytes` from the new
+`DrawList::heap_bytes`, and `node_bytes`, the node table), text layouts shaped
+over the run, and the renderer's last `RenderStats` (`plans_replayed`,
+`boxes_computed`).
+
+The pictures were checked: `shots/retained-*.png` against `shots/gameui-*.png`.
+The rows match line for line. The 10,000-cell grid is 80% lit against 95%
+for immediate mode: its pitch is 14.33 by 14.4 px, and the tree snaps sizes
+and positions to whole pixels, so cells are 13 px with gaps of 1 to 2 px. The
+deep scene the other way round: immediate mode's leaves are 19.2 by 10.8 px
+and show seams between them, the tree's do not.
+
+### Results, 2026-11-11 (load average 2 to 5; mean CPU ms per frame)
+
+One run of each binary, reuse off and then on. Immediate (`gameui`) against
+retained (`retained`), with the tree's share in brackets.
+
+| scene | gameui | retained (tree) | gameui+r | retained+r (tree) |
+| --- | ---: | ---: | ---: | ---: |
+| grid 100 `static` | 0.077 | 0.077 (0.000) | 0.082 | 0.075 (0.000) |
+| grid 1,000 `static` | 0.373 | 0.301 (0.000) | 0.220 | 0.157 (0.000) |
+| grid 3,000 `static` | 1.08 | 0.861 (0.000) | 0.610 | 0.405 (0.000) |
+| grid 10,000 `static` | 4.54 | 3.74 (0.000) | 2.35 | 1.57 (0.000) |
+| grid 100 `one` | 0.060 | 0.061 (0.007) | 0.045 | 0.062 (0.007) |
+| grid 1,000 `one` | 0.369 | 0.374 (0.070) | 0.216 | 0.225 (0.070) |
+| grid 3,000 `one` | 1.08 | 1.11 (0.214) | 0.614 | 0.662 (0.223) |
+| grid 10,000 `one` | 4.56 | 4.75 (0.875) | 2.49 | 2.76 (0.948) |
+| grid 100 `animated` | 0.061 | 0.075 (0.021) | 0.052 | 0.067 (0.022) |
+| grid 1,000 `animated` | 0.368 | 0.503 (0.205) | 0.226 | 0.373 (0.206) |
+| grid 3,000 `animated` | 1.07 | 1.51 (0.629) | 0.640 | 1.10 (0.650) |
+| grid 10,000 `animated` | 4.41 | 9.21 (5.01) | 2.55 | 7.27 (5.03) |
+| `rows-stat` | 0.193 | 0.188 (0.000) | 0.166 | 0.153 (0.000) |
+| `rows-one` | 0.206 | 0.266 (0.062) | 0.180 | 0.236 (0.061) |
+| `rows-scrl` | 0.198 | 0.201 (0.008) | 0.200 | 0.216 (0.008) |
+| `rows-hovr` | 0.195 | 0.191 (0.002) | 0.159 | 0.159 (0.002) |
+| `deep-static` | 0.706 | 0.420 (0.000) | 0.490 | 0.213 (0.000) |
+| `deep-one` | 0.703 | 0.561 (0.135) | 0.504 | 0.325 (0.137) |
+| `deep-animated` | 0.706 | 2.01 (1.52) | 0.589 | 1.70 (1.35) |
+
+Builds (retained, median of five, ms): grid 0.15 / 0.87 / 2.8 / 14 at 100 /
+1,000 / 3,000 / 10,000 cells; rows 108; deep 3.0.
+
+What the tree holds and copies (counters, identical in every run):
+
+| scene | immediate list | retained lists | node table | records held | records copied, one change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| grid 1,000 | 0.43 MB | 2.7 MB in 1,001 lists | 1.2 MB | 4,000 (2 per cell, twice) | 2,000 |
+| grid 10,000 | 6.9 MB | 30.1 MB in 10,001 lists | 18.9 MB | 40,000 | 20,000 |
+| rows | 27 KB | 305 KB in 110 lists | 18.9 MB | 432 | 216 |
+| deep | 2.9 MB | 10.5 MB in 1,111 lists | 9.4 MB | 40,000 (each leaf 4 times) | 11,100 |
+
+Reading it without overreaching:
+
+- **Nothing changed**: the tree does no work (`ret-tree` 0), and a host
+  following `needs_frame` would skip the frame entirely. Drawn anyway, the
+  untouched list costs less to render than a rebuilt one, most with frame
+  comparison on (grid 10,000: 1.57 ms against 2.35). Immediate mode has no
+  way to know it could skip.
+- **One change**: the tree's share is small next to the render, but it grows
+  with what is in view, not with what changed: one changed cell of 10,000
+  copies all 20,000 records into the root's list (0.88 ms), because the root
+  holds every cell. In the deep tree the same change copies 11,100 records
+  (one list per level) for 0.135 ms, and the whole frame is cheaper than
+  immediate mode's (0.33 against 0.50 ms with reuse on). The render is most
+  of every frame; with frame comparison on, a list in which only colours
+  changed is drawn from its kept plan in both modes (`plans_replayed=1`).
+- **Everything changed** (`animated`): the tree costs more than immediate
+  mode, about twice the whole frame at 10,000 cells, since every cell is
+  set, recorded and copied as well as drawn. A tree is the wrong shape for a
+  scene that changes everywhere every frame.
+- **Rows**: scrolling (8 us) and hover (2 us) cost the tree almost nothing:
+  culling enters the rows in view and the hover moves by binary search. The
+  one changed label costs more than in immediate mode (0.266 against 0.206
+  ms), because the tree shapes every new label twice (below).
+
+Problems the comparison found (not fixed; in the design doc's Outstanding
+list):
+
+- **Text is shaped twice.** A label is measured at the width it is offered
+  (the row's content width) and drawn at its own measured width; the layout
+  cache keys on the width, so each new or changed text is shaped once to
+  measure and once to draw: 512 layouts shaped in 230 `rows-one` frames
+  against 229 for immediate mode, and 54 extra on the first frame of every
+  rows scene.
+- **The rows build shapes 10,000 labels** that are not in view, to size
+  rows whose height is fixed anyway: 108 ms, almost all cosmic-text shaping
+  (profiled). Immediate mode shapes the 54 in view.
+- **Small lists are expensive to keep.** A grid cell's list holds two
+  records and takes about 2.3 KB (the list's own struct and its arrays'
+  first allocations), so the 10,000 cell lists hold 23 MB for records the
+  root holds again in 6.9 MB. The node table is 576 bytes a node (18.9 MB
+  reserved at 20,001 nodes).
+- **A change near the root's list copies all of it** (grid `one` above):
+  the design's open question about whole-subtree caches, now measured.

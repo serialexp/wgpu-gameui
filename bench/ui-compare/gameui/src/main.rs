@@ -6,45 +6,19 @@
 //! polled without waiting, so GPU execution is not in the sample.
 
 use ui_compare_common::*;
+use ui_compare_gameui::{Gpu, library, render_counts, rgba};
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{DrawList, TextBlock, TextContent, UiRenderer};
+use wgpu_gameui::{
+    Background, CornerRadii, DrawList, EdgeWidths, FontSystemHandle, QuadStyle, RenderStats,
+    TextBlock, TextContent, WrapMode,
+};
 
 fn main() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .expect("no GPU adapter");
-    let info = adapter.get_info();
-    eprintln!(
-        "gameui adapter: {} ({:?}, {:?})",
-        info.name, info.device_type, info.backend
-    );
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-            .expect("device");
-
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let lib = library("gameui");
+    let lib = lib.as_str();
+    let gpu = Gpu::new(lib);
     let fonts = wgpu_gameui::shared_font_system();
-    let mut ui = UiRenderer::new(&device, &queue, format, fonts.clone());
-    let size = (WIDTH as u32, HEIGHT as u32);
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("target"),
-        size: wgpu::Extent3d {
-            width: size.0,
-            height: size.1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut ui = gpu.renderer(fonts.clone());
 
     for n in counts() {
         let grid = Grid::new(n);
@@ -54,12 +28,9 @@ fn main() {
         {
             let mut list = DrawList::with_font_system(fonts.clone());
             build(&mut list, &grid, &labels, 0, Mode::Animated);
-            let mut encoder = device.create_command_encoder(&Default::default());
-            ui.begin_frame();
-            let stats = ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
-            queue.submit(Some(encoder.finish()));
+            let stats = gpu.draw(&mut ui, &list);
             eprintln!(
-                "gameui {n} cells: paint_runs={} draw_calls={} primitives={} \
+                "{lib} {n} cells: paint_runs={} draw_calls={} primitives={} \
                  blocks_looked_up={} glyphs_placed={} text_instances_built={} boxes_computed={}",
                 stats.paint_runs,
                 stats.draw_calls,
@@ -69,32 +40,37 @@ fn main() {
                 stats.text_instances_built,
                 stats.boxes_computed
             );
+            report_counts(
+                lib,
+                "grid",
+                &[
+                    ("cells", n as u64),
+                    ("list_bytes", list.heap_bytes() as u64),
+                ],
+            );
             assert!(
                 stats.primitives >= n,
-                "gameui drew {} primitives",
+                "{lib} drew {} primitives",
                 stats.primitives
             );
-            check_frame("gameui", n, &read_target(&device, &queue, &target, size));
+            gpu.wait();
+            check_frame(lib, n, &gpu.read());
         }
         for (scenario, mode) in MODES {
             let stats = measure(|frame| {
                 let mut list = DrawList::with_font_system(fonts.clone());
                 build(&mut list, &grid, &labels, frame, mode);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                ui.begin_frame();
-                ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
-                queue.submit(Some(encoder.finish()));
-                device.poll(wgpu::Maintain::Poll);
+                gpu.draw(&mut ui, &list);
             });
-            device.poll(wgpu::Maintain::Wait);
-            report("gameui", scenario, n, &stats);
+            gpu.wait();
+            report(lib, scenario, n, &stats);
         }
     }
 
     if text_scenes_wanted() {
         let doc: Vec<TextContent> = (0..DOC_LINES).map(|i| doc_line(i).into()).collect();
         let para: TextContent = para_text().into();
-        let scenes: [(&str, &dyn Fn(&mut DrawList, u64)); 3] = [
+        let scenes: [(&str, SceneFn); 3] = [
             ("scroll", &|list, frame| scroll_lines(list, &doc, frame)),
             ("churn", &|list, frame| churn_lines(list, frame)),
             ("para", &|list, frame| paragraph(list, &para, frame)),
@@ -106,41 +82,104 @@ fn main() {
             {
                 let mut list = DrawList::with_font_system(fonts.clone());
                 scene(&mut list, 40);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                ui.begin_frame();
-                let stats = ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
-                queue.submit(Some(encoder.finish()));
+                let stats = gpu.draw(&mut ui, &list);
                 eprintln!(
-                    "gameui {name}: blocks_looked_up={} glyphs_placed={} text_instances_built={} boxes_computed={}",
+                    "{lib} {name}: blocks_looked_up={} glyphs_placed={} text_instances_built={} boxes_computed={}",
                     stats.text_blocks_looked_up,
                     stats.glyphs_placed,
                     stats.text_instances_built,
                     stats.boxes_computed
                 );
-                check_text_frame("gameui", name, &read_target(&device, &queue, &target, size));
+                gpu.wait();
+                check_text_frame(lib, name, &gpu.read());
             }
             let stats = measure(|frame| {
                 let mut list = DrawList::with_font_system(fonts.clone());
                 scene(&mut list, frame);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                ui.begin_frame();
-                ui.render(&device, &queue, &mut encoder, &view, size, 1.0, &list);
-                queue.submit(Some(encoder.finish()));
-                device.poll(wgpu::Maintain::Poll);
+                gpu.draw(&mut ui, &list);
             });
-            device.poll(wgpu::Maintain::Wait);
-            report_scene("gameui", name, &stats);
+            gpu.wait();
+            report_scene(lib, name, &stats);
+        }
+    }
+
+    // The rows and deep scenes, to set beside the retained tree's
+    // (`ui-compare-gameui-retained`). Immediate mode has nothing to build
+    // before its first frame, so its "build" is one frame.
+    if group_wanted("rows") {
+        let labels: Vec<TextContent> = (0..ROWS).map(|i| row_text(i, 0).into()).collect();
+        for (name, mode) in ROW_MODES {
+            if !scene_wanted(name) {
+                continue;
+            }
+            let mut list = DrawList::with_font_system(fonts.clone());
+            rows(&mut list, &labels, mode, 0);
+            let stats = gpu.draw(&mut ui, &list);
+            report_counts(
+                lib,
+                name,
+                &[
+                    ("texts", list.texts.len() as u64),
+                    ("primitives", stats.primitives as u64),
+                    ("glyphs_placed", stats.glyphs_placed as u64),
+                    ("list_bytes", list.heap_bytes() as u64),
+                ],
+            );
+            gpu.wait();
+            check_text_frame(lib, name, &gpu.read());
+            let before = shaped(&fonts);
+            let mut last = RenderStats::default();
+            let stats = measure(|frame| {
+                let mut list = DrawList::with_font_system(fonts.clone());
+                rows(&mut list, &labels, mode, frame);
+                last = gpu.draw(&mut ui, &list);
+            });
+            gpu.wait();
+            report_scene(lib, name, &stats);
+            report_counts(lib, name, &render_counts(&last));
+            let frames = (WARMUP_FRAMES + stats.frames) as u64;
+            report_counts(
+                lib,
+                name,
+                &[("frames", frames), ("shaped", shaped(&fonts) - before)],
+            );
+        }
+    }
+    if group_wanted("deep") {
+        for (scenario, mode) in MODES {
+            let name = format!("deep-{scenario}");
+            if !scene_wanted(&name) {
+                continue;
+            }
+            let mut list = DrawList::with_font_system(fonts.clone());
+            deep(&mut list, mode, 0);
+            gpu.draw(&mut ui, &list);
+            report_counts(lib, &name, &[("list_bytes", list.heap_bytes() as u64)]);
+            gpu.wait();
+            check_scene_frame(lib, &name, &gpu.read());
+            let mut last = RenderStats::default();
+            let stats = measure(|frame| {
+                let mut list = DrawList::with_font_system(fonts.clone());
+                deep(&mut list, mode, frame);
+                last = gpu.draw(&mut ui, &list);
+            });
+            gpu.wait();
+            report_scene(lib, &name, &stats);
+            report_counts(lib, &name, &render_counts(&last));
         }
     }
 }
 
+/// A text scene: draws frame `n` into a list.
+type SceneFn<'a> = &'a dyn Fn(&mut DrawList, u64);
+
+/// Text layouts shaped so far by the shared font system.
+fn shaped(fonts: &FontSystemHandle) -> u64 {
+    fonts.lock().expect("font system").layout_stats().shaped
+}
+
 fn background(list: &mut DrawList) {
-    let [r, g, b] = TEXT_BG;
-    list.rounded_rect(
-        Rect::new(0.0, 0.0, WIDTH, HEIGHT),
-        0.0,
-        [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
-    );
+    list.rounded_rect(Rect::new(0.0, 0.0, WIDTH, HEIGHT), 0.0, rgba(TEXT_BG));
 }
 
 fn line(content: impl Into<TextContent>, x: f32, y: f32) -> TextBlock {
@@ -187,15 +226,14 @@ fn paragraph(list: &mut DrawList, text: &TextContent, frame: u64) {
 /// The scene as a `DrawList`: a rounded rectangle and a label per cell.
 fn build(list: &mut DrawList, grid: &Grid, labels: &[TextContent], frame: u64, mode: Mode) {
     let (w, h) = grid.size();
-    for i in 0..grid.n {
+    for (i, label) in labels.iter().enumerate().take(grid.n) {
         let (x, y) = grid.origin(i);
-        let [r, g, b] = fill_in(mode, i, frame);
         list.rounded_rect(
             Rect::new(x, y, w, h),
             grid.radius,
-            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
+            rgba(fill_in(mode, i, frame)),
         );
-        let mut block = TextBlock::new(labels[i].clone(), x + 1.0, y + 1.0)
+        let mut block = TextBlock::new(label.clone(), x + 1.0, y + 1.0)
             .with_line_height(grid.font_px * 1.25)
             .with_max_width(w);
         block.font_size = grid.font_px;
@@ -203,50 +241,54 @@ fn build(list: &mut DrawList, grid: &Grid, labels: &[TextContent], frame: u64, m
     }
 }
 
-/// Read the target back as RGBA bytes (blocking), to check what was drawn.
-fn read_target(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    target: &wgpu::Texture,
-    size: (u32, u32),
-) -> Vec<u8> {
-    // 1920 * 4 is a multiple of 256, so rows need no padding.
-    let bytes_per_row = size.0 * 4;
-    assert_eq!(bytes_per_row % 256, 0);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback"),
-        size: (bytes_per_row * size.1) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(size.1),
-            },
-        },
-        wgpu::Extent3d {
-            width: size.0,
-            height: size.1,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit(Some(encoder.finish()));
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = buffer.slice(..).get_mapped_range().to_vec();
-    buffer.unmap();
-    data
+fn solid(color: [u8; 3]) -> QuadStyle {
+    QuadStyle {
+        background: Background::Solid(rgba(color)),
+        border_widths: EdgeWidths::uniform(0.0),
+        border_color: [0.0; 4],
+        corner_radii: CornerRadii::uniform(0.0),
+    }
+}
+
+/// The rows in view, found by arithmetic as an immediate-mode list would,
+/// inside the list's clip. Each row is a box and a label; labels are the
+/// caller's, made once, except the one whose value changes.
+fn rows(list: &mut DrawList, labels: &[TextContent], mode: RowMode, frame: u64) {
+    let offset = row_offset(mode, frame);
+    let hovered =
+        (mode == RowMode::Hover).then(|| ((row_pointer(frame)[1] + offset) / ROW_H) as usize);
+    list.push_clip_viewport(Rect::new(0.0, 0.0, WIDTH, HEIGHT));
+    let first = (offset / ROW_H) as usize;
+    let end = (((offset + HEIGHT) / ROW_H).ceil() as usize).min(ROWS);
+    for (i, label) in labels.iter().enumerate().take(end).skip(first) {
+        let y = i as f32 * ROW_H - offset;
+        list.paint_quad(
+            Rect::new(0.0, y, WIDTH, ROW_H),
+            solid(row_fill(i, hovered == Some(i))),
+        );
+        let value = row_value(mode, i, frame);
+        let content: TextContent = if value == 0 {
+            label.clone()
+        } else {
+            row_text(i, value).into()
+        };
+        list.text(
+            TextBlock::new(content, ROW_PAD[0], y + ROW_PAD[1])
+                .with_size(ROW_PX)
+                .with_line_height((ROW_PX * 1.25).ceil())
+                .with_max_width(WIDTH - 2.0 * ROW_PAD[0])
+                .with_wrap(WrapMode::None)
+                .with_color_f32(rgba(ROW_TEXT)),
+        );
+    }
+    list.pop_clip();
+}
+
+/// The deep scene's leaves: an immediate-mode caller has no tree to keep,
+/// so it draws the leaves where the tree would put them.
+fn deep(list: &mut DrawList, mode: Mode, frame: u64) {
+    for i in 0..DEEP_LEAVES {
+        let [x, y, w, h] = deep_leaf(i);
+        list.paint_quad(Rect::new(x, y, w, h), solid(fill_in(mode, i, frame)));
+    }
 }
