@@ -562,6 +562,38 @@ fn a_volatile_painter_draws_every_frame() {
     check(&mut ui);
 }
 
+/// The bytes counted are the lists' own: a node with children adds its list,
+/// and removing it takes the list's bytes away again.
+#[test]
+fn tree_stats_count_the_bytes_each_kept_list_holds() {
+    let mut ui = Ui::new(fonts());
+    ui.frame(at(0.0));
+    let alone = ui.tree_stats();
+    assert_eq!(alone.lists, 1);
+    let root_list = ui.list().unwrap();
+    assert_eq!(
+        alone.list_bytes,
+        (std::mem::size_of::<wgpu_gameui::DrawList>() + root_list.heap_bytes()) as u64
+    );
+    assert!(alone.node_bytes > 0);
+    let panel = ui.add(ui.root(), Spec::new());
+    ui.add(panel, fixed(3.0, 3.0).fill([1.0; 4]));
+    ui.frame(at(0.0));
+    let with_panel = ui.tree_stats();
+    assert_eq!(with_panel.lists, 2);
+    assert!(with_panel.list_bytes > alone.list_bytes);
+    ui.remove(panel);
+    ui.frame(at(0.0));
+    let after = ui.tree_stats();
+    assert_eq!(after.lists, 1);
+    // The root's list keeps the capacity it grew to; the panel's is gone.
+    let root_list = ui.list().unwrap();
+    assert_eq!(
+        after.list_bytes,
+        (std::mem::size_of::<wgpu_gameui::DrawList>() + root_list.heap_bytes()) as u64
+    );
+}
+
 #[test]
 fn removing_a_subtree_disposes_of_what_it_owns() {
     let mut ui = Ui::new(fonts());

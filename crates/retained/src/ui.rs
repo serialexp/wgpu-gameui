@@ -59,6 +59,11 @@ pub struct TreeStats {
     pub lists: usize,
     /// Records those lists hold.
     pub records: u64,
+    /// Bytes those lists have reserved (see `DrawList::heap_bytes`).
+    pub list_bytes: u64,
+    /// Bytes the node table has reserved, live nodes or not (each node's
+    /// own allocations, such as its input handlers, are not counted).
+    pub node_bytes: u64,
 }
 
 pub(crate) const WIDTH: u8 = 0;
@@ -945,12 +950,14 @@ impl Ui {
     pub fn tree_stats(&self) -> TreeStats {
         let mut stats = TreeStats {
             nodes: self.live,
+            node_bytes: (self.nodes.capacity() * std::mem::size_of::<NodeData>()) as u64,
             ..TreeStats::default()
         };
         for d in &self.nodes {
             if let Some(list) = &d.list {
                 stats.lists += 1;
                 stats.records += list.prim_counts().total() as u64;
+                stats.list_bytes += (std::mem::size_of::<DrawList>() + list.heap_bytes()) as u64;
             }
         }
         stats
