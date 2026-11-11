@@ -552,6 +552,15 @@ fn the_renderer_reports_how_each_list_compares_with_last_frame() {
     );
     let replayed: Vec<_> = stats.iter().map(|s| s.plans_replayed).collect();
     assert_eq!(replayed, [0, 2, 2, 1, 1], "plans replayed, per frame");
+    // Text is prepared again only in a list in which something moved, and the
+    // second list's label never changes: frames 1 and 2 place no glyph, frame
+    // 3 only the moved list's and frame 4 only the first list's.
+    let placed: Vec<_> = stats.iter().map(|s| s.glyphs_placed).collect();
+    assert_eq!(placed[1..3], [0, 0], "glyphs placed, per frame: {placed:?}");
+    assert!(
+        placed[3] > 0 && placed[4] > 0 && placed[3] + placed[4] == placed[0],
+        "glyphs placed, per frame: {placed:?}"
+    );
     assert!(
         stats[1].snapshot_bytes > 0,
         "the kept frames hold something"
@@ -591,6 +600,7 @@ fn a_frame_drawn_from_a_kept_plan_looks_as_a_fresh_one_does() {
     let mut run = Run::new(&[], &Look::default(), &[]);
     let mut failures = Vec::new();
     let mut replayed = Vec::new();
+    let mut placed = Vec::new();
     // (frame, hue): the same again, only recoloured, then moved, and again.
     for (n, (frame, hue)) in [
         (0, 0.0),
@@ -614,10 +624,19 @@ fn a_frame_drawn_from_a_kept_plan_looks_as_a_fresh_one_does() {
             &format!("step {n}"),
             &mut failures,
         );
-        replayed.push(run.gpu.renderer().frame_stats().plans_replayed);
+        let stats = run.gpu.renderer().frame_stats();
+        replayed.push(stats.plans_replayed);
+        placed.push(stats.glyphs_placed);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert_eq!(replayed, [0, 1, 1, 1, 0, 1, 1], "plans replayed per frame");
+    // The same frame again places no glyph; a recoloured one places the
+    // recoloured labels' glyphs again, which are all of them.
+    assert_eq!(
+        placed,
+        [placed[0], 0, placed[0], placed[0], placed[4], 0, placed[4]],
+        "glyphs placed per frame"
+    );
 }
 
 /// A scene in which two units move and the rest stay: the boxes of the rest

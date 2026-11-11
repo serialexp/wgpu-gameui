@@ -14,6 +14,7 @@
 use std::ops::Range;
 
 use super::*;
+use crate::render::Change;
 
 /// The glyph and icon atlases as pixels, the font keys and the font system:
 /// everything preparing a list's text needs, with no device.
@@ -76,6 +77,10 @@ pub(crate) struct MsdfPrepared {
     /// Each text command's instances, in paint order: its units, one after
     /// another.
     pub(crate) text_commands: Vec<Range<u32>>,
+    /// A block's glyphs and instances built again by
+    /// [`MsdfCpu::refresh_texts`], before they replace the ones it had.
+    refreshed_placements: Vec<GlyphPlacement>,
+    refreshed_instances: Vec<MsdfInstance>,
     /// Every drawn icon's instance, in icon order.
     #[cfg(feature = "phosphor-icons")]
     pub(crate) icon_instances: Vec<MsdfInstance>,
@@ -279,6 +284,100 @@ impl MsdfCpu {
         }
         out.work.glyphs_placed = out.placements.len() as u32;
         out.work.instances_built = out.text_instances.len() as u32;
+    }
+
+    /// Bring `out` up to date with `texts` without preparing them from
+    /// nothing. `out` holds the text last prepared in this list's place, and
+    /// `texts` keeps every record's place against that list (the renderer's
+    /// frame comparison found none that moved): the same grid and fonts, the same paint commands, and blocks that lay out, cull and
+    /// draw as they did. `changes` says how each block differs from the one
+    /// prepared.
+    ///
+    /// A block that is the same is left as it is, its glyphs, units and
+    /// instances included. A block that only looks different (a colour) has
+    /// its glyphs placed and its instances built again, into the ranges they
+    /// had, so units and commands stay as they were.
+    ///
+    /// `false`, with `out` partly written, when that does not hold: a block
+    /// changed place, or placed or built a different number of glyphs or
+    /// instances than it had. The caller then prepares the list from nothing.
+    pub(crate) fn refresh_texts(
+        &mut self,
+        out: &mut MsdfPrepared,
+        grid: PixelGrid,
+        texts: &[TextBlock],
+        changes: &[Change],
+    ) -> bool {
+        #[cfg(feature = "tracy")]
+        let _span = tracing::info_span!("gameui_text_refresh").entered();
+
+        out.work = PrepareWork::default();
+        if out.block_glyphs.len() != texts.len() || changes.len() != texts.len() {
+            return false;
+        }
+        let sweep = Sweep {
+            px_range: self.atlas.px_range(),
+        };
+        // Locked only when a block has to be placed again.
+        let fs_handle = Arc::clone(&self.font_system);
+        let mut shared = None;
+        for (b, (block, change)) in texts.iter().zip(changes).enumerate() {
+            match change {
+                Change::Same => continue,
+                Change::Look => {}
+                Change::Place => return false,
+            }
+            let glyphs = out.block_glyphs[b].clone();
+            let glyphs = glyphs.start as usize..glyphs.end as usize;
+            out.refreshed_placements.clear();
+            if !block.content.is_empty() {
+                out.work.blocks_looked_up += 1;
+                let shared =
+                    shared.get_or_insert_with(|| fs_handle.lock().expect("FontSystem poisoned"));
+                let (layout, fs) =
+                    shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
+                let bounds = cull_bounds(block, grid.viewport());
+                append_placements(
+                    &mut self.atlas,
+                    &mut self.font_keys,
+                    &mut self.next_font_key,
+                    fs,
+                    block,
+                    &block.spans,
+                    &layout.glyphs[glyphs_in_clip(block, layout, bounds)],
+                    bounds,
+                    grid,
+                    &mut out.refreshed_placements,
+                );
+            }
+            if out.refreshed_placements.len() != glyphs.len() {
+                return false;
+            }
+            out.placements[glyphs.clone()].copy_from_slice(&out.refreshed_placements);
+            out.work.glyphs_placed += glyphs.len() as u32;
+            out.block_effects[b] = BlockEffects::of(block);
+            for kind in 0..3 {
+                let range = out.block_sweeps[b][kind].clone();
+                out.refreshed_instances.clear();
+                for p in &out.placements[glyphs.clone()] {
+                    push_sweep_quad(
+                        &mut out.refreshed_instances,
+                        &mut out.memo,
+                        &sweep,
+                        p,
+                        &out.block_effects[b],
+                        kind,
+                    );
+                }
+                if out.refreshed_instances.len() != range.len() {
+                    return false;
+                }
+                out.text_instances[range.start as usize..range.end as usize]
+                    .copy_from_slice(&out.refreshed_instances);
+                out.work.instances_built += range.len() as u32;
+            }
+        }
+        true
     }
 
     /// Prepare `icons` for drawing. Like text, every icon's glyph goes into the

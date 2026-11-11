@@ -705,8 +705,13 @@ pub struct TextRenderer {
     /// The glyph and icon atlases' pixels (the source of truth their GPU
     /// mirrors copy), the font keys and the font system.
     cpu: MsdfCpu,
-    /// The last list's text and icons, prepared and waiting to be uploaded.
-    prepared: MsdfPrepared,
+    /// Lists' text and icons, prepared and waiting to be uploaded: the first
+    /// for lists with no place in the renderer's frame comparison, then one
+    /// per place, kept so the next list there can reuse what did not change
+    /// (see [`select_prepared`](Self::select_prepared)).
+    prepared: Vec<MsdfPrepared>,
+    /// The one of `prepared` the next list is prepared into and uploaded from.
+    current: usize,
 
     // The glyph atlas's GPU mirror.
     atlas_bgl: wgpu::BindGroupLayout,
@@ -873,7 +878,8 @@ impl TextRenderer {
 
         Self {
             cpu,
-            prepared: MsdfPrepared::default(),
+            prepared: vec![MsdfPrepared::default()],
+            current: 0,
             atlas_bgl,
             glyph_gpu,
             #[cfg(feature = "phosphor-icons")]
@@ -1162,17 +1168,39 @@ impl TextRenderer {
     /// Every glyph is placed before any quad is built, so the uploaded atlas
     /// holds every glyph the commands draw; each command is then uploaded with
     /// [`upload_text_command`](Self::upload_text_command).
+    ///
+    /// `kept` is `Some` when the selected place holds the last list prepared
+    /// there and `texts` keeps every record's place against it; it then says
+    /// how each block changed, and only the blocks that did are prepared again
+    /// ([`MsdfCpu::refresh_texts`]).
     pub(crate) fn prepare_texts(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texts: &[TextBlock],
         commands: impl IntoIterator<Item = std::ops::Range<u32>>,
+        kept: Option<&[crate::render::Change]>,
     ) {
         let grid = self.pixel_grid();
-        self.cpu
-            .prepare_texts(&mut self.prepared, grid, texts, commands);
+        let out = &mut self.prepared[self.current];
+        let refreshed =
+            kept.is_some_and(|changes| self.cpu.refresh_texts(out, grid, texts, changes));
+        if !refreshed {
+            self.cpu.prepare_texts(out, grid, texts, commands);
+        }
         self.upload_atlas(device, queue);
+    }
+
+    /// Prepare and upload the next list's text and icons in place `slot` of
+    /// the renderer's frame comparison, or, with none, in the one shared by
+    /// every list without a place. A place keeps what was prepared in it
+    /// until a list is prepared there again.
+    pub(crate) fn select_prepared(&mut self, slot: Option<usize>) {
+        let index = slot.map_or(0, |slot| slot + 1);
+        if self.prepared.len() <= index {
+            self.prepared.resize_with(index + 1, MsdfPrepared::default);
+        }
+        self.current = index;
     }
 
     /// Prepare a list's MSDF icons for drawing, and upload the icon atlas they
@@ -1185,14 +1213,15 @@ impl TextRenderer {
         queue: &wgpu::Queue,
         icons: &[IconMsdf],
     ) {
-        self.cpu.prepare_icons(&mut self.prepared, icons);
+        self.cpu
+            .prepare_icons(&mut self.prepared[self.current], icons);
         self.icon_gpu
             .upload(device, queue, &self.atlas_bgl, &mut self.cpu.icon_atlas);
     }
 
     /// The text and icons last prepared.
     pub(crate) fn prepared(&self) -> &MsdfPrepared {
-        &self.prepared
+        &self.prepared[self.current]
     }
 
     /// Prepare and render a batch of MSDF icons in a pass of their own. Mirrors
@@ -1209,6 +1238,7 @@ impl TextRenderer {
         view: &wgpu::TextureView,
         icons: &[IconMsdf],
     ) {
+        self.select_prepared(None);
         self.prepare_icons(device, queue, icons);
         if let Some(run) = self.upload_icon_command(device, queue, 0..icons.len() as u32) {
             let mut pass = crate::render::load_pass(encoder, view, "msdf icon pass");
@@ -1228,8 +1258,9 @@ impl TextRenderer {
     ) -> Option<PreparedMsdf> {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_icon_render").entered();
-        let range = self.prepared.icon_range(icons);
-        let instances = &self.prepared.icon_instances[range.start as usize..range.end as usize];
+        let prepared = &self.prepared[self.current];
+        let range = prepared.icon_range(icons);
+        let instances = &prepared.icon_instances[range.start as usize..range.end as usize];
         let offset = Self::write_instances(
             &mut self.instances,
             &mut self.retired_buffers,
@@ -1251,8 +1282,9 @@ impl TextRenderer {
     ) -> Option<PreparedMsdf> {
         #[cfg(feature = "tracy")]
         let _span = tracing::info_span!("gameui_text_render").entered();
-        let range = self.prepared.text_commands[index].clone();
-        let instances = &self.prepared.text_instances[range.start as usize..range.end as usize];
+        let prepared = &self.prepared[self.current];
+        let range = prepared.text_commands[index].clone();
+        let instances = &prepared.text_instances[range.start as usize..range.end as usize];
         let offset = Self::write_instances(
             &mut self.instances,
             &mut self.retired_buffers,
@@ -1375,7 +1407,14 @@ impl TextRenderer {
         view: &wgpu::TextureView,
         texts: &[TextBlock],
     ) {
-        self.prepare_texts(device, queue, texts, std::iter::once(0..texts.len() as u32));
+        self.select_prepared(None);
+        self.prepare_texts(
+            device,
+            queue,
+            texts,
+            std::iter::once(0..texts.len() as u32),
+            None,
+        );
         if let Some(run) = self.upload_text_command(device, queue, 0) {
             let mut pass = crate::render::load_pass(encoder, view, "msdf text pass");
             self.draw_prepared(&mut pass, &run);
@@ -1715,6 +1754,7 @@ fn append_placements(
 /// A glyph ready to be turned into quads, captured before uv resolution. What
 /// the whole block shares (clip and effects) is in its [`BlockEffects`], not
 /// repeated in every glyph.
+#[derive(Clone, Copy)]
 struct GlyphPlacement {
     tile: GlyphTile,
     pen_x: f32,

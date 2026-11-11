@@ -71,6 +71,7 @@ pub use capture::{
     CAPTURE_FORMAT, CAPTURE_SPACE, capture_draw_list, capture_layers, capture_with, write_png,
 };
 pub(crate) use frame_arena::FrameArena;
+pub(crate) use frame_diff::Change;
 pub use image_cache::{ImageCache, ImageEntry, ImageError};
 pub use text_contrast::TextContrast;
 pub use textures::{AtlasId, Placement, SMALL_SPRITE_EDGE, SpriteError, SpriteId};

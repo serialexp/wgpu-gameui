@@ -100,6 +100,78 @@ fn a_command_with_a_shadow_or_glow_is_one_unit_drawn_in_three_sweeps() {
     assert_eq!(dark[2].end, total);
 }
 
+/// Blocks in two commands, one of them a unit with a shadow and a glow, coloured
+/// by `hue`.
+fn recoloured(font: &FontHandle, hue: u8) -> [TextBlock; 4] {
+    [
+        block("lit", font, 10.0)
+            .with_color(hue, 20, 20)
+            .with_glow(hue, 200, 0, 255, 2.0),
+        block("plain", font, 40.0).with_color(20, hue, 20),
+        block("dark", font, 70.0)
+            .with_color(20, 20, hue)
+            .with_shadow(hue, 0, 0, 200, 1.0, 1.0, 1.0)
+            .with_outline(0, hue, 0, 255, 1.0),
+        block("still", font, 100.0),
+    ]
+}
+
+/// A block only recoloured is prepared again in place, and what comes out is
+/// what preparing the list from nothing makes; a block the same is not looked
+/// at.
+#[test]
+fn refreshing_recoloured_blocks_matches_preparing_them_from_nothing() {
+    let (mut cpu, font) = cpu(None);
+    let commands = || [0..3, 3..4];
+    let mut kept = MsdfPrepared::default();
+    cpu.prepare_texts(&mut kept, grid(), &recoloured(&font, 40), commands());
+
+    let next = recoloured(&font, 220);
+    let changes = [Change::Look, Change::Look, Change::Look, Change::Same];
+    assert!(cpu.refresh_texts(&mut kept, grid(), &next, &changes));
+    let mut fresh = MsdfPrepared::default();
+    cpu.prepare_texts(&mut fresh, grid(), &next, commands());
+
+    assert_eq!(kept.text_instances, fresh.text_instances);
+    assert_eq!(kept.text_units, fresh.text_units);
+    assert_eq!(kept.text_commands, fresh.text_commands);
+    assert_eq!(kept.block_sweeps, fresh.block_sweeps);
+    // The three recoloured blocks were placed again, "still" was not.
+    let placed = ["lit", "plain", "dark"].map(str::len).iter().sum::<usize>() as u32;
+    assert_eq!(
+        kept.work,
+        PrepareWork {
+            blocks_looked_up: 3,
+            glyphs_placed: placed,
+            instances_built: fresh.work.instances_built - "still".len() as u32,
+        }
+    );
+
+    // Nothing changed: nothing is placed or built.
+    assert!(cpu.refresh_texts(&mut kept, grid(), &next, &[Change::Same; 4]));
+    assert_eq!(kept.work, PrepareWork::default());
+    assert_eq!(kept.text_instances, fresh.text_instances);
+}
+
+/// What a refresh cannot do it declines, and the caller prepares from nothing.
+#[test]
+fn a_refresh_declines_a_block_that_moved_or_a_list_of_another_shape() {
+    let (mut cpu, font) = cpu(None);
+    let texts = recoloured(&font, 40);
+    let mut kept = MsdfPrepared::default();
+    cpu.prepare_texts(&mut kept, grid(), &texts, [0..3, 3..4]);
+
+    let moved = [Change::Same, Change::Place, Change::Same, Change::Same];
+    assert!(!cpu.refresh_texts(&mut kept, grid(), &texts, &moved));
+    assert!(!cpu.refresh_texts(&mut kept, grid(), &texts[..3], &[Change::Same; 3]));
+    // Told a block only looks different when its text grew: it places more
+    // glyphs than it had.
+    let mut grown = texts.clone();
+    grown[3] = block("stiller", &font, 100.0);
+    let look = [Change::Same, Change::Same, Change::Same, Change::Look];
+    assert!(!cpu.refresh_texts(&mut kept, grid(), &grown, &look));
+}
+
 #[test]
 fn each_command_forms_its_own_units_in_paint_order() {
     let (mut cpu, font) = cpu(None);

@@ -7,6 +7,35 @@ then the dated batches in the order they were written.
 
 ---
 
+## Retained-mode performance (comparison and Fable review, 2026-11-11)
+
+- [x] **P1 — reuse prepared text for unchanged blocks (renderer).**
+      `prepare_texts` runs for every block (`render/ui_renderer.rs:2036`)
+      before the replay decision (`:2057`): about 57% of a replayed 10k frame
+      (`append_placements`, `MsdfInstance::new_memo`, `build_fill_unit`, atlas
+      and layout-key lookups). When a slot keeps its places, copy last
+      frame's prepared instances for blocks the comparison classed `Same`
+      (`frame_diff.rs:94-106`), patch colours for `Look` ones; fill-only path
+      first (shadow/glow regrouping at `text_prep.rs:265-276` breaks
+      per-block ranges). Estimate: renderer 1.55 → 0.7 ms on the grid at 10k;
+      immediate callers that keep their labels gain too. Check:
+      `glyphs_placed` / `text_instances_built` near 0 on a replayed frame.
+      **Done 2026-11-11.** `TextRenderer` keeps a `MsdfPrepared` per place of
+      the frame comparison (`select_prepared`), and `prepare_texts` takes the
+      comparison's text changes when every record kept its place:
+      `MsdfCpu::refresh_texts` leaves `Same` blocks alone and places and
+      builds `Look` blocks again into the ranges they had (shadow and glow
+      units included, through `block_sweeps`), declining to a full prepare
+      when a count differs. Tests: `refreshing_recoloured_blocks_matches_
+      preparing_them_from_nothing`, `a_refresh_declines_…`, and
+      `glyphs_placed` per frame in the frame oracle. Measured (10k grid,
+      comparison on, load average 13 to 19, so rough): immediate `static` /
+      `one` / `animated` 2.35 / 2.49 / 2.55 → about 1.6 / 1.7 / 1.8 ms;
+      retained `static` 1.57 → 0.68 ms, renderer share of retained `one`
+      1.81 → 1.12 ms; `glyphs_placed=0` on replayed frames.
+
+---
+
 ## Cross-notifier follow-up audit (2026-08-19)
 
 These items came from regressions found while migrating cross-notifier to gameui.

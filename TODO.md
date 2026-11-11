@@ -26,17 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P1 — reuse prepared text for unchanged blocks (renderer).**
-      `prepare_texts` runs for every block (`render/ui_renderer.rs:2036`)
-      before the replay decision (`:2057`): about 57% of a replayed 10k frame
-      (`append_placements`, `MsdfInstance::new_memo`, `build_fill_unit`, atlas
-      and layout-key lookups). When a slot keeps its places, copy last
-      frame's prepared instances for blocks the comparison classed `Same`
-      (`frame_diff.rs:94-106`), patch colours for `Look` ones; fill-only path
-      first (shadow/glow regrouping at `text_prep.rs:265-276` breaks
-      per-block ranges). Estimate: renderer 1.55 → 0.7 ms on the grid at 10k;
-      immediate callers that keep their labels gain too. Check:
-      `glyphs_placed` / `text_instances_built` near 0 on a replayed frame.
 - [ ] **P1 — patch changed records in place in ancestors' lists (retained).**
       Today a stale node re-records and every ancestor re-appends all its
       children (`paint.rs:28-49`, `:91-108`; grid `one` copies 20,000 records).

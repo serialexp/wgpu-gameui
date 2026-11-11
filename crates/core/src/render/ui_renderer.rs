@@ -2028,13 +2028,20 @@ impl UiRenderer {
         };
         // Place the whole list's glyphs and icons, and build their instances,
         // before any batch captures an atlas bind group: the atlas it binds
-        // has to hold every glyph the list draws.
+        // has to hold every glyph the list draws. A list in which nothing
+        // moved prepares again only the blocks whose look changed, into what
+        // was prepared for its place last frame.
         let text_commands = draw_list.paint_cmds.iter().filter_map(|cmd| match cmd {
             PaintCmd::Text { draws } => Some(draws.clone()),
             _ => None,
         });
         self.text_renderer
-            .prepare_texts(device, queue, &draw_list.texts, text_commands);
+            .select_prepared(slot.map(|slot| slot.index));
+        let kept = slot
+            .filter(|slot| slot.keeps_places)
+            .map(|slot| self.snapshots[slot.index].changes.texts.as_slice());
+        self.text_renderer
+            .prepare_texts(device, queue, &draw_list.texts, text_commands, kept);
         #[cfg(feature = "phosphor-icons")]
         self.text_renderer
             .prepare_icons(device, queue, &draw_list.icons_msdf);
@@ -2119,6 +2126,7 @@ impl UiRenderer {
         view: &wgpu::TextureView,
         draw_list: &DrawList,
     ) {
+        self.text_renderer.select_prepared(None);
         let (nine, bindings) = self.build_nine_slice_instances(&draw_list.nine_slices);
         if !nine.is_empty() {
             for run in self.upload_nine_slices(device, queue, &nine, &bindings) {
@@ -2162,6 +2170,7 @@ impl UiRenderer {
             queue,
             texts,
             std::iter::once(0..texts.len() as u32),
+            None,
         );
         if let Some(run) = self.text_renderer.upload_text_command(device, queue, 0) {
             self.frame_stats.render_passes += 1;
