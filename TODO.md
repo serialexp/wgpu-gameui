@@ -34,6 +34,16 @@ none chosen yet (Bart).
       key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
       the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
       option is good enough; a third is needed before this is taken up.
+      Bart (2026-11-12): a prepared text, shaped once and laid out at each
+      width, carried from measure to draw; design in
+      `docs/design/prepared-text.md` (draft).
+- [ ] **P3 — the unwrapped layout of right-to-left text sits at x ≈ 8.5e37
+      (core, found 2026-11-12).** `natural()` has no width, so
+      `shape_cut_layout` lays it out at `f32::MAX / 4` and cosmic-text starts
+      a right-to-left line at the width: the glyphs' x lose their precision.
+      Only advances and sizes are read from it today (the ellipsis cut,
+      measuring), so nothing is drawn wrong; anything that places its glyphs
+      would be. `docs/design/prepared-text.md`, deferred bullet.
 - [ ] **P2 — a list's `PlacedLog` is about 245 bytes a piece (retained/core,
       found 2026-11-11).** The grid's 20,000 pieces log 4.9 MB beside the
       root's 6.9 MB list (`TreeStats::list_bytes` 11.8 MB, the estimate was
