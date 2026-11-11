@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view and the node table at 384 bytes a node (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -205,6 +205,18 @@ Tick items as they land.
       timed at a load average of 25 to 28, 36 to 80 ms against 108 ms (the
       untouched `deep-bld` took 31 ms there against 3.0), so not compared:
       that waits for the rerun on a quiet machine.
+- [x] **The node table at 384 bytes a node** (2026-11-12; it was 664, grown
+      from 576 with patching's fields, the log, and deferral's flags). A
+      node keeps its properties' values and nothing for a constant: a bound
+      property's memo, setter and version are a `Binding` in
+      `Ui::bindings`, a `slotmap::SlotMap`, chained from
+      `NodeData::bindings` and looked up by property when a notification or
+      a setter comes (at most one per property, so a short walk). A
+      holder's list and its `PlacedLog` share one `Box<Kept>`, so a node
+      that keeps none pays a pointer for both. Bart chose the slotmap, the
+      log beside the list, and a size bound in the tests
+      (`a_node_stays_small`). Animated grid 10,000: `node_bytes` 21.8 →
+      13.4 MB.
 
 ### Outstanding
 
@@ -216,11 +228,10 @@ Tick items as they land.
       the width offered and drawn at its measured width, and the layout cache
       keys on the width, so each new or changed text is shaped twice (512
       layouts in 230 `rows-one` frames against 229 in immediate mode).
-- [ ] **The node table is 656 bytes a node, and a list's log about 245 bytes
-      a piece** (found by the comparison; the small lists, 2.3 KB each, went
-      with the cache shape): the grid's 20,000 pieces log 4.9 MB beside the
-      root's 6.9 MB list, mostly the two `RecordCounts` of each `Placed`; the
-      node grew from 576 bytes with patching's fields and the log.
+- [ ] **A list's log is about 245 bytes a piece** (found by the comparison;
+      the small lists, 2.3 KB each, went with the cache shape): the grid's
+      20,000 pieces log 4.9 MB beside the root's 6.9 MB list, mostly the two
+      `RecordCounts` of each `Placed`.
 - [ ] **Defer: keyboard focus, text input, selection and highlight** in retained
       subtrees.
 - [ ] **Defer: virtualised lists** (an item count and a row factory instead of a

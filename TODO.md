@@ -34,12 +34,6 @@ none chosen yet (Bart).
       key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
       the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
       option is good enough; a third is needed before this is taken up.
-- [ ] **P2 — `NodeData` is 656 bytes** (`retained/src/ui.rs`; 576 when
-      found, grown by patching's fields and the `PlacedLog` every node carries
-      though only list holders use it): each `Slot` carries `Option<Memo>`,
-      `Option<Signal>` and a version though most props are constants. A side
-      table for bound props would about halve it; the log could move behind
-      an `Option<Box<…>>` or into a table of holders.
 - [ ] **P2 — a list's `PlacedLog` is about 245 bytes a piece (retained/core,
       found 2026-11-11).** The grid's 20,000 pieces log 4.9 MB beside the
       root's 6.9 MB list (`TreeStats::list_bytes` 11.8 MB, the estimate was

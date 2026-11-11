@@ -2990,6 +2990,7 @@ dependencies = [
 name = "wgpu-gameui-retained"
 version = "1.0.0"
 dependencies = [
+ "slotmap",
  "wgpu-gameui",
 ]
 

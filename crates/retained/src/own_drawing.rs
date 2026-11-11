@@ -20,7 +20,7 @@ pub(crate) fn paint_node(
 ) {
     let [w, h] = d.size;
     let rect = Rect::new(0.0, 0.0, w, h);
-    let look = d.look.value;
+    let look = d.look;
     if let Some(shadow) = look.shadow
         && !shadow.inset
     {
@@ -31,7 +31,7 @@ pub(crate) fn paint_node(
     }
     if let Some(t) = &d.text {
         let (x, y, width) = text_place(d);
-        list.text(text_block(&t.text.value, t.color.value, x, y, width));
+        list.text(text_block(&t.text, t.color, x, y, width));
     }
     if let Some(c) = &d.custom {
         let mut repaint = f64::INFINITY;

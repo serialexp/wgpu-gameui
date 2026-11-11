@@ -752,10 +752,9 @@ fn tree_stats_count_the_bytes_each_kept_list_holds() {
     let mut ui = Ui::new(fonts());
     ui.frame(at(0.0));
     let root_bytes = |ui: &Ui| {
-        let list = ui.list().unwrap();
-        (std::mem::size_of::<wgpu_gameui::DrawList>()
-            + list.heap_bytes()
-            + ui.nodes[ui.root as usize].log.heap_bytes()) as u64
+        let kept = ui.nodes[ui.root as usize].kept.as_deref().unwrap();
+        (std::mem::size_of::<crate::ui::Kept>() + kept.list.heap_bytes() + kept.log.heap_bytes())
+            as u64
     };
     let alone = ui.tree_stats();
     assert_eq!(alone.lists, 1);
@@ -775,6 +774,39 @@ fn tree_stats_count_the_bytes_each_kept_list_holds() {
     assert_eq!(after.list_bytes, root_bytes(&ui));
 }
 
+/// A node's properties that follow memos each have a binding, chained from
+/// the node, and each is taken from its own: a bound one, set ones, and
+/// constants side by side, in a slot a removed node left.
+#[test]
+fn each_bound_property_follows_its_own_memo() {
+    let mut ui = Ui::new(fonts());
+    let black = ui.memo(|_| [0.0; 4]);
+    let gone = ui.add(ui.root(), fixed(1.0, 1.0).fill(black));
+    ui.frame(at(0.0));
+    ui.remove(gone);
+    let tone = ui.signal([0.5f32; 4]);
+    let shade = ui.memo(move |r| r.get(tone));
+    let node = ui.add(ui.root(), fixed(4.0, 3.0).fill(shade));
+    assert_eq!(node.index, gone.index, "the slot is reused");
+    ui.set_width(node, Size::Fixed(6.0));
+    ui.set_height(node, Size::Fixed(5.0));
+    assert_eq!(ui.bindings.len(), 3);
+    ui.frame(at(0.0));
+    assert_eq!(ui.rect(node).1, [6.0, 5.0]);
+    ui.set_height(node, Size::Fixed(7.0));
+    ui.graph().set(tone, [0.25; 4]);
+    ui.frame(at(0.0));
+    assert_eq!(ui.rect(node).1, [6.0, 7.0]);
+    assert_eq!(ui.nodes[node.index as usize].fill, [0.25; 4]);
+    // Setting again writes the signal the first set made.
+    assert_eq!(ui.bindings.len(), 3);
+    check(&mut ui);
+    let bound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui.set_fill(node, [1.0; 4]);
+    }));
+    assert!(bound.is_err(), "a bound property is not set");
+}
+
 #[test]
 fn removing_a_subtree_disposes_of_what_it_owns() {
     let mut ui = Ui::new(fonts());
@@ -786,8 +818,11 @@ fn removing_a_subtree_disposes_of_what_it_owns() {
     let child = ui.add(panel, fixed(3.0, 3.0));
     ui.set_fill(child, [1.0; 4]);
     ui.frame(at(0.0));
+    // The panel's bound fill and the child's set one.
+    assert_eq!(ui.bindings.len(), 2);
     ui.remove(panel);
     ui.frame(at(0.0));
+    assert_eq!(ui.bindings.len(), 0);
     let after = ui.graph().stats();
     // The root's signal and memo remain; what the nodes owned is gone.
     assert_eq!(after.nodes, before.nodes + 2);
@@ -1291,7 +1326,7 @@ fn a_scroll_that_puts_rows_off_draws_what_one_laying_them_out_draws() {
             for _ in 0..changes {
                 rows.retain(|&(n, _)| is_live(&a, n));
                 made.nodes.retain(|&n| is_live(&a, n));
-                let m = a.nodes[list.index as usize].stack.value.direction.main();
+                let m = a.nodes[list.index as usize].stack.direction.main();
                 let row = rows
                     .get(rng.below(rows.len().max(1) as u64) as usize)
                     .copied();
@@ -1460,4 +1495,14 @@ fn a_scroll_that_puts_rows_off_draws_what_one_laying_them_out_draws() {
         deferred > 10_000 && caught_up > 1_000 && mixed > 100,
         "{deferred} put off, {caught_up} caught up, {mixed} frames mixed"
     );
+}
+
+/// A node holds its properties' values and nothing for each that is a
+/// constant: what a bound one needs is in `Ui::bindings`, and the log of a
+/// kept list is beside the list. A field that grows it past this bound is a
+/// deliberate change, made with the bound.
+#[test]
+fn a_node_stays_small() {
+    let size = std::mem::size_of::<crate::ui::NodeData>();
+    assert!(size <= 384, "NodeData is {size} bytes");
 }

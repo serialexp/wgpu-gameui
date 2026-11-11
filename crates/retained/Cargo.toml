@@ -9,4 +9,5 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+slotmap = "1"
 wgpu-gameui = { path = "../core" }

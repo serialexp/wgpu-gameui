@@ -6,7 +6,7 @@ use wgpu_gameui::{DrawList, FontSystemHandle, PlacedLog, RecordSpan, TextMeasure
 use crate::input::{Input, Pointer};
 use crate::layout::Avail;
 use crate::node::{CustomPaint, Insets, Look, Node, Prop, Size, Spec, SpecContent, Stack, Text};
-use crate::signal::{Graph, Memo, Owner, Readable, Reader, Signal};
+use crate::signal::{Graph, Memo, NodeId, Owner, Readable, Reader, Signal};
 
 /// What the frame is drawn in: what, outside the tree, its layout and
 /// drawing depend on.
@@ -70,8 +70,9 @@ pub struct TreeStats {
     /// Bytes those lists, and the logs of what they placed, have reserved
     /// (see `DrawList::heap_bytes`).
     pub list_bytes: u64,
-    /// Bytes the node table has reserved, live nodes or not (each node's
-    /// own allocations, such as its input handlers, are not counted).
+    /// Bytes the node table and the table of bound properties have
+    /// reserved, live nodes or not (each node's own allocations, such as its
+    /// input handlers, are not counted).
     pub node_bytes: u64,
 }
 
@@ -90,23 +91,42 @@ pub(crate) fn key(index: u32, prop: u8) -> u64 {
     (u64::from(index) << 4) | u64::from(prop)
 }
 
-/// One property of a node: its current value, and the memo it follows if
-/// it is bound (the node's own, reading the memo it was bound to, so that
-/// any number of nodes can follow one memo).
-pub(crate) struct Slot<T> {
-    pub(crate) value: T,
-    pub(crate) memo: Option<Memo<T>>,
-    /// The signal a setter writes, once a setter has been used.
-    pub(crate) setter: Option<Signal<T>>,
-    /// The memo's version when the value was last taken.
-    pub(crate) version: u64,
+slotmap::new_key_type! {
+    /// A bound property's entry in [`Ui::bindings`].
+    pub(crate) struct BindingKey;
 }
 
-pub(crate) struct TextSlots {
-    pub(crate) text: Slot<Text>,
-    pub(crate) color: Slot<[f32; 4]>,
+/// A property of a node that follows a memo, the node holding only its
+/// current value: most properties are constants, and keep nothing else.
+/// The memo is the node's own, reading the memo the property was bound to
+/// (so that any number of nodes can follow one memo) or the signal its
+/// setter writes. A node's bindings are chained from
+/// [`NodeData::bindings`], one per property at most.
+pub(crate) struct Binding {
+    /// Which property (`WIDTH`, `TEXT`, ...).
+    pub(crate) prop: u8,
+    /// The memo it follows, of the property's type.
+    pub(crate) memo: NodeId,
+    /// The signal a setter writes, once a setter has been used.
+    pub(crate) setter: Option<NodeId>,
+    /// The memo's version when the value was last taken.
+    pub(crate) version: u64,
+    /// The node's next binding.
+    pub(crate) next: Option<BindingKey>,
+}
+
+pub(crate) struct TextContent {
+    pub(crate) text: Text,
+    pub(crate) color: [f32; 4],
     /// The text's measured size, whole pixels.
     pub(crate) size: [f32; 2],
+}
+
+/// The list a node keeps (see `Ui::keeps_list`), and the log of what it
+/// placed: where each node drawn into it went and its shape then.
+pub(crate) struct Kept {
+    pub(crate) list: DrawList,
+    pub(crate) log: PlacedLog,
 }
 
 pub(crate) struct CustomNode {
@@ -147,13 +167,15 @@ pub(crate) struct NodeData {
     /// Children placed at an offset, drawn after the stacked ones.
     pub(crate) absolute: Vec<u32>,
     pub(crate) owner: Owner,
-    pub(crate) width: Slot<Size>,
-    pub(crate) height: Slot<Size>,
-    pub(crate) stack: Slot<Stack>,
-    pub(crate) fill: Slot<[f32; 4]>,
-    pub(crate) look: Slot<Look>,
-    pub(crate) offset: Option<Slot<[f32; 2]>>,
-    pub(crate) text: Option<Box<TextSlots>>,
+    /// Its bound properties, chained; `None` when all are constants.
+    pub(crate) bindings: Option<BindingKey>,
+    pub(crate) width: Size,
+    pub(crate) height: Size,
+    pub(crate) stack: Stack,
+    pub(crate) fill: [f32; 4],
+    pub(crate) look: Look,
+    pub(crate) offset: Option<[f32; 2]>,
+    pub(crate) text: Option<Box<TextContent>>,
     pub(crate) custom: Option<Box<CustomNode>>,
     pub(crate) clip: bool,
     pub(crate) scroll: Option<Box<Scroll>>,
@@ -189,7 +211,7 @@ pub(crate) struct NodeData {
     pub(crate) dirty_kids: Vec<(u32, u32)>,
     /// It is in its holder's `dirty_kids`.
     pub(crate) queued: bool,
-    /// Its piece in its holder's `log` (its own list placed there, or, for a
+    /// Its piece in its holder's log (its own list placed there, or, for a
     /// node that keeps none, its own drawing), and the holder's `list_gen`
     /// then: the piece holds while the holder's list is the one it was
     /// placed in.
@@ -197,15 +219,13 @@ pub(crate) struct NodeData {
     pub(crate) placed_gen: u32,
     /// Counts the times its list was recorded.
     pub(crate) list_gen: u32,
-    /// What its list placed, for a node that keeps one: where each node
-    /// drawn into it went and its shape then.
-    pub(crate) log: PlacedLog,
     /// Volatile painters in its subtree, itself included: its list is
     /// recorded every frame while there are any.
     pub(crate) volatile_below: u32,
-    /// The list of its subtree, at its origin, for a node that keeps one
-    /// (see `Ui::keeps_list`).
-    pub(crate) list: Option<Box<DrawList>>,
+    /// The list of its subtree, at its origin, and the log of what it
+    /// placed, for a node that keeps one (see `Ui::keeps_list`), once
+    /// recorded.
+    pub(crate) kept: Option<Box<Kept>>,
     /// The earliest repaint asked for by what its list holds.
     pub(crate) deadline: f64,
     /// How far its own drawing reaches outside its box.
@@ -234,7 +254,7 @@ impl NodeData {
         match &self.scroll {
             Some(s) => {
                 let mut v = [0.0; 2];
-                v[self.stack.value.direction.main()] = s.applied;
+                v[self.stack.direction.main()] = s.applied;
                 v
             }
             None => [0.0; 2],
@@ -251,6 +271,8 @@ impl NodeData {
 pub struct Ui {
     pub(crate) graph: Graph,
     pub(crate) nodes: Vec<NodeData>,
+    /// The nodes' bound properties (see [`Binding`]).
+    pub(crate) bindings: slotmap::SlotMap<BindingKey, Binding>,
     free: Vec<u32>,
     pub(crate) root: u32,
     pub(crate) fonts: FontSystemHandle,
@@ -294,6 +316,7 @@ impl Ui {
         let mut ui = Self {
             graph: Graph::new(),
             nodes: Vec::new(),
+            bindings: slotmap::SlotMap::with_key(),
             free: Vec::new(),
             root: 0,
             measurer: TextMeasurer::with_font_system(fonts.clone()),
@@ -416,20 +439,25 @@ impl Ui {
             Some(&i) => i,
             None => self.nodes.len() as u32,
         };
-        let width = self.slot(spec.width, owner, key(index, WIDTH));
-        let height = self.slot(spec.height, owner, key(index, HEIGHT));
-        let stack = self.slot(spec.stack, owner, key(index, STACK));
-        let fill = self.slot(spec.fill, owner, key(index, FILL));
-        let look = self.slot(spec.look, owner, key(index, LOOK));
-        let offset = spec.offset.map(|o| self.slot(o, owner, key(index, OFFSET)));
+        let mut bindings = None;
+        let width = self.prop(spec.width, WIDTH, (owner, index, &mut bindings));
+        let height = self.prop(spec.height, HEIGHT, (owner, index, &mut bindings));
+        let stack = self.prop(spec.stack, STACK, (owner, index, &mut bindings));
+        let fill = self.prop(spec.fill, FILL, (owner, index, &mut bindings));
+        let look = self.prop(spec.look, LOOK, (owner, index, &mut bindings));
+        let offset = spec
+            .offset
+            .map(|o| self.prop(o, OFFSET, (owner, index, &mut bindings)));
         let mut text = None;
         let mut custom = None;
         match spec.content {
             SpecContent::None => {}
             SpecContent::Text(t, c) => {
-                text = Some(Box::new(TextSlots {
-                    text: self.slot(t, owner, key(index, TEXT)),
-                    color: self.slot(c, owner, key(index, TEXT_COLOR)),
+                let t = self.prop(t, TEXT, (owner, index, &mut bindings));
+                let c = self.prop(c, TEXT_COLOR, (owner, index, &mut bindings));
+                text = Some(Box::new(TextContent {
+                    text: t,
+                    color: c,
                     size: [0.0; 2],
                 }));
             }
@@ -473,6 +501,7 @@ impl Ui {
             children: Vec::new(),
             absolute: Vec::new(),
             owner,
+            bindings,
             width,
             height,
             stack,
@@ -497,9 +526,8 @@ impl Ui {
             piece: 0,
             placed_gen: 0,
             list_gen: 0,
-            log: PlacedLog::default(),
             volatile_below: u32::from(volatile),
-            list: None,
+            kept: None,
             deadline: f64::INFINITY,
             own_grow: Insets::default(),
             grow: Insets::default(),
@@ -518,32 +546,44 @@ impl Ui {
         index
     }
 
-    fn slot<T: Clone + PartialEq + 'static>(
+    /// The value property `id` of node `index` starts with; a bound one is
+    /// given a memo owned by `owner`, and a binding chained onto `chain`.
+    fn prop<T: Clone + PartialEq + 'static>(
         &mut self,
         prop: Prop<T>,
-        owner: Owner,
-        key: u64,
-    ) -> Slot<T> {
+        id: u8,
+        (owner, index, chain): (Owner, u32, &mut Option<BindingKey>),
+    ) -> T {
         match prop {
-            Prop::Const(value) => Slot {
-                value,
-                memo: None,
-                setter: None,
-                version: 0,
-            },
+            Prop::Const(value) => value,
             Prop::Bound(source) => {
                 let memo = self.graph.memo_in(owner, move |r| r.get(source));
                 let value = self.graph.get(memo);
                 let version = self.graph.version(memo);
-                self.graph.observe(memo, key);
-                Slot {
-                    value,
-                    memo: Some(memo),
+                self.graph.observe(memo, key(index, id));
+                *chain = Some(self.bindings.insert(Binding {
+                    prop: id,
+                    memo: memo.id(),
                     setter: None,
                     version,
-                }
+                    next: *chain,
+                }));
+                value
             }
         }
+    }
+
+    /// Node `n`'s binding of property `prop`, if it is bound.
+    fn binding(&self, n: u32, prop: u8) -> Option<BindingKey> {
+        let mut at = self.nodes[n as usize].bindings;
+        while let Some(k) = at {
+            let b = &self.bindings[k];
+            if b.prop == prop {
+                return Some(k);
+            }
+            at = b.next;
+        }
+        None
     }
 
     /// Remove `node` and everything below it, with every signal and memo
@@ -587,9 +627,13 @@ impl Ui {
             d.generation = d.generation.wrapping_add(1);
             d.children = Vec::new();
             d.absolute = Vec::new();
-            d.list = None;
+            d.kept = None;
             d.dirty_kids = Vec::new();
-            d.log = PlacedLog::default();
+            let mut at = d.bindings.take();
+            while let Some(k) = at {
+                at = self.bindings.remove(k).and_then(|b| b.next);
+            }
+            let d = &mut self.nodes[x as usize];
             d.text = None;
             d.custom = None;
             d.scroll = None;
@@ -652,30 +696,36 @@ impl Ui {
 
     // ---- Setters ----
 
+    /// Set property `prop` of `node` to `value`, through a signal the node
+    /// owns (made the first time), so that the change is taken like any
+    /// other: `has` says whether the node has the property.
     fn set_prop<T: Clone + PartialEq + 'static>(
         &mut self,
         node: Node,
         prop: u8,
         value: T,
-        slot: fn(&mut NodeData) -> &mut Slot<T>,
+        has: fn(&NodeData) -> bool,
     ) {
         let n = self.index(node);
-        let d = &mut self.nodes[n as usize];
-        let owner = d.owner;
-        let s = slot(d);
-        if let Some(signal) = s.setter {
-            self.graph.set(signal, value);
+        assert!(has(&self.nodes[n as usize]), "a node without the property");
+        if let Some(k) = self.binding(n, prop) {
+            let setter = self.bindings[k]
+                .setter
+                .expect("a property bound to a memo is changed through what the memo reads");
+            self.graph.set(Signal::<T>::from_id(setter), value);
             return;
         }
-        assert!(
-            s.memo.is_none(),
-            "a property bound to a memo is changed through what the memo reads"
-        );
+        let owner = self.nodes[n as usize].owner;
         let signal = self.graph.signal_in(owner, value);
         let memo = self.graph.memo_in(owner, move |r| r.get(signal));
-        s.setter = Some(signal);
-        s.memo = Some(memo);
-        s.version = 0;
+        let d = &mut self.nodes[n as usize];
+        d.bindings = Some(self.bindings.insert(Binding {
+            prop,
+            memo: memo.id(),
+            setter: Some(signal.id()),
+            version: 0,
+            next: d.bindings,
+        }));
         // A new memo has not run, so this reports it at once.
         self.graph.observe(memo, key(n, prop));
         self.pending = true;
@@ -683,48 +733,42 @@ impl Ui {
 
     /// Set `node`'s width.
     pub fn set_width(&mut self, node: Node, width: Size) {
-        self.set_prop(node, WIDTH, width, |d| &mut d.width);
+        self.set_prop(node, WIDTH, width, |_| true);
     }
 
     /// Set `node`'s height.
     pub fn set_height(&mut self, node: Node, height: Size) {
-        self.set_prop(node, HEIGHT, height, |d| &mut d.height);
+        self.set_prop(node, HEIGHT, height, |_| true);
     }
 
     /// Set how `node` stacks its children.
     pub fn set_stack(&mut self, node: Node, stack: Stack) {
-        self.set_prop(node, STACK, stack, |d| &mut d.stack);
+        self.set_prop(node, STACK, stack, |_| true);
     }
 
     /// Set `node`'s fill colour.
     pub fn set_fill(&mut self, node: Node, fill: [f32; 4]) {
-        self.set_prop(node, FILL, fill, |d| &mut d.fill);
+        self.set_prop(node, FILL, fill, |_| true);
     }
 
     /// Set `node`'s border, corners and shadow.
     pub fn set_look(&mut self, node: Node, look: Look) {
-        self.set_prop(node, LOOK, look, |d| &mut d.look);
+        self.set_prop(node, LOOK, look, |_| true);
     }
 
     /// Set an absolute node's offset. Panics on a stacked node.
     pub fn set_offset(&mut self, node: Node, offset: [f32; 2]) {
-        self.set_prop(node, OFFSET, offset, |d| {
-            d.offset.as_mut().expect("an absolute node")
-        });
+        self.set_prop(node, OFFSET, offset, |d| d.offset.is_some());
     }
 
     /// Set a text node's text. Panics on a node without text.
     pub fn set_text(&mut self, node: Node, text: Text) {
-        self.set_prop(node, TEXT, text, |d| {
-            &mut d.text.as_mut().expect("a text node").text
-        });
+        self.set_prop(node, TEXT, text, |d| d.text.is_some());
     }
 
     /// Set a text node's colour. Panics on a node without text.
     pub fn set_text_color(&mut self, node: Node, color: [f32; 4]) {
-        self.set_prop(node, TEXT_COLOR, color, |d| {
-            &mut d.text.as_mut().expect("a text node").color
-        });
+        self.set_prop(node, TEXT_COLOR, color, |d| d.text.is_some());
     }
 
     /// The signal holding a scrolling node's offset, to read (a scroll bar)
@@ -742,7 +786,7 @@ impl Ui {
     pub fn scroll_to(&mut self, node: Node, offset: f32) {
         let d = &self.nodes[self.index(node) as usize];
         let s = d.scroll.as_ref().expect("a scrolling node");
-        let max = (s.extent - d.size[d.stack.value.direction.main()]).max(0.0);
+        let max = (s.extent - d.size[d.stack.direction.main()]).max(0.0);
         let offset = if offset.is_nan() {
             0.0
         } else {
@@ -887,25 +931,30 @@ impl Ui {
         }
     }
 
+    /// Take property `prop` of `n` from its memo, if the memo moved on;
+    /// says whether the value changed.
     fn refresh<T: Clone + PartialEq + 'static>(
         &mut self,
         n: u32,
-        slot: fn(&mut NodeData) -> &mut Slot<T>,
+        prop: u8,
+        slot: fn(&mut NodeData) -> &mut T,
     ) -> bool {
-        let s = slot(&mut self.nodes[n as usize]);
-        let Some(memo) = s.memo else {
+        let Some(k) = self.binding(n, prop) else {
             return false;
         };
+        let b = &mut self.bindings[k];
+        let memo = Memo::<T>::from_id(b.memo);
         let version = self.graph.version(memo);
-        if version == s.version {
+        if version == b.version {
             return false;
         }
-        s.version = version;
+        b.version = version;
         let value = self.graph.get(memo);
-        if value == s.value {
+        let s = slot(&mut self.nodes[n as usize]);
+        if value == *s {
             return false;
         }
-        s.value = value;
+        *s = value;
         true
     }
 
@@ -922,47 +971,49 @@ impl Ui {
             }
             match (k & 15) as u8 {
                 WIDTH => {
-                    if self.refresh(n, |d| &mut d.width) {
+                    if self.refresh(n, WIDTH, |d| &mut d.width) {
                         self.mark_layout(n, true);
                     }
                 }
                 HEIGHT => {
-                    if self.refresh(n, |d| &mut d.height) {
+                    if self.refresh(n, HEIGHT, |d| &mut d.height) {
                         self.mark_layout(n, true);
                     }
                 }
                 STACK => {
-                    if self.refresh(n, |d| &mut d.stack) {
+                    if self.refresh(n, STACK, |d| &mut d.stack) {
                         self.mark_layout(n, false);
                         self.mark_records(n);
                         self.nodes[n as usize].child_grow_stale = true;
                     }
                 }
                 FILL => {
-                    if self.refresh(n, |d| &mut d.fill) {
+                    if self.refresh(n, FILL, |d| &mut d.fill) {
                         self.mark_paint(n);
                     }
                 }
                 LOOK => {
-                    if self.refresh(n, |d| &mut d.look) {
+                    if self.refresh(n, LOOK, |d| &mut d.look) {
                         self.mark_paint(n);
                         crate::layout::update_own_grow(self, n);
                     }
                 }
                 OFFSET => {
-                    if self.refresh(n, |d| d.offset.as_mut().expect("an absolute node")) {
+                    if self.refresh(n, OFFSET, |d| d.offset.as_mut().expect("an absolute node")) {
                         let parent = self.nodes[n as usize].parent;
                         self.mark_layout(parent, false);
                     }
                 }
                 TEXT => {
-                    if self.refresh(n, |d| &mut d.text.as_mut().expect("a text node").text) {
+                    if self.refresh(n, TEXT, |d| &mut d.text.as_mut().expect("a text node").text) {
                         self.mark_layout(n, false);
                         self.mark_paint(n);
                     }
                 }
                 TEXT_COLOR => {
-                    if self.refresh(n, |d| &mut d.text.as_mut().expect("a text node").color) {
+                    if self.refresh(n, TEXT_COLOR, |d| {
+                        &mut d.text.as_mut().expect("a text node").color
+                    }) {
                         self.mark_paint(n);
                     }
                 }
@@ -1056,23 +1107,27 @@ impl Ui {
         }
         // What this frame patches in the root's list is told to the renderer,
         // relative to the list as the last frame left it.
-        if let Some(list) = self.nodes[self.root as usize].list.as_deref_mut() {
-            list.begin_edits();
+        if let Some(kept) = self.nodes[self.root as usize].kept.as_deref_mut() {
+            kept.list.begin_edits();
         }
         self.update(self.root);
         self.spans.clear();
         self.epoch = self.epoch.wrapping_add(1).max(1);
         self.pending = self.graph.stats().notified > 0;
         self.stats.memo_runs = self.graph.stats().runs - runs;
-        self.nodes[self.root as usize]
-            .list
+        &self.nodes[self.root as usize]
+            .kept
             .as_deref()
             .expect("the root keeps a list")
+            .list
     }
 
     /// The last frame's list.
     pub fn list(&self) -> Option<&DrawList> {
-        self.nodes[self.root as usize].list.as_deref()
+        self.nodes[self.root as usize]
+            .kept
+            .as_deref()
+            .map(|k| &k.list)
     }
 
     /// What the last frame did.
@@ -1084,16 +1139,19 @@ impl Ui {
     pub fn tree_stats(&self) -> TreeStats {
         let mut stats = TreeStats {
             nodes: self.live,
-            node_bytes: (self.nodes.capacity() * std::mem::size_of::<NodeData>()) as u64,
+            node_bytes: (self.nodes.capacity() * std::mem::size_of::<NodeData>()
+                + self.bindings.capacity() * std::mem::size_of::<Binding>())
+                as u64,
             ..TreeStats::default()
         };
         for d in &self.nodes {
-            if let Some(list) = &d.list {
+            if let Some(kept) = &d.kept {
                 stats.lists += 1;
-                stats.records += list.prim_counts().total() as u64;
-                stats.list_bytes += (std::mem::size_of::<DrawList>() + list.heap_bytes()) as u64;
+                stats.records += kept.list.prim_counts().total() as u64;
+                stats.list_bytes += (std::mem::size_of::<Kept>()
+                    + kept.list.heap_bytes()
+                    + kept.log.heap_bytes()) as u64;
             }
-            stats.list_bytes += d.log.heap_bytes() as u64;
         }
         stats
     }

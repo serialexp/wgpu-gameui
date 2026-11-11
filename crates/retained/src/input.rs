@@ -170,7 +170,7 @@ impl Ui {
         while let Some(n) = x {
             let d = &self.nodes[n as usize];
             if d.scroll.is_some() {
-                let delta = [dx, dy][d.stack.value.direction.main()];
+                let delta = [dx, dy][d.stack.direction.main()];
                 if delta != 0.0 {
                     let node = Node {
                         index: n,
@@ -349,7 +349,7 @@ impl Ui {
             self.refresh_child_grow(n);
         }
         let d = &self.nodes[n as usize];
-        let m = d.stack.value.direction.main();
+        let m = d.stack.direction.main();
         let q = local[m] + d.scrolled()[m];
         let [before, after] = d.child_grow;
         let nodes = &self.nodes;

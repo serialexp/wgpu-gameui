@@ -29,13 +29,12 @@ use wgpu_gameui::{
 
 use crate::node::Insets;
 use crate::own_drawing::paint_node;
-use crate::ui::{NodeData, Ui};
+use crate::ui::{Kept, NodeData, Ui};
 
-/// A list being recorded: the list, the log of what it placed, its
+/// A list being recorded: the list and the log of what it placed, its
 /// `list_gen`, and the earliest repaint asked for by what it holds.
 struct Recording {
-    list: Box<DrawList>,
-    log: PlacedLog,
+    kept: Box<Kept>,
     generation: u32,
     deadline: f64,
 }
@@ -46,7 +45,7 @@ impl Ui {
     /// it has none yet.
     pub(crate) fn needs_record(&self, n: u32) -> bool {
         let d = &self.nodes[n as usize];
-        d.stale || d.volatile_below > 0 || d.deadline <= self.now || d.list.is_none()
+        d.stale || d.volatile_below > 0 || d.deadline <= self.now || d.kept.is_none()
     }
 
     /// Bring `n`'s list up to date, `n` being a node that keeps one: record
@@ -97,7 +96,7 @@ impl Ui {
             return false;
         }
         let piece = d.piece;
-        let Some(placed) = p.log.placed(piece).copied() else {
+        let Some(placed) = p.kept.as_ref().and_then(|k| k.log.placed(piece)).copied() else {
             return false;
         };
         if self.offset_in(c, n) != placed.offset {
@@ -129,23 +128,29 @@ impl Ui {
             }
             own = Some(self.paint_own(c));
         }
-        let mut list = self.nodes[n as usize]
-            .list
+        let mut kept = self.nodes[n as usize]
+            .kept
             .take()
             .expect("a list placed it");
         let child = match &own {
             Some(list) => &**list,
-            None => self.nodes[c as usize].list.as_deref().expect("recorded"),
+            None => {
+                &self.nodes[c as usize]
+                    .kept
+                    .as_deref()
+                    .expect("recorded")
+                    .list
+            }
         };
         // Drawn again whole, it must have the shape it was placed with.
         let whole = self.spans.len() == mark;
-        let mut ok = !whole || self.nodes[n as usize].log.fits(piece, child);
+        let mut ok = !whole || kept.log.fits(piece, child);
         if ok && whole {
             self.spans.push(RecordSpan::all_of(child));
         }
         if ok {
             for span in &mut self.spans[mark..] {
-                if !list.patch_translated(&placed, child, span) {
+                if !kept.list.patch_translated(&placed, child, span) {
                     ok = false;
                     break;
                 }
@@ -162,7 +167,7 @@ impl Ui {
             self.piece_list = own;
         }
         let d = &mut self.nodes[n as usize];
-        d.list = Some(list);
+        d.kept = Some(kept);
         // A deadline that moved later leaves this one early, which records
         // this list again when it comes and puts it right.
         d.deadline = d.deadline.min(deadline);
@@ -213,16 +218,17 @@ impl Ui {
     pub(crate) fn record(&mut self, n: u32) {
         self.stats.recorded += 1;
         let d = &mut self.nodes[n as usize];
-        let mut list = d
-            .list
-            .take()
-            .unwrap_or_else(|| Box::new(DrawList::with_font_system(self.fonts.clone())));
-        list.clear();
+        let mut kept = d.kept.take().unwrap_or_else(|| {
+            Box::new(Kept {
+                list: DrawList::with_font_system(self.fonts.clone()),
+                log: PlacedLog::default(),
+            })
+        });
+        kept.list.clear();
         // The frame's list says what each frame patched in it, so the
         // renderer need not compare it with the last (`Ui::frame`).
-        list.report_edits(n == self.root);
-        let mut log = std::mem::take(&mut d.log);
-        log.clear();
+        kept.list.report_edits(n == self.root);
+        kept.log.clear();
         d.list_gen = d.list_gen.wrapping_add(1);
         let generation = d.list_gen;
         // Everything in the list is drawn below, and so brought up to date;
@@ -232,8 +238,7 @@ impl Ui {
         kids.clear();
         self.nodes[n as usize].dirty_kids = kids;
         let mut rec = Recording {
-            list,
-            log,
+            kept,
             generation,
             deadline: f64::INFINITY,
         };
@@ -242,13 +247,12 @@ impl Ui {
             &self.nodes[n as usize],
             &mut self.graph,
             self.now,
-            &mut rec.list,
+            &mut rec.kept.list,
             &mut rec.deadline,
         );
         self.draw_children(n, [0.0; 2], &mut rec);
         let d = &mut self.nodes[n as usize];
-        d.list = Some(rec.list);
-        d.log = rec.log;
+        d.kept = Some(rec.kept);
         d.deadline = rec.deadline;
         d.stale = false;
     }
@@ -264,12 +268,12 @@ impl Ui {
         if clips {
             let rect = Rect::new(0.0, 0.0, d.size[0], d.size[1]);
             if d.scroll.is_some() {
-                rec.list.push_clip_viewport(rect);
+                rec.kept.list.push_clip_viewport(rect);
             } else {
-                rec.list.push_clip(rect);
+                rec.kept.list.push_clip(rect);
             }
         }
-        let clip = rec.list.current_clip();
+        let clip = rec.kept.list.current_clip();
         let range = self.flow_candidates(n);
         self.stats.examined += range.len() as u32;
         let place_of = |c: &NodeData| {
@@ -301,7 +305,7 @@ impl Ui {
             self.draw_child(c, at, clip, rec);
         }
         if clips {
-            rec.list.pop_clip();
+            rec.kept.list.pop_clip();
         }
     }
 
@@ -311,8 +315,8 @@ impl Ui {
             self.update(c);
             self.spans.truncate(mark);
             let d = &self.nodes[c as usize];
-            let child = d.list.as_deref().expect("recorded");
-            let piece = rec.log.place(&mut rec.list, child, at, clip);
+            let child = &d.kept.as_deref().expect("recorded").list;
+            let piece = rec.kept.log.place(&mut rec.kept.list, child, at, clip);
             self.stats.placed += 1;
             self.stats.copied += child.prim_counts().total() as u64;
             rec.deadline = rec.deadline.min(d.deadline);
@@ -334,7 +338,7 @@ impl Ui {
             &mut own,
             &mut rec.deadline,
         );
-        let piece = rec.log.place(&mut rec.list, &own, at, clip);
+        let piece = rec.kept.log.place(&mut rec.kept.list, &own, at, clip);
         self.piece_list = Some(own);
         let d = &mut self.nodes[c as usize];
         d.piece = piece;
@@ -359,7 +363,7 @@ impl Ui {
             self.refresh_child_grow(n);
         }
         let d = &self.nodes[n as usize];
-        let m = d.stack.value.direction.main();
+        let m = d.stack.direction.main();
         let s = d.scrolled()[m];
         let length = d.size[m];
         let [before, after] = d.child_grow;
@@ -376,7 +380,7 @@ impl Ui {
     }
 
     pub(crate) fn refresh_child_grow(&mut self, n: u32) {
-        let m = self.nodes[n as usize].stack.value.direction.main();
+        let m = self.nodes[n as usize].stack.direction.main();
         let kids = std::mem::take(&mut self.nodes[n as usize].children);
         let mut reach = [0.0f32; 2];
         for &c in &kids {
@@ -534,8 +538,8 @@ fn fresh_grow(ui: &Ui, n: u32) -> Insets {
 }
 
 pub(crate) fn quad_style(d: &NodeData) -> Option<QuadStyle> {
-    let look = d.look.value;
-    let fill = d.fill.value;
+    let look = d.look;
+    let fill = d.fill;
     let border = look.border.filter(|b| b.width > 0.0 && b.color[3] > 0.0);
     if fill[3] <= 0.0 && border.is_none() {
         return None;

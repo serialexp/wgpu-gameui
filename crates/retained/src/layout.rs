@@ -79,7 +79,7 @@ fn child_room(inner: Avail, fill: bool) -> Avail {
 /// Whether the node's size may change when its content does: on an axis
 /// that hugs, or fills without being given an exact length.
 pub(crate) fn follows_content(d: &NodeData) -> bool {
-    let sizes = [d.width.value, d.height.value];
+    let sizes = [d.width, d.height];
     (0..2).any(|axis| match sizes[axis] {
         Size::Fixed(_) => false,
         Size::Fill(_) => !matches!(d.avail.map(|a| a[axis]), Some(Avail::Exact(_))),
@@ -122,10 +122,10 @@ const UNLIMITED: f32 = 1.0e6;
 /// down by its vertical alignment, and the width it is set in.
 pub(crate) fn text_place(d: &NodeData) -> (f32, f32, f32) {
     let t = d.text.as_ref().expect("a text node");
-    let pad = padding(d.stack.value.padding);
+    let pad = padding(d.stack.padding);
     let content_w = (d.size[0] - pad.left - pad.right).max(0.0);
     let content_h = (d.size[1] - pad.top - pad.bottom).max(0.0);
-    let y = snap(pad.top + (content_h - t.size[1]) * t.text.value.valign.share());
+    let y = snap(pad.top + (content_h - t.size[1]) * t.text.valign.share());
     (pad.left, y, content_w)
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn update_own_grow(ui: &mut Ui, n: u32) {
     let d = &ui.nodes[n as usize];
     let [w, h] = d.size;
     let mut grow = Insets::default();
-    if let Some(s) = d.look.value.shadow
+    if let Some(s) = d.look.shadow
         && !s.inset
         && s.color[3] > 0.0
     {
@@ -170,7 +170,7 @@ pub(crate) fn update_own_grow(ui: &mut Ui, n: u32) {
 /// clamped.
 pub(crate) fn apply_scroll(ui: &mut Ui, n: u32) -> bool {
     let d = &mut ui.nodes[n as usize];
-    let viewport = d.size[d.stack.value.direction.main()];
+    let viewport = d.size[d.stack.direction.main()];
     let s = d.scroll.as_mut().expect("a scrolling node");
     let max = (s.extent - viewport).max(0.0);
     let want = if s.requested.is_nan() {
@@ -231,8 +231,8 @@ impl Ui {
         d.layout_below = false;
         self.stats.laid_out += 1;
 
-        let sizes = [d.width.value, d.height.value];
-        let stack = d.stack.value;
+        let sizes = [d.width, d.height];
+        let stack = d.stack;
         let m = stack.direction.main();
         let pad = padding(stack.padding);
         let pad_start = [pad.left, pad.top];
@@ -309,7 +309,7 @@ impl Ui {
             Avail::Exact(v) | Avail::AtMost(v) => v,
             Avail::Unbounded => UNLIMITED,
         };
-        let block = text_block(&t.text.value, t.color.value, 0.0, 0.0, width);
+        let block = text_block(&t.text, t.color, 0.0, 0.0, width);
         let (w, h) = self.measurer.measure_block(&block);
         let size = [w.ceil().max(0.0), h.ceil().max(0.0)];
         self.nodes[n as usize]
@@ -362,7 +362,7 @@ impl Ui {
     /// binary search and the walk stops past the last.
     fn layout_near_view(&mut self, n: u32) {
         let d = &self.nodes[n as usize];
-        let stack = d.stack.value;
+        let stack = d.stack;
         let m = stack.direction.main();
         let view = d.size[m];
         let s = d.scroll.as_ref().expect("a scrolling node");
@@ -388,7 +388,7 @@ impl Ui {
             if !(cd.layout_self || cd.layout_below) {
                 continue;
             }
-            if !near && deferrable([cd.width.value, cd.height.value], m, stack.cross) {
+            if !near && deferrable([cd.width, cd.height], m, stack.cross) {
                 continue;
             }
             let room = cd
@@ -419,7 +419,7 @@ impl Ui {
         pad_start: [f32; 2],
         defers: bool,
     ) -> [f32; 2] {
-        let stack = self.nodes[n as usize].stack.value;
+        let stack = self.nodes[n as usize].stack;
         let m = stack.direction.main();
         let x = 1 - m;
         let gap = if stack.gap > 0.0 { stack.gap } else { 0.0 };
@@ -428,7 +428,7 @@ impl Ui {
         let mut mixed = false;
         let specs = |ui: &Ui, c: u32| {
             let d = &ui.nodes[c as usize];
-            [d.width.value, d.height.value]
+            [d.width, d.height]
         };
 
         // Children that do not share the stack's length, then the share.
@@ -515,11 +515,7 @@ impl Ui {
                 child_room(inner[1], is_fill(s[1])),
             ];
             self.layout(c, room);
-            let offset = self.nodes[c as usize]
-                .offset
-                .as_ref()
-                .expect("an absolute node")
-                .value;
+            let offset = self.nodes[c as usize].offset.expect("an absolute node");
             let at = |a: usize| {
                 if offset[a].is_finite() {
                     snap(pad_start[a] + offset[a])

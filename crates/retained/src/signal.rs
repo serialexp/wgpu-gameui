@@ -61,6 +61,16 @@ pub struct Memo<T> {
 
 macro_rules! handle_impls {
     ($name:ident) => {
+        impl<T> $name<T> {
+            /// The handle naming `id`, which names one of type `T`: for a
+            /// handle kept untyped (reading it as another type panics).
+            pub(crate) fn from_id(id: NodeId) -> Self {
+                Self {
+                    id,
+                    _type: PhantomData,
+                }
+            }
+        }
         impl<T> Clone for $name<T> {
             fn clone(&self) -> Self {
                 *self

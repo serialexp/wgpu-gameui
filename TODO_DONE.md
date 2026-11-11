@@ -178,6 +178,26 @@ then the dated batches in the order they were written.
       piece, 11.6 and 10.7% at 16, 12.5 and 15.3% at 256 (256: 209 → 180
       µs). Tests: the append oracle; committing the soup when nothing was
       kept fails three of its tests.
+- [x] **P2 — `NodeData` is 656 bytes** (`retained/src/ui.rs`; 576 when
+      found, grown by patching's fields and the `PlacedLog` every node carries
+      though only list holders use it): each `Slot` carries `Option<Memo>`,
+      `Option<Signal>` and a version though most props are constants. A side
+      table for bound props would about halve it; the log could move behind
+      an `Option<Box<…>>` or into a table of holders.
+      **Done 2026-11-12: 664 → 384 bytes** (item 7 had grown it to 664).
+      A node holds its properties' values only; a bound one's memo, setter
+      and version are a `Binding` in `Ui::bindings`, a `SlotMap` (Bart chose
+      a slotmap, as citybuilder uses), chained from the node's
+      `bindings` key and found by property on notification and on set. The
+      `PlacedLog` moved beside the list into the one `Box<Kept>` a holder
+      has (Bart's choice). `TreeStats::node_bytes` counts the bindings too.
+      Bench, animated grid 10,000: `node_bytes` 21.8 → 13.4 MB (the table's
+      capacity is 32,768), the bindings 0.79 MB of it. Tests: the size
+      bound `a_node_stays_small` (Bart's choice), `each_bound_property_
+      follows_its_own_memo`, and the bindings counted in
+      `removing_a_subtree_disposes_of_what_it_owns`; leaving the bindings of
+      removed nodes in the table, or finding a node's first binding for any
+      property, fails them.
 
 ---
 
