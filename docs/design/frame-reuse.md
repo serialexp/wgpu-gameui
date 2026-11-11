@@ -308,7 +308,7 @@ box.
   owner changing a reporting list only by patches and clears between
   `begin_edits` and the render; anything else that changes the counts is
   caught, and a write to the public record arrays is not. Choices made in
-  building it, for Bart to confirm: a list produced but not drawn (a missed
+  building it (confirmed by Bart, 2026-11-12): a list produced but not drawn (a missed
   render) is planned from nothing next time; the soup is reported whole, at
   the most any part of it changed; a recorded root, since it is a new
   version with no log, is planned from nothing with no comparison, so the

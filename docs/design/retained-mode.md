@@ -176,10 +176,6 @@ Tick items as they land.
 
 ### Outstanding
 
-- [ ] **Bart to confirm the four pointer choices** made while he was away
-      (2026-11-11, under Decisions): app-owned hover/press signals, hover on
-      the topmost taker only, the wheel stopping at the innermost container's
-      limit, `pressed` meaning the press is held.
 - [ ] **Icon content.** Phase 3 built text and custom painters; `Icon` is not
       a content kind yet.
 - [ ] **Phase 6 — an example in a window.** Scrolling list, hover styling, a click
@@ -599,8 +595,8 @@ stack (`child_grow`) for the binary search, not only nodes that clip.
 - **Caches are in local coordinates, replayed with `append_translated` always**,
   so ancestor clips apply on every replay (both reviews, 2026-11-10).
 
-- **Pointer choices, provisional** (2026-11-11, made while Bart was away, to
-  confirm): hover and press go to signals the app makes (the alternatives:
+- **Pointer choices** (made 2026-11-11 while Bart was away; confirmed by
+  Bart 2026-11-12): hover and press go to signals the app makes (the alternatives:
   binding a prop after the node exists, or spec closures given the node's own
   signals); only the topmost node taking the pointer is hovered, not its
   ancestors; the wheel stops at the innermost container's limit instead of
