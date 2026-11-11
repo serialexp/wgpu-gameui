@@ -2692,6 +2692,35 @@ impl DrawList {
         self.analytic_instances.capacity()
     }
 
+    /// The bytes this list's own buffers have reserved: every array's
+    /// capacity times its element size. A text's content and range lists
+    /// are shared reference-counted values and are not counted, so this is
+    /// what keeping the list costs beyond what its texts already hold.
+    pub fn heap_bytes(&self) -> usize {
+        fn bytes<T>(v: &Vec<T>) -> usize {
+            v.capacity() * std::mem::size_of::<T>()
+        }
+        let total = bytes(&self.vertices)
+            + bytes(&self.indices)
+            + bytes(&self.texts)
+            + bytes(&self.icons)
+            + bytes(&self.nine_slices)
+            + bytes(&self.analytic_instances)
+            + bytes(&self.stroke_points)
+            + bytes(&self.circle_instances)
+            + bytes(&self.paint_cmds)
+            + bytes(&self.clip_stack)
+            + bytes(&self.viewport_clips)
+            + bytes(&self.transform_stack)
+            + bytes(&self.tint_stack)
+            + bytes(&self.debug_scopes)
+            + bytes(&self.debug_scope_stack)
+            + bytes(&self.selectable);
+        #[cfg(feature = "phosphor-icons")]
+        let total = total + bytes(&self.icons_msdf);
+        total
+    }
+
     /// Reserve shared chrome/shadow record capacity.
     pub fn reserve_analytic_instances(&mut self, additional: usize) {
         self.analytic_instances.reserve(additional);
@@ -5133,6 +5162,20 @@ mod tests {
         assert_eq!(list.dropped_degenerate(), 1);
         list.clear();
         assert_eq!(list.dropped_degenerate(), 0);
+    }
+
+    #[test]
+    fn heap_bytes_counts_what_the_buffers_reserved() {
+        let mut list = DrawList::new();
+        let empty = list.heap_bytes();
+        list.reserve_analytic_instances(10);
+        assert_eq!(
+            list.heap_bytes() - empty,
+            list.analytic_instance_capacity() * std::mem::size_of::<crate::AnalyticInstance>()
+        );
+        let before = list.heap_bytes();
+        list.clear();
+        assert_eq!(list.heap_bytes(), before, "clear keeps the capacity");
     }
 
     #[test]
