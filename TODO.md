@@ -34,9 +34,6 @@ none chosen yet (Bart).
       key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
       the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
       option is good enough; a third is needed before this is taken up.
-- [ ] **P2 — `append_translated` pushes one paint command per record**
-      (`draw_list.rs:996-1006`; `push_paint_cmd` is 12.5% of the retained grid
-      profile). Push a run when nothing was culled. Moot after patching.
 - [ ] **P2 — `NodeData` is 656 bytes** (`retained/src/ui.rs`; 576 when
       found, grown by patching's fields and the `PlacedLog` every node carries
       though only list holders use it): each `Slot` carries `Option<Memo>`,

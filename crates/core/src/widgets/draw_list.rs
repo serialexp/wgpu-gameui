@@ -1034,15 +1034,19 @@ impl DrawList {
             match cmd {
                 PaintCmd::Soup { indices } => soup_end = index_base + indices.end,
                 PaintCmd::Analytic { instances } => {
+                    // The records kept are stored one after another, so they
+                    // are one run however many shadows were dropped; it and
+                    // the soup before it are pushed when any is kept.
+                    let at = self.analytic_instances.len() as u32;
                     for record in &other.analytic_instances[ranged(instances)] {
                         if let Some(record) = place.analytic(record) {
-                            self.commit_soup(soup_end);
-                            let at = self.analytic_instances.len() as u32;
                             self.push_analytic_record(record);
-                            self.push_paint_cmd(PaintCmd::Analytic {
-                                instances: at..at + 1,
-                            });
                         }
+                    }
+                    let end = self.analytic_instances.len() as u32;
+                    if end > at {
+                        self.commit_soup(soup_end);
+                        self.push_paint_cmd(PaintCmd::Analytic { instances: at..end });
                     }
                 }
                 PaintCmd::Circle { instances } => {

@@ -162,6 +162,22 @@ then the dated batches in the order they were written.
       deferral, compared frame by frame and hit by hit
       (`docs/design/retained-mode.md`). Build timing waits for a quiet
       machine (load 25 to 28 here).
+- [x] **P2 — `append_translated` pushes one paint command per record**
+      (`draw_list.rs:996-1006`; `push_paint_cmd` is 12.5% of the retained grid
+      profile). Push a run when nothing was culled. Moot after patching.
+      **Done 2026-11-12.** The records of an analytic run that are kept are
+      stored one after another, so they are pushed as one run (and the soup
+      before it committed) once, when any is kept, whatever was culled;
+      the paint commands are the same as before. Moot for the scenes'
+      frames as the review guessed: since patching, grid and deep frames
+      record nothing (`recorded=0`) and never call it, and the bench's A/B
+      of grid builds was within noise (pieces of one or two records). What
+      it does cost is in a new Criterion bench, `benches/append_translated.rs`
+      (16,384 chrome rects placed in pieces of 1, 16 and 256): two
+      alternating A/B pairs at load 12, 3.7 and 11.9% faster at 1 record a
+      piece, 11.6 and 10.7% at 16, 12.5 and 15.3% at 256 (256: 209 → 180
+      µs). Tests: the append oracle; committing the soup when nothing was
+      kept fails three of its tests.
 
 ---
 
