@@ -377,7 +377,9 @@ Each case prints its counters: the tree's work in the last frame
 (`FrameStats`), what it holds (`TreeStats`, with `list_bytes` from the new
 `DrawList::heap_bytes`, and `node_bytes`, the node table), text layouts shaped
 over the run, and the renderer's last `RenderStats` (`plans_replayed`,
-`boxes_computed`).
+`boxes_computed`). A build prints what its last frame laid out (`visited`,
+`laid_out`, `measured`, and `deferred`, the children a scroll sized without
+laying them out).
 
 The pictures were checked: `shots/retained-*.png` against `shots/gameui-*.png`.
 The rows match line for line. The 10,000-cell grid is 80% lit against 95%

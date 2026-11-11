@@ -1,8 +1,8 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
-Last updated: 2026-11-11
+Last updated: 2026-11-12
 
 ## Implementation status
 
@@ -173,6 +173,37 @@ Tick items as they land.
       and 76 KB, not 305 KB; scrolling now draws the rows in view again into
       the scroll container's list instead of placing their lists (tree share
       of `rows-scrl` 0.009 → 0.014 ms). Builds: grid 24 → 18 to 20 ms.
+- [x] **Builds shape every text, in view or not** (found by the comparison;
+      done 2026-11-12, Bart's choices under Decisions): the rows build took
+      108 ms, almost all shaping 10,000 labels in rows of fixed height;
+      immediate mode shapes the 54 in view. A scroll whose content has an
+      exact length across it now sizes the stacked children it can without
+      laying them out (`layout::deferrable`: fixed along the stack, and
+      across it fixed, filling, or hugging at the start) and lays out only
+      those within a viewport of its view, before and after; the rest are
+      laid out when a scroll brings them near (`layout_near_view`, reached
+      through `mark_below` when the scroll moves). A child put off is
+      flagged `deferred`, and is neither drawn nor hit until it is laid out;
+      a child laid out before that changes while far from the view waits
+      too, keeping its last layout. `FrameStats::deferred` counts the
+      children sized without being laid out. Tests: the counted
+      `a_scroll_lays_out_only_the_rows_near_its_view` (10,000 rows: 40
+      measured at build, 5 more on a scroll of 100 px, a changed far row
+      laid out on coming back, every row sized again and 40 laid out when
+      the scroll narrows), and `a_scroll_that_puts_rows_off_draws_what_one_
+      laying_them_out_draws`, the same random scroll of rows built twice
+      (once with `Ui::no_defer`) and driven alike through scrolls, row and
+      content changes, the scroll's stack and size and the viewport: the
+      frames and hits are the same, and the random oracle passes (30,542
+      rows put off, 3,026 caught up with, 972 frames with rows it cannot
+      defer). Mutations caught: no mark when the scroll moves (five tests),
+      no paint mark when a row put off is resized (the twin test alone; the
+      oracle from nothing reads the same stale data). The bench's rows build
+      measures 108 labels in its first frame and 162 in its second (three
+      viewports at row 5,000), not 10,000 (`rows-bld` counts, now printed);
+      timed at a load average of 25 to 28, 36 to 80 ms against 108 ms (the
+      untouched `deep-bld` took 31 ms there against 3.0), so not compared:
+      that waits for the rerun on a quiet machine.
 
 ### Outstanding
 
@@ -184,9 +215,6 @@ Tick items as they land.
       the width offered and drawn at its measured width, and the layout cache
       keys on the width, so each new or changed text is shaped twice (512
       layouts in 230 `rows-one` frames against 229 in immediate mode).
-- [ ] **Builds shape every text, in view or not** (found by the comparison):
-      the rows build takes 108 ms, almost all shaping 10,000 labels in rows of
-      fixed height; immediate mode shapes the 54 in view.
 - [ ] **The node table is 656 bytes a node, and a list's log about 245 bytes
       a piece** (found by the comparison; the small lists, 2.3 KB each, went
       with the cache shape): the grid's 20,000 pieces log 4.9 MB beside the
@@ -419,6 +447,19 @@ Absolute children are drawn after the stacked ones. The scale is part of the
 context: a new scale measures and draws every text again, as a new font
 generation does.
 
+Follow-up (2026-11-12): a scroll does not lay out every child. When its
+content's length across the stack is exact, a stacked child whose length
+along the stack is fixed, and across it fixed, filling, or hugging at the
+start (where its place does not depend on that length), is sized without
+being laid out; after the scroll is clamped, the children within one
+viewport of the view, before and after, are laid out, and the rest when a
+scroll brings them near. Extent and clamping need nothing else: they depend
+on lengths along the stack, which are fixed. A child put off is neither drawn
+nor hit, so one whose drawing reaches more than a viewport past its box (a
+shadow longer than the view) is not drawn while it is that far away. A child
+laid out before that changes while far from the view keeps its last layout
+until it comes near; `Ui::rect` gives what is in it as last laid out.
+
 ## Drawing and the cache
 
 Every node with children is a **cache boundary** (Bart chose this to be measured
@@ -601,6 +642,13 @@ stack (`child_grow`) for the binary search, not only nodes that clip.
   signals); only the topmost node taking the pointer is hovered, not its
   ancestors; the wheel stops at the innermost container's limit instead of
   chaining outward; `pressed` means the press is held, not held and over it.
+- **A scroll puts off the layout of children away from its view** (Bart,
+  2026-11-12): automatically, with no flag to opt in; laid out within one
+  viewport of the view, before and after, not the view alone; for children
+  of fixed length along the stack whose length across it is known (fixed,
+  filling, or hugging at the start) in a scroll whose content's length
+  across it is exact; and a child laid out before that changes while far
+  from the view is put off too, not laid out at once.
 
 ## Questions only building can answer
 

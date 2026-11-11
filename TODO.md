@@ -34,11 +34,6 @@ none chosen yet (Bart).
       key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
       the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
       option is good enough; a third is needed before this is taken up.
-- [ ] **P1 — don't lay out children out of view (retained).**
-      `layout_stack` lays out every child (`layout.rs:313-327`): the rows build
-      shapes 10,000 labels, 108 ms. A scroll container with main-axis `Fixed`
-      children can defer their layout until in view; extent, clamping and hit
-      testing must cope. Check: `measured` at build = 54.
 - [ ] **P2 — `append_translated` pushes one paint command per record**
       (`draw_list.rs:996-1006`; `push_paint_cmd` is 12.5% of the retained grid
       profile). Push a run when nothing was culled. Moot after patching.

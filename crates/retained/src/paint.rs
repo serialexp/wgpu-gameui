@@ -89,7 +89,7 @@ impl Ui {
     /// drawn with another shape, or the patch is declined.
     fn patch_in(&mut self, n: u32, c: u32, generation: u32) -> bool {
         let d = &self.nodes[c as usize];
-        if !d.live || d.generation != generation || self.holder(c) != Some(n) {
+        if !d.live || d.generation != generation || d.deferred || self.holder(c) != Some(n) {
             return false;
         }
         let p = &self.nodes[n as usize];
@@ -279,7 +279,9 @@ impl Ui {
         for i in range {
             let c = self.nodes[n as usize].children[i];
             let cd = &self.nodes[c as usize];
-            if clips && !in_view(&self.nodes[n as usize], cd, offset(cd, scrolled)) {
+            // One whose layout was put off is out of view, unless its paint
+            // bounds reach a viewport: it is not drawn until it is laid out.
+            if cd.deferred || clips && !in_view(&self.nodes[n as usize], cd, offset(cd, scrolled)) {
                 continue;
             }
             let at = place_of(cd);
@@ -455,6 +457,9 @@ impl Ui {
         let kids: Vec<u32> = d.children.iter().chain(&d.absolute).copied().collect();
         for c in kids {
             let cd = &self.nodes[c as usize];
+            if cd.deferred {
+                continue;
+            }
             let at = offset(cd, scrolled);
             if clips {
                 let g = fresh_grow(self, c);

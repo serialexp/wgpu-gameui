@@ -47,7 +47,7 @@ fn main() {
         let grid = Grid::new(n);
         let labels: Vec<TextContent> = (0..n).map(|i| label(i).into()).collect();
         let make = |mode| GridTree::new(fonts.clone(), &grid, &labels, mode);
-        let build = bench.builds(|| make(Mode::Static));
+        let build = bench.builds(&format!("build-{n}"), || make(Mode::Static));
         report(&bench.lib, "build", n, &build);
         for (scenario, mode) in MODES {
             let (frames, tree) = bench.run(&mut make(mode), &format!("grid-{n}"));
@@ -62,7 +62,7 @@ fn main() {
     if group_wanted("rows") {
         let labels: Vec<TextContent> = (0..ROWS).map(|i| row_text(i, 0).into()).collect();
         let make = |mode| RowsTree::new(fonts.clone(), &labels, mode);
-        let build = bench.builds(|| make(RowMode::Static));
+        let build = bench.builds("rows-bld", || make(RowMode::Static));
         report_scene(&bench.lib, "rows-bld", &build);
         for (name, mode) in ROW_MODES {
             if !scene_wanted(name) {
@@ -76,7 +76,7 @@ fn main() {
     }
 
     if group_wanted("deep") {
-        let build = bench.builds(|| DeepTree::new(fonts.clone(), Mode::Static));
+        let build = bench.builds("deep-bld", || DeepTree::new(fonts.clone(), Mode::Static));
         report_scene(&bench.lib, "deep-bld", &build);
         for (scenario, mode) in MODES {
             let name = format!("deep-{scenario}");
@@ -120,9 +120,10 @@ impl Bench {
 
     /// Build a scene from nothing [`BUILDS`] times and time each: the tree,
     /// its first frame and that frame's render. The scene is dropped outside
-    /// the timing.
-    fn builds<S: Scene>(&mut self, mut make: impl FnMut() -> S) -> Stats {
+    /// the timing. Prints what the last build's last frame laid out.
+    fn builds<S: Scene>(&mut self, name: &str, mut make: impl FnMut() -> S) -> Stats {
         let mut times = Vec::with_capacity(BUILDS);
+        let mut last = None;
         for _ in 0..BUILDS {
             let started = Instant::now();
             let mut scene = make();
@@ -130,8 +131,20 @@ impl Bench {
             self.gpu.draw(&mut self.renderer, list);
             times.push(started.elapsed().as_secs_f64() * 1e6);
             self.gpu.wait();
+            last = Some(scene.ui().frame_stats());
             drop(scene);
         }
+        let f = last.expect("built");
+        report_counts(
+            &self.lib,
+            name,
+            &[
+                ("visited", f.visited as u64),
+                ("laid_out", f.laid_out as u64),
+                ("measured", f.measured as u64),
+                ("deferred", f.deferred as u64),
+            ],
+        );
         stats_from(times)
     }
 
@@ -174,6 +187,7 @@ impl Bench {
                 ("visited", f.visited as u64),
                 ("laid_out", f.laid_out as u64),
                 ("measured", f.measured as u64),
+                ("deferred", f.deferred as u64),
                 ("painted", f.painted as u64),
                 ("recorded", f.recorded as u64),
                 ("placed", f.placed as u64),

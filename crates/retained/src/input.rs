@@ -329,6 +329,9 @@ impl Ui {
             }
             for i in self.hit_candidates(n, local).rev() {
                 let c = self.nodes[n as usize].children[i];
+                if self.nodes[c as usize].deferred {
+                    continue;
+                }
                 let o = offset(&self.nodes[c as usize], scrolled);
                 if let Some(hit) = self.hit_in(c, [origin[0] + o[0], origin[1] + o[1]], at, want) {
                     return Some(hit);
@@ -448,6 +451,9 @@ impl Ui {
         };
         let scrolled = d.scrolled();
         for &c in d.children.iter().chain(&d.absolute) {
+            if self.nodes[c as usize].deferred {
+                continue;
+            }
             let o = offset(&self.nodes[c as usize], scrolled);
             self.scan(
                 c,

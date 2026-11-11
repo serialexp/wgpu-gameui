@@ -480,15 +480,92 @@ fn a_change_in_ten_thousand_rows_costs_the_rows_in_view() {
     assert_eq!((stats.painted, stats.patched), (1, 2));
     check(&mut ui);
 
-    // Out of view: its row is not drawn, but the list is recorded again
-    // (it cannot tell the label stayed out of view) with its twenty rows and
+    // Out of view, and more than a viewport from it: the label is not laid
+    // out (the list's walk for what is dirty stops at the rows near the
+    // view), and its row is not drawn, but the list is recorded again (it
+    // cannot tell the label stayed out of view) with its twenty rows and
     // their labels, keeping its shape, so the root is patched with it.
     ui.set_text(labels[0], Text::new("changed", 12.0));
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
-    assert_eq!((stats.measured, stats.laid_out, stats.visited), (1, 2, 4));
+    assert_eq!((stats.measured, stats.laid_out, stats.visited), (0, 0, 2));
     assert_eq!((stats.recorded, stats.examined, stats.placed), (1, 40, 0));
     assert_eq!(stats.patched, 40);
+    check(&mut ui);
+}
+
+/// The rows of a scroll that it can size without laying them out (a fixed
+/// length along it, filling across it) are laid out only within a viewport
+/// of its view; the rest wait until a scroll brings them near, a change in
+/// one of them too.
+#[test]
+fn a_scroll_lays_out_only_the_rows_near_its_view() {
+    let mut ui = Ui::new(fonts());
+    let list = ui.add(ui.root(), fixed(300.0, 400.0).scroll());
+    let mut labels = Vec::new();
+    for i in 0..10_000 {
+        let row = ui.add(
+            list,
+            Spec::new().width(Size::Fill(1.0)).height(Size::Fixed(20.0)),
+        );
+        labels.push(ui.add(
+            row,
+            Spec::new().text(Text::new(format!("row {i}"), 12.0), [1.0; 4]),
+        ));
+    }
+    let counts = |ui: &Ui| {
+        let s = ui.frame_stats();
+        (s.deferred, s.laid_out, s.measured)
+    };
+    // In view: rows 0 to 19; near it, to row 39. The rest are sized; laid
+    // out: the root, the list, and forty rows and their labels.
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (10_000, 82, 40));
+    check(&mut ui);
+
+    // Five rows more come near.
+    ui.scroll_by(list, 100.0);
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (0, 10, 5));
+    check(&mut ui);
+
+    // Far down: in view, rows 5000 to 5019; near it, 4980 to 5039.
+    ui.scroll_to(list, 100_000.0);
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (0, 120, 60));
+    check(&mut ui);
+
+    // A row laid out before, now far from the view, changes: it waits.
+    ui.set_text(labels[0], Text::new("changed", 12.0));
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (0, 0, 0));
+    check(&mut ui);
+
+    // Back near it: that label and its row are laid out (the rest near are
+    // as they were), and drawn as it is now.
+    ui.scroll_to(list, 0.0);
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (0, 2, 1));
+    check(&mut ui);
+    let changed = rect(&ui, labels[0]);
+    assert!(
+        changed[2] > rect(&ui, labels[1])[2],
+        "the label was measured as it is"
+    );
+
+    // Narrower: every row has other room, so every row is sized again, and
+    // those near the view are laid out.
+    ui.set_width(list, Size::Fixed(200.0));
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (10_000, 82, 40));
+    check(&mut ui);
+    assert_eq!(rect(&ui, ui.parent(labels[7000]).unwrap())[2], 200.0);
+
+    // Far down again: rows laid out for the old width are laid out for the
+    // new one as they come near.
+    ui.scroll_to(list, 140_000.0);
+    ui.frame(at(0.0));
+    assert_eq!(counts(&ui), (0, 120, 60));
     check(&mut ui);
 }
 
@@ -930,8 +1007,12 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
     let quiet = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let mut patched = 0;
+    // Children whose layout a scroll put off, and those of them laid out
+    // later, when the scroll brought them near.
+    let (mut deferred, mut caught_up) = (0, 0);
     for round in 0..40 {
         let mut ui = Ui::new(fonts.clone());
+        let mut put_off: Vec<(u32, bool)> = Vec::new();
         let mut made = Made::default();
         let root = ui.root();
         for _ in 0..3 {
@@ -1024,6 +1105,14 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
             context.now += rng.pick(&[0.0, 0.4, 1.0, 2.5]);
             ui.frame(context);
             patched += ui.frame_stats().patched;
+            deferred += ui.frame_stats().deferred;
+            put_off.resize(ui.nodes.len(), (0, false));
+            for (d, was) in ui.nodes.iter().zip(&mut put_off) {
+                if d.live && was.0 == d.generation && was.1 && !d.deferred {
+                    caught_up += 1;
+                }
+                *was = (d.generation, d.live && d.deferred);
+            }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&mut ui)));
             if let Err(e) = result {
                 std::panic::set_hook(quiet);
@@ -1072,4 +1161,285 @@ fn every_frame_is_the_tree_drawn_from_nothing() {
     // Lists kept their shape and were patched in their ancestors', so the
     // oracle checked patching too.
     assert!(patched > 0, "nothing was patched");
+    // Scrolls put layouts off and caught up with them, so the oracle checked
+    // that too.
+    assert!(
+        deferred > 0 && caught_up > 0,
+        "{deferred} put off, {caught_up} caught up"
+    );
+}
+
+/// A random row for `scroll_of_rows`, stacked along axis `m`: mostly one its
+/// scroll can defer (a fixed length along the stack), now and then one it
+/// cannot. One that does not clip has nothing in it, so what it draws
+/// reaches no further than its shadow, well inside the viewport the scroll
+/// looks past its view.
+fn random_row(ui: &mut Ui, rng: &mut Rng, list: Node, m: usize, made: &mut Made) -> Node {
+    let clips = rng.below(3) > 0;
+    let row = ui.add(list, random_row_spec(rng, m, clips));
+    if clips {
+        for _ in 0..rng.below(3) {
+            random_subtree(ui, rng, row, 2, made);
+        }
+    }
+    row
+}
+
+fn random_row_spec(rng: &mut Rng, m: usize, clips: bool) -> Spec {
+    let mut sizes = [Size::Hug; 2];
+    sizes[m] = if rng.chance(10) {
+        random_size(rng)
+    } else {
+        Size::Fixed(rng.below(25) as f32 * 2.5)
+    };
+    sizes[1 - m] = random_size(rng);
+    let spec = Spec::new()
+        .width(sizes[0])
+        .height(sizes[1])
+        .stack(random_stack(rng))
+        .fill(rng.colour())
+        .look(random_look(rng));
+    if clips { spec.clip() } else { spec }
+}
+
+/// A length for `scroll_of_rows`'s scroll: one that fills, hugs, or is 100
+/// to 300 pixels. Along the stack, the view is then no shorter than the
+/// viewport (97 pixels at least) or holds all the content, so what a row
+/// draws past its box (a shadow) does not reach the view from a viewport
+/// away, where the tree that defers would not draw it.
+fn list_size(rng: &mut Rng) -> Size {
+    match rng.below(4) {
+        0 => Size::Fill(1.0),
+        1 => Size::Hug,
+        _ => Size::Fixed(100.0 + rng.below(5) as f32 * 50.0),
+    }
+}
+
+/// A scroll, 100 to 300 pixels along its stack, of 30 to 180 random rows.
+fn scroll_of_rows(ui: &mut Ui, rng: &mut Rng) -> (Node, Vec<(Node, bool)>, Made) {
+    let stack = random_stack(rng);
+    let m = stack.direction.main();
+    let mut sizes = [list_size(rng); 2];
+    sizes[m] = Size::Fixed(100.0 + rng.below(5) as f32 * 50.0);
+    let list = ui.add(
+        ui.root(),
+        Spec::new()
+            .width(sizes[0])
+            .height(sizes[1])
+            .stack(stack)
+            .scroll(),
+    );
+    let mut made = Made::default();
+    let mut rows = Vec::new();
+    for _ in 0..30 + rng.below(150) {
+        let row = random_row(ui, rng, list, m, &mut made);
+        rows.push((row, ui.nodes[row.index as usize].clip));
+    }
+    (list, rows, made)
+}
+
+/// Make a change to both trees alike.
+fn both(a: &mut Ui, b: &mut Ui, mut change: impl FnMut(&mut Ui)) {
+    change(a);
+    change(b);
+}
+
+/// A scroll of random rows built twice, once putting off the layout of the
+/// rows away from its view and once laying every row out: through random
+/// scrolls and changes (to the rows, what is in them, the scroll's stack
+/// and size, the viewport), the two draw the same and hit the same, and the
+/// one that defers is the tree laid out and drawn from nothing.
+#[test]
+fn a_scroll_that_puts_rows_off_draws_what_one_laying_them_out_draws() {
+    let fonts = fonts();
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let quiet = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let (mut deferred, mut caught_up, mut mixed) = (0, 0, 0);
+    for round in 0..30 {
+        let seed = rng.next() | 1;
+        let build = |no_defer: bool| {
+            let mut ui = Ui::new(fonts.clone());
+            ui.no_defer = no_defer;
+            let built = scroll_of_rows(&mut ui, &mut Rng(seed));
+            (ui, built)
+        };
+        let (mut a, (list, mut rows, mut made)) = build(false);
+        let (mut b, _) = build(true);
+        let mut context = at(0.0);
+        let mut put_off: Vec<(u32, bool)> = Vec::new();
+        for step in 0..40 {
+            let changes = if rng.chance(3) { 3 } else { 1 };
+            for _ in 0..changes {
+                rows.retain(|&(n, _)| is_live(&a, n));
+                made.nodes.retain(|&n| is_live(&a, n));
+                let m = a.nodes[list.index as usize].stack.value.direction.main();
+                let row = rows
+                    .get(rng.below(rows.len().max(1) as u64) as usize)
+                    .copied();
+                let inner = made
+                    .nodes
+                    .get(rng.below(made.nodes.len().max(1) as u64) as usize)
+                    .copied();
+                let pick = rng.below(13);
+                match pick {
+                    0 | 1 => {
+                        let delta = rng.below(600) as f32 - 300.0;
+                        both(&mut a, &mut b, |ui| ui.scroll_by(list, delta));
+                    }
+                    2 => {
+                        let to = rng.below(8_000) as f32;
+                        both(&mut a, &mut b, |ui| ui.scroll_to(list, to));
+                    }
+                    3 | 4 => {
+                        if let Some((row, _)) = row {
+                            let size = if rng.chance(8) {
+                                random_size(&mut rng)
+                            } else {
+                                Size::Fixed(rng.below(25) as f32 * 2.5)
+                            };
+                            let along = rng.chance(2);
+                            both(&mut a, &mut b, |ui| {
+                                if along == (m == 0) {
+                                    ui.set_width(row, size);
+                                } else {
+                                    ui.set_height(row, size);
+                                }
+                            });
+                        }
+                    }
+                    5 => {
+                        if let Some((row, _)) = row {
+                            let (fill, look) = (rng.colour(), random_look(&mut rng));
+                            both(&mut a, &mut b, |ui| {
+                                ui.set_fill(row, fill);
+                                ui.set_look(row, look);
+                            });
+                        }
+                    }
+                    6 => {
+                        if let Some(node) = inner {
+                            let is_text = a.nodes[node.index as usize].text.is_some();
+                            let text = random_text(&mut rng);
+                            let size = random_size(&mut rng);
+                            both(&mut a, &mut b, |ui| {
+                                if is_text {
+                                    ui.set_text(node, text.clone());
+                                } else {
+                                    ui.set_height(node, size);
+                                }
+                            });
+                        }
+                    }
+                    7 => {
+                        // Into a row that clips, or something in one.
+                        let target = match (row, inner) {
+                            (Some((row, true)), _) if rng.chance(2) => Some(row),
+                            (_, Some(node)) => Some(node),
+                            _ => None,
+                        };
+                        if let Some(node) = target {
+                            let d = &a.nodes[node.index as usize];
+                            if d.text.is_none() && d.custom.is_none() {
+                                let seed = rng.next() | 1;
+                                let mut added = Made::default();
+                                for ui in [&mut a, &mut b] {
+                                    added = Made::default();
+                                    random_subtree(ui, &mut Rng(seed), node, 2, &mut added);
+                                }
+                                made.nodes.extend(added.nodes);
+                            }
+                        }
+                    }
+                    8 => {
+                        let target = if rng.chance(2) {
+                            row.map(|r| r.0)
+                        } else {
+                            inner
+                        };
+                        if let Some(node) = target {
+                            both(&mut a, &mut b, |ui| ui.remove(node));
+                        }
+                    }
+                    9 => {
+                        let seed = rng.next() | 1;
+                        let mut added = None;
+                        for ui in [&mut a, &mut b] {
+                            let mut made_here = Made::default();
+                            let row = random_row(ui, &mut Rng(seed), list, m, &mut made_here);
+                            added = Some((row, ui.nodes[row.index as usize].clip, made_here));
+                        }
+                        let (row, clips, made_here) = added.expect("added");
+                        rows.push((row, clips));
+                        made.nodes.extend(made_here.nodes);
+                    }
+                    10 => {
+                        let stack = random_stack(&mut rng);
+                        both(&mut a, &mut b, |ui| ui.set_stack(list, stack));
+                    }
+                    11 => {
+                        let size = list_size(&mut rng);
+                        let width = rng.chance(2);
+                        both(&mut a, &mut b, |ui| {
+                            if width {
+                                ui.set_width(list, size);
+                            } else {
+                                ui.set_height(list, size);
+                            }
+                        });
+                    }
+                    _ => {
+                        context.viewport = [
+                            rng.pick(&[640.0, 300.0, 151.5]),
+                            rng.pick(&[480.0, 200.0, 97.0]),
+                        ];
+                    }
+                }
+            }
+            OUTSIDE.set(OUTSIDE.get() + 1);
+            context.now += rng.pick(&[0.0, 0.4, 1.0]);
+            a.frame(context);
+            b.frame(context);
+            deferred += a.frame_stats().deferred;
+            mixed += u32::from(a.nodes[list.index as usize].scroll.as_ref().unwrap().mixed);
+            put_off.resize(a.nodes.len(), (0, false));
+            for (d, was) in a.nodes.iter().zip(&mut put_off) {
+                if d.live && was.0 == d.generation && was.1 && !d.deferred {
+                    caught_up += 1;
+                }
+                *was = (d.generation, d.live && d.deferred);
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let (fa, fb) = (a.list().expect("drawn"), b.list().expect("drawn"));
+                if let Some(difference) = fa.difference(fb) {
+                    panic!("the frame differs from the one laying every row out: {difference}");
+                }
+                for _ in 0..8 {
+                    let p = rng.point();
+                    assert_eq!(
+                        a.hit(p, |_| true),
+                        b.hit(p, |_| true),
+                        "the hit at {p:?} differs"
+                    );
+                }
+                check(&mut a);
+            }));
+            if let Err(e) = result {
+                std::panic::set_hook(quiet);
+                let message = e
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                panic!("round {round}, step {step}: {message}");
+            }
+        }
+    }
+    std::panic::set_hook(quiet);
+    // Rows were put off by the thousand and caught up with by the hundred,
+    // with rows the scroll cannot defer among them now and then.
+    assert!(
+        deferred > 10_000 && caught_up > 1_000 && mixed > 100,
+        "{deferred} put off, {caught_up} caught up, {mixed} frames mixed"
+    );
 }

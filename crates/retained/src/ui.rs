@@ -36,6 +36,10 @@ pub struct FrameStats {
     pub laid_out: u32,
     /// Texts measured.
     pub measured: u32,
+    /// Children of a scroll sized without being laid out, their layout put
+    /// off until they are near its view: those near it are laid out next,
+    /// the rest when the scroll brings them near.
+    pub deferred: u32,
     /// Nodes whose own drawing (box, text, painter) was recorded.
     pub painted: u32,
     /// Lists recorded again (each kept by the root or a node that clips).
@@ -122,6 +126,14 @@ pub(crate) struct Scroll {
     pub(crate) applied: f32,
     /// The content's length along the stack, padding included.
     pub(crate) extent: f32,
+    /// Its content's length across the stack is exact, so the children it
+    /// can size without laying them out (`layout::deferrable`) are laid out
+    /// only within a viewport of its view.
+    pub(crate) defers: bool,
+    /// Some stacked child is one it cannot defer: those are laid out
+    /// wherever they are, so finding what is dirty means looking at every
+    /// child, not only those near the view.
+    pub(crate) mixed: bool,
 }
 
 pub(crate) const NO_PARENT: u32 = u32::MAX;
@@ -157,6 +169,10 @@ pub(crate) struct NodeData {
     pub(crate) layout_self: bool,
     /// Something below it must be laid out again.
     pub(crate) layout_below: bool,
+    /// Its layout was put off, it being out of its scroll's view: its size
+    /// is right, nothing in it is laid out, and it is neither drawn nor hit
+    /// until it is.
+    pub(crate) deferred: bool,
 
     // Paint.
     /// What it draws is out of date: for a node that keeps a list, the list
@@ -256,6 +272,10 @@ pub struct Ui {
     /// The list a node that keeps none draws its own drawing into, before
     /// it is placed in its holder's list; reused.
     pub(crate) piece_list: Option<Box<DrawList>>,
+    /// Lay out every child of a scroll, as if none could be put off: for
+    /// comparing a tree that defers with one that does not.
+    #[cfg(test)]
+    pub(crate) no_defer: bool,
 }
 
 impl Ui {
@@ -290,6 +310,8 @@ impl Ui {
             pointer: Pointer::default(),
             spans: Vec::new(),
             piece_list: None,
+            #[cfg(test)]
+            no_defer: false,
         };
         let owner = ui.graph.root();
         ui.root = ui.create(NO_PARENT, owner, root);
@@ -435,6 +457,8 @@ impl Ui {
                 requested: 0.0,
                 applied: 0.0,
                 extent: 0.0,
+                defers: false,
+                mixed: false,
             })
         });
         let volatile = custom.as_ref().is_some_and(|c| c.volatile);
@@ -465,6 +489,7 @@ impl Ui {
             pos: [0.0; 2],
             layout_self: true,
             layout_below: false,
+            deferred: false,
             stale: true,
             mark_epoch: 0,
             dirty_kids: Vec::new(),
@@ -755,7 +780,16 @@ impl Ui {
                 None => break,
             }
         }
-        let mut p = self.nodes[x as usize].parent();
+        if let Some(p) = self.nodes[x as usize].parent() {
+            self.mark_below(p);
+        }
+    }
+
+    /// Something below `n` must be laid out again: the path from the root
+    /// to `n` is marked, up to the first node already marked.
+    pub(crate) fn mark_below(&mut self, n: u32) {
+        self.pending = true;
+        let mut p = Some(n);
         while let Some(q) = p {
             let d = &mut self.nodes[q as usize];
             if d.layout_below {
@@ -952,7 +986,11 @@ impl Ui {
                     if version != s.version {
                         s.version = version;
                         s.requested = self.graph.get(s.memo);
-                        crate::layout::apply_scroll(self, n);
+                        let defers = s.defers;
+                        // What comes near the view must be laid out.
+                        if crate::layout::apply_scroll(self, n) && defers {
+                            self.mark_below(n);
+                        }
                     }
                 }
                 other => unreachable!("no property {other}"),

@@ -8,7 +8,7 @@
 
 use wgpu_gameui::{TextBlock, WrapMode};
 
-use crate::node::{Insets, Size, Text};
+use crate::node::{Align, Insets, Size, Text};
 use crate::ui::{NodeData, Ui};
 
 /// The room a parent gives a child along one axis.
@@ -53,6 +53,18 @@ fn own(size: Size, avail: Avail) -> Option<f32> {
         },
         Size::Hug => None,
     }
+}
+
+/// Whether a stacked child of a scroll whose content has an exact length
+/// across the stack can be sized without laying it out: its length along
+/// the stack is fixed, and across it is fixed, fills, or hugs at the start,
+/// where its place does not depend on its length.
+fn deferrable(s: [Size; 2], m: usize, cross: Align) -> bool {
+    matches!(s[m], Size::Fixed(_))
+        && match s[1 - m] {
+            Size::Fixed(_) | Size::Fill(_) => true,
+            Size::Hug => cross == Align::Start,
+        }
 }
 
 /// The room a child gets from the room its parent's content has: a fill
@@ -154,8 +166,9 @@ pub(crate) fn update_own_grow(ui: &mut Ui, n: u32) {
 }
 
 /// Clamp `n`'s scroll to its content, snap it, and mark it if what is drawn
-/// moved. An offset past the content is written back clamped.
-pub(crate) fn apply_scroll(ui: &mut Ui, n: u32) {
+/// moved, which it returns. An offset past the content is written back
+/// clamped.
+pub(crate) fn apply_scroll(ui: &mut Ui, n: u32) -> bool {
     let d = &mut ui.nodes[n as usize];
     let viewport = d.size[d.stack.value.direction.main()];
     let s = d.scroll.as_mut().expect("a scrolling node");
@@ -176,6 +189,7 @@ pub(crate) fn apply_scroll(ui: &mut Ui, n: u32) {
     if moved {
         ui.mark_records(n);
     }
+    moved
 }
 
 impl Ui {
@@ -183,13 +197,23 @@ impl Ui {
     /// the room is the same, else measured and its children placed.
     pub(crate) fn layout(&mut self, n: u32, avail: [Avail; 2]) {
         self.stats.visited += 1;
+        #[cfg(test)]
+        let may_defer = !self.no_defer;
+        #[cfg(not(test))]
+        let may_defer = true;
         let d = &mut self.nodes[n as usize];
+        d.deferred = false;
         if !d.layout_self && d.avail == Some(avail) {
             if d.layout_below {
                 d.layout_below = false;
+                let defers = d.scroll.as_ref().is_some_and(|s| s.defers);
                 // Nothing here changes size: what is dirty below is under a
                 // node whose size does not follow its content.
                 for list in [false, true] {
+                    if defers && !list {
+                        self.layout_near_view(n);
+                        continue;
+                    }
                     let kids = self.take_kids(n, list);
                     for &c in &kids {
                         let cd = &self.nodes[c as usize];
@@ -225,11 +249,16 @@ impl Ui {
         if scrolls {
             inner[m] = Avail::Unbounded;
         }
+        let defers = may_defer && matches!(inner[1 - m], Avail::Exact(_));
+        if let Some(s) = d.scroll.as_mut() {
+            s.defers = defers;
+        }
+        let defers = scrolls && defers;
 
         let content = if d.text.is_some() {
             self.measure_text(n, inner[0])
         } else if d.has_children() {
-            self.layout_stack(n, inner, pad_start)
+            self.layout_stack(n, inner, pad_start, defers)
         } else {
             [0.0; 2]
         };
@@ -244,6 +273,9 @@ impl Ui {
             let s = self.nodes[n as usize].scroll.as_mut().expect("it scrolls");
             s.extent = content[m] + pad_sum[m];
             apply_scroll(self, n);
+            if defers {
+                self.layout_near_view(n);
+            }
         }
         update_own_grow(self, n);
         // Its size, or its children's places, may have moved its paint
@@ -295,14 +327,95 @@ impl Ui {
         }
     }
 
-    /// Lay out `n`'s children and return its content's size.
-    fn layout_stack(&mut self, n: u32, inner: [Avail; 2], pad_start: [f32; 2]) -> [f32; 2] {
+    /// Size `c`, a child its scroll defers, for `room` without laying it
+    /// out, unless it is laid out in that room already: what is in it is
+    /// laid out when it is near the view (`layout_near_view`).
+    fn defer(&mut self, c: u32, room: [Avail; 2], s: [Size; 2], m: usize) {
+        let d = &mut self.nodes[c as usize];
+        if d.avail == Some(room) && !d.layout_self && !d.layout_below {
+            return;
+        }
+        self.stats.deferred += 1;
+        d.deferred = true;
+        if d.avail != Some(room) {
+            d.avail = Some(room);
+            d.layout_self = true;
+        }
+        let x = 1 - m;
+        let mut size = d.size;
+        size[m] = own(s[m], room[m]).expect("a fixed length");
+        // Hugging at the start, it keeps its length until it is laid out:
+        // nothing else depends on it.
+        if let Some(v) = own(s[x], room[x]) {
+            size[x] = v;
+        }
+        if size != d.size {
+            d.size = size;
+            self.mark_paint(c);
+        }
+    }
+
+    /// Lay out what is dirty in the stacked children of `n`, a scroll that
+    /// defers: the children it defers only within a viewport of its view,
+    /// any other wherever it is. Its children are in order along the stack,
+    /// so when it defers them all the first near the view is found by
+    /// binary search and the walk stops past the last.
+    fn layout_near_view(&mut self, n: u32) {
+        let d = &self.nodes[n as usize];
+        let stack = d.stack.value;
+        let m = stack.direction.main();
+        let view = d.size[m];
+        let s = d.scroll.as_ref().expect("a scrolling node");
+        let (applied, mixed) = (s.applied, s.mixed);
+        let (lo, hi) = (applied - view, applied + 2.0 * view);
+        let kids = self.take_kids(n, false);
+        let nodes = &self.nodes;
+        let first = if mixed {
+            0
+        } else {
+            kids.partition_point(|&c| {
+                let c = &nodes[c as usize];
+                c.pos[m] + c.size[m] <= lo
+            })
+        };
+        for &c in &kids[first..] {
+            let cd = &self.nodes[c as usize];
+            let near = cd.pos[m] + cd.size[m] > lo && cd.pos[m] < hi;
+            if !near && !mixed {
+                break;
+            }
+            if !(cd.layout_self || cd.layout_below) {
+                continue;
+            }
+            if !near && deferrable([cd.width.value, cd.height.value], m, stack.cross) {
+                continue;
+            }
+            let room = cd
+                .avail
+                .expect("laid out, or sized when its layout was put off");
+            self.layout(c, room);
+        }
+        self.put_kids(n, false, kids);
+    }
+
+    /// Lay out `n`'s children and return its content's size. A scroll that
+    /// `defers` only sizes the children it can (`deferrable`); the caller
+    /// lays out those near the view (`layout_near_view`) once the scroll is
+    /// known.
+    fn layout_stack(
+        &mut self,
+        n: u32,
+        inner: [Avail; 2],
+        pad_start: [f32; 2],
+        defers: bool,
+    ) -> [f32; 2] {
         let stack = self.nodes[n as usize].stack.value;
         let m = stack.direction.main();
         let x = 1 - m;
         let gap = if stack.gap > 0.0 { stack.gap } else { 0.0 };
         let main_exact = matches!(inner[m], Avail::Exact(_));
         let flow = self.take_kids(n, false);
+        let mut mixed = false;
         let specs = |ui: &Ui, c: u32| {
             let d = &ui.nodes[c as usize];
             [d.width.value, d.height.value]
@@ -321,10 +434,18 @@ impl Ui {
             let mut room = [Avail::Unbounded; 2];
             room[m] = child_room(inner[m], false);
             room[x] = child_room(inner[x], is_fill(s[x]));
-            self.layout(c, room);
+            if defers && deferrable(s, m, stack.cross) {
+                self.defer(c, room, s, m);
+            } else {
+                mixed |= defers;
+                self.layout(c, room);
+            }
             let size = self.nodes[c as usize].size;
             fixed += size[m];
             cross = cross.max(size[x]);
+        }
+        if let Some(s) = self.nodes[n as usize].scroll.as_mut() {
+            s.mixed = mixed;
         }
         let gaps = gap * flow.len().saturating_sub(1) as f32;
         let remaining = match inner[m] {
@@ -411,18 +532,29 @@ impl Ui {
     #[cfg(test)]
     pub(crate) fn check_layout(&mut self) {
         let before: Vec<_> = self.nodes.iter().map(|d| (d.live, d.pos, d.size)).collect();
+        // What is laid out from nothing is what is near each scroll's view
+        // now; what the incremental layout put off, or kept from before,
+        // stays as it is. The marks are put back after, so the check
+        // changes nothing the next frame does.
+        let marks: Vec<_> = self
+            .nodes
+            .iter()
+            .map(|d| (d.avail, d.layout_self, d.layout_below, d.deferred))
+            .collect();
         for d in &mut self.nodes {
             if d.live {
                 d.avail = None;
                 d.layout_self = true;
             }
         }
-        let (visited, laid_out) = (self.stats.visited, self.stats.laid_out);
+        let stats = self.stats;
         let context = self.context.expect("a frame was drawn");
         let viewport = context.viewport.map(|v| Avail::Exact(snap(v).max(0.0)));
         self.layout(self.root, viewport);
-        self.stats.visited = visited;
-        self.stats.laid_out = laid_out;
+        self.stats = stats;
+        for (d, m) in self.nodes.iter_mut().zip(marks) {
+            (d.avail, d.layout_self, d.layout_below, d.deferred) = m;
+        }
         for (k, (d, b)) in self.nodes.iter().zip(&before).enumerate() {
             if d.live {
                 assert_eq!(

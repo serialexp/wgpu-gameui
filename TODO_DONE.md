@@ -142,6 +142,26 @@ then the dated batches in the order they were written.
       (`animated`: the panels, no glyph quads); deep 1,760,176 → 176 /
       352; rows unchanged. Frame means not yet compared with the build
       before it at one load (`frame-reuse.md`, Outstanding).
+- [x] **P1 — don't lay out children out of view (retained).**
+      `layout_stack` lays out every child (`layout.rs:313-327`): the rows build
+      shapes 10,000 labels, 108 ms. A scroll container with main-axis `Fixed`
+      children can defer their layout until in view; extent, clamping and hit
+      testing must cope. Check: `measured` at build = 54.
+      **Done 2026-11-12.** Bart's choices: automatic; laid out within one
+      viewport of the view either side; children fixed along the stack and
+      fixed, filling or start-hugging across it, in a scroll whose content
+      is exact across; a far child that changes waits too. A scroll sizes
+      those children without laying them out (`Ui::defer`), lays out the
+      ones near its view once it is clamped (`layout_near_view`), and when
+      it moves marks itself so the layout reaches it (`mark_below`); a
+      child put off is `deferred`, not drawn or hit. `FrameStats::deferred`.
+      With the margin chosen the check reads 108 measured in the rows
+      build's first frame and 162 in its second (three viewports), not 54;
+      the bench now prints the build's counts. Tests: counted rows test,
+      and a twin of random scrolls of rows laid out with and without
+      deferral, compared frame by frame and hit by hit
+      (`docs/design/retained-mode.md`). Build timing waits for a quiet
+      machine (load 25 to 28 here).
 
 ---
 
