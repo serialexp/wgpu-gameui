@@ -433,12 +433,19 @@ pub struct RenderStats {
     /// units whose records did not move (with the frame comparison on).
     pub boxes_reused: u64,
     /// Lists compared with the frame kept for their place in the render call
-    /// (see [`UiRenderer::set_frame_comparison`]).
+    /// (see [`UiRenderer::set_frame_comparison`]). Lists whose owner reports
+    /// their edits are not compared, and are counted in `lists_reported`.
     pub lists_compared: usize,
+    /// Lists whose owner reported what changed in them since they were last
+    /// drawn ([`DrawList::report_edits`]): the renderer took that in place of
+    /// comparing, and kept none of their records. The counts below take them
+    /// in as they take in compared lists.
+    pub lists_reported: usize,
     /// Lists not compared this frame, to save the cost of comparing a list in
     /// which most records moved.
     pub lists_skipped: usize,
-    /// Of those compared, lists that were the last frame's again to the byte.
+    /// Of those compared or reported, lists that were the last frame's again
+    /// to the byte.
     pub lists_identical: usize,
     /// Of those, lists in which nothing moved, resized or changed family:
     /// at most colours differ.
@@ -634,6 +641,10 @@ pub struct UiRenderer {
     /// Whether the plans of the places are checked as they are built.
     #[cfg(feature = "paint-order-oracle")]
     check_plans: bool,
+    /// Per place, the comparison a list that reports its edits is checked
+    /// against (the `edit-oracle` feature).
+    #[cfg(feature = "edit-oracle")]
+    edit_oracle: Vec<FrameSnapshot>,
 
     // Decoded-image cache (path/key -> sprite + dimensions)
     image_cache: ImageCache,
@@ -995,6 +1006,8 @@ impl UiRenderer {
             plan_current: Vec::new(),
             #[cfg(feature = "paint-order-oracle")]
             check_plans: false,
+            #[cfg(feature = "edit-oracle")]
+            edit_oracle: Vec::new(),
             image_cache: ImageCache::new(),
             color_vbo,
             color_ibo,
@@ -1434,6 +1447,8 @@ impl UiRenderer {
             self.snapshots.clear();
             self.plans.clear();
             self.plan_current.clear();
+            #[cfg(feature = "edit-oracle")]
+            self.edit_oracle.clear();
         }
     }
 
@@ -1469,6 +1484,31 @@ impl UiRenderer {
             }
         }
         let snapshot = &mut self.snapshots[slot];
+        if draw_list.reports_edits() {
+            let diff = snapshot.reported(draw_list, &context);
+            #[cfg(feature = "edit-oracle")]
+            {
+                if self.edit_oracle.len() <= slot {
+                    self.edit_oracle
+                        .resize_with(slot + 1, FrameSnapshot::default);
+                }
+                let oracle = &mut self.edit_oracle[slot];
+                self.snapshots[slot].check_reported(&diff, oracle, draw_list, &context);
+            }
+            let stats = &mut self.frame_stats;
+            stats.lists_reported += 1;
+            stats.lists_identical += usize::from(diff.identical());
+            stats.lists_keeping_places += usize::from(diff.keeps_places());
+            stats.records_same += diff.same as usize;
+            stats.records_look += diff.look as usize;
+            stats.records_place += diff.place as usize;
+            stats.snapshot_bytes = self.snapshots.iter().map(FrameSnapshot::bytes).sum();
+            return Some(PlanSlot {
+                index: slot,
+                keeps_places: diff.keeps_places(),
+                answered: diff.answered(),
+            });
+        }
         if snapshot.resting() {
             self.frame_stats.lists_skipped += 1;
             return Some(PlanSlot {

@@ -668,6 +668,13 @@ pub struct DrawList {
     /// lifetime and never reused; lets the renderer tell a reused list from a
     /// per-frame-fresh one. `clear()` keeps it (the list is the same object).
     id: u64,
+    /// A value never given to another list or to this one before, new at each
+    /// [`clear`](Self::clear): with the patches since, the list's version (see
+    /// [`report_edits`](Self::report_edits)).
+    stamp: u64,
+    /// What the owner patched since it last said the list may have been drawn
+    /// (see [`report_edits`](Self::report_edits)).
+    edits: EditLog,
 }
 
 impl Default for DrawList {
@@ -702,6 +709,8 @@ impl Default for DrawList {
             text_highlight: None,
             next_repaint: None,
             id: next_draw_list_id(),
+            stamp: next_draw_list_id(),
+            edits: EditLog::default(),
         }
     }
 }
@@ -758,6 +767,8 @@ impl DrawList {
             text_highlight: None,
             next_repaint: None,
             id: next_draw_list_id(),
+            stamp: next_draw_list_id(),
+            edits: EditLog::default(),
         }
     }
 
@@ -800,6 +811,9 @@ impl DrawList {
         self.tint_stack.clear();
         self.tint_stack.push([1.0, 1.0, 1.0, 1.0]);
         self.next_repaint = None;
+        self.stamp = next_draw_list_id();
+        self.edits.patches = 0;
+        self.edits.forget();
     }
 
     /// Add everything `other` recorded after what this list holds, so that
@@ -3632,6 +3646,10 @@ fn scaled_spec(block: &TextBlock, scale: f32) -> crate::shaping::LayoutSpec<'_> 
 #[path = "draw_list_patch.rs"]
 mod patch;
 pub use patch::{Placed, PlacedLog, RecordCounts, RecordSpan};
+
+#[path = "draw_list_edits.rs"]
+mod edits;
+pub(crate) use edits::{EditLog, ListVersion};
 
 #[cfg(test)]
 #[path = "draw_list_caret_tests.rs"]

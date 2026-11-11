@@ -79,6 +79,40 @@ then the dated batches in the order they were written.
       patched); rows 110 → 2 lists (145 → 2 scrolling), and the out-of-view
       lists are gone with them, but scrolling draws the rows in view again
       (tree share of `rows-scrl` 0.009 → 0.014 ms).
+- [x] **P2 — tell the renderer what changed (renderer/tree interface).**
+      The renderer spends about 14% of a replayed 10k frame comparing all
+      records (`compare_with_last_frame`, `ui_renderer.rs:1452-1500`;
+      `frame_diff.rs:205-306`) and keeps a second copy of the frame (~7 MB).
+      Let a `DrawList` carry per-record change classes since its last render,
+      filled by the tree in O(changed), used instead of the comparison; keep
+      the comparison as an oracle behind a feature. Check: `lists_compared=0`,
+      `snapshot_bytes=0`.
+      **Done 2026-11-11.** A list has a version (a stamp new at each
+      `clear`, and its patches since) and, when its owner opts in
+      (`DrawList::report_edits`), an edit log: after `begin_edits`, each
+      `patch_translated` logs every record it overwrote that changed, as
+      `Look` or `Place` by the renderer's own change functions, and the soup
+      as the most any vertex or index changed by
+      (`widgets/draw_list_edits.rs`). The renderer remembers, per place,
+      the id, version, counts and target of the reported list it drew last
+      (`FrameSnapshot::reported`): the same version is every record `Same`,
+      a log based on that version is its changes, anything else is planned
+      from nothing; it keeps no records for such a list. The retained tree
+      reports on its root's list and calls `begin_edits` at the start of
+      `Ui::frame`. `RenderStats::lists_reported` counts them. The
+      `edit-oracle` feature (on in the crate's tests) also compares each
+      reported list and panics where a report misses a change. Tests: a
+      random oracle of patches, skipped renders and re-records against
+      `compare` (`reported_edits_cover_what_a_comparison_finds`), and a GPU
+      test of a patched list against fresh renders with its counts; the
+      retained bench run with `edit-oracle` on in every scene. Measured
+      against the tree before it (load about 22, rough): `lists_compared`
+      1 → 0 and `snapshot_bytes` 4.24 MB → 0 on the grid, 1.76 MB → 0 on
+      deep; plans replayed and boxes reused as before in every scene; frame
+      mean of the grid's `static` 0.75 → 0.47 ms, `animated` 2.45 → 2.07,
+      `one` 0.67 → 0.51, with the tree's share of `animated` up about
+      0.08 ms (1.29 → 1.37) for classifying what it patches; rows and deep
+      within the noise.
 
 ---
 

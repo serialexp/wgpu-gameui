@@ -148,7 +148,6 @@ pub use drag_handle::{DragHandle, DragHandleOutput};
 pub use drag_list::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListOutput, DragListState, DragMove};
 #[cfg(feature = "phosphor-icons")]
 pub use draw_list::IconMsdf;
-pub(crate) use draw_list::PaintCmd;
 pub(crate) use draw_list::{
     ANALYTIC_KIND_CHROME, ANALYTIC_KIND_SEGMENT, ANALYTIC_KIND_SHADOW, ANALYTIC_KIND_STRIPES,
 };
@@ -157,6 +156,7 @@ pub use draw_list::{
     NineSliceDraw, NineSliceId, Placed, PlacedLog, PrimCounts, RecordCounts, RecordSpan,
     StripeInstance, Stripes, Vertex,
 };
+pub(crate) use draw_list::{ListVersion, PaintCmd};
 pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};
 pub use empty_state::{EmptyGlyph, EmptyState};

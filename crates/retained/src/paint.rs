@@ -218,6 +218,9 @@ impl Ui {
             .take()
             .unwrap_or_else(|| Box::new(DrawList::with_font_system(self.fonts.clone())));
         list.clear();
+        // The frame's list says what each frame patched in it, so the
+        // renderer need not compare it with the last (`Ui::frame`).
+        list.report_edits(n == self.root);
         let mut log = std::mem::take(&mut d.log);
         log.clear();
         d.list_gen = d.list_gen.wrapping_add(1);

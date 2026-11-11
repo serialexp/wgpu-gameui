@@ -26,14 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P2 — tell the renderer what changed (renderer/tree interface).**
-      The renderer spends about 14% of a replayed 10k frame comparing all
-      records (`compare_with_last_frame`, `ui_renderer.rs:1452-1500`;
-      `frame_diff.rs:205-306`) and keeps a second copy of the frame (~7 MB).
-      Let a `DrawList` carry per-record change classes since its last render,
-      filled by the tree in O(changed), used instead of the comparison; keep
-      the comparison as an oracle behind a feature. Check: `lists_compared=0`,
-      `snapshot_bytes=0`.
 - [ ] **P2 — keep instance data on the GPU, upload what changed
       (renderer, `frame-reuse.md` Phase 5).** `FrameArena` resets each frame
       (`frame_arena.rs:51`), so `BatchDraws::fill` (`batch_draws.rs:61-114`)
@@ -85,7 +77,8 @@ none chosen yet (Bart).
       of those frames; add an effective column (mean × needed / frames) to the
       README table. Rerun on a quiet machine: `rows-scrl` / `rows-hovr`
       differences are noise. The README's retained numbers predate the first
-      three items done (prepared text reused, patching, lists only at clips).
+      four items done (prepared text reused, patching, lists only at clips,
+      edits reported to the renderer).
 
 ---
 

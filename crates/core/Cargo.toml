@@ -107,6 +107,11 @@ winit = ["dep:winit"]
 # `UiRenderer::set_check_plan` checks each list's batches against a brute-force
 # oracle. The crate's own tests turn it on through the dev-dependency below.
 paint-order-oracle = []
+# Test switch for lists that report their edits (`DrawList::report_edits`):
+# each such list is also compared with the last one drawn in its place, and
+# the render panics where what was reported misses a change the comparison
+# finds. The crate's own tests turn it on through the dev-dependency below.
+edit-oracle = []
 
 [dev-dependencies]
 # The crate itself, so its tests (integration tests build as a separate crate,
@@ -114,7 +119,7 @@ paint-order-oracle = []
 # runner and the winit translation. Without
 # `default-features = false` this would turn the default features back on in a
 # `--no-default-features` run. Publishing strips path-only dev-dependencies.
-wgpu-gameui = { path = ".", default-features = false, features = ["paint-order-oracle", "automation", "winit"] }
+wgpu-gameui = { path = ".", default-features = false, features = ["paint-order-oracle", "edit-oracle", "automation", "winit"] }
 winit = "0.30"
 pollster = "0.3"
 env_logger = "0.11"

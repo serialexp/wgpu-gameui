@@ -13,7 +13,7 @@ use crate::layout::Rect;
 use crate::render::draw_box::Target;
 use crate::render::draw_order::tests_support::Rng;
 use crate::render::draw_plan::tests_support::Lists;
-use crate::render::frame_diff::{ContextKey, FrameSnapshot};
+use crate::render::frame_diff::{Change, ContextKey, FrameSnapshot};
 use crate::text::TextBlock;
 use crate::text_select::TextKey;
 use crate::widgets::{DrawList, PlacedLog, RecordCounts, RecordSpan, Stroke};
@@ -328,13 +328,7 @@ fn assert_same(direct: &DrawList, pieces: &DrawList, what: &str) {
     // Every other record (text blocks, icons, nine-slices), compared the way
     // the renderer compares frames: identical means the plan, the instances
     // and the draws come out the same.
-    let target = Target::new((640, 480), 1.0, [0.0, 0.0]);
-    let context = ContextKey {
-        grid: Lists::grid(&target),
-        viewport: target.size,
-        fonts: 0,
-        resolution: 0,
-    };
+    let context = test_context();
     let mut snapshot = FrameSnapshot::default();
     snapshot.keep(direct, &context);
     let diff = snapshot.compare(pieces, &context);
@@ -730,6 +724,146 @@ fn a_piece_patched_where_it_was_placed_is_the_new_piece_placed() {
     assert!(
         patched > 100 && declined > 0 && reshaped > 0,
         "{patched} patched, {declined} declined, {reshaped} of another shape"
+    );
+}
+
+/// The target the oracles here compare frames on.
+fn test_context() -> ContextKey {
+    let target = Target::new((640, 480), 1.0, [0.0, 0.0]);
+    ContextKey {
+        grid: Lists::grid(&target),
+        viewport: target.size,
+        fonts: 0,
+        resolution: 0,
+    }
+}
+
+/// A list kept and patched in place, reporting its edits, against the
+/// comparison it saves: every record the comparison finds changed is
+/// reported changed at least as much, and a report is answered exactly when
+/// it is relative to the list drawn last (renders skipped, lists recorded
+/// again and patches declined included).
+#[test]
+fn reported_edits_cover_what_a_comparison_finds() {
+    let lists = Lists::new();
+    let context = test_context();
+    let mut rng = Rng(59);
+    let (mut answered, mut unanswered, mut looks, mut places) = (0, 0, 0u32, 0u32);
+    for round in 0..60 {
+        let mut bodies: Vec<Vec<Call>> = (0..6)
+            .map(|_| {
+                let len = 1 + rng.below(8) as usize;
+                random_placed_calls(&mut rng, len)
+            })
+            .collect();
+        let places_of: Vec<([f32; 2], Option<Rect>)> = (0..bodies.len())
+            .map(|_| (random_offset(&mut rng), random_clip(&mut rng)))
+            .collect();
+        let mut list = lists.list();
+        list.report_edits(true);
+        let mut log = PlacedLog::default();
+        let record = |list: &mut DrawList, log: &mut PlacedLog, bodies: &[Vec<Call>]| {
+            list.clear();
+            log.clear();
+            for (body, &(offset, clip)) in bodies.iter().zip(&places_of) {
+                log.place(list, &recorded(&lists, body), offset, clip);
+            }
+        };
+        record(&mut list, &mut log, &bodies);
+        let mut told = FrameSnapshot::default();
+        let mut oracle = FrameSnapshot::default();
+        // What the renderer can know: whether a list was drawn, whether the
+        // list changed since (a patch or a recording), and whether the last
+        // `begin_edits` was called on the list as drawn.
+        let (mut drawn, mut changed, mut based) = (false, true, false);
+        for step in 0..12 {
+            let what = format!("round {round}, step {step}");
+            match rng.below(8) {
+                // Recorded again, from nothing.
+                0 => {
+                    record(&mut list, &mut log, &bodies);
+                    (changed, based) = (true, false);
+                }
+                // Untouched.
+                1 => {}
+                // Some pieces recoloured, resized or moved.
+                _ => {
+                    for _ in 0..1 + rng.below(3) {
+                        let k = rng.below(bodies.len() as u32) as usize;
+                        let mut next = bodies[k].clone();
+                        for call in &mut next {
+                            if rng.below(2) == 0 {
+                                call.n = rng.below(1000);
+                            }
+                            if rng.below(3) == 0 {
+                                call.at[0] += (rng.below(80) as f32 - 40.0) * 0.25;
+                            }
+                        }
+                        let new = recorded(&lists, &next);
+                        if !log.fits(k as u32, &new) {
+                            continue;
+                        }
+                        let placed = *log.placed(k as u32).expect("logged");
+                        bodies[k] = next;
+                        changed = true;
+                        if !list.patch_translated(&placed, &new, &RecordSpan::all_of(&new)) {
+                            // Partly patched: the owner records it again.
+                            record(&mut list, &mut log, &bodies);
+                            based = false;
+                        }
+                    }
+                }
+            }
+            // Now and then a list made is not drawn: what is patched next
+            // is relative to a list the renderer never saw.
+            if rng.below(6) == 0 {
+                list.begin_edits();
+                based = !changed;
+                continue;
+            }
+            let relative = drawn && (!changed || based);
+            let diff = told.reported(&list, &context);
+            let found = oracle.compare(&list, &context);
+            oracle.keep(&list, &context);
+            assert_eq!(diff.answered(), relative, "{what}: answered {diff:?}");
+            assert_eq!(told.bytes(), 0, "{what}: a reported list is not kept");
+            if relative {
+                answered += 1;
+                assert!(found.answered() || found.abandoned, "{what}: {found:?}");
+                if !found.abandoned {
+                    let (t, f) = (&told.changes, &oracle.changes);
+                    let families: [(&str, &[Change], &[Change]); 6] = [
+                        ("analytic", &t.analytic, &f.analytic),
+                        ("circle", &t.circles, &f.circles),
+                        ("icon", &t.icons, &f.icons),
+                        ("nine-slice", &t.nine_slices, &f.nine_slices),
+                        ("text", &t.texts, &f.texts),
+                        ("soup", &t.soup, &f.soup),
+                    ];
+                    for (family, t, f) in families {
+                        assert_eq!(t.len(), f.len(), "{what}: {family} counts");
+                        for (i, (t, f)) in t.iter().zip(f).enumerate() {
+                            assert!(t >= f, "{what}: {family} {i} told {t:?}, found {f:?}");
+                        }
+                    }
+                    #[cfg(feature = "phosphor-icons")]
+                    for (i, (t, f)) in t.icons_msdf.iter().zip(&f.icons_msdf).enumerate() {
+                        assert!(t >= f, "{what}: MSDF icon {i} told {t:?}, found {f:?}");
+                    }
+                    assert!(t.tail >= f.tail, "{what}: soup tail");
+                    looks += diff.look;
+                    places += diff.place;
+                }
+            } else {
+                unanswered += 1;
+            }
+            list.begin_edits();
+            (drawn, changed, based) = (true, false, true);
+        }
+    }
+    assert!(
+        answered > 200 && unanswered > 50 && looks > 0 && places > 0,
+        "{answered} answered, {unanswered} not, {looks} looks, {places} places"
     );
 }
 

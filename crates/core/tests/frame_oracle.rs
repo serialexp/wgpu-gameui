@@ -20,8 +20,8 @@
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::render::capture_with;
 use wgpu_gameui::{
-    AtlasId, DrawList, FontHandle, HeadlessGpu, Placement, SpriteId, Srgb, TextBlock,
-    load_font_bytes,
+    AtlasId, DrawList, FontHandle, HeadlessGpu, PlacedLog, Placement, RecordSpan, SpriteId, Srgb,
+    TextBlock, load_font_bytes,
 };
 
 const SIZE: (u32, u32) = (240, 160);
@@ -678,4 +678,125 @@ fn a_frame_in_which_a_few_units_moved_looks_as_a_fresh_one_does() {
             "step {n}: {taken} boxes reused, {computed} computed"
         );
     }
+}
+/// One cell of the patched scene, drawn at the origin: a panel, a triangle
+/// in the soup, a sprite and a label, in `hue`, the label `dy` down and the
+/// triangle `dx` across.
+fn cell(run: &Run, i: usize, hue: f32, dy: f32, dx: f32) -> DrawList {
+    let mut list = run.list();
+    list.chrome_rect(
+        Rect::new(0.0, 0.0, 70.0, 60.0),
+        4.0,
+        1.0,
+        [hue, 0.3, 0.2 + 0.1 * i as f32, 0.9],
+        [0.8; 4],
+    );
+    list.triangle(
+        (4.0 + dx, 40.0),
+        (20.0 + dx, 40.0),
+        (12.0 + dx, 54.0),
+        [0.9, hue, 0.2, 1.0],
+    );
+    list.icon_sprite(run.art.red, 46.0, 34.0, 20.0, 20.0, [1.0, hue, 1.0, 1.0]);
+    list.text(
+        TextBlock::new(format!("Cell {i}"), 4.0, 6.0 + dy)
+            .with_size(13.0)
+            .with_color_f32([1.0 - hue, hue, 0.4, 1.0]),
+    );
+    list
+}
+
+/// A list kept and patched in place, whose owner reports its edits, is
+/// drawn as a renderer from nothing draws it, without being compared or
+/// copied; the renderer reuses its plan where the edits leave every record
+/// in place. The crate's tests run with the `edit-oracle` feature, which
+/// also checks each report against a comparison.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_list_patched_in_place_that_reports_its_edits_looks_as_a_fresh_one_does() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    /// (hue, label shift, triangle shift)
+    type Cell = (f32, f32, f32);
+    fn place_all(run: &Run, list: &mut DrawList, log: &mut PlacedLog, cells: &[Cell]) {
+        list.clear();
+        log.clear();
+        for (i, &(hue, dy, dx)) in cells.iter().enumerate() {
+            let at = [6.0 + 78.0 * (i % 3) as f32, 8.0 + 72.0 * (i / 3) as f32];
+            log.place(list, &cell(run, i, hue, dy, dx), at, None);
+        }
+    }
+    let mut cells: [Cell; 6] = [(0.2, 0.0, 0.0); 6];
+    let mut list = run.list();
+    list.report_edits(true);
+    let mut log = PlacedLog::default();
+    place_all(&run, &mut list, &mut log, &cells);
+    let mut failures = Vec::new();
+    let mut seen = Vec::new();
+    // What each step does to the cells; `None` records the list again.
+    let steps: [Option<&[(usize, Cell)]>; 8] = [
+        // Drawn first, then untouched.
+        Some(&[]),
+        Some(&[]),
+        // One cell recoloured.
+        Some(&[(2, (0.7, 0.0, 0.0))]),
+        // A triangle moved, in the soup; then a label moved.
+        Some(&[(3, (0.2, 0.0, 6.0))]),
+        Some(&[(4, (0.2, 5.0, 0.0))]),
+        // Two recoloured.
+        Some(&[(1, (0.5, 0.0, 0.0)), (5, (0.9, 0.0, 0.0))]),
+        // Recorded again, as it was; then untouched.
+        None,
+        Some(&[]),
+    ];
+    for (n, step) in steps.into_iter().enumerate() {
+        match step {
+            Some(changes) => {
+                for &(i, look) in changes {
+                    cells[i] = look;
+                    let (hue, dy, dx) = look;
+                    let piece = cell(&run, i, hue, dy, dx);
+                    assert!(
+                        log.fits(i as u32, &piece),
+                        "step {n}: cell {i} keeps its shape"
+                    );
+                    let placed = *log.placed(i as u32).expect("placed");
+                    assert!(list.patch_translated(&placed, &piece, &RecordSpan::all_of(&piece)));
+                }
+            }
+            None => place_all(&run, &mut list, &mut log, &cells),
+        }
+        check(
+            &mut run,
+            &list,
+            1.0,
+            Tolerance::AtlasSampling,
+            &format!("step {n}"),
+            &mut failures,
+        );
+        list.begin_edits();
+        let s = run.gpu.renderer().frame_stats();
+        seen.push((s.lists_reported, s.lists_compared, s.snapshot_bytes));
+        seen.push((s.plans_replayed, s.lists_keeping_places, s.lists_identical));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    let (counts, reuse): (Vec<_>, Vec<_>) = seen.chunks(2).map(|c| (c[0], c[1])).unzip();
+    assert_eq!(
+        counts,
+        [(1, 0, 0); 8],
+        "lists reported, lists compared, snapshot bytes, per step"
+    );
+    assert_eq!(
+        reuse,
+        [
+            (0, 0, 0),
+            (1, 1, 1),
+            (1, 1, 0),
+            (0, 0, 0),
+            (0, 0, 0),
+            (1, 1, 0),
+            (0, 0, 0),
+            (1, 1, 1),
+        ],
+        "plans replayed, lists keeping their places, identical lists, per step"
+    );
 }

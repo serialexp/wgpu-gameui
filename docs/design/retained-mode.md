@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip (2026-11-11); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-11
 
@@ -139,6 +139,16 @@ Tick items as they land.
       0.001 ms, `deep-one` 0.145 → 0.001 ms, `rows-one` 0.065 → 0.027 ms;
       `animated` unchanged (every cell still records its list). The cache
       shape itself is still Bart's to choose (below).
+- [x] **The root's list reports its edits to the renderer** (2026-11-11; was
+      "Defer: a damage interface to the renderer"). The root's list is made
+      with `DrawList::report_edits`, and `Ui::frame` calls `begin_edits` on it
+      before bringing the tree up to date, so what the frame patches is logged
+      as it is patched and the renderer takes the log instead of comparing the
+      list or keeping a copy (`frame-reuse.md`, the follow-up under
+      Non-goals). On the grid at 10,000 cells: `lists_compared` 1 → 0,
+      `snapshot_bytes` 4.24 MB → 0, frame mean of `animated` about
+      2.45 → 2.07 ms (load about 22), plans replayed and boxes reused as
+      before.
 - [x] **Lists only at the root and at nodes that clip** (Bart's choice of
       cache shape, 2026-11-11; under Decisions). Every other node is drawn
       into its holder's list (the nearest list above it): its own drawing is
@@ -190,7 +200,6 @@ Tick items as they land.
       subtrees.
 - [ ] **Defer: virtualised lists** (an item count and a row factory instead of a
       node per row).
-- [ ] **Defer: a damage interface to the renderer** (it compares the whole list).
 - [ ] **Defer: a Lua host** over the same tree (gpuix's model).
 
 ## Why this exists
@@ -252,6 +261,11 @@ what it costs, on gameui. agent-ui is not being moved to it (Bart, 2026-11-10).
   measures what that costs.
 - A damage interface to the renderer: it compares the whole list (about 1% of a
   recompute, `frame-reuse.md`).
+
+  *Follow-up, 2026-11-11:* once a replayed frame cost little else, the
+  comparison was about 14% of the renderer's part of it, and its copy of the
+  root's list 4 MB on the grid, so the root's list now reports its edits
+  (Done).
 - A Lua or JavaScript host. Publishing the crate.
 
 ## Crate and module layout

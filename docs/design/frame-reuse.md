@@ -1,8 +1,8 @@
 # Frame-to-frame reuse
 
-Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet
+Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept
 Owner: Bart
-Last updated: 2026-11-09
+Last updated: 2026-11-11
 
 ## Implementation status
 
@@ -181,6 +181,18 @@ Tick items as they land.
       tenth), so Phase 3's saving on a partly changed frame is a tenth less the
       comparison's cost. The next savings are in text (Phase 4) and ordering
       (Phase 6).
+- [x] **Edits reported by the list's owner, in place of the comparison**
+      (extended beyond the original plan, from the retained-mode comparison;
+      2026-11-11). A list whose owner opts in (`DrawList::report_edits`)
+      carries a version (a stamp new at each `clear`, and its patches since)
+      and a log of what each `patch_translated` overwrote since
+      `begin_edits`, classed by the comparison's own change functions. The
+      renderer takes that log when it is relative to the version it drew last
+      in that place, treats an unchanged version as every record `Same`, and
+      plans from nothing otherwise; it keeps no copy of such a list
+      (`FrameSnapshot::reported`, `RenderStats::lists_reported`). The
+      comparison stays as the oracle behind the `edit-oracle` feature. See
+      the follow-up under Non-goals.
 
 ### Outstanding
 
@@ -257,6 +269,20 @@ box.
 
 - A retained element tree or caller-supplied dirty flags. They could be added
   later as hints that skip the comparison; correctness does not need them.
+
+  *Follow-up, 2026-11-11:* the retained tree (`retained-mode.md`) added them,
+  as the edit log above rather than hints. Each `patch_translated` classes
+  what it overwrites, so the owner pays for the records it changed and the
+  renderer neither compares nor keeps the list. Correctness rests on the
+  owner changing a reporting list only by patches and clears between
+  `begin_edits` and the render; anything else that changes the counts is
+  caught, and a write to the public record arrays is not. Choices made in
+  building it, for Bart to confirm: a list produced but not drawn (a missed
+  render) is planned from nothing next time; the soup is reported whole, at
+  the most any part of it changed; a recorded root, since it is a new
+  version with no log, is planned from nothing with no comparison, so the
+  draw boxes of that frame are not reused; and the path runs only with
+  `set_frame_comparison` on.
 - Cheaper shaping of new strings (`churn`): the layout layer, a separate item.
 - Multiple renders of one list into different targets beyond one kept frame per
   slot (below).

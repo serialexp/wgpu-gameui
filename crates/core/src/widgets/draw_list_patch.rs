@@ -5,6 +5,12 @@
 //! recorded again. A retained tree uses this to carry a change to a deep node
 //! up through its ancestors' lists in the work of the records that changed.
 
+#[cfg(feature = "phosphor-icons")]
+use super::edits::icon_msdf_change;
+use super::edits::{
+    Change, analytic_change, circle_change, icon_change, log_change, nine_slice_change,
+    same_vertex_box_inputs, text_change,
+};
 use super::*;
 
 /// A position in each of a list's record arrays: how many records of each
@@ -281,41 +287,103 @@ impl DrawList {
             dy: placed.offset[1],
             clip: placed.clip,
         };
+        self.edits.patches += 1;
+        // What the renderer is told changed, when the owner reports it.
+        let log = self.edits.logging();
         let (s, e, at) = (span.start, span.end, placed.at);
         let to = |base: u32, i: u32| (base + i) as usize;
         for i in s.vertices..e.vertices {
-            self.vertices[to(at.vertices, i)] = place.vertex(other.vertices[i as usize]);
+            let vertex = place.vertex(other.vertices[i as usize]);
+            let slot = &mut self.vertices[to(at.vertices, i)];
+            if log && bytemuck::bytes_of(slot) != bytemuck::bytes_of(&vertex) {
+                let change = if same_vertex_box_inputs(slot, &vertex) {
+                    Change::Look
+                } else {
+                    Change::Place
+                };
+                self.edits.soup = self.edits.soup.max(change);
+            }
+            *slot = vertex;
         }
         for i in s.indices..e.indices {
-            self.indices[to(at.indices, i)] = other.indices[i as usize] + at.vertices;
+            let index = other.indices[i as usize] + at.vertices;
+            let slot = &mut self.indices[to(at.indices, i)];
+            if log && *slot != index {
+                self.edits.soup = Change::Place;
+            }
+            *slot = index;
         }
         for i in s.analytic..e.analytic {
             let Some(record) = place.analytic(&other.analytic_instances[i as usize]) else {
                 return false;
             };
-            let slot = &mut self.analytic_instances[to(at.analytic, i)];
+            let k = to(at.analytic, i);
+            let slot = &mut self.analytic_instances[k];
             if slot.kind != record.kind {
                 return false;
+            }
+            if log {
+                log_change(&mut self.edits.analytic, k, slot, &record, analytic_change);
             }
             *slot = record;
         }
         for i in s.circles..e.circles {
-            self.circle_instances[to(at.circles, i)] =
-                place.circle(other.circle_instances[i as usize]);
+            let record = place.circle(other.circle_instances[i as usize]);
+            let k = to(at.circles, i);
+            if log {
+                let slot = &self.circle_instances[k];
+                log_change(&mut self.edits.circles, k, slot, &record, circle_change);
+            }
+            self.circle_instances[k] = record;
         }
         for i in s.nine_slices..e.nine_slices {
-            self.nine_slices[to(at.nine_slices, i)] =
-                place.nine_slice(&other.nine_slices[i as usize]);
+            let record = place.nine_slice(&other.nine_slices[i as usize]);
+            let k = to(at.nine_slices, i);
+            if log {
+                let slot = &self.nine_slices[k];
+                log_change(
+                    &mut self.edits.nine_slices,
+                    k,
+                    slot,
+                    &record,
+                    nine_slice_change,
+                );
+            }
+            self.nine_slices[k] = record;
         }
         for i in s.icons..e.icons {
-            self.icons[to(at.icons, i)] = place.icon(&other.icons[i as usize]);
+            let record = place.icon(&other.icons[i as usize]);
+            let k = to(at.icons, i);
+            if log {
+                let slot = &self.icons[k];
+                log_change(&mut self.edits.icons, k, slot, &record, icon_change);
+            }
+            self.icons[k] = record;
         }
         #[cfg(feature = "phosphor-icons")]
         for i in s.icons_msdf..e.icons_msdf {
-            self.icons_msdf[to(at.icons_msdf, i)] = place.icon_msdf(other.icons_msdf[i as usize]);
+            let record = place.icon_msdf(other.icons_msdf[i as usize]);
+            let k = to(at.icons_msdf, i);
+            if log {
+                let slot = &self.icons_msdf[k];
+                log_change(
+                    &mut self.edits.icons_msdf,
+                    k,
+                    slot,
+                    &record,
+                    icon_msdf_change,
+                );
+            }
+            self.icons_msdf[k] = record;
         }
         for i in s.texts..e.texts {
-            self.texts[to(at.texts, i)] = place.text(&other.texts[i as usize]);
+            let record = place.text(&other.texts[i as usize]);
+            let k = to(at.texts, i);
+            if log {
+                let slot = &self.texts[k];
+                log_change(&mut self.edits.texts, k, slot, &record, text_change);
+            }
+            self.texts[k] = record;
         }
         for i in s.selectable..e.selectable {
             let (key, index) = other.selectable[i as usize];

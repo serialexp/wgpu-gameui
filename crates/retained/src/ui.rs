@@ -1016,6 +1016,11 @@ impl Ui {
                 break;
             }
         }
+        // What this frame patches in the root's list is told to the renderer,
+        // relative to the list as the last frame left it.
+        if let Some(list) = self.nodes[self.root as usize].list.as_deref_mut() {
+            list.begin_edits();
+        }
         self.update(self.root);
         self.spans.clear();
         self.epoch = self.epoch.wrapping_add(1).max(1);

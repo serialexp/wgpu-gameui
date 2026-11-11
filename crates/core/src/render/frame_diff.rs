@@ -14,7 +14,8 @@ use super::draw_box::{same_analytic_box_inputs, same_circle_box_inputs, same_ver
 use crate::layout::Rect;
 use crate::text::{PixelGrid, TextBlock, TextOutline};
 use crate::widgets::{
-    AnalyticInstance, CircleInstance, DrawList, IconDraw, NineSliceDraw, PaintCmd, Vertex,
+    AnalyticInstance, CircleInstance, DrawList, IconDraw, ListVersion, NineSliceDraw, PaintCmd,
+    RecordCounts, Vertex,
 };
 
 /// How a record differs from the same record last frame.
@@ -129,6 +130,19 @@ pub(crate) struct FrameSnapshot {
     icons_msdf: Vec<crate::widgets::IconMsdf>,
     texts: Vec<TextBlock>,
     pub(crate) changes: Changes,
+    /// The list last drawn in this place, when its owner reported its edits
+    /// (see [`reported`](Self::reported)): no records are kept for it.
+    reported: Option<Reported>,
+}
+
+/// What is remembered of a list whose owner reports its edits, drawn in a
+/// place: enough to tell whether the next list's log is relative to it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Reported {
+    id: u64,
+    version: ListVersion,
+    counts: RecordCounts,
+    context: ContextKey,
 }
 
 /// Counts what has been compared and gives up when most of it moved.
@@ -164,6 +178,36 @@ impl Tally {
         }
         !self.abandoned
     }
+}
+
+/// `n` records as they were but those `entries` name, each as the most it
+/// changed by, into `out`, counted in `tally` (which never gives up here: what
+/// the owner said is read whole).
+fn spread(out: &mut Vec<Change>, n: u32, entries: &[(u32, Change)], tally: &mut Tally) {
+    out.clear();
+    out.resize(n as usize, Change::Same);
+    let (mut look, mut place) = (0u32, 0u32);
+    for &(i, change) in entries {
+        let Some(slot) = out.get_mut(i as usize) else {
+            continue;
+        };
+        if change > *slot {
+            match *slot {
+                Change::Look => look -= 1,
+                Change::Place => place -= 1,
+                Change::Same => {}
+            }
+            match change {
+                Change::Look => look += 1,
+                Change::Place => place += 1,
+                Change::Same => {}
+            }
+            *slot = change;
+        }
+    }
+    tally.same += n - look - place;
+    tally.look += look;
+    tally.place += place;
 }
 
 /// Compare `old` with `new` one for one, recording each answer in `out`.
@@ -205,6 +249,7 @@ impl FrameSnapshot {
     pub(crate) fn compare(&mut self, list: &DrawList, context: &ContextKey) -> FrameDiff {
         let mut diff = FrameDiff::default();
         self.complete = false;
+        self.reported = None;
         if !self.kept {
             return diff;
         }
@@ -322,6 +367,136 @@ impl FrameSnapshot {
     pub(crate) fn forget(&mut self) {
         self.kept = false;
         self.complete = false;
+        self.reported = None;
+    }
+
+    /// How `list`, whose owner reports its edits, drawn in `context`, differs
+    /// from the list drawn last in this place, from what its owner says
+    /// rather than by comparing: answered when it is that list again, of the
+    /// same counts on the same target, either untouched since (every record
+    /// [`Change::Same`]) or patched since [`DrawList::begin_edits`] was called
+    /// on it as it was drawn (the log's changes, the rest `Same`). Anything
+    /// else is not answered, and the list is planned from nothing. No record
+    /// is kept, and what was kept for another list in this place is let go.
+    pub(crate) fn reported(&mut self, list: &DrawList, context: &ContextKey) -> FrameDiff {
+        self.release();
+        let now = Reported {
+            id: list.id(),
+            version: list.version(),
+            counts: list.record_counts(),
+            context: *context,
+        };
+        let mut diff = FrameDiff::default();
+        let Some(last) = self.reported.replace(now) else {
+            return diff;
+        };
+        diff.compared = true;
+        diff.context_same = last.context == now.context;
+        let untouched = last.version == now.version;
+        let log = list.edit_log();
+        let logged = log.base == Some(last.version);
+        diff.topology_same =
+            last.id == now.id && last.counts == now.counts && (untouched || logged);
+        if !diff.topology_same {
+            return diff;
+        }
+        let mut tally = Tally::default();
+        let c = &mut self.changes;
+        let counts = now.counts;
+        let mut fill = |out: &mut Vec<Change>, n: u32, entries: &[(u32, Change)]| {
+            spread(out, n, if untouched { &[] } else { entries }, &mut tally);
+        };
+        fill(&mut c.analytic, counts.analytic, &log.analytic);
+        fill(&mut c.circles, counts.circles, &log.circles);
+        fill(&mut c.icons, counts.icons, &log.icons);
+        fill(&mut c.nine_slices, counts.nine_slices, &log.nine_slices);
+        #[cfg(feature = "phosphor-icons")]
+        fill(&mut c.icons_msdf, counts.icons_msdf, &log.icons_msdf);
+        fill(&mut c.texts, counts.texts, &log.texts);
+        // The soup is told of as a whole, by the most any part of it changed:
+        // each of its commands counts as changed by that.
+        let soup = if untouched { Change::Same } else { log.soup };
+        c.soup.clear();
+        for cmd in &list.paint_cmds {
+            if matches!(cmd, PaintCmd::Soup { .. }) {
+                c.soup.push(soup);
+                tally.record(soup);
+            }
+        }
+        // Counted as the comparison counts it, whether or not it is empty.
+        c.tail = soup;
+        tally.record(soup);
+        diff.same = tally.same;
+        diff.look = tally.look;
+        diff.place = tally.place;
+        diff
+    }
+
+    /// Check what [`reported`](Self::reported) answered for `list`, `diff`
+    /// with the answers in `self`, against `oracle`, which compares `list`
+    /// with the last list it kept: wherever both answer, every record must
+    /// be reported as changed at least as much as the comparison finds it.
+    #[cfg(feature = "edit-oracle")]
+    pub(crate) fn check_reported(
+        &self,
+        diff: &FrameDiff,
+        oracle: &mut FrameSnapshot,
+        list: &DrawList,
+        context: &ContextKey,
+    ) {
+        let found = oracle.compare(list, context);
+        oracle.keep(list, context);
+        if !diff.answered() || !found.compared {
+            return;
+        }
+        assert!(
+            found.context_same && found.topology_same,
+            "a reported list was answered, but differs in shape or target from the last \
+             one drawn in its place"
+        );
+        if found.abandoned {
+            return;
+        }
+        fn covers(what: &str, told: &[Change], found: &[Change]) {
+            assert_eq!(told.len(), found.len(), "{what}: answers for other counts");
+            if let Some(i) = (0..told.len()).find(|&i| told[i] < found[i]) {
+                panic!(
+                    "{what} {i}: reported {:?}, but it changed by {:?}",
+                    told[i], found[i]
+                );
+            }
+        }
+        let (t, f) = (&self.changes, &oracle.changes);
+        covers("analytic", &t.analytic, &f.analytic);
+        covers("circle", &t.circles, &f.circles);
+        covers("icon", &t.icons, &f.icons);
+        covers("nine-slice", &t.nine_slices, &f.nine_slices);
+        #[cfg(feature = "phosphor-icons")]
+        covers("MSDF icon", &t.icons_msdf, &f.icons_msdf);
+        covers("text", &t.texts, &f.texts);
+        covers("soup command", &t.soup, &f.soup);
+        covers("soup tail", &[t.tail], &[f.tail]);
+    }
+
+    /// Let go of the records kept, and the memory they hold.
+    fn release(&mut self) {
+        if !self.kept && self.bytes() == 0 {
+            return;
+        }
+        self.kept = false;
+        self.complete = false;
+        self.paint_cmds = Vec::new();
+        self.vertices = Vec::new();
+        self.indices = Vec::new();
+        self.analytic = Vec::new();
+        self.circles = Vec::new();
+        self.icons = Vec::new();
+        self.nine_slices = Vec::new();
+        #[cfg(feature = "phosphor-icons")]
+        {
+            self.icons_msdf = Vec::new();
+        }
+        self.texts = Vec::new();
     }
 
     /// Whether `list` is made of the same paint stream and arrays of the same
@@ -550,7 +725,7 @@ fn rect_bits(r: &Option<Rect>) -> Option<[u32; 4]> {
         .map(|r| [r.x, r.y, r.width, r.height].map(f32::to_bits))
 }
 
-fn analytic_change(a: &AnalyticInstance, b: &AnalyticInstance) -> Change {
+pub(crate) fn analytic_change(a: &AnalyticInstance, b: &AnalyticInstance) -> Change {
     if bytemuck::bytes_of(a) == bytemuck::bytes_of(b) {
         Change::Same
     } else if same_analytic_box_inputs(a, b) {
@@ -560,7 +735,7 @@ fn analytic_change(a: &AnalyticInstance, b: &AnalyticInstance) -> Change {
     }
 }
 
-fn circle_change(a: &CircleInstance, b: &CircleInstance) -> Change {
+pub(crate) fn circle_change(a: &CircleInstance, b: &CircleInstance) -> Change {
     if bytemuck::bytes_of(a) == bytemuck::bytes_of(b) {
         Change::Same
     } else if same_circle_box_inputs(a, b) {
@@ -601,7 +776,7 @@ fn soup_change(
     change
 }
 
-fn icon_change(a: &IconDraw, b: &IconDraw) -> Change {
+pub(crate) fn icon_change(a: &IconDraw, b: &IconDraw) -> Change {
     let IconDraw {
         corners,
         sprite,
@@ -620,7 +795,7 @@ fn icon_change(a: &IconDraw, b: &IconDraw) -> Change {
     look_or_place(placed, bits4(tint) == bits4(&b.tint))
 }
 
-fn nine_slice_change(a: &NineSliceDraw, b: &NineSliceDraw) -> Change {
+pub(crate) fn nine_slice_change(a: &NineSliceDraw, b: &NineSliceDraw) -> Change {
     let NineSliceDraw {
         local,
         transform,
@@ -639,7 +814,10 @@ fn nine_slice_change(a: &NineSliceDraw, b: &NineSliceDraw) -> Change {
 }
 
 #[cfg(feature = "phosphor-icons")]
-fn icon_msdf_change(a: &crate::widgets::IconMsdf, b: &crate::widgets::IconMsdf) -> Change {
+pub(crate) fn icon_msdf_change(
+    a: &crate::widgets::IconMsdf,
+    b: &crate::widgets::IconMsdf,
+) -> Change {
     let crate::widgets::IconMsdf {
         local,
         transform,
@@ -672,7 +850,7 @@ fn colour_bits(c: &cosmic_text::Color) -> u32 {
 /// Text blocks. Every field of a block is named below, so a field added to
 /// [`TextBlock`] does not compile until it is placed here: the colours of the
 /// block and of its outline, shadow and glow only look; the rest places.
-fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
+pub(crate) fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
     let TextBlock {
         content,
         x,
