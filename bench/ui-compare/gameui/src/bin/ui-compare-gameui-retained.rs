@@ -148,8 +148,9 @@ impl Bench {
         stats_from(times)
     }
 
-    /// Time a scene's frames and print the counts of its last frame and what
-    /// its tree holds. Returns the whole frames' times and the tree's share.
+    /// Time a scene's frames and print the counts of its last frame, what
+    /// its tree holds, and the effective mean (see below). Returns the whole
+    /// frames' times and the tree's share.
     fn run<S: Scene>(&mut self, scene: &mut S, name: &str) -> (Stats, Stats) {
         let mut tree = Vec::with_capacity(WARMUP_FRAMES + TIMED_FRAMES);
         let mut needed = 0u64;
@@ -212,6 +213,12 @@ impl Bench {
                 ("edges", g.edges as u64),
                 ("closures", g.closures as u64),
             ],
+        );
+        // What a host following `needs_frame` would spend a frame: the
+        // frames drawn taken to cost the mean, and the rest nothing.
+        println!(
+            "{lib:<10} {name:<9} effective  mean {:>8.3} ms  ({needed} of {frames} frames needed)",
+            stats.mean_us / 1e3 * needed as f64 / frames as f64,
         );
         (stats, stats_from(timed))
     }

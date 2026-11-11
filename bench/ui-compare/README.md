@@ -361,7 +361,10 @@ What is timed, per frame: `retained` is the changes, `Ui::frame` and the same
 `render` and `submit` as immediate mode; `ret-tree` is the tree's share of
 those same frames (the changes and `Ui::frame`). A frame is drawn even when
 `needs_frame` says nothing changed, as the immediate harness does; a host
-following `needs_frame` would draw none, so for `static` its real cost is 0.
+following `needs_frame` would draw only the frames it asks for. Each case
+prints that as an `effective` line: the mean × the frames needed / the frames
+run (warm-up included), taking each frame drawn to cost the mean and the rest
+nothing. Immediate mode has no `needs_frame`, so for it every frame is needed.
 `build` is a scene made from nothing: the tree, its first frame (and, for the
 rows, the scroll to row 5,000 and a second layout), and that frame's render,
 timed five times with the renderer's caches warm. Immediate mode has nothing
@@ -391,29 +394,35 @@ and show seams between them, the tree's do not.
 ### Results, 2026-11-11 (load average 2 to 5; mean CPU ms per frame)
 
 One run of each binary, reuse off and then on. Immediate (`gameui`) against
-retained (`retained`), with the tree's share in brackets.
+retained (`retained`), with the tree's share in brackets. The `effective`
+columns are the retained means × the frames needed / 230 (the counts of
+2026-11-12, which do not depend on the machine's load: 1 frame for `static`,
+35 for `rows-hovr`, all 230 for the rest, marked —, where it is the mean).
+These timings predate the first four items of the comparison's follow-ups
+(prepared text reused, patching, lists kept only at clips, edits reported to
+the renderer); they wait for a rerun on a quiet machine (`TODO.md`).
 
-| scene | gameui | retained (tree) | gameui+r | retained+r (tree) |
-| --- | ---: | ---: | ---: | ---: |
-| grid 100 `static` | 0.077 | 0.077 (0.000) | 0.082 | 0.075 (0.000) |
-| grid 1,000 `static` | 0.373 | 0.301 (0.000) | 0.220 | 0.157 (0.000) |
-| grid 3,000 `static` | 1.08 | 0.861 (0.000) | 0.610 | 0.405 (0.000) |
-| grid 10,000 `static` | 4.54 | 3.74 (0.000) | 2.35 | 1.57 (0.000) |
-| grid 100 `one` | 0.060 | 0.061 (0.007) | 0.045 | 0.062 (0.007) |
-| grid 1,000 `one` | 0.369 | 0.374 (0.070) | 0.216 | 0.225 (0.070) |
-| grid 3,000 `one` | 1.08 | 1.11 (0.214) | 0.614 | 0.662 (0.223) |
-| grid 10,000 `one` | 4.56 | 4.75 (0.875) | 2.49 | 2.76 (0.948) |
-| grid 100 `animated` | 0.061 | 0.075 (0.021) | 0.052 | 0.067 (0.022) |
-| grid 1,000 `animated` | 0.368 | 0.503 (0.205) | 0.226 | 0.373 (0.206) |
-| grid 3,000 `animated` | 1.07 | 1.51 (0.629) | 0.640 | 1.10 (0.650) |
-| grid 10,000 `animated` | 4.41 | 9.21 (5.01) | 2.55 | 7.27 (5.03) |
-| `rows-stat` | 0.193 | 0.188 (0.000) | 0.166 | 0.153 (0.000) |
-| `rows-one` | 0.206 | 0.266 (0.062) | 0.180 | 0.236 (0.061) |
-| `rows-scrl` | 0.198 | 0.201 (0.008) | 0.200 | 0.216 (0.008) |
-| `rows-hovr` | 0.195 | 0.191 (0.002) | 0.159 | 0.159 (0.002) |
-| `deep-static` | 0.706 | 0.420 (0.000) | 0.490 | 0.213 (0.000) |
-| `deep-one` | 0.703 | 0.561 (0.135) | 0.504 | 0.325 (0.137) |
-| `deep-animated` | 0.706 | 2.01 (1.52) | 0.589 | 1.70 (1.35) |
+| scene | gameui | retained (tree) | effective | gameui+r | retained+r (tree) | effective+r |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| grid 100 `static` | 0.077 | 0.077 (0.000) | 0.0003 | 0.082 | 0.075 (0.000) | 0.0003 |
+| grid 1,000 `static` | 0.373 | 0.301 (0.000) | 0.0013 | 0.220 | 0.157 (0.000) | 0.0007 |
+| grid 3,000 `static` | 1.08 | 0.861 (0.000) | 0.0037 | 0.610 | 0.405 (0.000) | 0.0018 |
+| grid 10,000 `static` | 4.54 | 3.74 (0.000) | 0.016 | 2.35 | 1.57 (0.000) | 0.0068 |
+| grid 100 `one` | 0.060 | 0.061 (0.007) | — | 0.045 | 0.062 (0.007) | — |
+| grid 1,000 `one` | 0.369 | 0.374 (0.070) | — | 0.216 | 0.225 (0.070) | — |
+| grid 3,000 `one` | 1.08 | 1.11 (0.214) | — | 0.614 | 0.662 (0.223) | — |
+| grid 10,000 `one` | 4.56 | 4.75 (0.875) | — | 2.49 | 2.76 (0.948) | — |
+| grid 100 `animated` | 0.061 | 0.075 (0.021) | — | 0.052 | 0.067 (0.022) | — |
+| grid 1,000 `animated` | 0.368 | 0.503 (0.205) | — | 0.226 | 0.373 (0.206) | — |
+| grid 3,000 `animated` | 1.07 | 1.51 (0.629) | — | 0.640 | 1.10 (0.650) | — |
+| grid 10,000 `animated` | 4.41 | 9.21 (5.01) | — | 2.55 | 7.27 (5.03) | — |
+| `rows-stat` | 0.193 | 0.188 (0.000) | 0.0008 | 0.166 | 0.153 (0.000) | 0.0007 |
+| `rows-one` | 0.206 | 0.266 (0.062) | — | 0.180 | 0.236 (0.061) | — |
+| `rows-scrl` | 0.198 | 0.201 (0.008) | — | 0.200 | 0.216 (0.008) | — |
+| `rows-hovr` | 0.195 | 0.191 (0.002) | 0.029 | 0.159 | 0.159 (0.002) | 0.024 |
+| `deep-static` | 0.706 | 0.420 (0.000) | 0.0018 | 0.490 | 0.213 (0.000) | 0.0009 |
+| `deep-one` | 0.703 | 0.561 (0.135) | — | 0.504 | 0.325 (0.137) | — |
+| `deep-animated` | 0.706 | 2.01 (1.52) | — | 0.589 | 1.70 (1.35) | — |
 
 Builds (retained, median of five, ms): grid 0.15 / 0.87 / 2.8 / 14 at 100 /
 1,000 / 3,000 / 10,000 cells; rows 108; deep 3.0.

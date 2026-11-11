@@ -198,6 +198,16 @@ then the dated batches in the order they were written.
       `removing_a_subtree_disposes_of_what_it_owns`; leaving the bindings of
       removed nodes in the table, or finding a node's first binding for any
       property, fails them.
+- [x] **P2 — the comparison table shows `static` and `rows-hovr` drawn
+      anyway.** A host following `needs_frame` draws 1 of 230 and 35 of 230
+      of those frames; add an effective column (mean × needed / frames) to the
+      README table. **Done 2026-11-12 (the column; the rerun stays open in
+      `TODO.md`).** The retained bench prints an `effective` line per case
+      (mean × frames needed / frames run, warm-up included); the README
+      table has `effective` and `effective+r` columns, from the table's
+      means and the 2026-11-12 counts (1 of 230 for `static`, 35 for
+      `rows-hovr`, 230 for the rest), noted as predating the follow-ups
+      until the rerun. Immediate mode needs every frame.
 
 ---
 

@@ -70,13 +70,13 @@ none chosen yet (Bart).
       (behind `headless`), and `automation/tests.rs:77` calls `run` with a
       fourth argument the featureless `run` does not take. The library itself
       is clean without them.
-- [ ] **P2 — the comparison table shows `static` and `rows-hovr` drawn
-      anyway.** A host following `needs_frame` draws 1 of 230 and 35 of 230
-      of those frames; add an effective column (mean × needed / frames) to the
-      README table. Rerun on a quiet machine: `rows-scrl` / `rows-hovr`
-      differences are noise. The README's retained numbers predate the first
-      four items done (prepared text reused, patching, lists only at clips,
-      edits reported to the renderer).
+- [ ] **P2 — rerun the comparison on a quiet machine.** `rows-scrl` /
+      `rows-hovr` differences are noise. The README's retained numbers
+      predate the first four items done (prepared text reused, patching,
+      lists only at clips, edits reported to the renderer), and the item 7
+      build timings and item 5 frame means wait for it too. The effective
+      columns (done 2026-11-12, see `TODO_DONE.md`) take their counts from
+      the run's `effective` lines.
 
 ---
 
