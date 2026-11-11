@@ -3631,7 +3631,7 @@ fn scaled_spec(block: &TextBlock, scale: f32) -> crate::shaping::LayoutSpec<'_> 
 
 #[path = "draw_list_patch.rs"]
 mod patch;
-pub use patch::{ListShape, Placed, RecordCounts, RecordSpan};
+pub use patch::{Placed, PlacedLog, RecordCounts, RecordSpan};
 
 #[cfg(test)]
 #[path = "draw_list_caret_tests.rs"]

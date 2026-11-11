@@ -34,8 +34,9 @@ fn hover_writes_the_apps_signal_and_a_prop_follows_it() {
     assert_eq!(ui.hovered(), Some(button));
     assert!(ui.needs_frame(0.0));
     ui.frame(at(0.0));
-    // The button is a leaf: only the root's list is recorded again.
-    assert_eq!(ui.frame_stats().recorded, 1);
+    // The button's own drawing is patched where the root's list holds it.
+    assert_eq!(ui.frame_stats().recorded, 0);
+    assert_eq!(ui.frame_stats().patched, 1);
     check(&mut ui);
     ui.pointer_moved(60.0, 10.0);
     assert!(!ui.get(hovered));

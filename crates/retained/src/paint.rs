@@ -1,28 +1,44 @@
-//! Drawing: each node with children keeps the list of its subtree at its
-//! own origin, recorded without its ancestors' clips, and is placed into its
-//! parent's list with `append_translated` at its position under the
-//! parent's clip. A list is recorded again only when something in it is out
-//! of date; otherwise it is placed as it is.
+//! Drawing: the root, and each node that clips (or scrolls), keeps a
+//! list of its subtree at its own origin, recorded without its ancestors'
+//! clips; such a list is placed into the list that holds it with
+//! `append_translated` at its position under that list's clip. Every other
+//! node is drawn into its holder's list (the nearest list above it): its own
+//! drawing is recorded at its origin into a scratch list and placed there at
+//! its offset, then its children are drawn the same way. A list is recorded
+//! again only when something in it moved or changed in number; otherwise it
+//! is placed as it is.
 //!
 //! A node that clips draws only the children whose paint bounds meet its
 //! box, found by binary search along its stack, so its list depends on what
 //! is in view and is recorded again when that changes.
 //!
-//! A list recorded again with the shape it had (the same paint runs over the
-//! same number of records) is not placed again: its records are overwritten
-//! where its parent's list holds them (`DrawList::patch_translated`), and the
-//! runs overwritten are handed up for the grandparent to overwrite in its
+//! What a list placed is logged with its shape (`PlacedLog`), so that a
+//! piece drawn again with the shape it had (the same paint runs over the same
+//! number of records) is not placed again: its records are overwritten where
+//! the holder's list holds them (`DrawList::patch_translated`), and the runs
+//! overwritten are handed up for the holder's holder to overwrite in its
 //! list, and so on to the root. A change deep in the tree costs the records
-//! it changed at each level, not every ancestor's list. Whatever the patch
-//! cannot vouch for (another shape, a record its placement culled, a child
-//! moved) records the parent again instead.
+//! it changed at each list, not every list above it. Whatever the patch
+//! cannot vouch for (another shape, a record its placement culled, a node
+//! moved or out of view) records the holder again instead.
 
 use wgpu_gameui::layout::Rect;
-use wgpu_gameui::{Background, CornerRadii, DrawList, EdgeWidths, QuadStyle, RecordSpan};
+use wgpu_gameui::{
+    Background, CornerRadii, DrawList, EdgeWidths, PlacedLog, QuadStyle, RecordSpan,
+};
 
 use crate::node::Insets;
 use crate::own_drawing::paint_node;
 use crate::ui::{NodeData, Ui};
+
+/// A list being recorded: the list, the log of what it placed, its
+/// `list_gen`, and the earliest repaint asked for by what it holds.
+struct Recording {
+    list: Box<DrawList>,
+    log: PlacedLog,
+    generation: u32,
+    deadline: f64,
+}
 
 impl Ui {
     /// Whether `n`'s list must be recorded again: something in it is out of
@@ -33,220 +49,294 @@ impl Ui {
         d.stale || d.volatile_below > 0 || d.deadline <= self.now || d.list.is_none()
     }
 
-    /// Bring `n`'s list up to date, `n` being a node with children: record
-    /// it again if it must be, else patch in it the children queued as
-    /// changed, falling back to recording it when a patch cannot be made.
-    /// The runs of records patched are pushed onto `spans`.
+    /// Bring `n`'s list up to date, `n` being a node that keeps one: record
+    /// it again if it must be, else patch in it the nodes queued as changed,
+    /// falling back to recording it when a patch cannot be made. The runs of
+    /// records patched are pushed onto `spans`.
     pub(crate) fn update(&mut self, n: u32) -> Update {
         if self.needs_record(n) {
-            return Update::Recorded {
-                same_shape: self.record(n),
-            };
+            self.record(n);
+            return Update::Recorded;
         }
         if self.nodes[n as usize].dirty_kids.is_empty() {
             return Update::Clean;
         }
         let start = self.spans.len();
-        let kids = std::mem::take(&mut self.nodes[n as usize].dirty_kids);
-        for &c in &kids {
-            if self.nodes[c as usize].parent == n {
-                self.nodes[c as usize].queued = false;
-            }
-        }
-        let patched = kids.iter().all(|&c| self.patch_child(n, c));
-        let mut kids = kids;
+        let mut kids = std::mem::take(&mut self.nodes[n as usize].dirty_kids);
+        self.unqueue(&kids);
+        let patched = kids
+            .iter()
+            .all(|&(c, generation)| self.patch_in(n, c, generation));
         kids.clear();
         self.nodes[n as usize].dirty_kids = kids;
         if patched {
             return Update::Patched;
         }
-        // The children not yet patched are drawn by the recording, which
-        // brings each up to date first.
+        // The nodes not yet patched are drawn by the recording, which brings
+        // each up to date first.
         self.spans.truncate(start);
-        Update::Recorded {
-            same_shape: self.record(n),
-        }
+        self.record(n);
+        Update::Recorded
     }
 
-    /// Bring child `c`'s list up to date and patch its records where `n`'s
-    /// list placed them, pushing the runs patched (in `n`'s list) onto
-    /// `spans`. `false` when that cannot be done and `n` must be recorded
-    /// again: `c` is not `n`'s child or draws straight into `n`'s list, its
-    /// placement is not in `n`'s list as it is (it was culled, or `n` was
-    /// recorded since) or is at another offset, `c` was recorded with
-    /// another shape, or the patch is declined.
-    fn patch_child(&mut self, n: u32, c: u32) -> bool {
-        let p = &self.nodes[n as usize];
+    /// Bring `c`, drawn into `n`'s list, up to date and patch its records
+    /// where `n`'s list placed them, pushing the runs patched (in `n`'s list)
+    /// onto `spans`: `c`'s own list's, or its own drawing's. `false` when that
+    /// cannot be done and `n` must be recorded again: `c` is not the node
+    /// queued (`generation`) or is not drawn into `n`'s list, its piece is
+    /// not in `n`'s list as it is (it was out of view, or `n` was recorded
+    /// since) or is at another offset, it is out of `n`'s view now, it was
+    /// drawn with another shape, or the patch is declined.
+    fn patch_in(&mut self, n: u32, c: u32, generation: u32) -> bool {
         let d = &self.nodes[c as usize];
-        if !d.live || d.parent != n || !d.has_children() || d.placed_gen != p.list_gen {
+        if !d.live || d.generation != generation || self.holder(c) != Some(n) {
             return false;
         }
-        let Some(placed) = d.placed.as_deref().copied() else {
+        let p = &self.nodes[n as usize];
+        if d.placed_gen != p.list_gen {
+            return false;
+        }
+        let piece = d.piece;
+        let Some(placed) = p.log.placed(piece).copied() else {
             return false;
         };
-        if offset(d, p.scrolled()) != placed.offset {
+        if self.offset_in(c, n) != placed.offset {
             return false;
         }
-        let mark = self.spans.len();
-        match self.update(c) {
-            Update::Clean => return true,
-            Update::Recorded { same_shape: false } => return false,
-            Update::Recorded { same_shape: true } => {
-                self.spans.truncate(mark);
-                let child = self.nodes[c as usize].list.as_deref().expect("recorded");
-                self.spans.push(RecordSpan::all_of(child));
+        // A child of a node that clips is drawn only while in view.
+        if d.parent == n && p.clip {
+            self.grow(c);
+            if !in_view(
+                &self.nodes[n as usize],
+                &self.nodes[c as usize],
+                placed.offset,
+            ) {
+                return false;
             }
-            Update::Patched => {}
+        }
+        let mark = self.spans.len();
+        let keeps = self.keeps_list(c);
+        let mut own = None;
+        if keeps {
+            match self.update(c) {
+                Update::Clean => return true,
+                Update::Patched => {}
+                Update::Recorded => self.spans.truncate(mark),
+            }
+        } else {
+            if !self.nodes[c as usize].stale {
+                return true;
+            }
+            own = Some(self.paint_own(c));
         }
         let mut list = self.nodes[n as usize]
             .list
             .take()
             .expect("a list placed it");
-        let child = self.nodes[c as usize].list.as_deref().expect("recorded");
-        let mut ok = true;
-        for span in &mut self.spans[mark..] {
-            if !list.patch_translated(&placed, child, span) {
-                ok = false;
-                break;
-            }
-            self.stats.patched += span.len();
-            *span = span.offset_by(placed.at);
+        let child = match &own {
+            Some(list) => &**list,
+            None => self.nodes[c as usize].list.as_deref().expect("recorded"),
+        };
+        // Drawn again whole, it must have the shape it was placed with.
+        let whole = self.spans.len() == mark;
+        let mut ok = !whole || self.nodes[n as usize].log.fits(piece, child);
+        if ok && whole {
+            self.spans.push(RecordSpan::all_of(child));
         }
-        self.nodes[n as usize].list = Some(list);
+        if ok {
+            for span in &mut self.spans[mark..] {
+                if !list.patch_translated(&placed, child, span) {
+                    ok = false;
+                    break;
+                }
+                self.stats.patched += span.len();
+                *span = span.offset_by(placed.at);
+            }
+        }
+        let deadline = if keeps {
+            self.nodes[c as usize].deadline
+        } else {
+            f64::INFINITY
+        };
+        if own.is_some() {
+            self.piece_list = own;
+        }
+        let d = &mut self.nodes[n as usize];
+        d.list = Some(list);
         // A deadline that moved later leaves this one early, which records
         // this list again when it comes and puts it right.
-        let deadline = self.nodes[c as usize].deadline;
-        let d = &mut self.nodes[n as usize];
         d.deadline = d.deadline.min(deadline);
         ok
     }
 
-    /// Record `n`'s list again: its own drawing, then its children in view.
-    /// Whether it has the shape it had (see `DrawList::has_shape`), so the
-    /// lists that placed it can be patched rather than recorded again.
-    pub(crate) fn record(&mut self, n: u32) -> bool {
-        self.stats.recorded += 1;
-        let (mut list, had) = match self.nodes[n as usize].list.take() {
-            Some(list) => (list, true),
-            None => (
-                Box::new(DrawList::with_font_system(self.fonts.clone())),
-                false,
-            ),
-        };
-        let mut shape = self.shapes.pop().unwrap_or_default();
-        if had {
-            list.shape_into(&mut shape);
-        }
-        list.clear();
-        // Every child is drawn below, and so brought up to date; what was
-        // queued is not wanted.
-        let kids = std::mem::take(&mut self.nodes[n as usize].dirty_kids);
-        for &c in &kids {
-            if self.nodes[c as usize].parent == n {
-                self.nodes[c as usize].queued = false;
-            }
-        }
-        let mut kids = kids;
-        kids.clear();
-        let d = &mut self.nodes[n as usize];
-        d.dirty_kids = kids;
-        d.list_gen = d.list_gen.wrapping_add(1);
+    /// Draw `c`'s own drawing, `c` being a node that keeps no list, into the
+    /// scratch piece list, which is returned (the caller puts it back);
+    /// its repaint request goes to its holder.
+    fn paint_own(&mut self, c: u32) -> Box<DrawList> {
+        let mut own = self
+            .piece_list
+            .take()
+            .unwrap_or_else(|| Box::new(DrawList::with_font_system(self.fonts.clone())));
+        own.clear();
         let mut deadline = f64::INFINITY;
+        self.stats.painted += 1;
+        paint_node(
+            &self.nodes[c as usize],
+            &mut self.graph,
+            self.now,
+            &mut own,
+            &mut deadline,
+        );
+        self.nodes[c as usize].stale = false;
+        if let Some(h) = self.holder(c) {
+            let d = &mut self.nodes[h as usize];
+            d.deadline = d.deadline.min(deadline);
+        }
+        own
+    }
+
+    /// Where `c` is drawn in `n`'s list, `n` being its holder: the offsets
+    /// down from `n` added in the order drawing adds them.
+    fn offset_in(&self, c: u32, n: u32) -> [f32; 2] {
+        let d = &self.nodes[c as usize];
+        let base = if d.parent == n {
+            [0.0; 2]
+        } else {
+            self.offset_in(d.parent, n)
+        };
+        let o = offset(d, self.nodes[d.parent as usize].scrolled());
+        [base[0] + o[0], base[1] + o[1]]
+    }
+
+    /// Record `n`'s list again, `n` being a node that keeps one: its own
+    /// drawing, then what is in view below it.
+    pub(crate) fn record(&mut self, n: u32) {
+        self.stats.recorded += 1;
+        let d = &mut self.nodes[n as usize];
+        let mut list = d
+            .list
+            .take()
+            .unwrap_or_else(|| Box::new(DrawList::with_font_system(self.fonts.clone())));
+        list.clear();
+        let mut log = std::mem::take(&mut d.log);
+        log.clear();
+        d.list_gen = d.list_gen.wrapping_add(1);
+        let generation = d.list_gen;
+        // Everything in the list is drawn below, and so brought up to date;
+        // what was queued is not wanted.
+        let mut kids = std::mem::take(&mut d.dirty_kids);
+        self.unqueue(&kids);
+        kids.clear();
+        self.nodes[n as usize].dirty_kids = kids;
+        let mut rec = Recording {
+            list,
+            log,
+            generation,
+            deadline: f64::INFINITY,
+        };
         self.stats.painted += 1;
         paint_node(
             &self.nodes[n as usize],
             &mut self.graph,
             self.now,
-            &mut list,
-            &mut deadline,
+            &mut rec.list,
+            &mut rec.deadline,
         );
-        self.draw_children(n, &mut list, &mut deadline);
-        let same_shape = had && list.has_shape(&shape);
-        self.shapes.push(shape);
+        self.draw_children(n, [0.0; 2], &mut rec);
         let d = &mut self.nodes[n as usize];
-        d.list = Some(list);
-        d.deadline = deadline;
+        d.list = Some(rec.list);
+        d.log = rec.log;
+        d.deadline = rec.deadline;
         d.stale = false;
-        same_shape
     }
 
-    fn draw_children(&mut self, n: u32, list: &mut DrawList, deadline: &mut f64) {
+    /// Draw `n`'s children into `rec`, `n` being drawn at `base` in it.
+    fn draw_children(&mut self, n: u32, base: [f32; 2], rec: &mut Recording) {
         let d = &self.nodes[n as usize];
-        let clips = d.clip;
+        // Only a node that keeps a list clips. A clip encloses the children,
+        // so a node without any (a scroll container whose last row went) has
+        // none, as in the frame drawn from nothing.
+        let clips = d.clip && d.has_children();
         let scrolled = d.scrolled();
         if clips {
             let rect = Rect::new(0.0, 0.0, d.size[0], d.size[1]);
             if d.scroll.is_some() {
-                list.push_clip_viewport(rect);
+                rec.list.push_clip_viewport(rect);
             } else {
-                list.push_clip(rect);
+                rec.list.push_clip(rect);
             }
         }
-        let clip = list.current_clip();
+        let clip = rec.list.current_clip();
         let range = self.flow_candidates(n);
         self.stats.examined += range.len() as u32;
+        let place_of = |c: &NodeData| {
+            let o = offset(c, scrolled);
+            [base[0] + o[0], base[1] + o[1]]
+        };
         for i in range {
             let c = self.nodes[n as usize].children[i];
-            let at = offset(&self.nodes[c as usize], scrolled);
-            if clips && !in_view(&self.nodes[n as usize], &self.nodes[c as usize], at) {
+            let cd = &self.nodes[c as usize];
+            if clips && !in_view(&self.nodes[n as usize], cd, offset(cd, scrolled)) {
                 continue;
             }
-            self.draw_child(c, at, list, clip, deadline);
+            let at = place_of(cd);
+            self.draw_child(c, at, clip, rec);
         }
         for i in 0..self.nodes[n as usize].absolute.len() {
             let c = self.nodes[n as usize].absolute[i];
             self.stats.examined += 1;
-            let at = offset(&self.nodes[c as usize], scrolled);
             if clips {
                 self.grow(c);
-                if !in_view(&self.nodes[n as usize], &self.nodes[c as usize], at) {
+                let cd = &self.nodes[c as usize];
+                if !in_view(&self.nodes[n as usize], cd, offset(cd, scrolled)) {
                     continue;
                 }
             }
-            self.draw_child(c, at, list, clip, deadline);
+            let at = place_of(&self.nodes[c as usize]);
+            self.draw_child(c, at, clip, rec);
         }
         if clips {
-            list.pop_clip();
+            rec.list.pop_clip();
         }
     }
 
-    fn draw_child(
-        &mut self,
-        c: u32,
-        at: [f32; 2],
-        list: &mut DrawList,
-        clip: Option<Rect>,
-        deadline: &mut f64,
-    ) {
-        if self.nodes[c as usize].has_children() {
+    fn draw_child(&mut self, c: u32, at: [f32; 2], clip: Option<Rect>, rec: &mut Recording) {
+        if self.keeps_list(c) {
             let mark = self.spans.len();
             self.update(c);
             self.spans.truncate(mark);
-            let parent_gen = self.nodes[self.nodes[c as usize].parent as usize].list_gen;
-            let d = &mut self.nodes[c as usize];
+            let d = &self.nodes[c as usize];
             let child = d.list.as_deref().expect("recorded");
-            let placed = list.append_translated(child, at, clip);
+            let piece = rec.log.place(&mut rec.list, child, at, clip);
             self.stats.placed += 1;
             self.stats.copied += child.prim_counts().total() as u64;
-            *deadline = deadline.min(d.deadline);
-            match &mut d.placed {
-                Some(kept) => **kept = placed,
-                None => d.placed = Some(Box::new(placed)),
-            }
-            d.placed_gen = parent_gen;
-        } else {
-            self.stats.painted += 1;
-            list.push_transform();
-            list.translate(at[0], at[1]);
-            paint_node(
-                &self.nodes[c as usize],
-                &mut self.graph,
-                self.now,
-                list,
-                deadline,
-            );
-            list.pop_transform();
-            self.nodes[c as usize].stale = false;
+            rec.deadline = rec.deadline.min(d.deadline);
+            let d = &mut self.nodes[c as usize];
+            d.piece = piece;
+            d.placed_gen = rec.generation;
+            return;
+        }
+        let mut own = self
+            .piece_list
+            .take()
+            .unwrap_or_else(|| Box::new(DrawList::with_font_system(self.fonts.clone())));
+        own.clear();
+        self.stats.painted += 1;
+        paint_node(
+            &self.nodes[c as usize],
+            &mut self.graph,
+            self.now,
+            &mut own,
+            &mut rec.deadline,
+        );
+        let piece = rec.log.place(&mut rec.list, &own, at, clip);
+        self.piece_list = Some(own);
+        let d = &mut self.nodes[c as usize];
+        d.piece = piece;
+        d.placed_gen = rec.generation;
+        d.stale = false;
+        if d.has_children() {
+            self.draw_children(c, at, rec);
         }
     }
 
@@ -378,19 +468,19 @@ impl Ui {
     }
 }
 
-/// `child`'s place in its parent's list: its position less the parent's
-/// scroll.
 /// What [`Ui::update`] did to a list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Update {
     /// Nothing in it changed.
     Clean,
-    /// Children's records were patched in it; the runs are on `spans`.
+    /// Records drawn into it were patched; the runs are on `spans`.
     Patched,
-    /// It was recorded again, keeping its shape or not.
-    Recorded { same_shape: bool },
+    /// It was recorded again.
+    Recorded,
 }
 
+/// `child`'s place in its parent's list: its position less the parent's
+/// scroll.
 pub(crate) fn offset(child: &NodeData, scrolled: [f32; 2]) -> [f32; 2] {
     [child.pos[0] - scrolled[0], child.pos[1] - scrolled[1]]
 }

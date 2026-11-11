@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors' (2026-11-11); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip (2026-11-11); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-11
 
@@ -139,6 +139,30 @@ Tick items as they land.
       0.001 ms, `deep-one` 0.145 → 0.001 ms, `rows-one` 0.065 → 0.027 ms;
       `animated` unchanged (every cell still records its list). The cache
       shape itself is still Bart's to choose (below).
+- [x] **Lists only at the root and at nodes that clip** (Bart's choice of
+      cache shape, 2026-11-11; under Decisions). Every other node is drawn
+      into its holder's list (the nearest list above it): its own drawing is
+      recorded into a scratch list and placed at its offset, its children
+      after it. Core: `PlacedLog` (replacing `ListShape`) logs each piece a
+      list placed with where it went and its shape then, flat, so a list of
+      20,000 pieces logs them without an allocation each; `fits` says whether
+      a list has the shape a piece had. The tree: a node's own drawing that
+      changes is patched where its holder's list holds it, and the runs go up
+      as before; a node moved, added or removed (`mark_records`) records its
+      holder. A child of a clipping holder found out of view is not patched
+      (it records the holder), which closes a gap the per-container lists had.
+      Tests: the log's pieces kept apart (`a_placed_log_holds_each_piece_
+      shape`), the patch oracle through the log, counted grid, clip, rows and
+      painter tests, and the random oracle (also run at 600 rounds once).
+      Measured against the tree before it (same core, alternate runs, load
+      about 15): the grid keeps 1 list, not 10,001, and 11.8 MB of lists and
+      logs, not 30.1 MB (the root's list 6.9 MB, its log 4.9 MB); the tree's
+      share of `animated` 5.5 → 1.3 to 1.6 ms (whole frame 9.8 → 5.5 to
+      6.2 ms), `deep-animated` 1.79 → 1.50 ms; one cell is 1 record patched,
+      nothing recorded. The rows keep 2 lists, not 110 (145 while scrolling),
+      and 76 KB, not 305 KB; scrolling now draws the rows in view again into
+      the scroll container's list instead of placing their lists (tree share
+      of `rows-scrl` 0.009 → 0.014 ms). Builds: grid 24 → 18 to 20 ms.
 
 ### Outstanding
 
@@ -150,9 +174,6 @@ Tick items as they land.
       a content kind yet.
 - [ ] **Phase 6 — an example in a window.** Scrolling list, hover styling, a click
       counter.
-- [ ] **Bart to decide on the cache shape** now that it is measured (below,
-      under the first question): keep whole-subtree caches, or per-node lists
-      patched in place, or explicit boundaries.
 - [ ] **Text shaped twice** (found by the comparison): a text is measured at
       the width offered and drawn at its measured width, and the layout cache
       keys on the width, so each new or changed text is shaped twice (512
@@ -160,10 +181,11 @@ Tick items as they land.
 - [ ] **Builds shape every text, in view or not** (found by the comparison):
       the rows build takes 108 ms, almost all shaping 10,000 labels in rows of
       fixed height; immediate mode shapes the 54 in view.
-- [ ] **Small lists cost about 2.3 KB each** (found by the comparison): a grid
-      cell's list of two records, so 10,000 cells keep 23 MB of lists for
-      records the root holds again in 6.9 MB; and the node table is 576 bytes
-      a node.
+- [ ] **The node table is 656 bytes a node, and a list's log about 245 bytes
+      a piece** (found by the comparison; the small lists, 2.3 KB each, went
+      with the cache shape): the grid's 20,000 pieces log 4.9 MB beside the
+      root's 6.9 MB list, mostly the two `RecordCounts` of each `Placed`; the
+      node grew from 576 bytes with patching's fields and the log.
 - [ ] **Defer: keyboard focus, text input, selection and highlight** in retained
       subtrees.
 - [ ] **Defer: virtualised lists** (an item count and a row factory instead of a
@@ -449,6 +471,26 @@ patch declines, records this list as rule 2 does. Marks still stop at a node
 marked in the same frame, and a node is queued once (`queued`), so a culled,
 changing subtree adds nothing per frame.
 
+Follow-up (2026-11-11, the cache shape): Bart chose to keep lists only at the
+root and at nodes that clip (or scroll), against keeping whole-subtree caches
+or marking boundaries explicitly. "Every node with children is a cache
+boundary" above no longer holds: a node that keeps no list is drawn into its
+holder's list (the nearest list above it) at its offset from the holder, its
+own drawing first, recorded at its origin into a scratch list and placed with
+`PlacedLog::place`, then its children, under the holder's clip. Which nodes
+keep a list is fixed for a node's life (a clip with no children keeps one,
+holding its own drawing), so a node's holder never changes; deciding it by
+whether a node has children fails, because layout takes them out of the node
+while it places them. Marks are of two kinds: `mark_paint` (a node's own
+drawing changed: queue it in its holder's `dirty_kids`, and each holder in its
+own) and `mark_records` (a node's children were added, removed or moved: the
+list it is drawn in records again). A queued node that keeps no list is drawn
+again into the scratch list and, if it fits the shape its piece was logged
+with, patched where it was placed; one that keeps a list is brought up to date
+and patched as before. A child of a clipping holder whose paint bounds no
+longer meet the clip is not patched (patching would leave it drawn), and
+records the holder instead.
+
 ## Pointer input
 
 - `ui.pointer_moved(x, y)`, `ui.pointer_button(button, pressed)`,
@@ -531,6 +573,11 @@ stack (`child_grow`) for the binary search, not only nodes that clip.
 - **Every container caches its whole subtree**, kept despite both reviews, to be
   measured first (Bart, 2026-11-10). The alternatives on the table: per-node lists
   patched in place in the frame's list, or explicitly marked boundaries.
+- **Lists only at the root and at nodes that clip** (Bart, 2026-11-11), once
+  the comparison measured whole-subtree caches: the grid held 10,001 lists
+  and 30 MB for records the root holds once. The rest are drawn into the
+  nearest list above them, and their own drawing patched there. Supersedes the
+  decision above.
 - **Pointer input is in the first prototype; the comparison runs the grid scenes
   and a rows scene** (Bart, 2026-11-10).
 - **Mark-then-pull propagation**, not height-ordered pushing: it stays glitch-free
@@ -560,6 +607,10 @@ stack (`child_grow`) for the binary search, not only nodes that clip.
   One changed cell copies all 20,000 of the grid root's records (0.88 ms of
   tree work at 10,000 cells), and one changed leaf of the deep tree copies
   11,100 (0.135 ms). The decision on the shape is Bart's (Outstanding).
+
+  Settled (Bart, 2026-11-11): lists only at the root and at nodes that clip,
+  with each node's own drawing patched in place (Done, and under "Drawing and
+  the cache").
 - **The frame floor.** What a retained frame with one change costs next to an
   immediate one, at each size: the point of the prototype.
 

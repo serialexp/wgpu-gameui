@@ -174,7 +174,7 @@ pub(crate) fn apply_scroll(ui: &mut Ui, n: u32) {
         ui.graph.set(signal, want);
     }
     if moved {
-        ui.mark_paint(n);
+        ui.mark_records(n);
     }
 }
 
@@ -291,7 +291,7 @@ impl Ui {
     fn place(&mut self, parent: u32, child: u32, pos: [f32; 2]) {
         if self.nodes[child as usize].pos != pos {
             self.nodes[child as usize].pos = pos;
-            self.mark_paint(parent);
+            self.mark_records(parent);
         }
     }
 

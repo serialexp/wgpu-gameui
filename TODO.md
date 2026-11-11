@@ -26,15 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P1 — not every container keeps a list (retained).** 10,001 lists
-      hold 30 MB for the grid's 20,000 records (about 2.3 KB per two-record
-      list: `DrawList`'s 16 arrays and pre-pushed stacks,
-      `draw_list.rs:604-671`); scattered small lists also make recording
-      slower (`TextBlock::new` 140 ns a call in the retained run against 12 ns
-      immediate). Keep lists at clip/scroll containers or large subtrees only
-      (needs the patching above), and drop lists of nodes culled out of view
-      (`rows-scrl` grows 110 → 145 lists). Estimate: grid 30 → ~7 MB. Check:
-      `TreeStats::lists`, `list_bytes`.
 - [ ] **P2 — tell the renderer what changed (renderer/tree interface).**
       The renderer spends about 14% of a replayed 10k frame comparing all
       records (`compare_with_last_frame`, `ui_renderer.rs:1452-1500`;
@@ -65,14 +56,36 @@ none chosen yet (Bart).
 - [ ] **P2 — `append_translated` pushes one paint command per record**
       (`draw_list.rs:996-1006`; `push_paint_cmd` is 12.5% of the retained grid
       profile). Push a run when nothing was culled. Moot after patching.
-- [ ] **P2 — `NodeData` is 576 bytes** (`retained/src/ui.rs`): each `Slot`
-      carries `Option<Memo>`, `Option<Signal>` and a version though most props
-      are constants. A side table for bound props would about halve it.
+- [ ] **P2 — `NodeData` is 656 bytes** (`retained/src/ui.rs`; 576 when
+      found, grown by patching's fields and the `PlacedLog` every node carries
+      though only list holders use it): each `Slot` carries `Option<Memo>`,
+      `Option<Signal>` and a version though most props are constants. A side
+      table for bound props would about halve it; the log could move behind
+      an `Option<Box<…>>` or into a table of holders.
+- [ ] **P2 — a list's `PlacedLog` is about 245 bytes a piece (retained/core,
+      found 2026-11-11).** The grid's 20,000 pieces log 4.9 MB beside the
+      root's 6.9 MB list (`TreeStats::list_bytes` 11.8 MB, the estimate was
+      ~7): each `LoggedPiece` holds a whole `Placed` (offset, clip, two
+      `RecordCounts` of ten `u32`s). Most pieces place one or two records, so
+      counts relative to the piece before, or a shared clip, would shrink it.
+      Check: `list_bytes` on the grid.
+- [ ] **P2 — lists of clipping nodes out of view are kept (retained, found
+      2026-11-11).** A clip or scroll container scrolled out of its holder's
+      view keeps its list. Moot for the bench scenes since only clipping nodes
+      keep lists (rows: 2 lists), but a long list of nested scroll panes would
+      hold one per pane ever drawn.
+- [ ] **P2 — test targets do not compile without default features (core,
+      found 2026-11-11).** `cargo clippy -p wgpu-gameui --no-default-features
+      --all-targets` fails: `tests/frame_oracle.rs` imports `HeadlessGpu`
+      (behind `headless`), and `automation/tests.rs:77` calls `run` with a
+      fourth argument the featureless `run` does not take. The library itself
+      is clean without them.
 - [ ] **P2 — the comparison table shows `static` and `rows-hovr` drawn
       anyway.** A host following `needs_frame` draws 1 of 230 and 35 of 230
       of those frames; add an effective column (mean × needed / frames) to the
       README table. Rerun on a quiet machine: `rows-scrl` / `rows-hovr`
-      differences are noise.
+      differences are noise. The README's retained numbers predate the first
+      three items done (prepared text reused, patching, lists only at clips).
 
 ---
 

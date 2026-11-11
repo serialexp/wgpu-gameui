@@ -153,9 +153,9 @@ pub(crate) use draw_list::{
     ANALYTIC_KIND_CHROME, ANALYTIC_KIND_SEGMENT, ANALYTIC_KIND_SHADOW, ANALYTIC_KIND_STRIPES,
 };
 pub use draw_list::{
-    AnalyticInstance, ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw, ListShape,
-    NineSliceDraw, NineSliceId, Placed, PrimCounts, RecordCounts, RecordSpan, StripeInstance,
-    Stripes, Vertex,
+    AnalyticInstance, ChromeInstance, CircleInstance, DebugScope, DrawList, IconDraw,
+    NineSliceDraw, NineSliceId, Placed, PlacedLog, PrimCounts, RecordCounts, RecordSpan,
+    StripeInstance, Stripes, Vertex,
 };
 pub use drop_zone::{DROP_ZONE_SIZE, DropZone};
 pub use dropdown::{Dropdown, DropdownId, DropdownOutput, DropdownState};

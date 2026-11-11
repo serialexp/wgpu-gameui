@@ -132,19 +132,101 @@ pub struct Placed {
     pub whole: bool,
 }
 
-/// The shape of a list: how many records of each kind it holds and the paint
+/// The lists placed into one list, each logged with where it went and its
+/// shape then, so that any of them can later be patched where it is
+/// ([`DrawList::patch_translated`]).
+///
+/// A list's shape is how many records of each kind it holds and the paint
 /// runs over them, and what else placing it adds to another list (its repaint
 /// request, its count of degenerate calls dropped), but not what the records
 /// hold. Two lists of one shape placed the same way leave the other list's
-/// paint runs as they were, so one can be patched over the other
-/// ([`DrawList::patch_translated`]).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ListShape {
-    counts: RecordCounts,
+/// paint runs as they were, so one can be patched over the other.
+///
+/// The log is flat: the paint runs of every piece share one array, so a list
+/// built from many small pieces (a retained tree drawing each node's own
+/// records into the list of the container that keeps one) logs them without
+/// an allocation per piece. [`clear`](Self::clear) keeps the arrays for the
+/// next recording.
+#[derive(Clone, Debug, Default)]
+pub struct PlacedLog {
+    pieces: Vec<LoggedPiece>,
     paint_cmds: Vec<PaintCmd>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LoggedPiece {
+    placed: Placed,
+    /// Its paint runs in the log's `paint_cmds`.
+    paint_cmds: [u32; 2],
     soup_committed: u32,
     next_repaint: Option<u32>,
     dropped_degenerate: u32,
+}
+
+impl PlacedLog {
+    /// Forget every piece, keeping the arrays.
+    pub fn clear(&mut self) {
+        self.pieces.clear();
+        self.paint_cmds.clear();
+    }
+
+    /// Pieces logged.
+    pub fn len(&self) -> usize {
+        self.pieces.len()
+    }
+
+    /// Whether no piece is logged.
+    pub fn is_empty(&self) -> bool {
+        self.pieces.is_empty()
+    }
+
+    /// Place `other` into `list` at `offset` under `clip`
+    /// ([`DrawList::append_translated`]) and log it: the piece's number in
+    /// the log.
+    pub fn place(
+        &mut self,
+        list: &mut DrawList,
+        other: &DrawList,
+        offset: [f32; 2],
+        clip: Option<Rect>,
+    ) -> u32 {
+        let placed = list.append_translated(other, offset, clip);
+        let start = self.paint_cmds.len() as u32;
+        self.paint_cmds.extend_from_slice(&other.paint_cmds);
+        self.pieces.push(LoggedPiece {
+            placed,
+            paint_cmds: [start, self.paint_cmds.len() as u32],
+            soup_committed: other.soup_committed_indices,
+            next_repaint: other.next_repaint.map(f32::to_bits),
+            dropped_degenerate: other.dropped_degenerate,
+        });
+        self.pieces.len() as u32 - 1
+    }
+
+    /// Where piece `piece` was placed, if the log holds it.
+    pub fn placed(&self, piece: u32) -> Option<&Placed> {
+        self.pieces.get(piece as usize).map(|p| &p.placed)
+    }
+
+    /// Whether `other` has the shape piece `piece` had when placed, so that
+    /// it can be patched over it.
+    pub fn fits(&self, piece: u32, other: &DrawList) -> bool {
+        let Some(p) = self.pieces.get(piece as usize) else {
+            return false;
+        };
+        let [start, end] = p.paint_cmds;
+        other.record_counts() == p.placed.of
+            && other.soup_committed_indices == p.soup_committed
+            && other.next_repaint.map(f32::to_bits) == p.next_repaint
+            && other.dropped_degenerate == p.dropped_degenerate
+            && other.paint_cmds[..] == self.paint_cmds[start as usize..end as usize]
+    }
+
+    /// Bytes the log has reserved.
+    pub fn heap_bytes(&self) -> usize {
+        self.pieces.capacity() * std::mem::size_of::<LoggedPiece>()
+            + self.paint_cmds.capacity() * std::mem::size_of::<PaintCmd>()
+    }
 }
 
 impl DrawList {
@@ -168,31 +250,13 @@ impl DrawList {
         }
     }
 
-    /// Write the list's shape into `out`, reusing its buffer.
-    pub fn shape_into(&self, out: &mut ListShape) {
-        out.counts = self.record_counts();
-        out.paint_cmds.clone_from(&self.paint_cmds);
-        out.soup_committed = self.soup_committed_indices;
-        out.next_repaint = self.next_repaint.map(f32::to_bits);
-        out.dropped_degenerate = self.dropped_degenerate;
-    }
-
-    /// Whether the list has the shape `shape` (see [`ListShape`]).
-    pub fn has_shape(&self, shape: &ListShape) -> bool {
-        self.record_counts() == shape.counts
-            && self.soup_committed_indices == shape.soup_committed
-            && self.next_repaint.map(f32::to_bits) == shape.next_repaint
-            && self.dropped_degenerate == shape.dropped_degenerate
-            && self.paint_cmds == shape.paint_cmds
-    }
-
     /// Overwrite the records of `span` of `other`, which was placed into this
     /// list as `placed` says, with `other`'s records there now, placed the
     /// same way: the list [`append_translated`](Self::append_translated)
     /// would have made had `other` held them then.
     ///
-    /// `other` must have the shape it had when placed ([`ListShape`]; the
-    /// caller checks that, since it alone saw the list before), and this list
+    /// `other` must have the shape it had when placed (the caller checks
+    /// that, with [`PlacedLog::fits`]), and this list
     /// must hold what it held after the placement, other records apart.
     /// `false`, when what this call can see says the patch would not give that
     /// list: the placement culled a record, `other` holds other counts, the

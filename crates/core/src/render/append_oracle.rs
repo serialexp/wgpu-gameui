@@ -16,7 +16,7 @@ use crate::render::draw_plan::tests_support::Lists;
 use crate::render::frame_diff::{ContextKey, FrameSnapshot};
 use crate::text::TextBlock;
 use crate::text_select::TextKey;
-use crate::widgets::{DrawList, ListShape, RecordCounts, RecordSpan, Stroke};
+use crate::widgets::{DrawList, PlacedLog, RecordCounts, RecordSpan, Stroke};
 
 /// One drawing call, of every kind of record a list holds.
 #[derive(Clone, Copy, Debug)]
@@ -694,14 +694,15 @@ fn a_piece_patched_where_it_was_placed_is_the_new_piece_placed() {
 
         let old = recorded(&lists, &body);
         let mut list = recorded(&lists, &before);
-        let placed = list.append_translated(&old, offset, clip);
+        let mut log = PlacedLog::default();
+        let piece = log.place(&mut list, &old, offset, clip);
+        let placed = *log.placed(piece).expect("logged");
         for call in &after {
             call.draw(&mut list);
         }
-        let mut shape = ListShape::default();
-        old.shape_into(&mut shape);
+        assert!(log.fits(piece, &old), "round {round}: a piece fits itself");
         let new = recorded(&lists, &next);
-        if !new.has_shape(&shape) {
+        if !log.fits(piece, &new) {
             reshaped += 1;
             continue;
         }
@@ -730,6 +731,46 @@ fn a_piece_patched_where_it_was_placed_is_the_new_piece_placed() {
         patched > 100 && declined > 0 && reshaped > 0,
         "{patched} patched, {declined} declined, {reshaped} of another shape"
     );
+}
+
+/// A log keeps each piece's shape apart: a piece fits only a list of the
+/// shape it had, and a piece it does not hold fits nothing.
+#[test]
+fn a_placed_log_holds_each_piece_shape() {
+    let lists = Lists::new();
+    let call = |op, n| Call {
+        op,
+        at: [0.0, 0.0],
+        n,
+    };
+    let a = recorded(&lists, &[call(Op::Chrome, 1), call(Op::Text, 2)]);
+    let b = recorded(&lists, &[call(Op::Text, 3), call(Op::Chrome, 4)]);
+    let c = recorded(&lists, &[call(Op::Chrome, 5)]);
+    let mut list = lists.list();
+    let mut log = PlacedLog::default();
+    let pieces = [&a, &b, &c].map(|piece| log.place(&mut list, piece, [2.0, 3.0], None));
+    assert_eq!(pieces, [0, 1, 2]);
+    assert_eq!(log.len(), 3);
+    // `a` and `b` hold the same counts, painted in another order.
+    assert_eq!(a.record_counts(), b.record_counts());
+    for i in 0..3 {
+        for (j, other) in [&a, &b, &c].into_iter().enumerate() {
+            assert_eq!(
+                log.fits(i as u32, other),
+                i == j,
+                "piece {i} against list {j}"
+            );
+        }
+    }
+    let recoloured = recorded(&lists, &[call(Op::Text, 7), call(Op::Chrome, 8)]);
+    assert!(log.fits(1, &recoloured));
+    assert!(!log.fits(3, &c));
+    assert_eq!(
+        log.placed(2).map(|p| p.at),
+        Some(b.record_counts().offset_by(a.record_counts()))
+    );
+    log.clear();
+    assert!(log.is_empty() && !log.fits(0, &a));
 }
 
 /// A placement whose clip culled a record cannot be patched; nor can a list

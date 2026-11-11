@@ -1,7 +1,7 @@
 //! The tree: nodes, their properties, and the frame that lays them out and
 //! draws them.
 
-use wgpu_gameui::{DrawList, FontSystemHandle, ListShape, Placed, RecordSpan, TextMeasurer};
+use wgpu_gameui::{DrawList, FontSystemHandle, PlacedLog, RecordSpan, TextMeasurer};
 
 use crate::input::{Input, Pointer};
 use crate::layout::Avail;
@@ -38,15 +38,15 @@ pub struct FrameStats {
     pub measured: u32,
     /// Nodes whose own drawing (box, text, painter) was recorded.
     pub painted: u32,
-    /// Lists (of nodes with children) recorded again.
+    /// Lists recorded again (each kept by the root or a node that clips).
     pub recorded: u32,
-    /// Lists placed into their parent's.
+    /// Lists placed into the list that holds them.
     pub placed: u32,
     /// Records copied by those placements.
     pub copied: u64,
     /// Records overwritten where they were in an ancestor's list, carrying a
-    /// list recorded again with its shape up the tree instead of recording
-    /// the ancestors again.
+    /// node's drawing, or a list recorded again, with its shape up the tree
+    /// instead of recording the ancestors again.
     pub patched: u64,
     /// Children looked at to decide whether they are in view.
     pub examined: u32,
@@ -59,11 +59,12 @@ pub struct FrameStats {
 pub struct TreeStats {
     /// Live nodes.
     pub nodes: usize,
-    /// Lists kept (one per node with children that has been drawn).
+    /// Lists kept: the root's, and one per node that clips, once drawn.
     pub lists: usize,
     /// Records those lists hold.
     pub records: u64,
-    /// Bytes those lists have reserved (see `DrawList::heap_bytes`).
+    /// Bytes those lists, and the logs of what they placed, have reserved
+    /// (see `DrawList::heap_bytes`).
     pub list_bytes: u64,
     /// Bytes the node table has reserved, live nodes or not (each node's
     /// own allocations, such as its input handlers, are not counted).
@@ -158,30 +159,36 @@ pub(crate) struct NodeData {
     pub(crate) layout_below: bool,
 
     // Paint.
-    /// What it draws itself, or which children it draws and where, is out of
-    /// date: its list must be recorded again (or, for a node without
-    /// children, its parent's).
+    /// What it draws is out of date: for a node that keeps a list, the list
+    /// must be recorded again; for one drawn into its holder's list, its own
+    /// drawing must be drawn again.
     pub(crate) stale: bool,
     /// The frame it was last marked in: a mark stops where one was already
     /// made this frame, since everything above it is marked too.
     pub(crate) mark_epoch: u32,
-    /// Children whose lists may have changed since this node's list placed
-    /// them, each once (see `queued`); this node's list is brought up to date
-    /// by patching their records in it where it can.
-    pub(crate) dirty_kids: Vec<u32>,
-    /// It is in its parent's `dirty_kids`.
+    /// For a node that keeps a list: the nodes drawn into it whose records
+    /// may have changed since, each once (see `queued`), with their
+    /// generations then; the list is brought up to date by patching their
+    /// records in it where it can.
+    pub(crate) dirty_kids: Vec<(u32, u32)>,
+    /// It is in its holder's `dirty_kids`.
     pub(crate) queued: bool,
-    /// Where its list's records went in its parent's list, and the parent's
-    /// `list_gen` then: the placement holds while the parent's list is the
-    /// one it was placed in.
-    pub(crate) placed: Option<Box<Placed>>,
+    /// Its piece in its holder's `log` (its own list placed there, or, for a
+    /// node that keeps none, its own drawing), and the holder's `list_gen`
+    /// then: the piece holds while the holder's list is the one it was
+    /// placed in.
+    pub(crate) piece: u32,
     pub(crate) placed_gen: u32,
     /// Counts the times its list was recorded.
     pub(crate) list_gen: u32,
+    /// What its list placed, for a node that keeps one: where each node
+    /// drawn into it went and its shape then.
+    pub(crate) log: PlacedLog,
     /// Volatile painters in its subtree, itself included: its list is
     /// recorded every frame while there are any.
     pub(crate) volatile_below: u32,
-    /// The list of its subtree, at its origin, for a node with children.
+    /// The list of its subtree, at its origin, for a node that keeps one
+    /// (see `Ui::keeps_list`).
     pub(crate) list: Option<Box<DrawList>>,
     /// The earliest repaint asked for by what its list holds.
     pub(crate) deadline: f64,
@@ -246,8 +253,9 @@ pub struct Ui {
     /// for its parent to patch in turn: each update's after those of the
     /// ones it called.
     pub(crate) spans: Vec<RecordSpan>,
-    /// Shapes of lists about to be recorded again, kept for reuse.
-    pub(crate) shapes: Vec<ListShape>,
+    /// The list a node that keeps none draws its own drawing into, before
+    /// it is placed in its holder's list; reused.
+    pub(crate) piece_list: Option<Box<DrawList>>,
 }
 
 impl Ui {
@@ -281,7 +289,7 @@ impl Ui {
             scratch_f32: Vec::new(),
             pointer: Pointer::default(),
             spans: Vec::new(),
-            shapes: Vec::new(),
+            piece_list: None,
         };
         let owner = ui.graph.root();
         ui.root = ui.create(NO_PARENT, owner, root);
@@ -370,7 +378,7 @@ impl Ui {
             p.child_grow_stale = true;
         }
         self.mark_layout(parent, false);
-        self.mark_paint(index);
+        self.mark_records(parent);
         let volatile = self.nodes[index as usize].volatile_below;
         if volatile > 0 {
             self.add_volatile_above(index, volatile, true);
@@ -461,9 +469,10 @@ impl Ui {
             mark_epoch: 0,
             dirty_kids: Vec::new(),
             queued: false,
-            placed: None,
+            piece: 0,
             placed_gen: 0,
             list_gen: 0,
+            log: PlacedLog::default(),
             volatile_below: u32::from(volatile),
             list: None,
             deadline: f64::INFINITY,
@@ -535,11 +544,8 @@ impl Ui {
                 .expect("a child is in its parent's lists");
             p.absolute.remove(at);
         }
-        if !p.has_children() {
-            p.list = None;
-        }
         self.mark_layout(parent, false);
-        self.mark_paint(parent);
+        self.mark_records(parent);
         self.graph.dispose(self.nodes[n as usize].owner);
 
         let mut stack = std::mem::take(&mut self.scratch);
@@ -558,7 +564,7 @@ impl Ui {
             d.absolute = Vec::new();
             d.list = None;
             d.dirty_kids = Vec::new();
-            d.placed = None;
+            d.log = PlacedLog::default();
             d.text = None;
             d.custom = None;
             d.scroll = None;
@@ -760,35 +766,73 @@ impl Ui {
         }
     }
 
-    /// What `n` draws is out of date: its list must be recorded again, or,
-    /// for a node without children (drawn straight into its parent's list),
-    /// its parent's. Every list above that one may have to change where it
-    /// placed it: each is queued in its parent's `dirty_kids`.
+    /// Whether `n` keeps a list of what it and its subtree draw: the root
+    /// does, and so does a node that clips (or scrolls). Every other node is
+    /// drawn into its holder's list (see [`holder`](Self::holder)). It is
+    /// fixed for a node's life, so a node's holder is too (not whether it has
+    /// children: layout takes them out of the node while it places them).
+    pub(crate) fn keeps_list(&self, n: u32) -> bool {
+        n == self.root || self.nodes[n as usize].clip
+    }
+
+    /// The node whose list `n` is drawn into: the nearest above it that
+    /// keeps one. `None` for the root.
+    pub(crate) fn holder(&self, n: u32) -> Option<u32> {
+        let mut p = self.nodes[n as usize].parent();
+        while let Some(x) = p {
+            if self.keeps_list(x) {
+                return Some(x);
+            }
+            p = self.nodes[x as usize].parent();
+        }
+        None
+    }
+
+    /// What `n` draws itself is out of date (or, for a node that keeps a
+    /// list, anything in it): it is queued in its holder's `dirty_kids`, and
+    /// that holder in its own, and so on up, each list above having to
+    /// change its records too.
     pub(crate) fn mark_paint(&mut self, n: u32) {
         self.pending = true;
-        let d = &mut self.nodes[n as usize];
-        d.stale = true;
+        self.nodes[n as usize].stale = true;
         let mut x = n;
-        if !d.has_children()
-            && let Some(p) = d.parent()
-        {
-            self.nodes[p as usize].stale = true;
-            x = p;
-        }
         loop {
             let d = &mut self.nodes[x as usize];
             if d.mark_epoch == self.epoch {
                 break;
             }
             d.mark_epoch = self.epoch;
-            let Some(p) = d.parent() else {
+            let Some(h) = self.holder(x) else {
                 break;
             };
+            let d = &mut self.nodes[x as usize];
             if !d.queued {
                 d.queued = true;
-                self.nodes[p as usize].dirty_kids.push(x);
+                let generation = d.generation;
+                self.nodes[h as usize].dirty_kids.push((x, generation));
             }
-            x = p;
+            x = h;
+        }
+    }
+
+    /// What is drawn below `n` changed in number or place: the list it is
+    /// drawn in (its own, if it keeps one) must be recorded again.
+    pub(crate) fn mark_records(&mut self, n: u32) {
+        let k = if self.keeps_list(n) {
+            n
+        } else {
+            self.holder(n).expect("the root keeps a list")
+        };
+        self.mark_paint(k);
+    }
+
+    /// Clear `queued` on the nodes of `kids` still the ones queued.
+    pub(crate) fn unqueue(&mut self, kids: &[(u32, u32)]) {
+        for &(c, generation) in kids {
+            let d = &mut self.nodes[c as usize];
+            if d.live && d.generation == generation {
+                d.queued = false;
+            }
         }
     }
 
@@ -856,7 +900,7 @@ impl Ui {
                 STACK => {
                     if self.refresh(n, |d| &mut d.stack) {
                         self.mark_layout(n, false);
-                        self.mark_paint(n);
+                        self.mark_records(n);
                         self.nodes[n as usize].child_grow_stale = true;
                     }
                 }
@@ -1006,6 +1050,7 @@ impl Ui {
                 stats.records += list.prim_counts().total() as u64;
                 stats.list_bytes += (std::mem::size_of::<DrawList>() + list.heap_bytes()) as u64;
             }
+            stats.list_bytes += d.log.heap_bytes() as u64;
         }
         stats
     }

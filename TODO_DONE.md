@@ -54,6 +54,31 @@ then the dated batches in the order they were written.
       0.001 ms (whole frame with reuse 1.8 → 0.65 ms), `deep-one` 0.145 →
       0.001 ms, `rows-one` 0.065 → 0.027 ms, `animated` unchanged (each cell
       still records its own list).
+- [x] **P1 — not every container keeps a list (retained).** 10,001 lists
+      hold 30 MB for the grid's 20,000 records (about 2.3 KB per two-record
+      list: `DrawList`'s 16 arrays and pre-pushed stacks,
+      `draw_list.rs:604-671`); scattered small lists also make recording
+      slower (`TextBlock::new` 140 ns a call in the retained run against 12 ns
+      immediate). Keep lists at clip/scroll containers or large subtrees only
+      (needs the patching above), and drop lists of nodes culled out of view
+      (`rows-scrl` grows 110 → 145 lists). Estimate: grid 30 → ~7 MB. Check:
+      `TreeStats::lists`, `list_bytes`.
+      **Done 2026-11-11** (Bart chose clip/scroll only). Only the root and
+      nodes that clip keep a list (`Ui::keeps_list`, fixed for a node's
+      life); every other node is drawn into its holder's list, its own drawing
+      placed from a scratch list and logged in the holder's `PlacedLog`
+      (core, replacing `ListShape`), so a changed node's own records are
+      patched there and handed up as before; adding, removing or moving
+      children records the holder (`mark_records`). Tests: the log oracle and
+      the patch oracle through it, counted grid / clip / rows / painter tests,
+      the random oracle (600 rounds once). Measured against the tree before it
+      (load about 15): grid lists 10,001 → 1, `list_bytes` 30.1 → 11.8 MB
+      (root list 6.9 MB, its log 4.9 MB: the log's size is a follow-up in
+      `TODO.md`), tree share of `animated` 5.5 → 1.3 to 1.6 ms, of
+      `deep-animated` 1.79 → 1.50 ms, `one` still about 1 µs (1 record
+      patched); rows 110 → 2 lists (145 → 2 scrolling), and the out-of-view
+      lists are gone with them, but scrolling draws the rows in view again
+      (tree share of `rows-scrl` 0.009 → 0.014 ms).
 
 ---
 

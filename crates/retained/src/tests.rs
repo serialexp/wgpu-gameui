@@ -197,7 +197,13 @@ fn layout_dirt_stops_at_a_node_whose_size_does_not_follow_its_content() {
 
 /// A column of `rows` rows of `cols` cells, each a box with a label.
 fn grid(ui: &mut Ui, rows: usize, cols: usize) -> Vec<Node> {
-    let column = ui.add(ui.root(), Spec::new().stack(Stack::column().gap(2.0)));
+    let root = ui.root();
+    grid_in(ui, root, rows, cols)
+}
+
+/// [`grid`], in `parent`.
+fn grid_in(ui: &mut Ui, parent: Node, rows: usize, cols: usize) -> Vec<Node> {
+    let column = ui.add(parent, Spec::new().stack(Stack::column().gap(2.0)));
     let mut cells = Vec::new();
     for r in 0..rows {
         let row = ui.add(column, Spec::new().stack(Stack::row().gap(2.0)));
@@ -238,8 +244,23 @@ fn a_frame_with_nothing_changed_does_nothing_and_keeps_the_list() {
     check(&mut ui);
 }
 
+/// Only the root and nodes that clip keep a list; the rest are drawn into
+/// it, so a grid of a hundred cells keeps one.
 #[test]
-fn one_changed_cell_records_its_list_and_patches_those_above_it() {
+fn a_grid_keeps_the_root_list_alone() {
+    let mut ui = Ui::new(fonts());
+    grid(&mut ui, 10, 10);
+    ui.frame(at(0.0));
+    let stats = ui.frame_stats();
+    // The root, the column, the rows, the cells and their labels.
+    assert_eq!(stats.painted, 1 + 1 + 10 + 200);
+    assert_eq!((stats.recorded, stats.placed), (1, 0));
+    assert_eq!(ui.tree_stats().lists, 1);
+    check(&mut ui);
+}
+
+#[test]
+fn one_changed_cell_is_patched_where_the_root_holds_it() {
     let mut ui = Ui::new(fonts());
     let cells = grid(&mut ui, 10, 10);
     ui.frame(at(0.0));
@@ -248,40 +269,66 @@ fn one_changed_cell_records_its_list_and_patches_those_above_it() {
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
     assert_eq!(stats.laid_out, 0);
-    // The cell alone: its box and its label.
-    assert_eq!((stats.recorded, stats.painted), (1, 2));
-    // Its list keeps its shape, so nothing is placed: its two records are
-    // overwritten where its row, the column and the root hold them.
+    // The cell's own drawing alone, its box: drawn with the shape it had,
+    // so its record is overwritten where the root's list holds it, and no
+    // list is recorded or placed.
+    assert_eq!((stats.recorded, stats.painted), (0, 1));
     assert_eq!((stats.placed, stats.copied), (0, 0));
-    assert_eq!(stats.patched, 2 * 3);
+    assert_eq!(stats.patched, 1);
     assert_eq!(stats.memo_runs, 1);
     check(&mut ui);
 }
 
-/// A change that alters a list's shape records the lists above it, as far
-/// as one keeps its shape.
+/// In a node that clips, a cell's change is patched in the clip's list and
+/// then, the clip's list keeping its shape, in the root's.
+#[test]
+fn a_cell_in_a_clip_is_patched_in_its_list_and_in_the_root() {
+    let mut ui = Ui::new(fonts());
+    let root = ui.root();
+    let clip = ui.add(root, fixed(500.0, 300.0).clip());
+    let cells = grid_in(&mut ui, clip, 10, 10);
+    ui.frame(at(0.0));
+    assert_eq!(ui.tree_stats().lists, 2);
+    ui.set_fill(cells[37], [0.9, 0.1, 0.1, 1.0]);
+    ui.frame(at(0.0));
+    let stats = ui.frame_stats();
+    assert_eq!((stats.recorded, stats.painted, stats.placed), (0, 1, 0));
+    assert_eq!(stats.patched, 2);
+    check(&mut ui);
+}
+
+/// A change that alters a node's shape records the list that holds it, and
+/// each list above it as far as one keeps its shape.
 #[test]
 fn a_change_of_shape_records_the_lists_above_it() {
     let mut ui = Ui::new(fonts());
-    let cells = grid(&mut ui, 10, 10);
+    let root = ui.root();
+    let clip = ui.add(root, fixed(500.0, 300.0).clip());
+    let cells = grid_in(&mut ui, clip, 10, 10);
     ui.frame(at(0.0));
     // A transparent cell draws no box: one record fewer.
     ui.set_fill(cells[37], [0.0; 4]);
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
-    // The cell, its row, the column and the root.
-    assert_eq!(stats.recorded, 4);
+    // The clip's list and the root's.
+    assert_eq!(stats.recorded, 2);
     assert_eq!(stats.patched, 0);
     check(&mut ui);
-    // Back: the same again, and the cell's list is recorded once more.
+    // Back: the same again.
     ui.set_fill(cells[37], [0.9, 0.1, 0.1, 1.0]);
     ui.frame(at(0.0));
-    assert_eq!(ui.frame_stats().recorded, 4);
+    assert_eq!(ui.frame_stats().recorded, 2);
     check(&mut ui);
     // A recolour now keeps the shape.
     ui.set_fill(cells[37], [0.1, 0.9, 0.1, 1.0]);
     ui.frame(at(0.0));
-    assert_eq!(ui.frame_stats().recorded, 1);
+    assert_eq!(ui.frame_stats().recorded, 0);
+    assert_eq!(ui.frame_stats().patched, 2);
+    check(&mut ui);
+    // So does another cell's.
+    ui.set_fill(cells[38], [0.3, 0.3, 0.3, 1.0]);
+    ui.frame(at(0.0));
+    assert_eq!(ui.frame_stats().recorded, 0);
     check(&mut ui);
 }
 
@@ -301,20 +348,22 @@ fn a_scrolling_column_draws_only_the_rows_in_view() {
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
     // Five rows fill the 100 px; binary search looks at only those (and the
-    // root at the list, and each row recorded at its label).
+    // root at the list, and each row drawn at its label).
     assert_eq!(stats.examined, 1 + 5 + 5);
-    assert_eq!(stats.recorded, 2 + 5);
+    // The root's list and the scroll container's; the rows are drawn into
+    // the latter.
+    assert_eq!(stats.recorded, 2);
+    assert_eq!(stats.painted, 2 + 2 * 5);
     check(&mut ui);
 
     ui.scroll_by(list, 30.0);
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
-    // Rows 1 to 6 are in view now: six looked at, two recorded for the
-    // first time (rows 5 and 6, each looking at its label), the rest placed
-    // as they were.
-    assert_eq!(stats.examined, 1 + 6 + 2);
-    assert_eq!(stats.recorded, 2 + 2);
-    assert_eq!(stats.placed, 6 + 1);
+    // Rows 1 to 6 are in view now: the list is recorded with them, and,
+    // holding a row more, placed in the root's list recorded again.
+    assert_eq!(stats.examined, 1 + 6 + 6);
+    assert_eq!(stats.recorded, 2);
+    assert_eq!(stats.placed, 1);
     check(&mut ui);
 
     // Past the end it stops at the end, and the signal says so.
@@ -346,6 +395,7 @@ fn a_child_outside_the_clip_whose_shadow_reaches_in_is_drawn() {
     check(&mut ui);
     ui.set_offset(mover, [200.0, 0.0]);
     ui.frame(at(0.0));
+
     assert_eq!(ui.list().unwrap().shadow_instance_count(), 0);
     check(&mut ui);
 }
@@ -424,20 +474,21 @@ fn a_change_in_ten_thousand_rows_costs_the_rows_in_view() {
     assert_eq!(stats.laid_out, 2);
     // Those, the list and the root.
     assert_eq!(stats.visited, 4);
-    // The row alone, looking at its label; its two records are patched in
-    // the list and the root.
-    assert_eq!((stats.recorded, stats.examined, stats.placed), (1, 1, 0));
-    assert_eq!(stats.patched, 2 * 2);
+    // The label's own drawing alone; its record is patched in the list and
+    // the root.
+    assert_eq!((stats.recorded, stats.examined, stats.placed), (0, 0, 0));
+    assert_eq!((stats.painted, stats.patched), (1, 2));
     check(&mut ui);
 
-    // Out of view: its row is not drawn, but the list's view of it is
-    // recorded again (the list cannot tell it stayed out of view), and the
-    // root patched with it.
+    // Out of view: its row is not drawn, but the list is recorded again
+    // (it cannot tell the label stayed out of view) with its twenty rows and
+    // their labels, keeping its shape, so the root is patched with it.
     ui.set_text(labels[0], Text::new("changed", 12.0));
     ui.frame(at(0.0));
     let stats = ui.frame_stats();
     assert_eq!((stats.measured, stats.laid_out, stats.visited), (1, 2, 4));
-    assert_eq!((stats.recorded, stats.examined, stats.placed), (1, 20, 20));
+    assert_eq!((stats.recorded, stats.examined, stats.placed), (1, 40, 0));
+    assert_eq!(stats.patched, 40);
     check(&mut ui);
 }
 
@@ -554,12 +605,12 @@ fn a_painter_is_drawn_again_when_its_value_changes_and_at_the_time_it_asks() {
     assert_eq!(ui.next_repaint(), Some(2.0));
     check(&mut ui);
 
-    // The host and its painter; the root has the host's records patched.
+    // The painter alone, patched where the root's list holds it.
     ui.set(tone, 0.75);
     ui.frame(at(1.5));
     let stats = ui.frame_stats();
-    assert_eq!((stats.painted, stats.memo_runs), (2, 1));
-    assert_eq!(stats.patched, 1);
+    assert_eq!((stats.painted, stats.memo_runs), (1, 1));
+    assert_eq!((stats.recorded, stats.patched), (0, 1));
     check(&mut ui);
 }
 
@@ -582,28 +633,31 @@ fn a_volatile_painter_draws_every_frame() {
     ui.frame(at(0.0));
     assert!(ui.needs_frame(0.0));
     ui.frame(at(0.0));
-    assert_eq!(ui.frame_stats().recorded, 2);
+    // The root's list, which the host and the painter are drawn into.
+    assert_eq!(ui.frame_stats().recorded, 1);
     ui.remove(painter);
     ui.frame(at(0.0));
     assert!(!ui.needs_frame(0.0));
     check(&mut ui);
 }
 
-/// The bytes counted are the lists' own: a node with children adds its list,
-/// and removing it takes the list's bytes away again.
+/// The bytes counted are the lists' own and their logs': a node that clips
+/// adds its list, and removing it takes the list's bytes away again.
 #[test]
 fn tree_stats_count_the_bytes_each_kept_list_holds() {
     let mut ui = Ui::new(fonts());
     ui.frame(at(0.0));
+    let root_bytes = |ui: &Ui| {
+        let list = ui.list().unwrap();
+        (std::mem::size_of::<wgpu_gameui::DrawList>()
+            + list.heap_bytes()
+            + ui.nodes[ui.root as usize].log.heap_bytes()) as u64
+    };
     let alone = ui.tree_stats();
     assert_eq!(alone.lists, 1);
-    let root_list = ui.list().unwrap();
-    assert_eq!(
-        alone.list_bytes,
-        (std::mem::size_of::<wgpu_gameui::DrawList>() + root_list.heap_bytes()) as u64
-    );
+    assert_eq!(alone.list_bytes, root_bytes(&ui));
     assert!(alone.node_bytes > 0);
-    let panel = ui.add(ui.root(), Spec::new());
+    let panel = ui.add(ui.root(), Spec::new().clip());
     ui.add(panel, fixed(3.0, 3.0).fill([1.0; 4]));
     ui.frame(at(0.0));
     let with_panel = ui.tree_stats();
@@ -614,11 +668,7 @@ fn tree_stats_count_the_bytes_each_kept_list_holds() {
     let after = ui.tree_stats();
     assert_eq!(after.lists, 1);
     // The root's list keeps the capacity it grew to; the panel's is gone.
-    let root_list = ui.list().unwrap();
-    assert_eq!(
-        after.list_bytes,
-        (std::mem::size_of::<wgpu_gameui::DrawList>() + root_list.heap_bytes()) as u64
-    );
+    assert_eq!(after.list_bytes, root_bytes(&ui));
 }
 
 #[test]
