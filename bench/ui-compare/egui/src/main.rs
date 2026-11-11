@@ -70,7 +70,7 @@ fn main() {
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 let (w, h) = grid.size();
                 let font = FontId::proportional(grid.font_px);
-                for i in 0..n {
+                for (i, label) in labels.iter().enumerate().take(n) {
                     let (x, y) = grid.origin(i);
                     let [r, g, b] = fill_in(mode, i, frame);
                     let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h));
@@ -82,7 +82,7 @@ fn main() {
                     painter.text(
                         Pos2::new(x + 1.0, y + 1.0),
                         egui::Align2::LEFT_TOP,
-                        &labels[i],
+                        label,
                         font.clone(),
                         Color32::WHITE,
                     );
