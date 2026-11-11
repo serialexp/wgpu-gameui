@@ -15,6 +15,86 @@ still open.
 
 ---
 
+## Retained-mode performance (comparison and Fable review, 2026-11-11)
+
+From the retained-vs-immediate comparison (`bench/ui-compare/README.md`,
+"Retained mode") and a Fable agent's review of it, which profiled the
+renderer-only bench (`crates/core/benches/frame_compare.rs`). The headline:
+a replayed 10,000-cell frame still costs the renderer about 1.55 ms, so a
+tree that did no work would beat immediate mode with frame comparison on by
+at most about 35%; the renderer/tree interface has to change for a large
+win. Estimates below are the reviewer's, not measured. Listed in its order;
+none chosen yet (Bart).
+
+- [ ] **P1 — reuse prepared text for unchanged blocks (renderer).**
+      `prepare_texts` runs for every block (`render/ui_renderer.rs:2036`)
+      before the replay decision (`:2057`): about 57% of a replayed 10k frame
+      (`append_placements`, `MsdfInstance::new_memo`, `build_fill_unit`, atlas
+      and layout-key lookups). When a slot keeps its places, copy last
+      frame's prepared instances for blocks the comparison classed `Same`
+      (`frame_diff.rs:94-106`), patch colours for `Look` ones; fill-only path
+      first (shadow/glow regrouping at `text_prep.rs:265-276` breaks
+      per-block ranges). Estimate: renderer 1.55 → 0.7 ms on the grid at 10k;
+      immediate callers that keep their labels gain too. Check:
+      `glyphs_placed` / `text_instances_built` near 0 on a replayed frame.
+- [ ] **P1 — patch changed records in place in ancestors' lists (retained).**
+      Today a stale node re-records and every ancestor re-appends all its
+      children (`paint.rs:28-49`, `:91-108`; grid `one` copies 20,000 records).
+      Keep each placement's ranges per family; when a re-recorded child keeps
+      its counts and command shape, overwrite its translated records at each
+      ancestor, else fall back. Estimate: grid `one` tree 0.88 ms → µs, deep
+      `one` 0.135 ms → µs, `animated` 5 → ~1 ms. Check: `FrameStats::copied`,
+      the `draw_from_nothing` oracle.
+- [ ] **P1 — not every container keeps a list (retained).** 10,001 lists
+      hold 30 MB for the grid's 20,000 records (about 2.3 KB per two-record
+      list: `DrawList`'s 16 arrays and pre-pushed stacks,
+      `draw_list.rs:604-671`); scattered small lists also make recording
+      slower (`TextBlock::new` 140 ns a call in the retained run against 12 ns
+      immediate). Keep lists at clip/scroll containers or large subtrees only
+      (needs the patching above), and drop lists of nodes culled out of view
+      (`rows-scrl` grows 110 → 145 lists). Estimate: grid 30 → ~7 MB. Check:
+      `TreeStats::lists`, `list_bytes`.
+- [ ] **P2 — tell the renderer what changed (renderer/tree interface).**
+      The renderer spends about 14% of a replayed 10k frame comparing all
+      records (`compare_with_last_frame`, `ui_renderer.rs:1452-1500`;
+      `frame_diff.rs:205-306`) and keeps a second copy of the frame (~7 MB).
+      Let a `DrawList` carry per-record change classes since its last render,
+      filled by the tree in O(changed), used instead of the comparison; keep
+      the comparison as an oracle behind a feature. Check: `lists_compared=0`,
+      `snapshot_bytes=0`.
+- [ ] **P2 — keep instance data on the GPU, upload what changed
+      (renderer, `frame-reuse.md` Phase 5).** `FrameArena` resets each frame
+      (`frame_arena.rs:51`), so `BatchDraws::fill` (`batch_draws.rs:61-114`)
+      and `write_buffer` copy and upload everything (about 13.5% of the
+      replayed frame). Per-family persistent buffers with the plan's ranges,
+      not a buffer per node (10,000 draw calls would cost more than the frame).
+      The most work of these.
+- [ ] **P1 — text shaped twice (retained or core).** Measured at the offered
+      width (`retained/src/layout.rs:276-280`), drawn at its own width
+      (`:111-118`); `LayoutKey` includes `max_width` (`shaping.rs:327`). 512
+      layouts in 230 `rows-one` frames against 229 immediate. Options: draw at
+      the measured-at width (start-aligned only), or drop `max_width` from the
+      key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
+      the `rows-one` gap (0.266 vs 0.206 ms).
+- [ ] **P1 — don't lay out children out of view (retained).**
+      `layout_stack` lays out every child (`layout.rs:313-327`): the rows build
+      shapes 10,000 labels, 108 ms. A scroll container with main-axis `Fixed`
+      children can defer their layout until in view; extent, clamping and hit
+      testing must cope. Check: `measured` at build = 54.
+- [ ] **P2 — `append_translated` pushes one paint command per record**
+      (`draw_list.rs:996-1006`; `push_paint_cmd` is 12.5% of the retained grid
+      profile). Push a run when nothing was culled. Moot after patching.
+- [ ] **P2 — `NodeData` is 576 bytes** (`retained/src/ui.rs`): each `Slot`
+      carries `Option<Memo>`, `Option<Signal>` and a version though most props
+      are constants. A side table for bound props would about halve it.
+- [ ] **P2 — the comparison table shows `static` and `rows-hovr` drawn
+      anyway.** A host following `needs_frame` draws 1 of 230 and 35 of 230
+      of those frames; add an effective column (mean × needed / frames) to the
+      README table. Rerun on a quiet machine: `rows-scrl` / `rows-hovr`
+      differences are noise.
+
+---
+
 ## Rustdoc links (found 2026-11-10)
 
 - [ ] **P2 — `RUSTDOCFLAGS="-D warnings" cargo doc -p wgpu-gameui --no-deps`
