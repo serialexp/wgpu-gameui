@@ -11,11 +11,17 @@ are in `docs/design/retained-mode.md`: keep that current as phases land.
   `DrawList::difference` (`656d39f`), canonical empty clips in core (Bart's
   choice; `f8613e8`), Phase 3 the tree, layout and cached drawing with its
   frame and layout oracles and a 10,000-row scale check (`ef7865b`), Phase 4
-  pointer input (`167ca13`).
+  pointer input (`167ca13`), Phase 5 the comparison (`df318a9` heap bytes,
+  `5ec2547` tree bytes, `873233f` the harness, rows and deep scenes, results
+  in `bench/ui-compare/README.md` under "Retained mode").
 - Waiting on Bart: four pointer choices made while he was away (Decisions in
   the design doc: app-owned hover/press signals, hover on the topmost taker,
-  the wheel stopping at the innermost limit, `pressed` = press held).
-- Next: Phase 5, the comparison harness and its `rows` scene.
+  the wheel stopping at the innermost limit, `pressed` = press held); and the
+  comparison's findings (design doc Outstanding): the cache shape, text
+  shaped twice (measured at the offered width, drawn at its own), builds
+  shaping every text in view or not, small lists at about 2.3 KB each.
+- Next: Phase 6, the example in a window, unless Bart takes up a finding
+  first.
 - agent-ui's desktop tests pass against the core clip change (`f8613e8`):
   1,054 passed, 2026-11-10.
 - The gameui release waits for a successful gothab deploy (Bart); agent-ui's
