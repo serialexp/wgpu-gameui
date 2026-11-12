@@ -228,6 +228,17 @@ impl Rig {
         }
     }
 
+    /// Wait (by looking) until the sound thread has the device open and
+    /// says so: what the player goes by, a little after the device itself
+    /// is open.
+    fn wait_for_ready(&self) {
+        let limit = Instant::now() + HUNG;
+        while !self.sound().is_ready() {
+            assert!(Instant::now() < limit, "the sound thread hung");
+            std::thread::yield_now();
+        }
+    }
+
     /// Paused on the first picture with the pictures after it decoded,
     /// then playing from `now`.
     fn play_from_the_start(&mut self, now: Instant) {
@@ -1014,7 +1025,9 @@ fn a_device_slow_to_open_starts_from_where_the_clock_has_got_to() {
         "gone on without it"
     );
     let _ = release.send(());
-    rig.wait_for_device(&device, Fake::open);
+    // The device is open before the sound thread has it: wait for that.
+    rig.wait_for_ready();
+    assert!(device.open());
     rig.player.update(rig.at(1_100));
     assert_eq!(
         rig.sound().segment(),

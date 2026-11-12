@@ -111,13 +111,6 @@ New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios se
       which depends on how far that thread got; the test should hold the worker (or count its
       decodes) rather than race it.
 
-- [ ] **`player::tests::a_device_slow_to_open_starts_from_where_the_clock_has_got_to`**
-      (`crates/media/src/player_tests.rs:1019`) failed four runs in a row on 2026-11-12,
-      alone and in the workspace (load average 12–16): the sound's segment started at 0, not
-      at 100 ms. It passed in the next workspace run, as load fell, so it races something
-      (how the late device is handed the clock, or `wait_for_device`); nothing in
-      `crates/media` changed since 72e2827. Not yet investigated.
-
 ## Flaky allocation test (found 2026-11-11)
 
 - [ ] **`render::draw_plan::tests::lists::planning_a_warmed_frame_allocates_nothing`**

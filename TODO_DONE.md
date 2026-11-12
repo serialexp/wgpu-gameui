@@ -403,6 +403,24 @@ then the dated batches in the order they were written.
 
 ---
 
+## Flaky media test (found 2026-10-23)
+
+- [x] **`player::tests::a_device_slow_to_open_starts_from_where_the_clock_has_got_to`**
+      (`crates/media/src/player_tests.rs:1019`) failed four runs in a row on 2026-11-12,
+      alone and in the workspace (load average 12–16): the sound's segment started at 0, not
+      at 100 ms. It passed in the next workspace run, as load fell, so it races something
+      (how the late device is handed the clock, or `wait_for_device`); nothing in
+      `crates/media` changed since 72e2827. Not yet investigated.
+      **Done 2026-11-12.** The test raced the sound thread: it waited for `Fake::open`, which
+      turns true inside `Device::open`, and updated the player before the sound thread had
+      recorded the device (`control.device`, a few lines later), which `Sound::is_ready`
+      reads; not ready, the player rightly did not restart the sound. It failed 283 of 300
+      runs alone at load 20. The test now waits for `Sound::is_ready`
+      (`Rig::wait_for_ready`), the condition the player goes by: 0 of 300 alone, and no
+      failure in 40 runs of the media suite. The player was right; only the test changed.
+
+---
+
 ## Cross-notifier follow-up audit (2026-08-19)
 
 These items came from regressions found while migrating cross-notifier to gameui.
