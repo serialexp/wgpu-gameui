@@ -581,6 +581,76 @@ fn msdf_by_triangles(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
     out
 }
 
+/// `msdf` with every quad's corners gathered one by one.
+fn msdf_by_corners(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
+    let mut out = PixelBox::EMPTY;
+    for quad in instances {
+        let clip = if quad.clip_enabled() {
+            clip_bound(target, quad.clip)
+        } else {
+            Bound::Whole
+        };
+        let mut points = Points::new();
+        for corner in quad.corners() {
+            points.add(corner);
+        }
+        out = out.union(
+            &points
+                .bound(target, HARD_EDGE)
+                .intersect(clip)
+                .pixels(target),
+        );
+    }
+    out
+}
+
+#[test]
+fn an_upright_quad_is_bounded_as_its_four_corners_are() {
+    let t = plain();
+    let values = [
+        0.0,
+        -0.0,
+        0.4,
+        -0.4,
+        7.25,
+        -3.5,
+        12.0,
+        99.5,
+        100.0,
+        1e5,
+        -1e5,
+        1e-20,
+        f32::MAX,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    let clips = [
+        None,
+        Some([5.0, 5.0, 40.0, 40.0]),
+        Some([-1e5, -1e5, 3e5, 3e5]),
+    ];
+    let mut quads = 0;
+    for clip in clips {
+        for &x in &values {
+            for &y in &values {
+                for &w in &values {
+                    for &h in &values {
+                        let quad = MsdfInstance::placed([[x, y], [x + w, y], [x, y + h]], clip);
+                        quads += 1;
+                        assert_eq!(
+                            msdf(&t, &[quad]),
+                            msdf_by_corners(&t, &[quad]),
+                            "{x} {y} {w} {h} {clip:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(quads > 10_000);
+}
+
 #[test]
 fn a_quad_is_bounded_as_its_two_triangles_were() {
     let t = plain();

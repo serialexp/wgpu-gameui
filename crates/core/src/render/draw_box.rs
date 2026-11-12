@@ -252,6 +252,25 @@ impl Points {
         self.hi = [self.hi[0].max(p[0]), self.hi[1].max(p[1])];
     }
 
+    /// What [`Points::add`] gathers from the corners of an upright quad
+    /// (`MsdfInstance::upright`): its two distinct x values and two distinct
+    /// y values, with the same bookkeeping done once each. The corners' sums
+    /// with the zero extents are the origin's own coordinates, bit for bit
+    /// (up to the sign of a zero), so the bound is the same.
+    fn upright(origin: [f32; 2], w: f32, h: f32) -> Self {
+        let (x1, y1) = (origin[0] + w, origin[1] + h);
+        Self {
+            lo: [origin[0].min(x1), origin[1].min(y1)],
+            hi: [origin[0].max(x1), origin[1].max(y1)],
+            magnitude: origin[0]
+                .abs()
+                .max(x1.abs())
+                .max(origin[1].abs())
+                .max(y1.abs()),
+            finite: origin[0].is_finite() & x1.is_finite() & origin[1].is_finite() & y1.is_finite(),
+        }
+    }
+
     /// The points of `rect` (`[x, y, width, height]`) moved by `translation`:
     /// what [`Points::add`] gathers from its four corners, worked out from the
     /// two that differ per axis. The values are the same ones (`x + width`
@@ -614,10 +633,16 @@ pub(crate) fn msdf(target: &Target, instances: &[MsdfInstance]) -> PixelBox {
                 bound
             }
         };
-        let mut points = Points::new();
-        for corner in quad.corners() {
-            points.add(corner);
-        }
+        let points = match quad.upright() {
+            Some((origin, w, h)) => Points::upright(origin, w, h),
+            None => {
+                let mut points = Points::new();
+                for corner in quad.corners() {
+                    points.add(corner);
+                }
+                points
+            }
+        };
         out = out.union(
             &points
                 .bound(target, HARD_EDGE)

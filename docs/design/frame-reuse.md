@@ -456,6 +456,18 @@ and the arithmetic, not the second load. A per-layout tile cache would remove
 the lookup as well, at the price of invalidation (atlas generation, grid
 sizing, hinting, font keys); its ceiling is about 14% of such a frame.
 
+*Text-block pixel bounds, 2026-11-12.* A moved block's box cannot be taken
+from its old one: the box is exact (the oracle compares it bit for bit against
+a fresh plan), and it depends on rounding, on the float margin, which follows
+the largest coordinate, on the clip and on which glyphs the viewport leaves in.
+So the step taken makes computing it cheaper. A glyph quad has no rotation or
+shear (`MsdfInstance::upright`), so its four corners are two x values and two
+y values; `Points::upright` gathers those once. The bound is the same to the
+last bit (`an_upright_quad_is_bounded_as_its_four_corners_are`, over NaN,
+infinities, signed zeros and negative extents, three clips). Whole-run
+instructions on `scroll` and `para`: −2.2% and −2.0%; cycles about −5% on
+`scroll` and −2% on `para` at a load that made single runs vary by 5%.
+
 ### Phase 5 — retained GPU storage
 
 Partial upload is **not** possible on the current `FrameArena`: it is a

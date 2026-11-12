@@ -627,6 +627,18 @@ impl MsdfInstance {
         ]
     }
 
+    /// The origin and the two extents when the quad's sides lie along the
+    /// axes (no rotation or shear), as a glyph's do: `corners` is then
+    /// `origin`, `origin + (w, 0)`, `origin + (w, h)` and `origin + (0, h)`,
+    /// to the last bit.
+    pub(crate) fn upright(&self) -> Option<([f32; 2], f32, f32)> {
+        (self.axis_x[1] == 0.0 && self.axis_y[0] == 0.0).then_some((
+            self.origin,
+            self.axis_x[0],
+            self.axis_y[1],
+        ))
+    }
+
     /// The bits [`clip_enabled`](Self::clip_enabled) is read from: equal bits,
     /// equal answer.
     pub(crate) fn clip_flag_bits(&self) -> u16 {
