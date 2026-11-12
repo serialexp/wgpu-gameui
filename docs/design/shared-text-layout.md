@@ -229,7 +229,9 @@ shifted to its start), and stack the results. Points to settle then:
   copy. Paragraph caching saves the shaping, not all of an edit's cost; keeping the paragraphs as
   a list, without a stacked copy, would save the rest, at the cost of every reader walking a list.
 - Many small entries cost more fixed overhead each (`LAYOUT_OVERHEAD`); the budget may need to count
-  them differently.
+  them differently. (2026-11-12: it does now. `LAYOUT_OVERHEAD` is each layout's slot and map entry,
+  from their sizes, times half again for the tables' spare room, and a layout's glyphs count by
+  capacity: 10,000 labels count 10.0 MB of the 10.2 MB they take, where 96 B a layout counted 8.4.)
 - Vertical and ellipsized text are one stack or one line, so they keep the whole-string path.
 
 > **2026-10-21 update:** Bart chose to go ahead, together with the clip culling. It shipped as

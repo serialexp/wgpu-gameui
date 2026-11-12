@@ -24,15 +24,29 @@ use crate::text::{
 
 /// Roughly how many bytes of layouts [`SharedFontSystem`] keeps before it
 /// drops the least recently used, down to three quarters of it (so eviction
-/// runs rarely rather than on every new layout). Over four hundred thousand
-/// glyphs: many screens of dense text, measured and drawn, with room for
-/// scrolling back. Large layouts, over a quarter of it each, are kept apart
+/// runs rarely rather than on every new layout). About 16,000 short labels,
+/// or 380,000 glyphs of long text: many screens of dense text, measured and
+/// drawn, with room for scrolling back. Large layouts, over a quarter of it each, are kept apart
 /// under a budget of the same size, so one long text can only push out other
 /// long ones, never every label and row on screen.
 const LAYOUT_BUDGET: usize = 16 << 20;
 
-/// Bookkeeping bytes counted per layout on top of its text and glyphs.
-const LAYOUT_OVERHEAD: usize = 96;
+/// What a kept layout costs the cache's tables, counted on top of its text
+/// (the key its map holds) and its glyphs and lines: its slot and its map
+/// entry (the key, the slot number, a control byte), times the room the
+/// tables keep spare on average. A vector grown by doubling is between half
+/// full and full, a hash map between seven sixteenths and seven eighths, so
+/// half again over what they hold: 10,000 labels count within a few percent
+/// of what they take (`tests/kept_shaping_bytes.rs`). Evicting a layout
+/// frees its share, so the count follows the layouts kept, not the tables'
+/// most.
+const LAYOUT_OVERHEAD: usize = (LAYOUT_SLOT + LAYOUT_ENTRY) * 3 / 2;
+const LAYOUT_SLOT: usize = std::mem::size_of::<Option<CachedLayout>>();
+const LAYOUT_ENTRY: usize = std::mem::size_of::<(String, usize)>() + 1;
+
+/// What a derived array kept beside a layout costs on top of its items: the
+/// `Arc`'s counts.
+const DERIVED_OVERHEAD: usize = 2 * std::mem::size_of::<usize>();
 
 /// Most per-font vertical metrics kept before starting over. Each is one font
 /// at one weight and style, so only an application that cycles through fonts
@@ -288,7 +302,8 @@ pub struct LayoutStats {
     pub laid_out: u64,
     /// Layouts kept now.
     pub layouts: usize,
-    /// Roughly how many bytes the kept layouts take.
+    /// Roughly how many bytes the kept layouts take, with their share of
+    /// the cache's tables.
     pub bytes: usize,
 }
 
@@ -673,10 +688,7 @@ impl LayoutCache {
     /// Keep `layout` as `content`'s under `key`, which has none, making room
     /// for it within the budget; its slot.
     fn insert(&mut self, key: LayoutKey, content: &str, layout: ShapedLayout) -> usize {
-        let bytes = content.len()
-            + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
-            + layout.lines.len() * std::mem::size_of::<ShapedLine>()
-            + LAYOUT_OVERHEAD;
+        let bytes = content.len() + layout.heap_bytes() + LAYOUT_OVERHEAD;
         let large = bytes > self.budget / 4;
         if self.bytes[usize::from(large)] + bytes > self.budget {
             self.evict(large, None);
@@ -831,7 +843,7 @@ impl LayoutCache {
             return Arc::clone(kept);
         }
         let made: Arc<[T]> = make(&entry.layout).into();
-        let bytes = made.len() * std::mem::size_of::<T>();
+        let bytes = made.len() * std::mem::size_of::<T>() + DERIVED_OVERHEAD;
         entry.bytes += bytes;
         *slot(entry) = Some(Arc::clone(&made));
         let large = entry.large;

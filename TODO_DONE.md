@@ -361,6 +361,23 @@ then the dated batches in the order they were written.
       scrolled through, keep two lists a row in view, each frame drawn as
       from nothing; it fails when only the direct holder is checked (the
       inner panes stay) or a moved keeper's slot is not updated.
+- [x] **P3 — the layout cache counts about three quarters of the bytes its
+      layouts hold (core, found 2026-11-12).** 10,000 short labels:
+      `LayoutStats::bytes` 8.44 MB, heap 11.29 MB (`kept_shaping_bytes`,
+      `crates/core/tests/`). `LAYOUT_OVERHEAD` (96 B) and the content's
+      length leave out the maps' entries and the vectors' spare capacity, so
+      the 16 MiB budget holds about 21 MiB.
+      **Done 2026-11-12** (Bart chose a per-entry count with an amortized
+      share of the tables over counting the tables by capacity or reporting
+      their slack apart). `LAYOUT_OVERHEAD` is a layout's slot (136 B) and
+      map entry (33 B), from `size_of`, times 3/2 for the tables' spare
+      room; glyphs and lines count by capacity (`ShapedLayout::heap_bytes`)
+      and a derived array its `Arc`'s counts. 10,000 labels now count
+      10.01 MB of the 10.24 MB the heap holds (the heap was 11.29 before the
+      prepared-text change sized the glyph vectors exactly). Test:
+      `the_layout_caches_counted_bytes_are_what_it_holds`
+      (`tests/kept_shaping_bytes.rs`): 3,000 labels count within a tenth of
+      what the allocator handed out (1.02); with 96 B a layout it is 0.86.
 
 ---
 

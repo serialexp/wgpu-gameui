@@ -26,12 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P3 — the layout cache counts about three quarters of the bytes its
-      layouts hold (core, found 2026-11-12).** 10,000 short labels:
-      `LayoutStats::bytes` 8.44 MB, heap 11.29 MB (`kept_shaping_bytes`,
-      `crates/core/tests/`). `LAYOUT_OVERHEAD` (96 B) and the content's
-      length leave out the maps' entries and the vectors' spare capacity, so
-      the 16 MiB budget holds about 21 MiB.
 - [ ] **P3 — the unwrapped layout of right-to-left text sits at x ≈ 8.5e37
       (core, found 2026-11-12).** `natural()` has no width, so
       `shape_cut_layout` lays it out at `f32::MAX / 4` and cosmic-text starts

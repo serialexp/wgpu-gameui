@@ -4,9 +4,10 @@
 //! retained tree's shaping budget (`docs/design/prepared-text.md`, Phase 0).
 //!
 //! The measurements print and assert nothing about the sizes; they are
-//! ignored. Two tests are not: what `PreparedText::heap_bytes` estimates is
-//! checked against what the allocator handed out for it, and a changed
-//! label's allocations against a new one's.
+//! ignored. Three tests are not: what `PreparedText::heap_bytes` estimates,
+//! and what the layout cache counts, are checked against what the allocator
+//! handed out for them, and a changed label's allocations against a new
+//! one's.
 //!
 //! The allocator counts per thread, so tests running side by side don't
 //! count each other's.
@@ -136,6 +137,46 @@ fn a_prepared_texts_counted_bytes_are_what_it_holds() {
     assert!(
         (0.75..=1.33).contains(&ratio),
         "counted {counted} B for {bytes} B held (ratio {ratio:.2})"
+    );
+}
+
+/// The bytes the shared cache counts for the layouts of many labels, with
+/// their share of its tables, are within a tenth of the bytes the allocator
+/// handed out for them: the cache's budget is what it holds. (Counting only
+/// the glyphs, the text and 96 bytes a layout came to about three quarters.)
+#[test]
+fn the_layout_caches_counted_bytes_are_what_it_holds() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let measure = |measurer: &mut TextMeasurer, text: &str| {
+        measurer.measure_block(
+            &TextBlock::new(text, 0.0, 0.0)
+                .with_size(16.0)
+                .with_line_height(20.0)
+                .with_max_width(112.0)
+                .with_wrap(WrapMode::None),
+        );
+    };
+    // Warm the font system's own caches, which are not the layouts'.
+    measure(&mut measurer, &label(true, 0));
+    fonts.lock().expect("font system").clear_caches();
+    let texts: Vec<String> = (0..3000).map(|i| label(true, i)).collect();
+    let start = snapshot();
+    for text in &texts {
+        measure(&mut measurer, text);
+    }
+    let held = (snapshot().0 - start.0) as f64;
+    let stats = fonts.lock().expect("font system").layout_stats();
+    let ratio = stats.bytes as f64 / held;
+    println!(
+        "{} layouts: counted {} B, held {held} B, ratio {ratio:.2}",
+        stats.layouts, stats.bytes
+    );
+    assert_eq!(stats.layouts, texts.len());
+    assert!(
+        (0.9..=1.1).contains(&ratio),
+        "counted {} B for {held} B held (ratio {ratio:.2})",
+        stats.bytes
     );
 }
 
