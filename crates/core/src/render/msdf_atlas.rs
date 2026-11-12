@@ -113,9 +113,6 @@ struct Shelf {
 #[derive(Clone)]
 struct StoredGlyph {
     region: AtlasRegion,
-    metrics: GlyphMetrics,
-    /// Texels per EM this entry was generated at (see [`GlyphTile::ref_px`]).
-    ref_px: f32,
     /// RGBA8 pixels (region.w * region.h * 4). MSDF RGB with alpha forced to 255.
     rgba: Vec<u8>,
 }
@@ -131,7 +128,7 @@ pub struct MsdfGlyphAtlas {
     /// outline-less glyphs (whitespace) and generation failures. Caches misses so
     /// we never retry — including a font whose hinting `skrifa` declines, which
     /// would otherwise re-parse on every frame.
-    lookup: HashMap<(u64, u16, GlyphSizing), Option<u32>, rustc_hash::FxBuildHasher>,
+    lookup: HashMap<(u64, u16, GlyphSizing), Option<GlyphTile>, rustc_hash::FxBuildHasher>,
     dirty: bool,
     ref_px: f32,
     px_range: f32,
@@ -217,7 +214,7 @@ impl MsdfGlyphAtlas {
         font_data: &[u8],
     ) -> Option<GlyphTile> {
         if let Some(cached) = self.lookup.get(&(font_id, glyph_id, sizing)) {
-            return cached.map(|idx| self.tile(idx));
+            return *cached;
         }
 
         let hinted = match sizing {
@@ -239,20 +236,18 @@ impl MsdfGlyphAtlas {
         match generated {
             Some((g, ref_px)) => {
                 let region = self.pack(g.metrics.width_px, g.metrics.height_px);
-                let idx = self.glyphs.len() as u32;
                 self.glyphs.push(StoredGlyph {
                     region,
-                    metrics: g.metrics,
-                    ref_px,
                     rgba: rgb_to_rgba(&g.image),
                 });
                 self.dirty = true;
-                self.lookup.insert((font_id, glyph_id, sizing), Some(idx));
-                Some(GlyphTile {
+                let tile = GlyphTile {
                     region,
                     metrics: g.metrics,
                     ref_px,
-                })
+                };
+                self.lookup.insert((font_id, glyph_id, sizing), Some(tile));
+                Some(tile)
             }
             None => {
                 self.lookup.insert((font_id, glyph_id, sizing), None);
@@ -270,18 +265,7 @@ impl MsdfGlyphAtlas {
         glyph_id: u16,
         sizing: GlyphSizing,
     ) -> Option<Option<GlyphTile>> {
-        self.lookup
-            .get(&(font_id, glyph_id, sizing))
-            .map(|cached| cached.map(|idx| self.tile(idx)))
-    }
-
-    fn tile(&self, idx: u32) -> GlyphTile {
-        let g = &self.glyphs[idx as usize];
-        GlyphTile {
-            region: g.region,
-            metrics: g.metrics,
-            ref_px: g.ref_px,
-        }
+        self.lookup.get(&(font_id, glyph_id, sizing)).copied()
     }
 
     /// Take the dirty flag; returns whether a GPU re-upload is needed.

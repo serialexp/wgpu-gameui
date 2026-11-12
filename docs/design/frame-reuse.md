@@ -230,7 +230,11 @@ Tick items as they land.
       above to be explained on a quiet machine, and for Phase 3 to have something
       more to reuse.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
-      (`scroll`, `para`) hits too; plus pointer-identity layout hits.
+      (`scroll`, `para`) hits too. Measured first (2026-11-12, below): the
+      atlas tile fetch is about 18% of a `scroll` or `para` frame. Narrow step
+      done (tile held in the lookup map); the per-layout cache is open, with a
+      ceiling of about 14% more. The pointer-identity layout half is covered
+      by `PreparedText` handles (`docs/design/prepared-text.md`).
 - [ ] **Phase 5 — timings against the build before it**, at one load (the
       counts above are exact; the frame means are not yet compared).
 - [ ] **Phase 6 — partial order reuse** (prefix, then propagation), only if the
@@ -431,6 +435,26 @@ size and fill, so that selecting the visible lines and glyphs and placing them
 atlas tile on `ShapedGlyph`" item in `TODO.md`, taken further. A layout lookup
 that hashes the whole string each frame can also skip the hash when the
 `Arc<str>` is the one last frame used.
+
+*Measured before building, 2026-11-12* (release, comparison off, `perf record`
+on `ui-compare-gameui text scroll|para`, only samples inside the timed loop,
+318 and 192 of them, so shares are rough): `prepare_texts` is 52% of the frame
+in both scenes; `append_placements` 25% of it; the atlas tile fetch
+(`MsdfGlyphAtlas::cached`: the map lookup and the read of the stored glyph)
+about 71% of placement, about 18% of the frame; the hash itself under 10% of
+placement; text-block pixel bounds (`draw_box`) about a third.
+
+The narrow step: the lookup map holds the `GlyphTile` itself, not an index into
+a vector of stored glyphs, so a hit is one load, not two dependent ones
+(`StoredGlyph` keeps only the region and pixels the GPU upload needs). Cycles
+and instructions for a whole run of `scroll` and `para` (`perf stat`,
+`instructions:u` / `cycles:u`, three alternations; the run includes the atlas
+warm-up, which this does not change): instructions −3.1% and −2.9%, cycles
+about −2% and −1.5%, so about 3% to 6% of the timed frames. That is far under
+the 18% the fetch costs, so most of the cost is the lookup's own cache misses
+and the arithmetic, not the second load. A per-layout tile cache would remove
+the lookup as well, at the price of invalidation (atlas generation, grid
+sizing, hinting, font keys); its ceiling is about 14% of such a frame.
 
 ### Phase 5 — retained GPU storage
 
