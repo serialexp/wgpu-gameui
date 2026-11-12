@@ -88,7 +88,7 @@ pub type FontSystemHandle = Arc<Mutex<SharedFontSystem>>;
 ///
 /// Each call returns a font system of its own (fonts loaded into one, and its
 /// shaping cache, are not seen by another), but the host's font folders are
-/// read once per process: see [`system_font_db`].
+/// read once per process and the database shared.
 pub fn shared_font_system() -> FontSystemHandle {
     let (locale, db) = system_font_db();
     let fs = FontSystem::new_with_locale_and_db(locale.clone(), db.clone());
@@ -966,8 +966,8 @@ impl TextRenderer {
     /// Call this once per pass, before that pass's [`render`](Self::render) /
     /// [`render_icons`](Self::render_icons): the projection is per pass, because two
     /// passes submitted together can target differently sized views and a shared
-    /// uniform slot would hand both of them the last matrix written (see
-    /// [`uniform_arena`](crate::render::uniform_arena)). `begin_frame` — called once
+    /// uniform slot would hand both of them the last matrix written: the
+    /// renderer's per-frame uniform arena keeps them apart. `begin_frame` — called once
     /// per frame by [`UiRenderer::begin_frame`](crate::UiRenderer::begin_frame) —
     /// releases the slots for reuse.
     pub fn resize(
@@ -3630,7 +3630,7 @@ pub struct TextBlock {
     /// Where the block sits in selectable text, if it can be selected with the
     /// pointer (default `None`: it can't). See [`selectable`](Self::selectable).
     pub selectable: Option<crate::TextKey>,
-    /// The block's layout made in advance by a [`PreparedText`], so drawing
+    /// The block's layout made in advance by a [`PreparedText`](crate::PreparedText), so drawing
     /// it shapes nothing (default `None`). Used only where it is exactly the
     /// layout the block would be looked up as: a block changed after it was
     /// attached, or drawn under a scale, is laid out through the shared

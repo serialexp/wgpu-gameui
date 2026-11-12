@@ -116,7 +116,7 @@ impl<'a> Frame<'a> {
     /// unbalanced `push`/`pop`), then runs `end_frame`. Returns the build
     /// closure's value paired with the frame's
     /// [`UiFrameResult`](crate::UiFrameResult) (see
-    /// [`UiState::end_frame`](Self::end_frame)).
+    /// [`UiState::end_frame`](crate::UiState::end_frame)).
     pub fn run<R>(
         self,
         list: &mut DrawList,

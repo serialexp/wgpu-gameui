@@ -250,7 +250,7 @@ impl SpriteAtlas {
     /// Safe to call at any time: atlas regions are pixel rects re-derived into
     /// UVs every render frame, and a dirty atlas triggers a full GPU re-upload,
     /// so reassigning regions here is picked up automatically — exactly the
-    /// invariant [`try_grow`](Self::try_grow "method") already relies on. Idempotent
+    /// invariant growing the atlas already relies on. Idempotent
     /// when there are no tombstones.
     ///
     /// The sprites are repacked tallest first, which fills shelves better than

@@ -139,7 +139,7 @@ impl TooltipSide {
 /// mono shortcut — the Forge `Tooltip`.
 ///
 /// Unlike [`TooltipLayer`] (cursor-following, delayed, rich content), a hint
-/// has no delay and no fade and sits [`HINT_OFFSET`] pixels off one side of
+/// has no delay and no fade and sits 7 pixels off one side of
 /// its anchor. The widget that owns the anchor decides *when* to show it and
 /// *which side* (a toolbar puts it on the strip's outward side); this type only
 /// measures, places, and paints. If the preferred side would leave the

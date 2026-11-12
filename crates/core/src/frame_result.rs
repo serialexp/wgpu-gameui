@@ -23,8 +23,9 @@
 //! - `needs_repaint` is `next_deadline.is_some()`: some source is unsettled,
 //!   whether it changes on the next frame or later.
 
-/// Aggregated per-frame timing outcome, returned by [`UiState::end_frame`]
-/// (`crate::UiState::end_frame`) and [`Frame::run`]/[`Frame::run_layers`].
+/// Aggregated per-frame timing outcome, returned by
+/// [`UiState::end_frame`](crate::UiState::end_frame) and
+/// [`Frame::run`](crate::Frame::run)/[`Frame::run_layers`](crate::Frame::run_layers).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiFrameResult {
     /// At least one timing source is unsettled (an in-flight hover/press

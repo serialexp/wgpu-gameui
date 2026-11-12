@@ -66,8 +66,9 @@ impl SyntaxTheme {
     /// A dotted name takes the ink of its first part that names one, so a
     /// capture inherits its base: `keyword.function` is a keyword,
     /// `variable.parameter` a variable. This is how Tree-sitter's highlighter
-    /// resolves the names [`SyntaxHighlighting`](crate::SyntaxHighlighting)
-    /// is configured with, which are all one part long and listed bases first.
+    /// resolves the names `SyntaxHighlighting` (the `syntax-highlighting`
+    /// feature) is configured with, which are all one part long and listed
+    /// bases first.
     ///
     /// `constant.builtin` is the exception: grammars give it to `true`,
     /// `nil` and `None`, and Rust to its numbers, which are all literals.

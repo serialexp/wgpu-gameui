@@ -218,7 +218,7 @@ impl NumberInput {
     }
 
     /// Custom parse-back from edited text. When set, the default numeric
-    /// [`sanitize`](sanitize_numeric) + `parse::<f64>()` path is **bypassed** —
+    /// sanitising + `parse::<f64>()` path is **bypassed** —
     /// this parser owns validation, returning `None` to leave the value
     /// untouched mid-edit (mirroring the default's handling of partial states
     /// like `""` or `"-"`).

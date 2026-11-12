@@ -112,7 +112,7 @@ pub fn place_popover(
 
 /// Measure the minimum body height that keeps `title` and wrapped `lines` inside
 /// a popover with `body_width`. Pass the result to [`place_popover`] before
-/// drawing; [`draw_sheet`] deliberately stays rect-native.
+/// drawing; [`Popover::draw`] deliberately stays rect-native.
 pub fn measure_sheet_height(
     body_width: f32,
     title: &str,

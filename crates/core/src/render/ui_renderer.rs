@@ -1605,14 +1605,14 @@ impl UiRenderer {
     /// How hard glyph origins are pulled onto the device pixel grid before their
     /// quads are emitted — our equivalent of a rasterizer's grid fitting.
     ///
-    /// Defaults to [`GlyphSnap::Baseline`], which rounds baselines to whole
+    /// Defaults to [`GlyphSnap::Baseline`](crate::GlyphSnap::Baseline), which rounds baselines to whole
     /// device pixels so horizontal strokes stay crisp, matching what FreeType's
-    /// `hintslight` (the usual Linux browser setting) does. See [`GlyphSnap`] for
+    /// `hintslight` (the usual Linux browser setting) does. See [`GlyphSnap`](crate::GlyphSnap) for
     /// the alternatives and what each costs.
     ///
     /// Snapping quantises glyph positions, so text that slides by fractions of a
     /// pixel — a panel animating open, a smooth-scrolled list — steps instead of
-    /// gliding. Set [`GlyphSnap::Off`] for the duration if that shows.
+    /// gliding. Set [`GlyphSnap::Off`](crate::GlyphSnap::Off) for the duration if that shows.
     pub fn set_glyph_snap(&mut self, snap: crate::text::GlyphSnap) {
         self.text_renderer.set_glyph_snap(snap);
     }
@@ -1653,8 +1653,8 @@ impl UiRenderer {
     ///
     /// Anti-aliased edges blend in sRGB space, where a half-covered pixel of
     /// light text looks fainter than half, so light-on-dark text otherwise
-    /// comes out thinner. Defaults to [`TextContrast::GPUI`], the correction
-    /// gpui (Zed) and DirectWrite apply; [`TextContrast::OFF`] turns it off.
+    /// comes out thinner. Defaults to [`TextContrast::GPUI`](crate::TextContrast::GPUI), the correction
+    /// gpui (Zed) and DirectWrite apply; [`TextContrast::OFF`](crate::TextContrast::OFF) turns it off.
     /// Only anti-aliased edges change: glyph interiors, shadows and glows
     /// draw as before. Applies from the next [`render`](Self::render).
     pub fn set_text_contrast(&mut self, contrast: crate::TextContrast) {
@@ -1724,7 +1724,7 @@ impl UiRenderer {
     ///
     /// Forgetting the call is not silent: the arenas keep growing, so the buffers
     /// reallocate every frame, which trips the sustained-render-pressure warning, and a
-    /// single frame crossing [`ARENA_SANITY_CAP`] logs a dedicated message.
+    /// single frame crossing 64 MiB of scratch logs a dedicated message.
     pub fn begin_frame(&mut self) {
         self.next_snapshot = 0;
         // A place no list was drawn in last frame gives back what it kept.

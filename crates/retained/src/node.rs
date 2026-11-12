@@ -3,7 +3,7 @@
 //!
 //! Every property is a [`Prop`]: a constant, or a memo the node reads. A
 //! [`Spec`] gathers a node's properties before it is added to the tree; the
-//! setters on [`Ui`](crate::Ui) change one later.
+//! setters on [`Ui`] change one later.
 
 use wgpu_gameui::{BoxShadow, DrawList, FontHandle, TextAlign, TextContent, Weight};
 

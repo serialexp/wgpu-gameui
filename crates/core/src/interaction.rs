@@ -88,8 +88,9 @@ pub enum PointerPolicy {
 pub struct OrderKey {
     /// Outer layer order (`0` is the base list; larger values are above it).
     pub layer: u32,
-    /// Submission sequence within the layer. `0` is a layer's
-    /// [`block`](InteractionScene::block)er, below everything drawn on it.
+    /// Submission sequence within the layer. `0` is a layer's blocker (the
+    /// disabled region keeping the pointer from the layers below), below
+    /// everything drawn on it.
     pub sequence: u64,
 }
 

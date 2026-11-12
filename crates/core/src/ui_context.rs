@@ -223,7 +223,7 @@ pub struct UiState {
     /// [`TextSelection`](crate::TextSelection)).
     pub text_selection: crate::TextSelection,
     /// Tooltip layer — register hover regions with
-    /// [`TooltipLayer::hover_zone`], call [`tick`](TooltipLayer::tick) once per
+    /// [`register`](TooltipLayer::register), call [`tick`](TooltipLayer::tick) once per
     /// frame with `dt`, and [`draw`](TooltipLayer::draw) at the end of the
     /// frame. Caller-owned; no `UiContext` verb wraps it.
     pub tooltips: TooltipLayer,
@@ -396,7 +396,7 @@ impl UiState {
     /// end the interaction scene's frame. Call after building the frame's
     /// verbs, with every layer the frame pushed ([`LayerStack::layers`]), or
     /// `&[]` for a host that draws into one list: each keeps the pointer from
-    /// what is under it (see [`InteractionScene::end_frame`]), and while a
+    /// what is under it (see [`InteractionScene::end_frame`](crate::InteractionScene::end_frame)), and while a
     /// modal is up, Tab stays among its focusables (widgets drawn with its
     /// index as their [`active_layer`](crate::DrawContext::active_layer)).
     ///
@@ -463,7 +463,7 @@ impl UiState {
     /// [`end_frame`](Self::end_frame) — e.g. from inside a `Frame::run` build
     /// closure via [`UiContext::request_repaint_after`]. Registrations last
     /// for one frame; the earliest one wins in
-    /// [`end_frame`](Self::end_frame)'s [`UiFrameResult::next_deadline`].
+    /// [`end_frame`](Self::end_frame)'s [`UiFrameResult::next_deadline`](crate::UiFrameResult::next_deadline).
     pub fn request_repaint_after(&mut self, seconds: f32) {
         self.app_deadlines.push(seconds.max(0.0));
     }

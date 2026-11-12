@@ -9,8 +9,9 @@
 //! * a [`crate::TextRenderer`] for MSDF text (cosmic-text shaping + fdsm glyph atlas)
 //!
 //! Per-frame GPU scratch (vertex/index/instance buffers, uniform slots) is a bump
-//! arena owned by the frame, not by the pass: see [`uniform_arena`] for why passes
-//! in one submission must not share bytes.
+//! arena owned by the frame, not by the pass, because passes in one submission
+//! must not share bytes: a uniform slot written twice before the submission
+//! hands both passes the last value.
 //!
 //! `UiRenderer::render` draws a `DrawList` in batches: primitives that can't
 //! change the same pixel may be regrouped, so every non-overlapping box goes in
