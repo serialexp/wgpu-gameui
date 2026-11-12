@@ -242,8 +242,11 @@ impl MsdfCpu {
             out.block_effects.push(BlockEffects::of(block));
             if !block.content.is_empty() {
                 out.work.blocks_looked_up += 1;
-                let (layout, fs) =
-                    shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
+                let (layout, fs) = shared.resolve(
+                    &LayoutSpec::of_block(block),
+                    &block.content,
+                    block.prepared.as_ref(),
+                );
                 let bounds = cull_bounds(block, grid.viewport());
                 append_placements(
                     &mut self.atlas,
@@ -334,8 +337,11 @@ impl MsdfCpu {
                 out.work.blocks_looked_up += 1;
                 let shared =
                     shared.get_or_insert_with(|| fs_handle.lock().expect("FontSystem poisoned"));
-                let (layout, fs) =
-                    shared.layout_and_fonts(&LayoutSpec::of_block(block), &block.content);
+                let (layout, fs) = shared.resolve(
+                    &LayoutSpec::of_block(block),
+                    &block.content,
+                    block.prepared.as_ref(),
+                );
                 let bounds = cull_bounds(block, grid.viewport());
                 append_placements(
                     &mut self.atlas,

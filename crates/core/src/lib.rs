@@ -72,7 +72,7 @@ mod text_units;
 
 #[cfg(feature = "markdown")]
 pub use markdown::{Markdown, MarkdownLayout, MarkdownMetrics, MarkdownStyle, ScrollTable};
-pub use shaping::{LayoutStats, SharedFontSystem};
+pub use shaping::{LayoutStats, PreparedLayout, PreparedText, SharedFontSystem};
 #[cfg(feature = "syntax-lua")]
 pub use syntax::SyntaxConfigurationError;
 #[cfg(feature = "syntax-highlighting")]

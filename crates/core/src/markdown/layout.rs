@@ -514,7 +514,12 @@ impl Lay<'_> {
     fn shaped<R>(&mut self, block: &TextBlock, read: impl FnOnce(&ShapedLayout) -> R) -> R {
         let handle = self.list.text_measurer.font_system_handle();
         let mut shared = handle.lock().expect("FontSystem poisoned");
-        read(shared.layout(&LayoutSpec::of_block(block), &block.content))
+        let (layout, _) = shared.resolve(
+            &LayoutSpec::of_block(block),
+            &block.content,
+            block.prepared.as_ref(),
+        );
+        read(layout)
     }
 
     /// The size `block` takes.

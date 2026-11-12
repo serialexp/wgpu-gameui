@@ -152,3 +152,31 @@ fn carets_are_right_again_after_their_layout_is_evicted() {
     assert_eq!(again, carets, "the same as the carets still held");
     assert_eq!(list.visual_layout(&block()), visual);
 }
+
+/// A prepared block's carets and visual glyphs come from its layout, shaping
+/// nothing, and are the ones the cache gives; under a scale, or once the
+/// block has changed, they are the cache's for the block as it is.
+#[test]
+fn a_prepared_block_answers_carets_from_its_layout() {
+    let mut list = DrawList::new();
+    let mut measurer =
+        crate::TextMeasurer::with_font_system(list.text_measurer.font_system_handle());
+    let plain = block().with_align(TextAlign::Center);
+    let layout = measurer.prepare(&plain).layout(&mut measurer, &plain);
+    let prepared = plain.clone().with_prepared(layout);
+    let before = shaping_passes();
+    let carets = list.caret_layout(&prepared);
+    let visual = list.visual_layout(&prepared);
+    assert_eq!(shaping_passes(), before, "from the prepared layout");
+    assert_eq!(*carets, *list.caret_layout(&plain));
+    assert_eq!(visual.len(), list.visual_layout(&plain).len());
+    let mut changed = prepared.clone();
+    changed.content = "Another text".into();
+    let mut want = changed.clone();
+    want.prepared = None;
+    assert_eq!(*list.caret_layout(&changed), *list.caret_layout(&want));
+    list.push_transform();
+    list.scale(2.0, 2.0);
+    assert_eq!(*list.caret_layout(&prepared), *list.caret_layout(&plain));
+    list.pop_transform();
+}

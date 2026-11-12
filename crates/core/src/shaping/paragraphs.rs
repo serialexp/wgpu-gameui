@@ -14,9 +14,9 @@
 //! The paragraphs come from the layout under the same spec used last: while
 //! someone types, the field's previous text. No paragraph is kept twice.
 
-use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use cosmic_text::FontSystem;
 
@@ -194,7 +194,7 @@ pub(super) fn reshape(
         lines,
         shown: content.len() as u32,
         size: (width, height.max(spec.line_height)),
-        ink: OnceCell::new(),
+        ink: OnceLock::new(),
     })
 }
 

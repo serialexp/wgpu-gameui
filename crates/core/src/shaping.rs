@@ -9,9 +9,8 @@
 //! [`SharedFontSystem::db_mut`] drops them all.
 
 use std::borrow::Cow;
-use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use cosmic_text::{
     Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight, Wrap, fontdb,
@@ -56,16 +55,24 @@ pub struct SharedFontSystem {
     /// is stale once it has moved on. Evicting a layout to stay in budget does
     /// not count, since shaping it again gives the same layout.
     generation: u64,
+    /// Which font system this is, unique in the process: a prepared text
+    /// ([`PreparedText`]) is only used with the one it was shaped by.
+    id: u64,
+    /// Layouts made from shaping a [`PreparedText`] kept, without shaping.
+    laid_out: u64,
 }
 
 impl SharedFontSystem {
     /// Wrap a cosmic-text `FontSystem`.
     pub fn new(font_system: FontSystem) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         Self {
             font_system,
             layouts: LayoutCache::default(),
             vmetrics: HashMap::new(),
             generation: 0,
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            laid_out: 0,
         }
     }
 
@@ -144,6 +151,7 @@ impl SharedFontSystem {
             hits: self.layouts.hits,
             shaped: self.layouts.shaped,
             reshaped: self.layouts.reshaped,
+            laid_out: self.laid_out,
             layouts: self.layouts.len,
             bytes: self.layouts.bytes(),
         }
@@ -204,6 +212,54 @@ impl SharedFontSystem {
         )
     }
 
+    /// The layout of `content` under `spec` for a recorded block: `prepared`'s
+    /// when it was made for exactly that spec, content and these fonts, else
+    /// the shared cache's. Every lookup of a block's layout goes through
+    /// this, with the spec and content the site would look up, so a block
+    /// changed after its layout was attached, or drawn under a scale, is laid
+    /// out as it is now.
+    pub(crate) fn resolve<'a>(
+        &'a mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        prepared: Option<&'a PreparedLayout>,
+    ) -> (&'a ShapedLayout, &'a mut FontSystem) {
+        if let Some(prepared) = prepared
+            && prepared.is_for(spec, content, self)
+        {
+            return (prepared.layout(), &mut self.font_system);
+        }
+        self.layout_and_fonts(spec, content)
+    }
+
+    /// [`caret_layout`](Self::caret_layout) of the layout
+    /// [`resolve`](Self::resolve) gives.
+    pub(crate) fn resolve_carets(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        prepared: Option<&PreparedLayout>,
+    ) -> Arc<[CaretPos]> {
+        match prepared.filter(|prepared| !spec.vertical && prepared.is_for(spec, content, self)) {
+            Some(prepared) => prepared.carets(),
+            None => self.caret_layout(spec, content),
+        }
+    }
+
+    /// [`visual_layout`](Self::visual_layout) of the layout
+    /// [`resolve`](Self::resolve) gives.
+    pub(crate) fn resolve_visual(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        prepared: Option<&PreparedLayout>,
+    ) -> Arc<[VisualGlyph]> {
+        match prepared.filter(|prepared| !spec.vertical && prepared.is_for(spec, content, self)) {
+            Some(prepared) => prepared.visual(),
+            None => self.visual_layout(spec, content),
+        }
+    }
+
     /// [`layout`](Self::layout), with the font system still at hand for the
     /// glyph outlines the layout refers to.
     pub(crate) fn layout_and_fonts(
@@ -230,6 +286,9 @@ pub struct LayoutStats {
     /// Of those, the long texts laid out from the paragraphs of another
     /// layout, shaping only the paragraphs it didn't have.
     pub reshaped: u64,
+    /// Layouts a [`PreparedText`] made from the shaping it keeps, shaping
+    /// nothing.
+    pub laid_out: u64,
     /// Layouts kept now.
     pub layouts: usize,
     /// Roughly how many bytes the kept layouts take.
@@ -456,7 +515,7 @@ pub(crate) struct ShapedLayout {
     /// The band the glyphs ink, once
     /// [`TextMeasurer::measure_block_ink`](crate::TextMeasurer::measure_block_ink)
     /// asked for it.
-    pub ink: OnceCell<Option<(f32, f32)>>,
+    pub ink: OnceLock<Option<(f32, f32)>>,
 }
 
 struct CachedLayout {
@@ -797,6 +856,35 @@ fn shape_cut_layout(
     content: &str,
     cut: Option<usize>,
 ) -> ShapedLayout {
+    let (mut buffer, source) = set_buffer(spec, content, cut);
+    set_layout(&mut buffer, spec);
+    crate::text::shape_buffer(&mut buffer, font_system);
+    extract(&buffer, spec, &source)
+}
+
+/// What a buffer's text was made from, to read its glyphs back as the
+/// content's ([`extract`]).
+pub(crate) struct BufferSource {
+    /// The direction mark's length at the head of the shaped text.
+    prefix_len: usize,
+    /// Where each of the buffer's lines starts in the shaped text.
+    line_starts: Vec<usize>,
+    /// How many bytes of the content the buffer shows.
+    shown: usize,
+    /// Whether the shown text is empty.
+    empty: bool,
+}
+
+/// A buffer holding `content`, or its first `cut` bytes and a '…' when `cut`
+/// is given, set to be shaped under `spec`: the shaping half of the spec
+/// (font, size, weight, style, letter spacing, faces, direction, vertical).
+/// Nothing is shaped or laid out yet, and the layout half is
+/// [`set_layout`]'s.
+pub(crate) fn set_buffer(
+    spec: &LayoutSpec<'_>,
+    content: &str,
+    cut: Option<usize>,
+) -> (Buffer, BufferSource) {
     let family = spec.family();
     let faces = spec.shaped_faces();
 
@@ -811,10 +899,10 @@ fn shape_cut_layout(
 
     // Force the base paragraph direction (if requested) by prepending a
     // zero-width strong mark; cosmic-text has no base-direction API. The mark
-    // shifts every glyph's byte offset by its UTF-8 length, undone below via
-    // `prefix_len`. Vertical text skips this — base direction is meaningless
-    // for a one-glyph-per-row column — and instead stacks each grapheme
-    // cluster on its own line (see `vertical_stack_string`).
+    // shifts every glyph's byte offset by its UTF-8 length, undone in
+    // `extract` via `prefix_len`. Vertical text skips this — base direction
+    // is meaningless for a one-glyph-per-row column — and instead stacks
+    // each grapheme cluster on its own line (see `vertical_stack_string`).
     let prefix = if spec.vertical {
         ""
     } else {
@@ -829,10 +917,45 @@ fn shape_cut_layout(
         Cow::Owned(format!("{prefix}{content}"))
     };
 
-    let mut buffer = Buffer::new(font_system, Metrics::new(spec.font_size, spec.line_height));
+    // Empty, so nothing is shaped before the text is set.
+    let mut buffer = Buffer::new_empty(Metrics::new(spec.font_size, spec.line_height));
+    let attrs = Attrs::new()
+        .family(family)
+        .weight(spec.weight)
+        .style(spec.style)
+        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size));
+    // Alignment is the layout's: `set_layout` sets it on every line.
+    if faces.is_empty() {
+        buffer.set_text(&shaped_text, &attrs, Shaping::Advanced, None);
+    } else {
+        // The ranges address the content: past the direction prefix, and
+        // not into an ellipsis.
+        let runs = face_runs(&shaped_text, prefix_len, shown, faces, &attrs);
+        buffer.set_rich_text(runs, &attrs, Shaping::Advanced, None);
+    }
+    // cosmic-text reports `glyph.start` relative to the glyph's own buffer
+    // line, and span colours address the whole content, so each shaped line's
+    // start byte is added back. Vertical text also subtracts the `line_i`
+    // separators `vertical_stack_string` inserted.
+    let source = BufferSource {
+        prefix_len,
+        line_starts: crate::text::line_starts(&shaped_text),
+        shown,
+        empty: content.is_empty(),
+    };
+    (buffer, source)
+}
+
+/// Set the layout half of `spec` on `buffer`: the line height, the width
+/// and wrapping, and every line's alignment, each set whatever it was, so a
+/// buffer laid out under one spec and then another lays out as one set
+/// under the second would. cosmic-text lays out again only what these
+/// change, and shapes nothing.
+pub(crate) fn set_layout(buffer: &mut Buffer, spec: &LayoutSpec<'_>) {
+    buffer.set_metrics(Metrics::new(spec.font_size, spec.line_height));
     if spec.vertical {
         // One cluster per line, no wrapping; shrink to the content so the
-        // manual centring below governs horizontal placement.
+        // centring in `extract` governs horizontal placement.
         buffer.set_wrap(Wrap::None);
         buffer.set_size(None, None);
     } else if spec.ellipsize {
@@ -844,24 +967,25 @@ fn shape_cut_layout(
         buffer.set_wrap(spec.wrap.into());
         buffer.set_size(Some(spec.max_width.unwrap_or(f32::MAX / 4.0)), None);
     }
-    let attrs = Attrs::new()
-        .family(family)
-        .weight(spec.weight)
-        .style(spec.style)
-        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size));
-    // `Start` is cosmic-text's default, so only the rest override it.
-    // Vertical text never sets a cosmic align: it centres each row within
-    // the column itself (below), whatever the shrink-to-content width.
+    // `None` is cosmic-text's start of the line. Vertical text never sets a
+    // cosmic align: `extract` centres each row within the column itself,
+    // whatever the shrink-to-content width.
     let align = cosmic_align(spec.align).filter(|_| !spec.vertical);
-    if faces.is_empty() {
-        buffer.set_text(&shaped_text, &attrs, Shaping::Advanced, align);
-    } else {
-        // The ranges address the content: past the direction prefix, and
-        // not into an ellipsis.
-        let runs = face_runs(&shaped_text, prefix_len, shown, faces, &attrs);
-        buffer.set_rich_text(runs, &attrs, Shaping::Advanced, align);
+    for line in &mut buffer.lines {
+        line.set_align(align);
     }
-    crate::text::shape_buffer(&mut buffer, font_system);
+}
+
+/// The layout of `buffer`, shaped and laid out under `spec`, as gameui
+/// reads it: glyphs and lines relative to the block's origin, with byte
+/// offsets into the content.
+pub(crate) fn extract(
+    buffer: &Buffer,
+    spec: &LayoutSpec<'_>,
+    source: &BufferSource,
+) -> ShapedLayout {
+    let prefix_len = source.prefix_len;
+    let line_starts = &source.line_starts;
 
     // Vertical: the column is as wide as the widest cluster row; each row is
     // centred within it by shifting its glyphs right by half the slack.
@@ -888,12 +1012,6 @@ fn shape_cut_layout(
     } else {
         0.0
     };
-
-    // cosmic-text reports `glyph.start` relative to the glyph's own buffer
-    // line, and span colours address the whole content, so each shaped line's
-    // start byte is added back. Vertical text also subtracts the `line_i`
-    // separators `vertical_stack_string` inserted.
-    let line_starts = crate::text::line_starts(&shaped_text);
 
     // Where a caret on an empty line stands: where its alignment would start
     // a line.
@@ -970,7 +1088,7 @@ fn shape_cut_layout(
         });
     }
 
-    let size = if content.is_empty() {
+    let size = if source.empty {
         (0.0, spec.line_height)
     } else {
         (width, height.max(spec.line_height))
@@ -978,9 +1096,9 @@ fn shape_cut_layout(
     ShapedLayout {
         glyphs,
         lines,
-        shown: shown as u32,
+        shown: source.shown as u32,
         size,
-        ink: OnceCell::new(),
+        ink: OnceLock::new(),
     }
 }
 
@@ -990,6 +1108,11 @@ mod paragraphs;
 
 // Where the cache cuts an ellipsized line, from the layouts it keeps.
 mod ellipsis;
+
+// Text shaped once and laid out at any width: a child of the cache for the
+// buffer it keeps and the counters it adds to.
+mod prepared;
+pub use prepared::{PreparedLayout, PreparedText};
 
 #[cfg(test)]
 mod tests {

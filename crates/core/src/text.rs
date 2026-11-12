@@ -282,6 +282,17 @@ pub(crate) fn shape_buffer(buffer: &mut Buffer, font_system: &mut FontSystem) {
     buffer.shape_until_scroll(font_system, false);
 }
 
+/// Lay `buffer` out again from the shaping it keeps, after its layout
+/// settings changed ([`crate::shaping::set_layout`]): shapes nothing, which
+/// debug builds check.
+pub(crate) fn lay_out_buffer(buffer: &mut Buffer, font_system: &mut FontSystem) {
+    debug_assert!(
+        buffer.lines.iter().all(|line| line.shape_opt().is_some()),
+        "laying a buffer out again shapes nothing"
+    );
+    buffer.shape_until_scroll(font_system, false);
+}
+
 /// Convert gameui's letter spacing (pixels) to cosmic-text's (em of the font size).
 pub(crate) fn letter_spacing_em(pixels: f32, font_size: f32) -> f32 {
     if font_size > 0.0 {
@@ -2247,6 +2258,18 @@ impl TextMeasurer {
         Arc::clone(&self.font_system)
     }
 
+    /// The shared font system, locked.
+    pub(crate) fn shared(&self) -> std::sync::MutexGuard<'_, SharedFontSystem> {
+        self.font_system.lock().expect("FontSystem poisoned")
+    }
+
+    /// Shape `block` once, as [`DrawList::text`](crate::DrawList::text)
+    /// records it, to measure and lay it out at any width without shaping it
+    /// again: see [`PreparedText`](crate::PreparedText).
+    pub fn prepare(&mut self, block: &TextBlock) -> crate::PreparedText {
+        crate::PreparedText::new(&mut self.shared(), block)
+    }
+
     /// Drop all cached measurements: the layouts and font metrics kept in the
     /// shared font system ([`SharedFontSystem::clear_caches`]). Loading a font
     /// through this crate already does this.
@@ -2424,7 +2447,11 @@ impl TextMeasurer {
             return None;
         }
         let mut shared = self.font_system.lock().expect("FontSystem poisoned");
-        let (layout, fs) = shared.layout_and_fonts(&LayoutSpec::of_block(block), &content);
+        let (layout, fs) = shared.resolve(
+            &LayoutSpec::of_block(block),
+            &content,
+            block.prepared.as_ref(),
+        );
         *layout.ink.get_or_init(|| ink_band(fs, &layout.glyphs))
     }
 
@@ -3562,6 +3589,12 @@ pub struct TextBlock {
     /// Where the block sits in selectable text, if it can be selected with the
     /// pointer (default `None`: it can't). See [`selectable`](Self::selectable).
     pub selectable: Option<crate::TextKey>,
+    /// The block's layout made in advance by a [`PreparedText`], so drawing
+    /// it shapes nothing (default `None`). Used only where it is exactly the
+    /// layout the block would be looked up as: a block changed after it was
+    /// attached, or drawn under a scale, is laid out through the shared
+    /// cache. See [`with_prepared`](Self::with_prepared).
+    pub prepared: Option<crate::PreparedLayout>,
 }
 
 impl TextBlock {
@@ -3594,6 +3627,7 @@ impl TextBlock {
             wrap: WrapMode::default(),
             vertical: false,
             selectable: None,
+            prepared: None,
         }
     }
 
@@ -3738,6 +3772,14 @@ impl TextBlock {
     /// [`TextSelection`](crate::TextSelection).
     pub fn selectable(mut self, key: crate::TextKey) -> Self {
         self.selectable = Some(key);
+        self
+    }
+
+    /// Draw the block with `layout`, made for it by
+    /// [`PreparedText::layout`](crate::PreparedText::layout), instead of
+    /// looking it up in the shared cache.
+    pub fn with_prepared(mut self, layout: crate::PreparedLayout) -> Self {
+        self.prepared = Some(layout);
         self
     }
 

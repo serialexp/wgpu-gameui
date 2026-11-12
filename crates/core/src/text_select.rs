@@ -136,6 +136,8 @@ struct DrawnBlock {
     direction: TextDirection,
     vertical: bool,
     ellipsize: bool,
+    /// The layout it was drawn with, when it was prepared.
+    prepared: Option<crate::PreparedLayout>,
 }
 
 impl DrawnBlock {
@@ -158,6 +160,7 @@ impl DrawnBlock {
             direction: block.direction,
             vertical: block.vertical,
             ellipsize: block.ellipsize,
+            prepared: block.prepared.clone(),
         }
     }
 
@@ -180,6 +183,7 @@ impl DrawnBlock {
         self.direction = block.direction;
         self.vertical = block.vertical;
         self.ellipsize = block.ellipsize;
+        self.prepared.clone_from(&block.prepared);
     }
 
     /// The layout it was drawn with, as [`LayoutSpec::of_block`] gives it.
@@ -621,7 +625,10 @@ impl TextSelection {
         let block = &drawn.block;
         let (width, height) = {
             let mut shared = font_system.lock().expect("FontSystem poisoned");
-            shared.layout(&block.spec(), &block.content).size
+            shared
+                .resolve(&block.spec(), &block.content, block.prepared.as_ref())
+                .0
+                .size
         };
         let spans_the_width =
             !block.ellipsize && (block.wrap != WrapMode::None || block.align != TextAlign::Start);
@@ -644,7 +651,7 @@ impl TextSelection {
     fn point_in(&self, index: usize, x: f32, y: f32) -> Option<(usize, usize)> {
         let block = &self.drawn[index].block;
         let mut shared = self.font_system.as_ref()?.lock().ok()?;
-        let layout = shared.layout(&block.spec(), &block.content);
+        let (layout, _) = shared.resolve(&block.spec(), &block.content, block.prepared.as_ref());
         let (caret, under) = hit_layout(layout, x - block.x, y - block.y);
         let len = block.content.len();
         Some((
@@ -1071,6 +1078,29 @@ mod tests {
         assert_eq!(hit_layout(layout, 500.0, 500.0).0, 5);
         let rects = highlight_rects(layout, 1..4);
         assert_eq!(rects.len(), 2, "one per line: {rects:?}");
+    }
+
+    #[test]
+    fn a_drawn_block_keeps_its_prepared_layout_to_hit_test_with() {
+        let fonts = fonts();
+        let mut measurer = crate::TextMeasurer::with_font_system(fonts.clone());
+        let plain = TextBlock::new("prepared text", 0.0, 0.0).with_size(16.0);
+        let layout = measurer.prepare(&plain).layout(&mut measurer, &plain);
+        let prepared = plain.clone().with_prepared(layout);
+        let mut drawn = DrawnBlock::of(&plain);
+        drawn.update(&prepared);
+        let mut shared = fonts.lock().unwrap();
+        let before = shared.layout_stats();
+        let (got, _) = shared.resolve(&drawn.spec(), &drawn.content, drawn.prepared.as_ref());
+        let size = got.size;
+        assert_eq!(
+            shared.layout_stats(),
+            before,
+            "its own layout, nothing looked up"
+        );
+        assert_eq!(size, prepared.prepared.as_ref().unwrap().size());
+        drawn.update(&plain);
+        assert!(drawn.prepared.is_none(), "a block without one clears it");
     }
 
     #[test]

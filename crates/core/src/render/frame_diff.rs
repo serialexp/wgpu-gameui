@@ -877,6 +877,9 @@ pub(crate) fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
         wrap,
         vertical,
         selectable,
+        // A prepared layout is the layout the rest of the fields give, so
+        // two blocks the same in those are drawn the same with or without.
+        prepared: _,
     } = a;
     let f = |v: f32| v.to_bits();
     let spans_same = spans.len() == b.spans.len()

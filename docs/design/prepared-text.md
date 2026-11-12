@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: partial — Phase 0 landed, Phases 1–5 outstanding
+Status: partial — Phases 0–2 landed, Phases 3–5 outstanding
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -34,23 +34,43 @@ everything inside them is checked.
       text is shaped and drawn in the same frame, the most recently used, so
       the budget decides only whether an unchanged text reshapes on a
       resize; Phase 4 checks what the bench scenes hold under it.
+- [x] **Phase 1 — one extraction, and `PreparedText` in core.**
+      `shape_cut_layout` is `set_buffer` (the shaping half, into
+      `Buffer::new_empty`), `set_layout` (line height, width, wrap, and
+      alignment set on every line) and `extract`, shared by the cache and
+      `PreparedText` (`crates/core/src/shaping/prepared.rs`).
+      `TextMeasurer::prepare`, `PreparedText::measure` / `layout`,
+      `PreparedLayout`, `TextBlock::prepared` / `with_prepared`;
+      `ShapedLayout::ink` and the handle's carets and visual glyphs are
+      `OnceLock`; `LayoutStats::laid_out`; `text::lay_out_buffer` asserts in
+      debug builds that a relayout shapes nothing. `SharedFontSystem` has a
+      process-unique id, stamped on the handle with the generation. Tests in
+      `shaping/prepared_tests.rs`. Unlike the plan, preparing also lays the
+      text out as it is measured, so `laid_out` counts only layouts made
+      from kept shaping: a hugging label is shaped once and laid out once
+      more, not twice.
+- [x] **Phase 2 — every lookup of a recorded block honours the handle.**
+      `SharedFontSystem::resolve` (and `resolve_carets` / `resolve_visual`)
+      returns the handle's layout when it is exactly what the site looks up.
+      Every site in the table goes through it: `prepare_texts`,
+      `refresh_texts`, underlines, highlights, `caret_layout` /
+      `visual_layout`, `measure_block_ink`, `TextSelection` (`DrawnBlock`
+      keeps the handle) and markdown's `shaped`. Tests: the renderer places
+      what the cache gives and shapes nothing, through preparing and a
+      refresh, and stale handles (new fonts, a changed block, a scale) fall
+      back to the cache (`text_prep_tests.rs`, `draw_list_caret_tests.rs`,
+      `text_select.rs`).
+- [x] **Settle: cosmic-text's relayout of a kept `Buffer` gives the glyphs a
+      fresh shape at that width gives.** Bit for bit, in every case
+      `prepared_tests.rs` walks one prepared text through and back: ten
+      contents (right to left and mixed, line breaks with CRLF and empty
+      lines, an empty and a blank text, a word wider than the width,
+      ligatures, CJK) in three directions, five widths with fractional ones
+      and zero, five alignments, four wraps, ellipsis on and off, two line
+      heights; faces, letter spacing both ways, spans, vertical text.
 
 ### Outstanding
 
-- [ ] **Phase 1 — one extraction, and `PreparedText` in core.** The glyph
-      extraction of `shape_cut_layout` (direction marks, vertical stacking
-      and centring, cell x, empty lines) becomes one function over a laid-out
-      `Buffer`, used by the cache and by `PreparedText`. `TextMeasurer::
-      prepare` shapes a block once and keeps the `Buffer`; `measure` and
-      `layout` lay it out without shaping; a `PreparedLayout` handle attaches
-      to a `TextBlock`. `ShapedLayout`'s lazy fields become thread-safe.
-      `LayoutStats::laid_out` counts layouts made from kept shaping, and the
-      one relayout function asserts in debug builds that it shaped nothing.
-- [ ] **Phase 2 — every lookup of a recorded block honours the handle.** One
-      resolver takes the spec and content a site would look up and the
-      block's handle, and returns the handle's layout when it was made for
-      exactly that, else the shared cache's. Every site in the table below,
-      including `TextSelection`'s copies (`DrawnBlock`), goes through it.
 - [ ] **Phase 3 — an ellipsized text that fits is shaped once when only
       drawn.** When its unwrapped layout is not in the cache, the block is
       shaped uncut under its ellipsis key first: if it fits, that is its
@@ -67,9 +87,6 @@ everything inside them is checked.
       a frame (about 229 in 230 frames, as immediate mode); TODO, TODO_DONE,
       `retained-mode.md`, `shared-text-layout.md` (a note under its "one
       cache" premise) and the bench README updated.
-- [ ] **Settle: cosmic-text's relayout of a kept `Buffer` gives the glyphs a
-      fresh shape at that width gives**, in every case the exactness tests
-      cover; a case that differs stops the work and goes to Bart.
 - [ ] **Defer: a prepared text editing its paragraphs in place.** The shared
       cache shapes only the paragraphs a long text's edit touched
       (`shaping/paragraphs.rs`); a `PreparedText` prepared again on an edit

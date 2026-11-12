@@ -153,6 +153,92 @@ fn refreshing_recoloured_blocks_matches_preparing_them_from_nothing() {
     assert_eq!(kept.text_instances, fresh.text_instances);
 }
 
+/// `blocks`, each with the layout a prepared text makes for it.
+fn with_prepared(fs: &FontSystemHandle, blocks: &[TextBlock]) -> Vec<TextBlock> {
+    let mut measurer = crate::TextMeasurer::with_font_system(fs.clone());
+    blocks
+        .iter()
+        .map(|block| {
+            let layout = measurer.prepare(block).layout(&mut measurer, block);
+            block.clone().with_prepared(layout)
+        })
+        .collect()
+}
+
+fn shaped(fs: &FontSystemHandle) -> u64 {
+    fs.lock().unwrap().layout_stats().shaped
+}
+
+/// Prepared blocks place the glyphs the shared cache gives, shaping nothing,
+/// whether prepared from nothing or refreshed in place; once the fonts have
+/// changed their layouts are stale and the cache's are placed.
+#[test]
+fn prepared_blocks_place_what_the_cache_gives_and_shape_nothing() {
+    let (mut cpu, font) = cpu(None);
+    let fs = Arc::clone(&cpu.font_system);
+    let commands = || [0..3, 3..4];
+    let plain = recoloured(&font, 40);
+    let prepared = with_prepared(&fs, &plain);
+    let start = shaped(&fs);
+    let mut kept = MsdfPrepared::default();
+    cpu.prepare_texts(&mut kept, grid(), &prepared, commands());
+    assert_eq!(shaped(&fs), start, "placed from the prepared layouts");
+    let mut fresh = MsdfPrepared::default();
+    cpu.prepare_texts(&mut fresh, grid(), &plain, commands());
+    assert_eq!(shaped(&fs) - start, 4, "the cache shapes each block");
+    assert_eq!(kept.text_instances, fresh.text_instances);
+    assert_eq!(kept.block_sweeps, fresh.block_sweeps);
+
+    // Recoloured, the layouts still hold: a refresh places them again.
+    let next: Vec<TextBlock> = recoloured(&font, 220)
+        .into_iter()
+        .zip(&prepared)
+        .map(|(block, was)| block.with_prepared(was.prepared.clone().unwrap()))
+        .collect();
+    let changes = [Change::Look, Change::Look, Change::Look, Change::Same];
+    let start = shaped(&fs);
+    assert!(cpu.refresh_texts(&mut kept, grid(), &next, &changes));
+    let mut fresh = MsdfPrepared::default();
+    cpu.prepare_texts(&mut fresh, grid(), &recoloured(&font, 220), commands());
+    assert_eq!(kept.text_instances, fresh.text_instances);
+    assert_eq!(kept.work.blocks_looked_up, 3);
+    assert_eq!(
+        shaped(&fs),
+        start,
+        "the cache had them; the handles placed them"
+    );
+
+    // New fonts: the handles are stale, so the cache shapes the blocks again.
+    fs.lock().unwrap().clear_caches();
+    let start = shaped(&fs);
+    let mut stale = MsdfPrepared::default();
+    cpu.prepare_texts(&mut stale, grid(), &prepared, commands());
+    assert_eq!(shaped(&fs) - start, 4, "stale handles are not used");
+    let mut fresh = MsdfPrepared::default();
+    cpu.prepare_texts(&mut fresh, grid(), &plain, commands());
+    assert_eq!(stale.text_instances, fresh.text_instances);
+}
+
+/// A block changed after its layout was attached is laid out as it is now.
+#[test]
+fn a_handle_on_a_block_changed_since_is_not_used() {
+    let (mut cpu, font) = cpu(None);
+    let fs = Arc::clone(&cpu.font_system);
+    let plain = [block("before", &font, 10.0)];
+    let prepared = with_prepared(&fs, &plain);
+    let mut changed = prepared.clone();
+    changed[0].content = "after, and longer".into();
+    changed[0].max_width = 40.0;
+    let mut got = MsdfPrepared::default();
+    cpu.prepare_texts(&mut got, grid(), &changed, once(0..1));
+    let mut cleared = changed.clone();
+    cleared[0].prepared = None;
+    let mut want = MsdfPrepared::default();
+    cpu.prepare_texts(&mut want, grid(), &cleared, once(0..1));
+    assert_eq!(got.text_instances, want.text_instances);
+    assert_eq!(got.text_instances.len(), "after,andlonger".len());
+}
+
 /// What a refresh cannot do it declines, and the caller prepares from nothing.
 #[test]
 fn a_refresh_declines_a_block_that_moved_or_a_list_of_another_shape() {

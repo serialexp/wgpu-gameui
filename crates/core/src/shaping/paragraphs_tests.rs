@@ -179,7 +179,7 @@ fn the_cache_lays_a_long_text_out_from_its_last_version() {
         lines: got.1,
         shown: typed.len() as u32,
         size: got.2,
-        ink: OnceCell::new(),
+        ink: OnceLock::new(),
     };
     assert_same(&got, &want, "typed into line 120");
     assert_eq!(shared.layout_stats().reshaped, 1, "laid out from the first");

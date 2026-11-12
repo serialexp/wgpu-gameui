@@ -1275,7 +1275,11 @@ impl DrawList {
         runs.sort_unstable_by_key(|(range, _)| range.start);
         let handle = self.text_measurer.font_system_handle();
         let mut shared = handle.lock().expect("FontSystem poisoned");
-        let layout = shared.layout(&crate::shaping::LayoutSpec::of_block(block), &block.content);
+        let (layout, _) = shared.resolve(
+            &crate::shaping::LayoutSpec::of_block(block),
+            &block.content,
+            block.prepared.as_ref(),
+        );
         // Just below the baseline, so it clears the letter bottoms and sits in
         // the descender zone, at a gap that scales with the size.
         let gap = block.font_size * 0.12;
@@ -1334,7 +1338,9 @@ impl DrawList {
         let content = content.as_deref().unwrap_or(&block.content);
         let scale = self.text_scale();
         let spec = scaled_spec(block, scale);
-        let carets = self.shared_layouts(|shared| shared.caret_layout(&spec, content));
+        let carets = self.shared_layouts(|shared| {
+            shared.resolve_carets(&spec, content, block.prepared.as_ref())
+        });
         if scale == 1.0 {
             return carets;
         }
@@ -1359,7 +1365,9 @@ impl DrawList {
         let content = content.as_deref().unwrap_or(&block.content);
         let scale = self.text_scale();
         let spec = scaled_spec(block, scale);
-        let glyphs = self.shared_layouts(|shared| shared.visual_layout(&spec, content));
+        let glyphs = self.shared_layouts(|shared| {
+            shared.resolve_visual(&spec, content, block.prepared.as_ref())
+        });
         if scale == 1.0 {
             return glyphs;
         }
@@ -3001,8 +3009,11 @@ impl DrawList {
         let rects = {
             let handle = self.text_measurer.font_system_handle();
             let mut shared = handle.lock().expect("FontSystem poisoned");
-            let layout =
-                shared.layout(&crate::shaping::LayoutSpec::of_block(block), &block.content);
+            let (layout, _) = shared.resolve(
+                &crate::shaping::LayoutSpec::of_block(block),
+                &block.content,
+                block.prepared.as_ref(),
+            );
             crate::text_select::highlight_rects(layout, range)
         };
         // The block's own clip is in screen space; bring it back through the
