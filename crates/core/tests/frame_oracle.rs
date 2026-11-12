@@ -577,6 +577,63 @@ fn the_renderer_reports_how_each_list_compares_with_last_frame() {
     assert!(stats[3].records_place > 0);
 }
 
+/// A layer that empties, and fills again, keeps its place in the render call:
+/// the layer over it is compared with itself, not with the one under it, the
+/// refilled one with what it last drew, and every frame draws as a fresh
+/// renderer draws it.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_layer_emptied_and_filled_again_leaves_the_layers_after_it_their_places() {
+    let mut run = Run::new(&[], &Look::default(), &[]);
+    run.gpu.renderer().set_check_plan(true);
+    run.gpu.renderer().set_frame_comparison(true);
+    let layer = |run: &Run, i: usize, filled: bool| {
+        let mut list = run.list();
+        if filled {
+            let x = 8.0 + 90.0 * i as f32;
+            list.chrome_rect(
+                Rect::new(x, 20.0, 80.0, 50.0),
+                4.0,
+                1.0,
+                [0.2 + 0.3 * i as f32, 0.4, 0.6, 0.9],
+                [0.8; 4],
+            );
+            list.text(TextBlock::new(format!("Layer {i}"), x + 6.0, 30.0).with_size(14.0));
+        }
+        list
+    };
+    // Whether the middle layer has anything in it, per frame.
+    let middle = [true, false, false, true, true];
+    let mut compared = Vec::new();
+    let mut failures = Vec::new();
+    for (n, &filled) in middle.iter().enumerate() {
+        let lists = [
+            layer(&run, 0, true),
+            layer(&run, 1, filled),
+            layer(&run, 2, true),
+        ];
+        let kept = layered(&mut run, &lists);
+        let s = run.gpu.renderer().frame_stats();
+        compared.push((s.lists_compared, s.lists_keeping_places, s.plans_replayed));
+        let mut fresh = run.fresh();
+        let from_nothing = layered(&mut fresh, &lists);
+        if let Some((count, x, y)) = difference(&kept, &from_nothing, Tolerance::AtlasSampling) {
+            failures.push(format!(
+                "frame {n}: {count} pixels differ, the first at ({x}, {y})"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // (lists compared, keeping their places, plans replayed). The empty
+    // layer is not compared; the one over it always keeps its place, and the
+    // middle one, filled again as it was, replays its plan.
+    assert_eq!(
+        compared,
+        [(0, 0, 0), (2, 2, 2), (2, 2, 2), (3, 3, 3), (3, 3, 3)],
+        "per frame"
+    );
+}
+
 /// The scene again with its colours changed: where everything is stays.
 fn tinted_scene(list: &mut DrawList, art: &Art, frame: usize, hue: f32) {
     let shift = (frame % 7) as f32 * 3.0;

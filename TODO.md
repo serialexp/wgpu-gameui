@@ -51,12 +51,6 @@ none chosen yet (Bart).
       view keeps its list. Moot for the bench scenes since only clipping nodes
       keep lists (rows: 2 lists), but a long list of nested scroll panes would
       hold one per pane ever drawn.
-- [ ] **P2 — an empty layer moves later lists to other places (core, found
-      by both reviewers 2026-11-11).** A list with no paint stream goes
-      through `render_unordered` and takes no comparison place
-      (`ui_renderer.rs:2040`), so the lists after it are compared, planned
-      and stored in the place of the one before. Correct, but a layer
-      emptying rebuilds every later one. Give such a list its place.
 - [ ] **P2 — rerun the comparison on a quiet machine.** `rows-scrl` /
       `rows-hovr` differences are noise. The README's retained numbers
       predate the first four items done (prepared text reused, patching,

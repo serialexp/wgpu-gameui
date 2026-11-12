@@ -1584,6 +1584,16 @@ impl UiRenderer {
         })
     }
 
+    /// Take the next place for a list drawn without a paint stream, which is
+    /// neither compared nor planned, so the lists after it are compared with
+    /// the ones drawn in their own places. What was kept there stays: the
+    /// list drawn there next is compared with the last one that was, as after
+    /// a frame that drew nothing, and its records, not used this frame, are
+    /// given back at the next.
+    fn hold_place(&mut self) {
+        self.next_snapshot += 1;
+    }
+
     /// Whether lists are drawn in paint order (see `set_paint_order`).
     fn paint_order(&self) -> bool {
         #[cfg(feature = "paint-order-oracle")]
@@ -2090,6 +2100,9 @@ impl UiRenderer {
         self.frame_stats.paint_runs += draw_list.paint_commands().len();
 
         if draw_list.paint_cmds.is_empty() {
+            if self.compare_frames {
+                self.hold_place();
+            }
             self.render_unordered(device, queue, encoder, view, draw_list);
         } else {
             self.render_batches(device, queue, encoder, view, draw_list);

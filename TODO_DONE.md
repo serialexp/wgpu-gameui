@@ -305,6 +305,22 @@ then the dated batches in the order they were written.
       each compares as a look, the refresh equals a fresh prepare, and a
       moved span boundary or range is a place). The range colours were
       beyond the item: an editor recolouring its syntax was a place too.
+- [x] **P2 — an empty layer moves later lists to other places (core, found
+      by both reviewers 2026-11-11).** A list with no paint stream goes
+      through `render_unordered` and takes no comparison place
+      (`ui_renderer.rs:2040`), so the lists after it are compared, planned
+      and stored in the place of the one before. Correct, but a layer
+      emptying rebuilds every later one. Give such a list its place.
+      **Done 2026-11-12.** A list drawn without a paint stream takes its
+      place (`UiRenderer::hold_place`), leaving what was kept there as a
+      frame that drew nothing in it does: the list drawn there next is
+      compared with the last one that was, and the lists after it with
+      their own. Test (GPU, ignored):
+      `a_layer_emptied_and_filled_again_leaves_the_layers_after_it_their_places`
+      (`tests/frame_oracle.rs`): the layer over one that empties keeps its
+      place every frame, the refilled one replays its plan, and each frame
+      draws as a fresh renderer's; without the fix the top layer lost its
+      place when the middle one emptied and when it refilled.
 
 ---
 
