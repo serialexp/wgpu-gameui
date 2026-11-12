@@ -372,7 +372,7 @@ timed five times with the renderer's caches warm. Immediate mode has nothing
 to build: its first frame is a frame.
 
 `UI_COMPARE_REUSE=1` turns on the renderer's frame comparison
-(`UiRenderer::set_frame_comparison`, off by default), which draws a list in
+(`UiRenderer::set_frame_comparison`, on by default in the library and set explicitly here), which draws a list in
 which nothing moved from the plan kept for it; results are then named with
 `+r`. It matters here because a retained tree hands the renderer the same
 list, untouched, when nothing in it changed.

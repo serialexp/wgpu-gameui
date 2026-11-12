@@ -1,6 +1,6 @@
 # Frame-to-frame reuse
 
-Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept; and Phase 5's retained GPU storage: each place keeps its records on the GPU, and a frame drawn from its kept plan uploads only the records whose look changed. 2026-11-12: orders are reused for units no change reaches (Phase 6, in the form below, which needs neither the comparison nor a rollback)
+Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (it is on by default since 2026-11-12) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept; and Phase 5's retained GPU storage: each place keeps its records on the GPU, and a frame drawn from its kept plan uploads only the records whose look changed. 2026-11-12: orders are reused for units no change reaches (Phase 6, in the form below, which needs neither the comparison nor a rollback)
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -62,7 +62,7 @@ Tick items as they land.
       names which stage's inputs changed.
 
 - [x] **Phase 1 — snapshot, context key and stage-wise comparison**
-      (`render/frame_diff.rs`; `UiRenderer::set_frame_comparison`, default off).
+      (`render/frame_diff.rs`; `UiRenderer::set_frame_comparison`; off until 2026-11-12, now on).
       Each render call keeps the records of its list (up to 8 places per frame:
       the base list and the layers over it) with the context key (pixel grid,
       viewport, font-system generation, texture resolution epoch), and compares
@@ -181,6 +181,20 @@ Tick items as they land.
       tenth), so Phase 3's saving on a partly changed frame is a tenth less the
       comparison's cost. The next savings are in text (Phase 4) and ordering
       (Phase 6).
+- [x] **The comparison is on by default** (2026-11-12, Bart's decision, on
+      "The +8% at 10,000 cells" below: a frame where everything moved costs
+      about 1% more instructions, one that repeats about a sixth, and one
+      where a few units moved about a tenth less). The price is that each
+      place keeps a copy of its list's records and a plan (the list itself is
+      7 MB at 10,000 cells of chrome and a label); `set_frame_comparison(false)`
+      keeps nothing. Two tests that assumed it off changed:
+      `shadow_batching_and_uploads_stay_structurally_bounded` renders its
+      second list on a renderer of its own, because a place whose list grows
+      reallocates its kept storage. Still failing, and not from this:
+      `alternating_runs_share_one_pass_and_keep_their_order` (ignored, GPU)
+      counts the draw calls of text it puts off the target, which the
+      culling of 2026-11-08 no longer draws; it fails with the comparison
+      off too.
 - [x] **Phase 6 — orders reused for the units no change reaches**
       (2026-11-12). Not the prefix rule and not a rollback of the grid, but the
       forward closure below, which turned out to be cheap: a unit has the
@@ -251,13 +265,6 @@ Tick items as they land.
 
 ### Outstanding
 
-- [ ] **Turn the comparison on by default.** Its two conditions are met
-      (2026-11-12, "The +8% at 10,000 cells" below: the all-moved cost is
-      +1.1% instructions, and Phases 3 and 6 reuse something on a partly
-      changed frame). What is left is a choice the measurements do not make:
-      each place then keeps a copy of its list's records and a plan (the
-      list itself is 7 MB at 10,000 cells of chrome and a label), and a frame
-      where all moved pays 1% for nothing.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
       (`scroll`, `para`) hits too. Measured first (2026-11-12, below): the
       atlas tile fetch is about 18% of a `scroll` or `para` frame. Narrow step

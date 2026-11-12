@@ -138,6 +138,7 @@ fn bench(c: &mut Criterion) {
         // What a reused frame would skip.
         group.bench_with_input(BenchmarkId::new("recompute", n), &n, |b, _| {
             let ui = gpu.renderer();
+            ui.set_frame_comparison(false);
             b.iter(|| {
                 ui.begin_frame();
                 let mut encoder = device.create_command_encoder(&Default::default());
@@ -150,6 +151,7 @@ fn bench(c: &mut Criterion) {
         // by themselves, for the `with_comparison_*` runs to be read against.
         group.bench_with_input(BenchmarkId::new("recompute_alternating", n), &n, |b, _| {
             let ui = gpu.renderer();
+            ui.set_frame_comparison(false);
             let mut flip = false;
             b.iter(|| {
                 flip = !flip;
@@ -168,6 +170,7 @@ fn bench(c: &mut Criterion) {
             &n,
             |b, _| {
                 let ui = gpu.renderer();
+                ui.set_frame_comparison(false);
                 let mut flip = false;
                 b.iter(|| {
                     flip = !flip;

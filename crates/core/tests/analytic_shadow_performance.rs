@@ -158,6 +158,12 @@ fn shadow_batching_and_uploads_stay_structurally_bounded() {
 
     let mut alternating = DrawList::new();
     build_alternating_shadow_chrome(&mut alternating);
+    // On a renderer of its own: the place that drew the contiguous list keeps
+    // its records on the GPU, and a list twice as long makes that storage
+    // grow, which counts as a reallocation. This one measures a first frame.
+    let Some(mut fixture) = RenderFixture::new() else {
+        return;
+    };
     let alternating_stats = fixture.render(&alternating);
     assert_eq!(alternating_stats.shadow_instances, SHADOW_COUNT);
     assert_eq!(alternating_stats.primitives, SHADOW_COUNT * 2);

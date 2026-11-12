@@ -669,7 +669,7 @@ pub struct UiRenderer {
     /// resolve to another sprite or border.
     nine_slice_epoch: u64,
     /// Whether each list is compared with the last frame's
-    /// (`set_frame_comparison`).
+    /// (`set_frame_comparison`, on by default).
     compare_frames: bool,
     /// The records of the last frame's lists, one per place in a render call
     /// (the base list, then each layer).
@@ -1045,7 +1045,7 @@ impl UiRenderer {
             nine_slices: Vec::new(),
             nine_slice_names: HashMap::new(),
             nine_slice_epoch: 0,
-            compare_frames: false,
+            compare_frames: true,
             snapshots: Vec::new(),
             next_snapshot: 0,
             plans: Vec::new(),
@@ -1486,8 +1486,11 @@ impl UiRenderer {
     /// (`lists_compared` and the `records_*` counts), and draw a list in which
     /// nothing moved, resized or changed family from the plan kept for it
     /// (`plans_replayed`; the order, the sort and the batches are not run).
-    /// Off by default: keeping a frame costs a copy of its records
-    /// (`docs/design/frame-reuse.md`).
+    /// On by default: keeping a frame costs a copy of its records and a
+    /// plan per place, and about 1% of a frame in which everything moved;
+    /// a frame that repeats costs a sixth, and one in which a few units
+    /// moved about a tenth less (`docs/design/frame-reuse.md`). Turn it off
+    /// to keep nothing between frames.
     pub fn set_frame_comparison(&mut self, on: bool) {
         self.compare_frames = on;
         if !on {
