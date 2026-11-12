@@ -418,6 +418,16 @@ then the dated batches in the order they were written.
       runs alone at load 20. The test now waits for `Sound::is_ready`
       (`Rig::wait_for_ready`), the condition the player goes by: 0 of 300 alone, and no
       failure in 40 runs of the media suite. The player was right; only the test changed.
+- [x] **`player::tests::out_of_pictures_the_clock_waits_for_them`** (`crates/media/src/player_tests.rs`)
+      failed now and then under load (recorded three times: 2026-10-21, -23 and -29), a later
+      picture shown a second on than the second one.
+      **Done 2026-11-12.** The worker does not rest at `Ahead::frames` while it has less than
+      the 300 ms sound floor (`SOUND_FLOOR`, `worker.rs`) known ahead: in `h264_aac.mp4` it
+      rests with eight pictures queued, not two. The test waited for two and read the queue
+      before the worker got further, so a slow test saw up to picture 8 (a 500 ms sleep there
+      made it fail every time). It now plays `baseline_full_range.mp4`, which has no sound, so
+      the worker rests at exactly two until the player takes one: 0 of 200 runs failed at load
+      11, and it passed with the 500 ms sleep in. Only the test changed.
 
 ---
 

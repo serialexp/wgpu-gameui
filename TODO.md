@@ -102,15 +102,6 @@ Structural (larger designs; judge on the new ui-compare scenarios first):
 
 New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios section).
 
-## Flaky media test (found 2026-10-23)
-
-- [ ] **`player::tests::out_of_pictures_the_clock_waits_for_them`** (`crates/media/src/player_tests.rs:367`)
-      failed once in a full `cargo test --workspace` on a loaded machine (picture 2 was not the
-      one shown a second on) and passed five times alone and in a `--no-fail-fast` rerun. It
-      waits for two queued pictures, then asserts what the decode worker has *not* done yet,
-      which depends on how far that thread got; the test should hold the worker (or count its
-      decodes) rather than race it.
-
 ## Flaky allocation test (found 2026-11-11)
 
 - [ ] **`render::draw_plan::tests::lists::planning_a_warmed_frame_allocates_nothing`**
@@ -185,15 +176,6 @@ New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios se
       window until Escape. Needs some way to end the wait that isn't a
       timer: the app reporting the window's state after applying the
       change, say, if that can be told apart from macOS's stale reports.
-- [ ] **`out_of_pictures_the_clock_waits_for_them` fails under a full
-      workspace run.** Found 2026-10-21: it passes alone, but in
-      `cargo test --workspace --all-features` it failed in most runs, the
-      clock at 133 ms where it expects picture 3's 66 ms
-      (`crates/media/src/player_tests.rs:367`). Under load the worker
-      seems to decode past the two pictures `Ahead::frames` allows before
-      the test checks, or the clock reads a later picture; a race between
-      the test and the decoding worker, not a timing assert, so it wants
-      the test (or the player) to wait on what the worker did.
 
 ## Video phase 3 follow-ups (review, 2026-10-16)
 
@@ -806,11 +788,3 @@ sharp at any size, list selection and gamepad navigation.
       with a renderer pass `with_font_system`; tests and font-less hosts pay
       it. Share one lazily made system across the stack's layers, or make
       `new()` take the process-wide `shared_font_system()`.
-- [ ] **P2 — `player::tests::out_of_pictures_the_clock_waits_for_them` fails
-      now and then under load.** Seen once (2026-10-29) in a full
-      `cargo test --workspace --all-features`, at
-      `crates/media/src/player_tests.rs:367` (the shown picture is checked to
-      be picture 2 a second on, with two pictures decoded ahead); it passed
-      alone five times and in the next full run. Likely the worker decodes a
-      third picture before the check on a busy machine; make the test hold
-      the worker at two pictures rather than rely on it being slow.

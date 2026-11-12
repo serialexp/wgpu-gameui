@@ -350,15 +350,21 @@ fn a_late_update_skips_to_the_picture_due_and_counts_the_rest() {
 
 /// Without pictures to show, the clock waits at the end of the one shown
 /// (the state says loading) and goes on from there when they come.
+///
+/// The file has no sound: with sound, the worker decodes past `Ahead::frames`
+/// until it has the sound floor's worth, so how many pictures are queued a
+/// second on would depend on how far it got. Without, it rests at two.
 #[test]
 fn out_of_pictures_the_clock_waits_for_them() {
+    // 25 pictures a second.
+    let picture = |index: i64| index * 40_000_000;
     let ahead = Ahead {
         frames: 2,
         ..Ahead::default()
     };
     let mut rig = Rig::with(
         Player::with_options(
-            reader("h264_aac.mp4"),
+            reader("baseline_full_range.mp4"),
             Options {
                 ahead,
                 sound: false,
