@@ -6,7 +6,8 @@
 //! [`text::paragraphs`](crate::text::paragraphs)) out on its own, from its
 //! own text, the spec's metrics, width and alignment, so a paragraph's glyphs
 //! and lines are the same wherever it stands; only its height and its byte
-//! offset move it. The one exception is the direction mark a forced
+//! offset move it, and, for text without a width, the widest line, which
+//! aligning it goes by (`align_unwrapped`, run on the stacked layout). The one exception is the direction mark a forced
 //! direction puts at the head of the text: it sets the first paragraph's
 //! direction and no other's, so the first paragraph is taken only from a
 //! first paragraph, unless the direction is `Auto`.
@@ -20,7 +21,7 @@ use std::sync::OnceLock;
 
 use cosmic_text::FontSystem;
 
-use super::{LayoutSpec, ShapedGlyph, ShapedLayout, ShapedLine, shape_layout};
+use super::{LayoutSpec, ShapedGlyph, ShapedLayout, ShapedLine, align_unwrapped, shape_layout};
 use crate::text::{TextDirection, paragraphs};
 
 /// How long a text has to be, in bytes, for its paragraphs to be taken from
@@ -189,13 +190,18 @@ pub(super) fn reshape(
             height += line.height;
         }
     }
-    Some(ShapedLayout {
+    let mut layout = ShapedLayout {
         glyphs,
         lines,
         shown: content.len() as u32,
         size: (width, height.max(spec.line_height)),
         ink: OnceLock::new(),
-    })
+    };
+    // Without a width, a line's place hangs on the widest line, which the
+    // paragraphs taken from another layout were placed by: place them by
+    // this one's.
+    align_unwrapped(&mut layout, spec);
+    Some(layout)
 }
 
 #[cfg(test)]

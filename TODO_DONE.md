@@ -378,6 +378,28 @@ then the dated batches in the order they were written.
       `the_layout_caches_counted_bytes_are_what_it_holds`
       (`tests/kept_shaping_bytes.rs`): 3,000 labels count within a tenth of
       what the allocator handed out (1.02); with 96 B a layout it is 0.86.
+- [x] **P3 — the unwrapped layout of right-to-left text sits at x ≈ 8.5e37
+      (core, found 2026-11-12).** `natural()` has no width, so
+      `shape_cut_layout` lays it out at `f32::MAX / 4` and cosmic-text starts
+      a right-to-left line at the width: the glyphs' x lose their precision.
+      Only advances and sizes are read from it today (the ellipsis cut,
+      measuring), so nothing is drawn wrong; anything that places its glyphs
+      would be. `docs/design/prepared-text.md`, deferred bullet.
+      **Done 2026-11-12.** It was wider than noted: every block drawn
+      without a width was laid out at `f32::MAX / 4`, so a right-to-left
+      label, or a centred or right-aligned one, was drawn at about 8.5e37
+      (or half that), off any screen. `set_layout` now gives cosmic-text no
+      width, which lines each paragraph up at the origin within its own,
+      and `align_unwrapped` aligns each line within the block's widest
+      (by its alignment, and by its paragraph's direction, the new
+      `ShapedLine::rtl`, for `Start` and `End`), also on a layout stacked
+      from another's paragraphs, whose widest line an edit can change.
+      Tests: `text_without_a_width_is_aligned_within_its_widest_line`
+      (`shaping.rs`): right-to-left, left-to-right and mixed texts, one and
+      several paragraphs, under every alignment and direction, lay out as
+      at the width of their widest line; the paragraph-reuse test runs
+      three specs without a width too. Each fails with its half of
+      `align_unwrapped` taken out.
 
 ---
 

@@ -26,13 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P3 — the unwrapped layout of right-to-left text sits at x ≈ 8.5e37
-      (core, found 2026-11-12).** `natural()` has no width, so
-      `shape_cut_layout` lays it out at `f32::MAX / 4` and cosmic-text starts
-      a right-to-left line at the width: the glyphs' x lose their precision.
-      Only advances and sizes are read from it today (the ellipsis cut,
-      measuring), so nothing is drawn wrong; anything that places its glyphs
-      would be. `docs/design/prepared-text.md`, deferred bullet.
 - [ ] **P2 — rerun the comparison on a quiet machine.** `rows-scrl` /
       `rows-hovr` differences are noise. The README's retained numbers
       predate the first four items done (prepared text reused, patching,

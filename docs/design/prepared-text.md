@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: complete — Phases 0–5 landed, a follow-up on changed texts; two items deferred
+Status: complete — Phases 0–5 landed, follow-ups on changed texts and on text without a width; one item deferred
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -123,6 +123,11 @@ everything inside them is checked.
       layouts and two sizes. A changed label: 43 allocations to 17 (a new
       one 36), checked by `a_changed_label_allocates_less_than_a_new_one`;
       shape and layout counts unchanged.
+- [x] **The unwrapped layout of right-to-left text sat at x ≈ 8.5e37**
+      (found by both reviewers, 2026-11-12; fixed the same day): text without
+      a width is laid out by cosmic-text without one and each line aligned
+      within the widest (`align_unwrapped` in `shaping.rs`). Every block
+      drawn without a width had it, not only `natural()`'s layouts.
 
 ### Outstanding
 
@@ -133,13 +138,6 @@ everything inside them is checked.
       so replacing only those that changed is possible later. Until then an
       edit to a long text in a retained node shapes it whole: a 100 KB
       paragraph is the representative size to time when this is taken up.
-- [ ] **Defer: the unwrapped layout of right-to-left text sits at
-      x ≈ 8.5e37** (found by both reviewers, 2026-11-12): `natural()` has no
-      width, `shape_cut_layout` lays it out at `f32::MAX / 4`, and
-      cosmic-text starts a right-to-left line at the width, so the glyphs'
-      x lose their precision. Only advances and sizes are read from it
-      today (the ellipsis cut, measuring), so nothing is drawn wrong; noted
-      in `TODO.md`.
 
 ## Why this exists
 

@@ -36,6 +36,23 @@ fn specs() -> Vec<LayoutSpec<'static>> {
             wrap: WrapMode::None,
             ..base
         },
+        // Without a width, where a line stands hangs on the widest, which an
+        // edit can change.
+        LayoutSpec {
+            max_width: None,
+            ..base
+        },
+        LayoutSpec {
+            max_width: None,
+            align: TextAlign::Center,
+            ..base
+        },
+        LayoutSpec {
+            max_width: None,
+            align: TextAlign::End,
+            direction: TextDirection::Rtl,
+            ..base
+        },
     ]
 }
 

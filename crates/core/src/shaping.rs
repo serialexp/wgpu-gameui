@@ -510,6 +510,8 @@ pub(crate) struct ShapedLine {
     /// The line's advance, as cosmic-text reports it: what the layout's
     /// width is the widest of.
     pub width: f32,
+    /// Its paragraph reads right to left: where `Start` and `End` put it.
+    pub rtl: bool,
 }
 
 /// A laid-out string: its glyphs, including outline-less ones such as spaces,
@@ -1048,8 +1050,11 @@ pub(crate) fn set_layout(buffer: &mut Buffer, spec: &LayoutSpec<'_>) {
         buffer.set_wrap(Wrap::None);
         buffer.set_size(spec.max_width, None);
     } else {
+        // Without a width nothing wraps, and cosmic-text lines each
+        // paragraph up within its own width, at the origin: `align_unwrapped`
+        // aligns them within the block's.
         buffer.set_wrap(spec.wrap.into());
-        buffer.set_size(Some(spec.max_width.unwrap_or(f32::MAX / 4.0)), None);
+        buffer.set_size(spec.max_width, None);
     }
     // `None` is cosmic-text's start of the line. Vertical text never sets a
     // cosmic align: `extract` centres each row within the column itself,
@@ -1200,15 +1205,51 @@ pub(crate) fn extract(
             left,
             right,
             width: run.line_w,
+            rtl: run.rtl,
         });
     }
 
-    ShapedLayout {
+    let mut layout = ShapedLayout {
         glyphs,
         lines,
         shown: source.shown as u32,
         size: totals.size(spec, source),
         ink: OnceLock::new(),
+    };
+    align_unwrapped(&mut layout, spec);
+    layout
+}
+
+/// Align the lines of horizontal text laid out without a width within the
+/// block, which is as wide as its widest line: each line moved to where its
+/// alignment (and, for `Start` and `End`, its paragraph's direction) puts
+/// it, wherever it stood. cosmic-text, given no width, lines each paragraph
+/// up within its own; a layout stacked from other layouts' paragraphs has
+/// them where those layouts' widths put them.
+pub(crate) fn align_unwrapped(layout: &mut ShapedLayout, spec: &LayoutSpec<'_>) {
+    if spec.max_width.is_some() || spec.vertical {
+        return;
+    }
+    let block = layout.size.0;
+    for line in &mut layout.lines {
+        // How far along the slack the line sits: 0 flush left, 1 flush right.
+        let along = match (spec.align, line.rtl) {
+            (TextAlign::Left, _) | (TextAlign::Start, false) | (TextAlign::End, true) => 0.0,
+            (TextAlign::Right, _) | (TextAlign::Start, true) | (TextAlign::End, false) => 1.0,
+            (TextAlign::Center, _) => 0.5,
+        };
+        let empty = line.glyphs.is_empty();
+        let width = if empty { 0.0 } else { line.width };
+        let shift = (block - width).max(0.0) * along - line.left;
+        if shift == 0.0 {
+            continue;
+        }
+        for glyph in &mut layout.glyphs[line.glyphs.start as usize..line.glyphs.end as usize] {
+            glyph.rel_x += shift;
+            glyph.cell_x += shift;
+        }
+        line.left += shift;
+        line.right += shift;
     }
 }
 
@@ -1661,6 +1702,64 @@ mod tests {
             assert_eq!(b.byte_start as usize, text.len() - 1, "{text:?}");
             let last = layout.lines.last().unwrap();
             assert_eq!(last.byte_start as usize, text.len() - 1, "{text:?}");
+        }
+    }
+
+    /// A block without a width is as wide as its widest line, and its
+    /// lines are aligned within that: laid out as it would be given that
+    /// width, whatever the direction of each paragraph. (Right-to-left
+    /// paragraphs once started at `f32::MAX / 4`, x ≈ 8.5e37.)
+    #[test]
+    fn text_without_a_width_is_aligned_within_its_widest_line() {
+        let handle = shared_font_system();
+        let mut shared = handle.lock().unwrap();
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        let texts = [
+            "שלום עולם",
+            "שלום\nעולם רחב מאוד",
+            "short\na much longer line\n\nmid",
+            "abc אבג\nשלום עולם, ומילים נוספות\nmixed אב cd",
+        ];
+        let aligns = [
+            TextAlign::Start,
+            TextAlign::End,
+            TextAlign::Left,
+            TextAlign::Right,
+            TextAlign::Center,
+        ];
+        let directions = [TextDirection::Auto, TextDirection::Rtl, TextDirection::Ltr];
+        for text in texts {
+            for align in aligns {
+                for direction in directions {
+                    let spec = LayoutSpec {
+                        align,
+                        direction,
+                        wrap: WrapMode::None,
+                        ..LayoutSpec::plain(16.0, None)
+                    };
+                    let what = format!("{text:?} {align:?} {direction:?}");
+                    let got = shape_layout(shared.font_system(), &spec, text);
+                    let at_width = LayoutSpec {
+                        max_width: Some(got.size.0),
+                        ..spec
+                    };
+                    let want = shape_layout(shared.font_system(), &at_width, text);
+                    assert_eq!(got.glyphs.len(), want.glyphs.len(), "{what}");
+                    for (g, w) in got.glyphs.iter().zip(&want.glyphs) {
+                        assert!(
+                            near(g.rel_x, w.rel_x) && near(g.cell_x, w.cell_x),
+                            "{what}: {g:?} against {w:?}"
+                        );
+                        assert!((0.0..=got.size.0 + 1e-3).contains(&g.cell_x), "{what}");
+                    }
+                    for (l, w) in got.lines.iter().zip(&want.lines) {
+                        assert!(
+                            near(l.left, w.left) && near(l.right, w.right),
+                            "{what}: {l:?} against {w:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
