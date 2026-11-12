@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: partial — Phases 0–2 landed, Phases 3–5 outstanding
+Status: partial — Phases 0–3 landed, Phases 4–5 outstanding
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -68,15 +68,20 @@ everything inside them is checked.
       ligatures, CJK) in three directions, five widths with fractional ones
       and zero, five alignments, four wraps, ellipsis on and off, two line
       heights; faces, letter spacing both ways, spans, vertical text.
+- [x] **Phase 3 — an ellipsized text that fits is shaped once when only
+      drawn.** `LayoutCache::ellipsized`: when the unwrapped layout is not
+      kept, the text is shaped unwrapped once and that layout kept (what
+      measuring reads); when it fits, the same buffer is laid out again
+      within the width as the block's layout (counted in `laid_out`). A cut
+      label reads its cut from the kept unwrapped layout and shapes
+      `prefix…`, two shapes as before. Changed from the plan, which shaped
+      the block within its width first: shaping it unwrapped first gives the
+      same one shape when it fits, keeps the layout measuring reads (so
+      measuring after drawing still shapes nothing), and needs no layout at
+      the width when it is cut. Tests in `shaping/ellipsis_tests.rs`.
 
 ### Outstanding
 
-- [ ] **Phase 3 — an ellipsized text that fits is shaped once when only
-      drawn.** When its unwrapped layout is not in the cache, the block is
-      shaped uncut under its ellipsis key first: if it fits, that is its
-      layout; if not, the cut is read from its advances and `prefix…` shaped
-      (Bart, 2026-11-12). A cut label still shapes `prefix…` fresh (Bart,
-      2026-11-12).
 - [ ] **Phase 4 — the retained tree prepares its texts.** A text node
       prepares at its first measure (deferred rows cost nothing), keeps its
       `PreparedText` for its life within the tree's byte budget (Bart,

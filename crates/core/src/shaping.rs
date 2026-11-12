@@ -58,8 +58,6 @@ pub struct SharedFontSystem {
     /// Which font system this is, unique in the process: a prepared text
     /// ([`PreparedText`]) is only used with the one it was shaped by.
     id: u64,
-    /// Layouts made from shaping a [`PreparedText`] kept, without shaping.
-    laid_out: u64,
 }
 
 impl SharedFontSystem {
@@ -72,7 +70,6 @@ impl SharedFontSystem {
             vmetrics: HashMap::new(),
             generation: 0,
             id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            laid_out: 0,
         }
     }
 
@@ -151,7 +148,7 @@ impl SharedFontSystem {
             hits: self.layouts.hits,
             shaped: self.layouts.shaped,
             reshaped: self.layouts.reshaped,
-            laid_out: self.laid_out,
+            laid_out: self.layouts.laid_out,
             layouts: self.layouts.len,
             bytes: self.layouts.bytes(),
         }
@@ -286,8 +283,8 @@ pub struct LayoutStats {
     /// Of those, the long texts laid out from the paragraphs of another
     /// layout, shaping only the paragraphs it didn't have.
     pub reshaped: u64,
-    /// Layouts a [`PreparedText`] made from the shaping it keeps, shaping
-    /// nothing.
+    /// Layouts made from shaping kept in a buffer, shaping nothing: by a
+    /// [`PreparedText`], or by the cache for an ellipsized text that fits.
     pub laid_out: u64,
     /// Layouts kept now.
     pub layouts: usize,
@@ -565,6 +562,8 @@ struct LayoutCache {
     hits: u64,
     shaped: u64,
     reshaped: u64,
+    /// Layouts made from a buffer's kept shaping ([`LayoutStats::laid_out`]).
+    laid_out: u64,
 }
 
 impl Default for LayoutCache {
@@ -587,6 +586,7 @@ impl LayoutCache {
             hits: 0,
             shaped: 0,
             reshaped: 0,
+            laid_out: 0,
         }
     }
 
@@ -636,61 +636,111 @@ impl LayoutCache {
             self.hits += 1;
             slot
         } else {
-            // Counted where shaping happens, so a layout built from kept
-            // paragraphs alone shapes nothing; the cut's own lookups count
-            // themselves.
-            let cut = spec
-                .cut_width()
-                .map(|max_width| self.ellipsis_cut(spec, content, max_width, font_system));
-            let before = crate::text::shaping_passes();
-            let layout = if let Some(cut) = cut {
-                shape_cut_layout(font_system, spec, content, cut)
-            } else if let Some(layout) = self.reshaped(&key, spec, content, font_system) {
-                self.reshaped += 1;
-                layout
-            } else {
-                shape_layout(font_system, spec, content)
-            };
-            self.shaped += crate::text::shaping_passes() - before;
-            let bytes = content.len()
-                + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
-                + layout.lines.len() * std::mem::size_of::<ShapedLine>()
-                + LAYOUT_OVERHEAD;
-            let large = bytes > self.budget / 4;
-            if self.bytes[usize::from(large)] + bytes > self.budget {
-                self.evict(large, None);
-            }
-            self.len += 1;
-            self.bytes[usize::from(large)] += bytes;
-            let cached = CachedLayout {
-                layout,
-                carets: None,
-                visual: None,
-                last_used: self.uses,
-                bytes,
-                large,
-            };
-            let slot = match self.free.pop() {
-                Some(slot) => {
-                    self.slots[slot] = Some(cached);
-                    slot
-                }
+            let layout = match spec.cut_width() {
+                Some(max_width) => self.ellipsized(spec, content, max_width, font_system),
                 None => {
-                    self.slots.push(Some(cached));
-                    self.slots.len() - 1
+                    // Counted where shaping happens, so a layout built from
+                    // kept paragraphs alone shapes nothing.
+                    let before = crate::text::shaping_passes();
+                    let layout = match self.reshaped(&key, spec, content, font_system) {
+                        Some(layout) => {
+                            self.reshaped += 1;
+                            layout
+                        }
+                        None => shape_layout(font_system, spec, content),
+                    };
+                    self.shaped += crate::text::shaping_passes() - before;
+                    layout
                 }
             };
-            self.map
-                .entry(key)
-                .or_default()
-                .insert(content.to_owned(), slot);
-            slot
+            self.insert(key, content, layout)
         };
         let entry = self.slots[slot]
             .as_mut()
             .expect("the slot is kept or just filled");
         entry.last_used = self.uses;
         entry
+    }
+
+    /// Keep `layout` as `content`'s under `key`, which has none, making room
+    /// for it within the budget; its slot.
+    fn insert(&mut self, key: LayoutKey, content: &str, layout: ShapedLayout) -> usize {
+        let bytes = content.len()
+            + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
+            + layout.lines.len() * std::mem::size_of::<ShapedLine>()
+            + LAYOUT_OVERHEAD;
+        let large = bytes > self.budget / 4;
+        if self.bytes[usize::from(large)] + bytes > self.budget {
+            self.evict(large, None);
+        }
+        self.len += 1;
+        self.bytes[usize::from(large)] += bytes;
+        let cached = CachedLayout {
+            layout,
+            carets: None,
+            visual: None,
+            last_used: self.uses,
+            bytes,
+            large,
+        };
+        let slot = match self.free.pop() {
+            Some(slot) => {
+                self.slots[slot] = Some(cached);
+                slot
+            }
+            None => {
+                self.slots.push(Some(cached));
+                self.slots.len() - 1
+            }
+        };
+        self.map
+            .entry(key)
+            .or_default()
+            .insert(content.to_owned(), slot);
+        slot
+    }
+
+    /// `content` laid out ellipsized under `spec` within `max_width`.
+    ///
+    /// Whether it fits is read from the text laid out unwrapped
+    /// ([`LayoutSpec::natural`]), which measuring the block looks up too.
+    /// When that is not kept, the text is shaped unwrapped once, that layout
+    /// kept, and, when it fits, the same buffer laid out again within the
+    /// width as the block's layout: a label only drawn is shaped once, and
+    /// measuring it afterwards finds its size. A label that does not fit is
+    /// cut where [`ellipsis_cut`](Self::ellipsis_cut) says and the cut shaped,
+    /// so the glyphs at the cut are exact.
+    fn ellipsized(
+        &mut self,
+        spec: &LayoutSpec<'_>,
+        content: &str,
+        max_width: f32,
+        font_system: &mut FontSystem,
+    ) -> ShapedLayout {
+        let natural = spec.natural();
+        let cuttable = !content.is_empty() && max_width.is_finite() && max_width > 0.0;
+        if cuttable && self.find(&natural.key(), content).is_none() {
+            let (mut buffer, source) = set_buffer(&natural, content, None);
+            set_layout(&mut buffer, &natural);
+            let before = crate::text::shaping_passes();
+            crate::text::shape_buffer(&mut buffer, font_system);
+            self.shaped += crate::text::shaping_passes() - before;
+            let whole = extract(&buffer, &natural, &source);
+            let fits = whole.size.0 <= max_width;
+            self.insert(natural.key(), content, whole);
+            if fits {
+                set_layout(&mut buffer, spec);
+                crate::text::lay_out_buffer(&mut buffer, font_system);
+                self.laid_out += 1;
+                return extract(&buffer, spec, &source);
+            }
+        }
+        // The cut's own lookups count themselves.
+        let cut = self.ellipsis_cut(spec, content, max_width, font_system);
+        let before = crate::text::shaping_passes();
+        let layout = shape_cut_layout(font_system, spec, content, cut);
+        self.shaped += crate::text::shaping_passes() - before;
+        layout
     }
 
     /// The slot of the layout of `content` under `key`, if it is kept: one

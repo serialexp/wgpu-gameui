@@ -236,7 +236,7 @@ impl PreparedText {
         }
         set_layout(&mut self.buffer, spec);
         crate::text::lay_out_buffer(&mut self.buffer, &mut shared.font_system);
-        shared.laid_out += 1;
+        shared.layouts.laid_out += 1;
         let layout = PreparedLayout::new(
             extract(&self.buffer, spec, &self.source),
             key,
