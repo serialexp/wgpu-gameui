@@ -465,6 +465,10 @@ pub struct RenderStats {
     /// Draw boxes taken from the last frame's plan instead of computed, for
     /// units whose records did not move (with the frame comparison on).
     pub boxes_reused: u64,
+    /// Units given the order they had in the last plan instead of finding
+    /// what they overlap: the same key and boxes, and nothing that changed
+    /// reaches them.
+    pub orders_given: usize,
     /// Lists compared with the frame kept for their place in the render call
     /// (see [`UiRenderer::set_frame_comparison`]). Lists whose owner reports
     /// their edits are not compared, and are counted in `lists_reported`.
@@ -2191,6 +2195,7 @@ impl UiRenderer {
             self.frame_stats.units_ordered += order.units_ordered as usize;
             self.frame_stats.order_overlap_tests += order.overlap_tests;
             self.frame_stats.order_cell_visits += order.cell_visits;
+            self.frame_stats.orders_given += order.orders_given as usize;
             self.frame_stats.boxes_computed += plan.boxes_computed();
             self.frame_stats.boxes_reused += plan.boxes_reused();
         }

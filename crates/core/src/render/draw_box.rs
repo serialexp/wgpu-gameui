@@ -77,7 +77,7 @@ impl Target {
 
 /// A range of whole pixels on the target, `x0..x1` by `y0..y1`. Empty when
 /// either range is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PixelBox {
     pub x0: u32,
     pub y0: u32,

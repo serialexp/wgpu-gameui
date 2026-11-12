@@ -89,6 +89,21 @@ pub(crate) struct PlannedUnit {
     pub(crate) unit: UnitRef,
 }
 
+/// What a plan kept of a unit, by its place in paint order (culled and
+/// skipped ones included), for the plan after it to take orders from.
+#[derive(Clone, Copy, Debug, Default)]
+struct UnitLog {
+    key: BatchKey,
+    /// A range of the plan's `unit_boxes`.
+    boxes: [u32; 2],
+    /// The order it got; `None` when it drew nothing.
+    order: Option<u32>,
+}
+
+/// How many boxes of changed units a plan tracks before it stops giving
+/// orders: every later unit is tested against them.
+const MAX_CHANGED_BOXES: usize = 32;
+
 /// Units drawn in one call: a range of [`DrawPlan::units`], all of one key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Batch {
@@ -133,6 +148,21 @@ pub(crate) struct DrawPlan {
     prev_boxes: Vec<PixelBox>,
     prev_ranges: Vec<[u32; 2]>,
     prev_text_ranges: Vec<[u32; 3]>,
+    /// Every unit's key, boxes and order by paint index: this plan's, and the
+    /// last one's (`prev_log`, valid when `prev_kept`). A unit with the key
+    /// and boxes the unit at its paint index had, that no changed unit's box
+    /// reaches, gets that unit's order (`changed`).
+    log: Vec<UnitLog>,
+    prev_log: Vec<UnitLog>,
+    /// The boxes of the units so far that differ from the last plan's unit at
+    /// their paint index (the new boxes and the old ones), or got another
+    /// order, and `changed_bounds`, the box around them. A later unit that
+    /// touches none of them has the same earlier units overlapping it as the
+    /// unit it is compared with, each with the same key and order, so it has
+    /// that unit's order. Past [`MAX_CHANGED_BOXES`], no unit is given one.
+    changed: Vec<PixelBox>,
+    changed_bounds: PixelBox,
+    changed_full: bool,
     /// The next unit that is not text, among them.
     next_other: u32,
     /// The blocks of the text unit being planned, for [`add`](Self::add).
@@ -386,6 +416,11 @@ impl DrawPlan {
         std::mem::swap(&mut self.unit_boxes, &mut self.prev_boxes);
         std::mem::swap(&mut self.unit_ranges, &mut self.prev_ranges);
         std::mem::swap(&mut self.text_ranges, &mut self.prev_text_ranges);
+        std::mem::swap(&mut self.log, &mut self.prev_log);
+        self.log.clear();
+        self.changed.clear();
+        self.changed_bounds = PixelBox::EMPTY;
+        self.changed_full = false;
         self.unit_boxes.clear();
         self.unit_ranges.clear();
         self.text_ranges.clear();
@@ -453,7 +488,28 @@ impl DrawPlan {
             self.boxes_computed += self.boxes.len() as u64;
         }
         self.unit_reused = false;
-        let order = self.order.add(key, &self.boxes);
+        let old = self.old_unit(paint);
+        let same = old.is_some_and(|o| {
+            o.key == key && self.prev_boxes[o.boxes[0] as usize..o.boxes[1] as usize] == self.boxes
+        });
+        // The same unit as last time, which nothing that changed reaches.
+        let given = old
+            .filter(|_| same && !self.reached_by_changes(&self.boxes))
+            .and_then(|o| o.order);
+        let order = self.order.add_given(key, &self.boxes, given);
+        self.log.push(UnitLog {
+            key,
+            boxes: [start, end],
+            order,
+        });
+        if self.prev_kept && !same {
+            if let Some(o) = old {
+                self.note_changed_old(o.boxes);
+            }
+            self.note_changed(start, end);
+        } else if self.prev_kept && old.is_some_and(|o| o.order != order) {
+            self.note_changed(start, end);
+        }
         self.boxes.clear();
         let Some(order) = order else {
             return false;
@@ -470,15 +526,68 @@ impl DrawPlan {
     /// Pass over a draw that doesn't resolve: it takes a paint index, and draws
     /// nothing.
     fn skip(&mut self) {
+        let paint = self.next_paint;
         self.next_paint += 1;
         if !self.paint_order {
             self.unit_ranges.push([0, 0]);
             self.next_other += 1;
+            // Nothing is drawn here now: what was, no longer is.
+            if let Some(o) = self.old_unit(paint) {
+                self.note_changed_old(o.boxes);
+            }
+            self.log.push(UnitLog::default());
         }
         #[cfg(any(test, feature = "paint-order-oracle"))]
         if let Some(checked) = &mut self.checked {
             checked.push((BatchKey(0), Vec::new()));
         }
+    }
+
+    /// The unit the last plan had at paint index `paint`, if it kept them.
+    fn old_unit(&self, paint: u32) -> Option<UnitLog> {
+        if !self.prev_kept || self.changed_full {
+            return None;
+        }
+        self.prev_log.get(paint as usize).copied()
+    }
+
+    /// Whether any box of `boxes` overlaps a box of a changed unit.
+    fn reached_by_changes(&self, boxes: &[PixelBox]) -> bool {
+        if self.changed_full {
+            return true;
+        }
+        boxes
+            .iter()
+            .any(|b| b.overlaps(&self.changed_bounds) && self.changed.iter().any(|c| c.overlaps(b)))
+    }
+
+    /// Note the old boxes (a range of `prev_boxes`) of a unit that changed.
+    fn note_changed_old(&mut self, range: [u32; 2]) {
+        for i in range[0] as usize..range[1] as usize {
+            let b = self.prev_boxes[i];
+            self.note_box(b);
+        }
+    }
+
+    /// Note the boxes of this plan's `unit_boxes[start..end]`, of a unit that
+    /// changed.
+    fn note_changed(&mut self, start: u32, end: u32) {
+        for i in start as usize..end as usize {
+            let b = self.unit_boxes[i];
+            self.note_box(b);
+        }
+    }
+
+    fn note_box(&mut self, b: PixelBox) {
+        if b.is_empty() || self.changed_full {
+            return;
+        }
+        if self.changed.len() >= MAX_CHANGED_BOXES {
+            self.changed_full = true;
+            return;
+        }
+        self.changed.push(b);
+        self.changed_bounds = self.changed_bounds.union(&b);
     }
 
     /// Sort the units into draw order and cut them into batches.
@@ -577,6 +686,7 @@ impl DrawPlan {
             self.boxes.extend_from_slice(boxes);
             self.add(*key, UnitRef::Analytic(i as u32));
         }
+        self.boxes_kept = true;
         self.finish();
     }
 }

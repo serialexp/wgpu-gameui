@@ -46,6 +46,112 @@ fn assert_batches_cover_units(plan: &DrawPlan) {
     assert_eq!(next as usize, plan.units().len());
 }
 
+/// Plan `units` on `plan`, which has planned the frame before, and check the
+/// orders against the brute-force ones. Returns the orders given.
+fn plan_again(plan: &mut DrawPlan, size: (u32, u32), units: &[Unit]) -> u32 {
+    plan.plan(size, units);
+    plan.check();
+    plan.stats().orders_given
+}
+
+#[test]
+fn a_unit_whose_order_changed_with_its_own_boxes_the_same_changes_those_after_it() {
+    // P (key A) moves onto U (key B), which then draws after it; V (key A)
+    // overlaps U, not P's new place, and must draw after U.
+    let v = (A, vec![px(45, 0, 60, 10)]);
+    let u = (B, vec![px(30, 0, 50, 10)]);
+    let before = [(A, vec![px(0, 0, 10, 10)]), u.clone(), v.clone()];
+    let after = [(A, vec![px(25, 0, 35, 10)]), u, v];
+    let mut plan = DrawPlan::new();
+    plan.set_check(true);
+    plan_again(&mut plan, (128, 128), &before);
+    let orders = |plan: &DrawPlan| {
+        let mut o = vec![0; 3];
+        for unit in plan.units() {
+            o[unit.paint as usize] = unit.order;
+        }
+        o
+    };
+    assert_eq!(orders(&plan), [0, 0, 1]);
+    plan_again(&mut plan, (128, 128), &after);
+    assert_eq!(orders(&plan), [0, 1, 2]);
+}
+
+#[test]
+fn a_unit_nothing_that_changed_reaches_is_given_the_order_it_had() {
+    // Ten units in a row, each overlapping the next, with keys alternating:
+    // one in the middle moves a long way off.
+    let row: Vec<Unit> = (0..10u32)
+        .map(|i| {
+            (
+                BatchKey(u64::from(i % 2)),
+                vec![px(i * 8, 0, i * 8 + 12, 10)],
+            )
+        })
+        .collect();
+    let mut moved = row.clone();
+    moved[4].1 = vec![px(100, 60, 110, 70)];
+    let mut plan = DrawPlan::new();
+    plan.set_check(true);
+    assert_eq!(plan_again(&mut plan, (128, 128), &row), 0, "nothing before");
+    // The first three are before the moved one and clear of its old place;
+    // the 4th overlaps that, and the rest chain from the moved one's old
+    // neighbours, so their orders change too.
+    let given = plan_again(&mut plan, (128, 128), &moved);
+    assert!(given >= 3, "{given} given");
+    // Nothing changed: every unit is given its order but the first, which
+    // had one key so far and looked nothing up either way.
+    assert_eq!(plan_again(&mut plan, (128, 128), &moved), 9);
+}
+
+/// Frames of random units changed a little at a time: every plan's orders are
+/// the brute-force ones, and some were given.
+#[test]
+fn orders_given_from_the_plan_before_are_the_orders_found() {
+    let mut given = 0;
+    let mut total = 0;
+    for seed in 0..300u64 {
+        let mut rng = Rng(seed);
+        let (size, mut units) = random_units(&mut rng);
+        let mut plan = DrawPlan::new();
+        plan.set_check(true);
+        plan_again(&mut plan, size, &units);
+        for _ in 0..8 {
+            for _ in 0..rng.below(4) {
+                let i = rng.below(units.len() as u32) as usize;
+                match rng.below(4) {
+                    0 => units[i].0 = BatchKey(u64::from(rng.below(4))),
+                    1 => {
+                        let (_, other) = random_units(&mut rng);
+                        units[i].1 = other[0].1.iter().map(|b| clip_to(*b, size)).collect();
+                    }
+                    2 if units.len() > 2 => {
+                        units.remove(i);
+                    }
+                    _ => {
+                        let unit = units[rng.below(units.len() as u32) as usize].clone();
+                        units.insert(i, unit);
+                    }
+                }
+            }
+            given += plan_again(&mut plan, size, &units);
+            total += units.len() as u32;
+        }
+    }
+    assert!(given * 4 > total, "{given} given of {total}");
+}
+
+/// `b` cut to a target of `size`, as a box of that target is.
+fn clip_to(b: PixelBox, size: (u32, u32)) -> PixelBox {
+    let cut = PixelBox {
+        x0: b.x0.min(size.0),
+        y0: b.y0.min(size.1),
+        x1: b.x1.min(size.0),
+        y1: b.y1.min(size.1),
+    };
+    if cut.is_empty() { PixelBox::EMPTY } else { cut }
+}
+
 #[test]
 fn units_sort_by_order_then_key_then_paint_and_each_key_run_is_a_batch() {
     let units = [

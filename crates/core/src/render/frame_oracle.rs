@@ -70,6 +70,8 @@ pub(crate) struct Work {
     pub(crate) text: PrepareWork,
     pub(crate) boxes_computed: u64,
     pub(crate) boxes_reused: u64,
+    /// Units that took their order from the last plan.
+    pub(crate) orders_given: u32,
     pub(crate) units: usize,
     /// How the list differed from the frame before, as `FrameSnapshot` saw it.
     pub(crate) diff: FrameDiff,
@@ -143,6 +145,7 @@ impl Oracle {
             text: self.kept.prepared.work,
             boxes_computed: self.kept_plan.boxes_computed(),
             boxes_reused: self.kept_plan.boxes_reused(),
+            orders_given: self.kept_plan.stats().orders_given,
             units: self.kept_plan.units().len(),
             diff,
         };
@@ -532,6 +535,7 @@ fn what_the_comparison_promises_holds_over_random_changes() {
     let t = target();
     let (mut identical, mut keeps, mut moved, mut reshaped, mut frames) = (0, 0, 0, 0, 0);
     let (mut reused, mut computed) = (0, 0);
+    let mut given = 0u64;
     for seed in 0..6u64 {
         let mut rng = Rng(100 + seed);
         let mut oracle = Oracle::new();
@@ -568,6 +572,7 @@ fn what_the_comparison_promises_holds_over_random_changes() {
             let diff = work.diff;
             reused += work.boxes_reused;
             computed += work.boxes_computed;
+            given += u64::from(work.orders_given);
             frames += 1;
             identical += usize::from(diff.identical());
             keeps += usize::from(diff.keeps_places() && !diff.identical());
@@ -586,6 +591,9 @@ fn what_the_comparison_promises_holds_over_random_changes() {
         reused > 1000 && computed > 1000,
         "{reused} reused, {computed} computed"
     );
+    // And orders were given to the units nothing that changed reached, while
+    // the rest were looked up (the brute-force check ran on every plan).
+    assert!(given > 1000, "{given} orders given");
 }
 
 /// The other half: a colour is a look in every family, so the plan is kept.
@@ -770,6 +778,7 @@ fn a_frame_in_which_one_unit_moved_takes_every_other_box_from_the_last() {
     }
     let first = oracle.step(&draw_cells(&oracle, &cells), &t);
     assert_eq!(first.boxes_reused, 0, "nothing to take them from");
+    assert_eq!(first.orders_given, 0, "nothing to take them from");
     let units = first.boxes_computed;
     // One of each kind moves in turn.
     for i in 0..KINDS.len() {
@@ -788,6 +797,15 @@ fn a_frame_in_which_one_unit_moved_takes_every_other_box_from_the_last() {
             KINDS[i],
             work.boxes_computed,
             work.boxes_reused
+        );
+        // Nearly every other unit keeps its order too: those that the moved
+        // one's old or new box reaches are looked up, the rest are given.
+        assert!(
+            work.orders_given as usize + 12 >= work.units,
+            "moving a {:?}: {} orders given of {} units",
+            KINDS[i],
+            work.orders_given,
+            work.units
         );
     }
 }

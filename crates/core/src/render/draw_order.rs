@@ -129,7 +129,7 @@ impl CellTuner {
 /// What units must share to be drawn in one call: the pipeline and what it
 /// samples (see `DrawPlan`). Units sort by it within an order, so its value
 /// also decides which of two batches at one order draws first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct BatchKey(pub(crate) u64);
 
 /// How much work ordering a list took, and how many units it ordered.
@@ -141,6 +141,8 @@ pub(crate) struct OrderStats {
     pub(crate) overlap_tests: u64,
     /// Grid cells looked at or written, one per box per cell.
     pub(crate) cell_visits: u64,
+    /// Units that were given their order instead of looking for it.
+    pub(crate) orders_given: u32,
 }
 
 /// A box stored in the grid, with its unit's order and key.
@@ -202,12 +204,14 @@ impl DrawOrder {
             cell.top = None;
             cell.other = None;
         }
-        // Only a list that used the grid says what its cell cost.
-        if self.keys == Keys::Many {
+        // Only a list that used the grid says what its cell cost, and one
+        // that was given orders didn't look anything up, so it says nothing.
+        if self.keys == Keys::Many && self.stats.orders_given == 0 {
             let OrderStats {
                 units_ordered,
                 overlap_tests,
                 cell_visits,
+                ..
             } = self.stats;
             self.cell = self
                 .tuner
@@ -238,11 +242,28 @@ impl DrawOrder {
         self.stats
     }
 
+    /// Order the next unit in paint order, of `key`, drawn within `boxes`,
+    /// finding what it overlaps.
+    #[cfg(test)]
+    pub(crate) fn add(&mut self, key: BatchKey, boxes: &[PixelBox]) -> Option<u32> {
+        self.add_given(key, boxes, None)
+    }
+
     /// Order the next unit in paint order, of `key`, drawn within `boxes`.
     /// Empty boxes are left out; a unit whose boxes are all empty draws
     /// nothing and gets no order. Every box is looked up before any is
     /// stored, so each is stored with the unit's final order.
-    pub(crate) fn add(&mut self, key: BatchKey, boxes: &[PixelBox]) -> Option<u32> {
+    ///
+    /// `given` is the order the unit is known to get, when the caller knows
+    /// it (`DrawPlan` does, for a unit no change reaches): it is stored as
+    /// that without looking at what the unit overlaps. It must be what the
+    /// lookup would have found; a wrong one is a wrong plan.
+    pub(crate) fn add_given(
+        &mut self,
+        key: BatchKey,
+        boxes: &[PixelBox],
+        given: Option<u32>,
+    ) -> Option<u32> {
         if boxes.iter().all(PixelBox::is_empty) {
             return None;
         }
@@ -261,10 +282,19 @@ impl DrawOrder {
             self.pending.extend(on_target);
             return Some(0);
         }
-        let mut order = 0;
-        for b in boxes.iter().filter(|b| !b.is_empty()) {
-            order = self.highest(*b, key, order);
-        }
+        let order = match given {
+            Some(order) => {
+                self.stats.orders_given += 1;
+                order
+            }
+            None => {
+                let mut order = 0;
+                for b in boxes.iter().filter(|b| !b.is_empty()) {
+                    order = self.highest(*b, key, order);
+                }
+                order
+            }
+        };
         for b in boxes.iter().filter(|b| !b.is_empty()) {
             self.store(*b, key, order);
         }

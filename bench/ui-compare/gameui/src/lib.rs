@@ -170,6 +170,7 @@ pub fn render_counts(r: &RenderStats) -> [(&'static str, u64); 13] {
         ("boxes_computed", r.boxes_computed),
         ("boxes_reused", r.boxes_reused),
         ("units_ordered", r.units_ordered as u64),
+        ("orders_given", r.orders_given as u64),
         ("glyphs_placed", r.glyphs_placed as u64),
     ]
 }

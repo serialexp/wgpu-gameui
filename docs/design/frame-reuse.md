@@ -1,8 +1,8 @@
 # Frame-to-frame reuse
 
-Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept; and Phase 5's retained GPU storage: each place keeps its records on the GPU, and a frame drawn from its kept plan uploads only the records whose look changed
+Status: partial — Phases 0 to 2 landed (2026-11-09): with `set_frame_comparison` on (default off) a list whose places are unchanged is drawn from its kept plan; boxes, text and upload are not reused yet. Since then (2026-11-11): draw boxes and prepared text reused (Phase 3 and the text item in `TODO_DONE.md`), and a list whose owner reports its edits (the retained tree's root) is not compared or kept; and Phase 5's retained GPU storage: each place keeps its records on the GPU, and a frame drawn from its kept plan uploads only the records whose look changed. 2026-11-12: orders are reused for units no change reaches (Phase 6, in the form below, which needs neither the comparison nor a rollback)
 Owner: Bart
-Last updated: 2026-11-11
+Last updated: 2026-11-12
 
 ## Implementation status
 
@@ -181,6 +181,31 @@ Tick items as they land.
       tenth), so Phase 3's saving on a partly changed frame is a tenth less the
       comparison's cost. The next savings are in text (Phase 4) and ordering
       (Phase 6).
+- [x] **Phase 6 — orders reused for the units no change reaches**
+      (2026-11-12). Not the prefix rule and not a rollback of the grid, but the
+      forward closure below, which turned out to be cheap: a unit has the
+      order the unit at its paint index had in the last plan when it has the
+      same key and boxes and no box of a *changed* unit (old or new) overlaps
+      it, a changed unit being one with another key or boxes or, with the same
+      ones, another order. The changed boxes are few; past 32 of them the plan
+      stops giving orders. The grid is still filled as before (the stores
+      stay), only the lookup is skipped. `DrawOrder::add_given`,
+      `DrawPlan::{log, prev_log, changed}`, `RenderStats::orders_given`. It
+      reads the boxes of the plan before, so it works with the comparison off
+      too, and soundness needs no more than boxes and keys that are compared
+      exactly, so a list that differs entirely only has every unit looked up.
+      Tests: every plan in the frame oracle is checked against the
+      brute-force orders, with a mutation check on each of the three rules (a
+      later unit is tested against changed boxes; a changed unit's old boxes
+      count; a unit whose order alone changed counts); two plain tests
+      (`a_unit_whose_order_changed_with_its_own_boxes_the_same_changes_those_after_it`
+      is the one that fails without the third rule) and a fuzz over random
+      units changed a few at a time. Measured on the 10,000-cell list with one
+      text block moving (`perf stat`, user instructions and cycles, two
+      alternations): **−24% instructions, −20% cycles**, comparison on or off;
+      with every unit moved −1% and cycles equal within noise. The cell
+      tuner now skips a list that was given orders, which cost nothing to
+      look up and would have taught it a wrong cell size.
 - [x] **Edits reported by the list's owner, in place of the comparison**
       (extended beyond the original plan, from the retained-mode comparison;
       2026-11-11). A list whose owner opts in (`DrawList::report_edits`)
@@ -237,8 +262,6 @@ Tick items as they land.
       by `PreparedText` handles (`docs/design/prepared-text.md`).
 - [ ] **Phase 5 — timings against the build before it**, at one load (the
       counts above are exact; the frame means are not yet compared).
-- [ ] **Phase 6 — partial order reuse** (prefix, then propagation), only if the
-      scenes show it pays.
 - [ ] **Phase 7 — cheaper list building** on the caller side.
 - [ ] **Open questions** (below).
 
@@ -597,6 +620,13 @@ grid run's samples are in `memmove`.
   never left current over stale arrays.
 
 ### Phase 6 — partial order reuse (only if measured)
+
+*Built 2026-11-12, as the propagation rule's simplest sound form:* units are
+matched to the last plan's by paint index (a matching of any kind is sound
+when keys and boxes are compared exactly); a unit that matches in key and
+boxes and that no changed box reaches is given its old order, and the grid is
+filled as before, so nothing is rolled back. The text below is the analysis
+that led there.
 
 The prefix rule is causally sound (units before the first changed one keep their
 orders) but "truncate the grid" is **wrong as drafted**: cells keep running
