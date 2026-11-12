@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: partial — Phase 0 landed; the shaping budget waits on Bart
+Status: partial — Phase 0 landed, Phases 1–5 outstanding
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -29,6 +29,11 @@ everything inside them is checked.
       with the renderer, rather than a second bench.
 - [x] **Settle: what laying out again costs against shaping** (Phase 0's
       bench): about a twentieth (below).
+- [x] **Settle the tree's shaping budget**: 64 MB by default (Bart,
+      2026-11-12), about 8,500 short labels at Phase 0's 7.5 KB. A changed
+      text is shaped and drawn in the same frame, the most recently used, so
+      the budget decides only whether an unchanged text reshapes on a
+      resize; Phase 4 checks what the bench scenes hold under it.
 
 ### Outstanding
 
@@ -62,8 +67,6 @@ everything inside them is checked.
       a frame (about 229 in 230 frames, as immediate mode); TODO, TODO_DONE,
       `retained-mode.md`, `shared-text-layout.md` (a note under its "one
       cache" premise) and the bench README updated.
-- [ ] **Settle the tree's shaping budget** from Phase 0's bytes, with Bart:
-      its default, and what the bench scenes hold under it.
 - [ ] **Settle: cosmic-text's relayout of a kept `Buffer` gives the glyphs a
       fresh shape at that width gives**, in every case the exactness tests
       cover; a case that differs stops the work and goes to Bart.
@@ -269,8 +272,8 @@ below check that through what is drawn, not through that comparison.
 - The tree keeps a byte budget for its prepared shaping (Bart, 2026-11-12):
   past it, the shaping of the nodes laid out longest ago is dropped (their
   drawn layout stays); such a node prepares again if it is measured again.
-  The bytes are counted in `TreeStats`. The default is settled with Bart
-  from Phase 0's numbers.
+  The bytes are counted in `TreeStats`. The default is 64 MB (Bart,
+  2026-11-12, from Phase 0's numbers), settable on the tree.
 
 ## Tests and checks
 
@@ -323,7 +326,9 @@ the rest; 4 uses 1 and 2; 5 closes.
 - **The shaping lives as long as the node** (Bart, 2026-11-12), **within a
   byte budget** (Bart, 2026-11-12, after Antigravity's estimate of 1.6 to
   2 KB a short label, 16 to 20 MB for the grid's 10,000), prepared at the
-  first measure, not at creation.
+  first measure, not at creation. The default budget is 64 MB (Bart,
+  2026-11-12), chosen once Phase 0 measured a kept buffer at 7.5 KB a
+  label rather than the estimate.
 - **A cut ellipsis keeps its fresh shape** (Bart, 2026-11-12).
 - **A fitting ellipsis in the cache: uncut first** when the unwrapped layout
   is not cached (Bart, 2026-11-12), over laying the unwrapped layout out at
