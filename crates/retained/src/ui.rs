@@ -49,6 +49,10 @@ pub struct FrameStats {
     pub recorded: u32,
     /// Lists placed into the list that holds them.
     pub placed: u32,
+    /// Lists dropped because the tree as drawn no longer places them (a
+    /// node that clips scrolled out of view, or one whose holder was): each
+    /// is recorded again when it is drawn again.
+    pub dropped: u32,
     /// Records copied by those placements.
     pub copied: u64,
     /// Records overwritten where they were in an ancestor's list, carrying a
@@ -66,7 +70,8 @@ pub struct FrameStats {
 pub struct TreeStats {
     /// Live nodes.
     pub nodes: usize,
-    /// Lists kept: the root's, and one per node that clips, once drawn.
+    /// Lists kept: the root's, and one per node that clips while the tree as
+    /// last drawn places it.
     pub lists: usize,
     /// Records those lists hold.
     pub records: u64,
@@ -147,6 +152,8 @@ pub(crate) struct TextContent {
 pub(crate) struct Kept {
     pub(crate) list: DrawList,
     pub(crate) log: PlacedLog,
+    /// Its node's place in `Ui::keepers`.
+    pub(crate) slot: u32,
 }
 
 pub(crate) struct CustomNode {
@@ -316,6 +323,10 @@ pub struct Ui {
     /// The list a node that keeps none draws its own drawing into, before
     /// it is placed in its holder's list; reused.
     pub(crate) piece_list: Option<Box<DrawList>>,
+    /// The nodes keeping a list, each at the `slot` its `Kept` holds: so
+    /// that the lists no longer placed are found without a pass over every
+    /// node.
+    pub(crate) keepers: Vec<u32>,
     /// Lay out every child of a scroll, as if none could be put off: for
     /// comparing a tree that defers with one that does not.
     #[cfg(test)]
@@ -360,6 +371,7 @@ impl Ui {
             pointer: Pointer::default(),
             spans: Vec::new(),
             piece_list: None,
+            keepers: Vec::new(),
             #[cfg(test)]
             no_defer: false,
             #[cfg(test)]
@@ -657,12 +669,12 @@ impl Ui {
             if self.nodes[x as usize].text.is_some() {
                 self.forget_text(x);
             }
+            self.drop_kept(x);
             let d = &mut self.nodes[x as usize];
             d.live = false;
             d.generation = d.generation.wrapping_add(1);
             d.children = Vec::new();
             d.absolute = Vec::new();
-            d.kept = None;
             d.dirty_kids = Vec::new();
             let mut at = d.bindings.take();
             while let Some(k) = at {
@@ -1147,6 +1159,10 @@ impl Ui {
         }
         self.update(self.root);
         self.spans.clear();
+        // Only a recording changes what is placed.
+        if self.stats.recorded > 0 {
+            self.drop_unplaced();
+        }
         self.epoch = self.epoch.wrapping_add(1).max(1);
         self.pending = self.graph.stats().notified > 0;
         self.stats.memo_runs = self.graph.stats().runs - runs;
@@ -1182,8 +1198,8 @@ impl Ui {
             texts_dropped: self.texts.dropped,
             ..TreeStats::default()
         };
-        for d in &self.nodes {
-            if let Some(kept) = &d.kept {
+        for &n in &self.keepers {
+            if let Some(kept) = &self.nodes[n as usize].kept {
                 stats.lists += 1;
                 stats.records += kept.list.prim_counts().total() as u64;
                 stats.list_bytes += (std::mem::size_of::<Kept>()

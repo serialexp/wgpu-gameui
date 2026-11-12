@@ -343,6 +343,24 @@ then the dated batches in the order they were written.
       equal to the `Placed` a twin list's `append_translated` returned, and
       fit only lists of their shape; it fails with the varint shift or the
       clip deduplication broken.
+- [x] **P2 — lists of clipping nodes out of view are kept (retained, found
+      2026-11-11).** A clip or scroll container scrolled out of its holder's
+      view keeps its list. Moot for the bench scenes since only clipping nodes
+      keep lists (rows: 2 lists), but a long list of nested scroll panes would
+      hold one per pane ever drawn.
+      **Done 2026-11-12** (Bart chose dropping a list as soon as it is not
+      placed, over a byte budget or a grace in frames). After a frame that
+      recorded a list, `Ui::drop_unplaced` drops every list the tree as drawn
+      no longer places: one whose node's `placed_gen` is not its holder's
+      `list_gen`, or whose holder's is not, up to the root. The tree keeps
+      the nodes holding lists in `Ui::keepers` (each `Kept` knows its slot),
+      so the sweep and `tree_stats` walk those, not every node. A pane
+      scrolled back is recorded again. `FrameStats::dropped` counts them.
+      Test: `lists_of_panes_scrolled_out_of_view_are_dropped`
+      (`crates/retained/src/tests.rs`): 200 rows of a pane holding a pane,
+      scrolled through, keep two lists a row in view, each frame drawn as
+      from nothing; it fails when only the direct holder is checked (the
+      inner panes stay) or a moved keeper's slot is not updated.
 
 ---
 

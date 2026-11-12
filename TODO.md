@@ -39,11 +39,6 @@ none chosen yet (Bart).
       Only advances and sizes are read from it today (the ellipsis cut,
       measuring), so nothing is drawn wrong; anything that places its glyphs
       would be. `docs/design/prepared-text.md`, deferred bullet.
-- [ ] **P2 — lists of clipping nodes out of view are kept (retained, found
-      2026-11-11).** A clip or scroll container scrolled out of its holder's
-      view keeps its list. Moot for the bench scenes since only clipping nodes
-      keep lists (rows: 2 lists), but a long list of nested scroll panes would
-      hold one per pane ever drawn.
 - [ ] **P2 — rerun the comparison on a quiet machine.** `rows-scrl` /
       `rows-hovr` differences are noise. The README's retained numbers
       predate the first four items done (prepared text reused, patching,

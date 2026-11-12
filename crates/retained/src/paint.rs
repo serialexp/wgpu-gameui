@@ -21,6 +21,11 @@
 //! it changed at each list, not every list above it. Whatever the patch
 //! cannot vouch for (another shape, a record its placement culled, a node
 //! moved or out of view) records the holder again instead.
+//!
+//! A list is kept only while the tree as drawn places it: after a frame
+//! that recorded a list, a node that clips whose list its holder's no longer
+//! places (it scrolled out of view, or a node above it did) drops it, and is
+//! recorded again when it is drawn again.
 
 use wgpu_gameui::layout::Rect;
 use wgpu_gameui::{
@@ -217,13 +222,18 @@ impl Ui {
     /// drawing, then what is in view below it.
     pub(crate) fn record(&mut self, n: u32) {
         self.stats.recorded += 1;
+        let mut kept = match self.nodes[n as usize].kept.take() {
+            Some(kept) => kept,
+            None => {
+                self.keepers.push(n);
+                Box::new(Kept {
+                    list: DrawList::with_font_system(self.fonts.clone()),
+                    log: PlacedLog::default(),
+                    slot: self.keepers.len() as u32 - 1,
+                })
+            }
+        };
         let d = &mut self.nodes[n as usize];
-        let mut kept = d.kept.take().unwrap_or_else(|| {
-            Box::new(Kept {
-                list: DrawList::with_font_system(self.fonts.clone()),
-                log: PlacedLog::default(),
-            })
-        });
         kept.list.clear();
         // The frame's list says what each frame patched in it, so the
         // renderer need not compare it with the last (`Ui::frame`).
@@ -255,6 +265,54 @@ impl Ui {
         d.kept = Some(rec.kept);
         d.deadline = rec.deadline;
         d.stale = false;
+    }
+
+    /// Drop `n`'s list, if it keeps one, out of `keepers`.
+    pub(crate) fn drop_kept(&mut self, n: u32) {
+        let Some(kept) = self.nodes[n as usize].kept.take() else {
+            return;
+        };
+        let slot = kept.slot as usize;
+        self.keepers.swap_remove(slot);
+        if let Some(&moved) = self.keepers.get(slot) {
+            self.nodes[moved as usize]
+                .kept
+                .as_mut()
+                .expect("a keeper keeps a list")
+                .slot = slot as u32;
+        }
+    }
+
+    /// Whether the tree as drawn places `n`'s list: it was placed in its
+    /// holder's list as that list is, and so was the holder's, up to the
+    /// root's.
+    fn placed_now(&self, n: u32) -> bool {
+        let mut x = n;
+        while let Some(h) = self.holder(x) {
+            let hd = &self.nodes[h as usize];
+            if hd.kept.is_none() || self.nodes[x as usize].placed_gen != hd.list_gen {
+                return false;
+            }
+            x = h;
+        }
+        true
+    }
+
+    /// Drop the lists the tree as drawn no longer places. A list dropped
+    /// first leaves the walk up from one below it failing where it would
+    /// have anyway, so the order they are looked at does not matter.
+    pub(crate) fn drop_unplaced(&mut self) {
+        let mut i = 0;
+        while i < self.keepers.len() {
+            let n = self.keepers[i];
+            if n == self.root || self.placed_now(n) {
+                i += 1;
+            } else {
+                // The last keeper takes its slot, and is looked at next.
+                self.drop_kept(n);
+                self.stats.dropped += 1;
+            }
+        }
     }
 
     /// Draw `n`'s children into `rec`, `n` being drawn at `base` in it.

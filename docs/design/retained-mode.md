@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view, the node table at 384 bytes a node, each text shaped once, and the list's log at about 72 bytes a piece (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view, the node table at 384 bytes a node, each text shaped once, the list's log at about 72 bytes a piece, and lists kept only while placed (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -232,6 +232,10 @@ Tick items as they land.
       comparison, 2026-11-12): a piece's counts are logged as the ones that
       are not zero, in varints in one pool, and its clip as an index into a
       deduplicated table; the grid's log went from 4.85 to 1.44 MB.
+- [x] **Lists only while placed** (extended beyond the original plan,
+      2026-11-12): a node that clips drops its list once the tree as drawn
+      no longer places it (scrolled out of view, itself or a node above),
+      and is recorded again when drawn again (`Ui::drop_unplaced`).
 
 ### Outstanding
 

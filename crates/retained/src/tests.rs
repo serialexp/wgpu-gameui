@@ -623,6 +623,53 @@ fn a_scrolling_column_draws_only_the_rows_in_view() {
     check(&mut ui);
 }
 
+/// Panes that clip, each in a row of a scroll and holding a pane of its
+/// own, keep their lists only while drawn: scrolled out of view, a pane's
+/// list goes, and so does the list of the pane inside it, whose own holder
+/// still holds it; scrolled back, they are recorded again.
+#[test]
+fn lists_of_panes_scrolled_out_of_view_are_dropped() {
+    let mut ui = Ui::new(fonts());
+    let list = ui.add(ui.root(), fixed(200.0, 100.0).scroll());
+    for _ in 0..200 {
+        let row = ui.add(list, fixed(200.0, 40.0));
+        let pane = ui.add(row, fixed(200.0, 40.0).clip());
+        let inner = ui.add(pane, fixed(100.0, 20.0).clip());
+        ui.add(inner, fixed(50.0, 10.0).fill([0.9, 0.2, 0.2, 1.0]));
+    }
+    // The root's list, the scroll's, and two per row in view.
+    let lists_at = |scrolled: f32| {
+        let rows = (0..200)
+            .filter(|&i| (i as f32) * 40.0 < scrolled + 100.0 && (i as f32 + 1.0) * 40.0 > scrolled)
+            .count();
+        2 + 2 * rows
+    };
+    ui.frame(at(0.0));
+    assert_eq!(ui.tree_stats().lists, lists_at(0.0));
+    check(&mut ui);
+    let mut dropped = 0;
+    for step in 1..=50 {
+        let to = step as f32 * 70.0;
+        ui.scroll_to(list, to);
+        ui.frame(at(0.0));
+        dropped += ui.frame_stats().dropped;
+        assert_eq!(ui.tree_stats().lists, lists_at(to), "scrolled to {to}");
+        check(&mut ui);
+    }
+    // Every pane scrolled past went, with the pane inside it.
+    assert_eq!(dropped as usize, 2 * (3500 / 40));
+    ui.scroll_to(list, 0.0);
+    ui.frame(at(0.0));
+    let stats = ui.frame_stats();
+    assert_eq!(ui.tree_stats().lists, lists_at(0.0));
+    // The three rows back in view record their panes again, and the scroll
+    // its list, which holds as many rows as it did and so is patched in the
+    // root's.
+    assert_eq!(stats.recorded, 1 + 2 * 3);
+    assert_eq!(stats.dropped, 2 * 3);
+    check(&mut ui);
+}
+
 #[test]
 fn a_child_outside_the_clip_whose_shadow_reaches_in_is_drawn() {
     let mut ui = Ui::new(fonts());
