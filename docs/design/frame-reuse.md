@@ -251,9 +251,13 @@ Tick items as they land.
 
 ### Outstanding
 
-- [ ] **Turn the comparison on by default.** Waits for the +8% at 10,000 cells
-      above to be explained on a quiet machine, and for Phase 3 to have something
-      more to reuse.
+- [ ] **Turn the comparison on by default.** Its two conditions are met
+      (2026-11-12, "The +8% at 10,000 cells" below: the all-moved cost is
+      +1.1% instructions, and Phases 3 and 6 reuse something on a partly
+      changed frame). What is left is a choice the measurements do not make:
+      each place then keeps a copy of its list's records and a plan (the
+      list itself is 7 MB at 10,000 cells of chrome and a label), and a frame
+      where all moved pays 1% for nothing.
 - [ ] **Phase 4 — a prepared-text cache.** Position-independent, so a moved block
       (`scroll`, `para`) hits too. Measured first (2026-11-12, below): the
       atlas tile fetch is about 18% of a `scroll` or `para` frame. Narrow step
@@ -490,6 +494,32 @@ last bit (`an_upright_quad_is_bounded_as_its_four_corners_are`, over NaN,
 infinities, signed zeros and negative extents, three clips). Whole-run
 instructions on `scroll` and `para`: −2.2% and −2.0%; cycles about −5% on
 `scroll` and −2% on `para` at a load that made single runs vary by 5%.
+
+### The +8% at 10,000 cells
+
+*Re-measured 2026-11-12, at load 12.* The Criterion figure compared
+`with_comparison_all_moved` (two lists alternating, comparison on) with
+`recompute` (one list repeated, comparison off): different cache behaviour in
+the two, and a machine at load 25 to 58. A fixed 400-frame run of the same
+scene (`perf stat`, user instructions, so load does not enter; cycles
+alternate between old and new and are within about 5% of each other), with
+the lists alternating in both columns:
+
+| scene | cells | instructions, comparison off | on | cycles |
+| --- | ---: | ---: | ---: | --- |
+| every cell moved | 100 | 23.7 G | 24.0 G (+1.3%) | not separable from noise |
+| every cell moved | 1,000 | 25.5 G | 25.8 G (+1.1%) | +3.6% (median) |
+| every cell moved | 10,000 | 24.4 G | 24.7 G (+1.1%) | within noise |
+| one text block moves | 100 | 21.6 G | 19.3 G (−10.6%) | |
+| one text block moves | 1,000 | 20.0 G | 17.6 G (−11.8%) | −23% |
+| same list again | 1,000 | 19.7 G | 3.2 G (−83.5%) | −78% |
+| same list again | 10,000 | 19.0 G | 3.0 G (−84.2%) | −80% |
+
+So the worst case is about 1% more instructions, inside the 5% budget; the
++8% was the benchmark's baseline and the load, not the renderer. The probe
+that ran these is not kept (`crates/core/benches/frame_compare.rs` still has the
+Criterion form; its `recompute_alternating` is the fair baseline for the
+all-moved case, not `recompute`).
 
 ### Phase 5 — retained GPU storage
 
