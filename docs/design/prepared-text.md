@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: complete — Phases 0–5 landed; two items deferred
+Status: complete — Phases 0–5 landed, a follow-up on changed texts; two items deferred
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -110,6 +110,19 @@ everything inside them is checked.
       rerun on a quiet machine is in `TODO.md`. TODO, TODO_DONE,
       `retained-mode.md`, `shared-text-layout.md` (a note under its "one
       cache" premise) and the bench README updated.
+
+- [x] **Extended beyond the plan: a changed text reuses its buffer, and
+      measuring makes no layout** (2026-11-12, from `panel-chg`, where the
+      tree's share had not shrunk). A text given new content is set and
+      shaped into the buffer it keeps (`set_buffer_text`,
+      `PreparedText::reshape`) rather than a new one; `measure` reads the
+      size off the laid-out buffer and keeps the last two sizes, so the
+      measured layout is not extracted when only its size is read; the
+      buffer remembers the spec it is laid out under. The design's "keeps
+      its last two layouts, the measured one and the drawn one" is now two
+      layouts and two sizes. A changed label: 43 allocations to 17 (a new
+      one 36), checked by `a_changed_label_allocates_less_than_a_new_one`;
+      shape and layout counts unchanged.
 
 ### Outstanding
 

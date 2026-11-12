@@ -922,6 +922,7 @@ fn shape_cut_layout(
 
 /// What a buffer's text was made from, to read its glyphs back as the
 /// content's ([`extract`]).
+#[derive(Default)]
 pub(crate) struct BufferSource {
     /// The direction mark's length at the head of the shaped text.
     prefix_len: usize,
@@ -943,6 +944,24 @@ pub(crate) fn set_buffer(
     content: &str,
     cut: Option<usize>,
 ) -> (Buffer, BufferSource) {
+    // Empty, so nothing is shaped before the text is set.
+    let mut buffer = Buffer::new_empty(Metrics::new(spec.font_size, spec.line_height));
+    let mut source = BufferSource::default();
+    set_buffer_text(&mut buffer, &mut source, spec, content, cut);
+    (buffer, source)
+}
+
+/// Set `content` into `buffer`, as [`set_buffer`] sets it into a new one,
+/// and describe it in `source`: cosmic-text reuses the buffer's lines, their
+/// text, attributes and shaping, so a kept buffer given new text allocates
+/// little. Every line is left to be shaped again.
+pub(crate) fn set_buffer_text(
+    buffer: &mut Buffer,
+    source: &mut BufferSource,
+    spec: &LayoutSpec<'_>,
+    content: &str,
+    cut: Option<usize>,
+) {
     let family = spec.family();
     let faces = spec.shaped_faces();
 
@@ -975,8 +994,6 @@ pub(crate) fn set_buffer(
         Cow::Owned(format!("{prefix}{content}"))
     };
 
-    // Empty, so nothing is shaped before the text is set.
-    let mut buffer = Buffer::new_empty(Metrics::new(spec.font_size, spec.line_height));
     let attrs = Attrs::new()
         .family(family)
         .weight(spec.weight)
@@ -995,13 +1012,10 @@ pub(crate) fn set_buffer(
     // line, and span colours address the whole content, so each shaped line's
     // start byte is added back. Vertical text also subtracts the `line_i`
     // separators `vertical_stack_string` inserted.
-    let source = BufferSource {
-        prefix_len,
-        line_starts: crate::text::line_starts(&shaped_text),
-        shown,
-        empty: content.is_empty(),
-    };
-    (buffer, source)
+    source.prefix_len = prefix_len;
+    crate::text::line_starts_into(&shaped_text, &mut source.line_starts);
+    source.shown = shown;
+    source.empty = content.is_empty();
 }
 
 /// Set the layout half of `spec` on `buffer`: the line height, the width
@@ -1034,6 +1048,45 @@ pub(crate) fn set_layout(buffer: &mut Buffer, spec: &LayoutSpec<'_>) {
     }
 }
 
+/// What a laid-out buffer's runs add up to.
+pub(crate) struct RunTotals {
+    /// The widest run's width.
+    widest: f32,
+    /// The runs' heights, summed.
+    height: f32,
+    /// How many glyphs and runs there are.
+    glyphs: usize,
+    runs: usize,
+}
+
+impl RunTotals {
+    pub(crate) fn of(buffer: &Buffer) -> Self {
+        let mut totals = Self {
+            widest: 0.0,
+            height: 0.0,
+            glyphs: 0,
+            runs: 0,
+        };
+        for run in buffer.layout_runs() {
+            totals.widest = totals.widest.max(run.line_w);
+            totals.height += run.line_height;
+            totals.glyphs += run.glyphs.len();
+            totals.runs += 1;
+        }
+        totals
+    }
+
+    /// The size of the layout [`extract`] reads from the buffer: what
+    /// measuring the text gives.
+    pub(crate) fn size(&self, spec: &LayoutSpec<'_>, source: &BufferSource) -> (f32, f32) {
+        if source.empty {
+            (0.0, spec.line_height)
+        } else {
+            (self.widest, self.height.max(spec.line_height))
+        }
+    }
+}
+
 /// The layout of `buffer`, shaped and laid out under `spec`, as gameui
 /// reads it: glyphs and lines relative to the block's origin, with byte
 /// offsets into the content.
@@ -1044,16 +1097,11 @@ pub(crate) fn extract(
 ) -> ShapedLayout {
     let prefix_len = source.prefix_len;
     let line_starts = &source.line_starts;
+    let totals = RunTotals::of(buffer);
 
     // Vertical: the column is as wide as the widest cluster row; each row is
     // centred within it by shifting its glyphs right by half the slack.
-    let column_w = if spec.vertical {
-        buffer
-            .layout_runs()
-            .fold(0.0f32, |widest, run| widest.max(run.line_w))
-    } else {
-        0.0
-    };
+    let column_w = if spec.vertical { totals.widest } else { 0.0 };
 
     // Vertical: the whole column sits within `max_width` per `align`, as
     // horizontal text does — `Start`/`Left` flush left, `Center` centres,
@@ -1079,13 +1127,10 @@ pub(crate) fn extract(
         _ => column_off_x,
     };
 
-    let mut glyphs = Vec::new();
-    let mut lines = Vec::new();
-    let mut width = 0.0f32;
-    let mut height = 0.0f32;
+    // Sized up front: the direction mark, if any, is one glyph too many.
+    let mut glyphs = Vec::with_capacity(totals.glyphs);
+    let mut lines = Vec::with_capacity(totals.runs);
     for run in buffer.layout_runs() {
-        width = width.max(run.line_w);
-        height += run.line_height;
         let line_off_x = if spec.vertical {
             column_off_x + (column_w - run.line_w) / 2.0
         } else {
@@ -1146,16 +1191,11 @@ pub(crate) fn extract(
         });
     }
 
-    let size = if source.empty {
-        (0.0, spec.line_height)
-    } else {
-        (width, height.max(spec.line_height))
-    };
     ShapedLayout {
         glyphs,
         lines,
         shown: source.shown as u32,
-        size,
+        size: totals.size(spec, source),
         ink: OnceLock::new(),
     }
 }

@@ -214,6 +214,81 @@ fn letter_spacing_faces_spans_and_vertical_text_lay_out_as_a_fresh_shape() {
 }
 
 #[test]
+fn a_text_given_one_content_after_another_lays_out_as_a_fresh_shape_of_each() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let mut prepared = measurer.prepare(&TextBlock::new("Before", 0.0, 0.0));
+    let steps = layouts();
+    // Twice through, so each content follows another kind of content: more
+    // lines and fewer, empty and not, one direction and the other.
+    let contents = CONTENTS.iter().chain(CONTENTS.iter().rev());
+    for (step, content) in contents.enumerate() {
+        let layout = steps[step * 7 % steps.len()];
+        let block = with_layout(&TextBlock::new(*content, 0.0, 0.0).with_size(16.0), layout);
+        let what = format!("step {step} {content:?} {layout:?}");
+        warm_ellipsis(&fonts, &block);
+        let start = stats(&fonts);
+        let measured = prepared.measure(&mut measurer, &block);
+        let drawn = prepared.layout(&mut measurer, &block);
+        let cut = block.ellipsize && drawn.layout().shown < block.drawn_content().len() as u32;
+        assert!(
+            stats(&fonts).shaped - start.shaped <= 1 + u64::from(cut),
+            "{what}: shaped {}",
+            stats(&fonts).shaped - start.shaped
+        );
+        assert_exact(drawn.layout(), &cached(&fonts, &block), &what);
+        let want = TextMeasurer::with_font_system(fonts.clone()).measure_block(&block);
+        assert_eq!(
+            (measured.0.to_bits(), measured.1.to_bits()),
+            (want.0.to_bits(), want.1.to_bits()),
+            "{what}: measured {measured:?} against {want:?}"
+        );
+    }
+}
+
+#[test]
+fn a_label_given_new_content_is_shaped_once_and_measured_without_a_layout() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    // Centred, so where its glyphs stand depends on the width.
+    let offered = |text: &str| {
+        TextBlock::new(text, 0.0, 0.0)
+            .with_max_width(420.0)
+            .with_wrap(WrapMode::WordOrGlyph)
+            .with_align(TextAlign::Center)
+    };
+    let mut prepared = measurer.prepare(&offered("Row 0 · 0.0%"));
+    for i in 1..20 {
+        let text = format!("Row {i} · {}.{}%", i * 3, i % 10);
+        let start = stats(&fonts);
+        let measured = prepared.measure(&mut measurer, &offered(&text));
+        let w = measured.0;
+        // Measured, the size is read off the buffer: no layout is made.
+        assert_eq!(prepared.kept.iter().flatten().count(), 0, "{text}");
+        let own = offered(&text).with_max_width(w.ceil());
+        let drawn = prepared.layout(&mut measurer, &own);
+        let after = stats(&fonts);
+        assert_eq!(after.shaped - start.shaped, 1, "{text}: shaped once");
+        assert_eq!(
+            after.laid_out - start.laid_out,
+            1,
+            "{text}: laid out once more"
+        );
+        assert_eq!(prepared.kept.iter().flatten().count(), 1, "{text}");
+        // Measured again, the size is kept.
+        assert_eq!(prepared.measure(&mut measurer, &offered(&text)), measured);
+        assert_eq!(stats(&fonts).laid_out, after.laid_out, "{text}: size kept");
+        let want = TextMeasurer::with_font_system(fonts.clone()).measure_block(&offered(&text));
+        assert_eq!(measured, want, "{text}: measured");
+        assert_exact(drawn.layout(), &cached(&fonts, &own), &text);
+        // Drawn at the width it was measured at, after the other: the buffer
+        // is laid out under that width again, not read as it was left.
+        let back = prepared.layout(&mut measurer, &offered(&text));
+        assert_exact(back.layout(), &cached(&fonts, &offered(&text)), &text);
+    }
+}
+
+#[test]
 fn a_hugging_label_is_shaped_once_and_laid_out_once_more() {
     let fonts = shared_font_system();
     let mut measurer = TextMeasurer::with_font_system(fonts.clone());

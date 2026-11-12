@@ -488,6 +488,10 @@ a load average of 60, so their size, not their decimals, is the result.
   level with immediate mode. The tree's own share did not shrink: it now
   does all the shaping (preparing a label allocates a new buffer and lays it
   out twice), where before the renderer shaped the second copy.
+- **Afterwards, a changed label reuses its buffer** and is measured without
+  a layout being made (`TODO_DONE.md`): 17 allocations a change, was 43.
+  `panel-chg`'s tree share, three rounds at a load average of about 45:
+  0.31–0.38 ms (frame 0.39–0.48); the shapes are the same 11,040.
 
 Problems the comparison found (not fixed; in the design doc's Outstanding
 list):

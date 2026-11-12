@@ -10,11 +10,11 @@
 
 use std::sync::{Arc, OnceLock};
 
-use cosmic_text::Buffer;
+use cosmic_text::{Buffer, Metrics};
 
 use super::{
-    BufferSource, LayoutKey, LayoutSpec, ShapedLayout, SharedFontSystem, ellipsis, extract,
-    faces_hash, set_buffer, set_layout, shape_cut_layout,
+    BufferSource, LayoutKey, LayoutSpec, RunTotals, ShapedLayout, SharedFontSystem, ellipsis,
+    extract, faces_hash, set_buffer_text, set_layout, shape_cut_layout,
 };
 use crate::text::{
     CaretPos, TextBlock, TextContent, TextDirection, VisualGlyph, family_hash, style_disc,
@@ -83,16 +83,22 @@ impl ShapingKey {
 /// bytes and a '…', as the shared cache does, so the glyphs at the cut are
 /// exact; one that fits is laid out from the kept shaping.
 ///
-/// It keeps its last two layouts, the measured one and the drawn one, so
-/// asking again for either lays nothing out.
+/// It keeps its last two layouts and the last two sizes it measured, so
+/// asking again for the measured size or the drawn layout lays nothing out.
+/// Measuring reads the size off the laid-out buffer: a text measured at one
+/// width and drawn at another makes one layout, the drawn one.
 pub struct PreparedText {
     buffer: Buffer,
     source: BufferSource,
     content: TextContent,
     shaping: ShapingKey,
     fonts: FontStamp,
+    /// The spec the buffer is laid out under now.
+    laid_out: LayoutKey,
     /// The last two layouts made, the latest first.
     kept: [Option<PreparedLayout>; 2],
+    /// The last two sizes measured, the latest first.
+    sizes: [Option<(LayoutKey, (f32, f32))>; 2],
     /// Roughly the heap bytes it holds (`heap_bytes`), counted whenever the
     /// buffer is shaped or laid out.
     bytes: usize,
@@ -139,29 +145,55 @@ impl PreparedText {
 
     /// Shape `content` under `spec`'s shaping half, laid out under all of it.
     fn shape(shared: &mut SharedFontSystem, spec: &LayoutSpec<'_>, content: TextContent) -> Self {
-        let (mut buffer, source) = set_buffer(spec, &content, None);
-        set_layout(&mut buffer, spec);
-        let before = crate::text::shaping_passes();
-        crate::text::shape_buffer(&mut buffer, &mut shared.font_system);
-        shared.layouts.shaped += crate::text::shaping_passes() - before;
-        let fonts = FontStamp::of(shared);
-        let first = PreparedLayout::new(
-            extract(&buffer, spec, &source),
-            spec.key(),
-            content.clone(),
-            fonts,
-        );
         let mut prepared = Self {
-            buffer,
-            source,
-            content,
+            // Empty, so nothing is shaped before the text is set.
+            buffer: Buffer::new_empty(Metrics::new(spec.font_size, spec.line_height)),
+            source: BufferSource::default(),
+            content: content.clone(),
             shaping: ShapingKey::of(spec),
-            fonts,
-            kept: [Some(first), None],
+            fonts: FontStamp::of(shared),
+            laid_out: spec.key(),
+            kept: [None, None],
+            sizes: [None, None],
             bytes: 0,
         };
-        prepared.recount();
+        prepared.reshape(shared, spec, content);
         prepared
+    }
+
+    /// Set `content` into the kept buffer, reusing what its lines hold, and
+    /// shape it under `spec`'s shaping half, laid out under all of it: the
+    /// layouts and sizes kept before are dropped.
+    fn reshape(
+        &mut self,
+        shared: &mut SharedFontSystem,
+        spec: &LayoutSpec<'_>,
+        content: TextContent,
+    ) {
+        set_buffer_text(&mut self.buffer, &mut self.source, spec, &content, None);
+        set_layout(&mut self.buffer, spec);
+        let before = crate::text::shaping_passes();
+        crate::text::shape_buffer(&mut self.buffer, &mut shared.font_system);
+        shared.layouts.shaped += crate::text::shaping_passes() - before;
+        self.fonts = FontStamp::of(shared);
+        self.shaping = ShapingKey::of(spec);
+        self.content = content;
+        self.laid_out = spec.key();
+        self.kept = [None, None];
+        self.sizes = [None, None];
+        self.recount();
+    }
+
+    /// Lay the kept shaping out under `spec`, unless it is laid out so now.
+    fn lay_out(&mut self, shared: &mut SharedFontSystem, spec: &LayoutSpec<'_>) {
+        let key = spec.key();
+        if self.laid_out == key {
+            return;
+        }
+        set_layout(&mut self.buffer, spec);
+        crate::text::lay_out_buffer(&mut self.buffer, &mut shared.font_system);
+        shared.layouts.laid_out += 1;
+        self.laid_out = key;
     }
 
     /// Roughly the heap bytes it holds: its buffer's lines, as set, shaped
@@ -190,14 +222,41 @@ impl PreparedText {
     /// `max_width`. Lays the kept shaping out, shaping nothing unless the
     /// block's shaping differs from what was prepared.
     pub fn measure(&mut self, measurer: &mut crate::TextMeasurer, block: &TextBlock) -> (f32, f32) {
-        let content = block.drawn_content();
+        let content = drawn_content(block);
         if content.is_empty() {
             return (0.0, block.line_height);
         }
         let mut shared = measurer.shared();
-        self.layout_at(&mut shared, &measured_spec(block), &content)
-            .layout()
-            .size
+        self.size_at(&mut shared, &measured_spec(block), &content)
+    }
+
+    /// `content`'s size laid out under `spec` from the kept shaping: a kept
+    /// layout's or size, else read off the buffer laid out under it, with no
+    /// layout made.
+    fn size_at(
+        &mut self,
+        shared: &mut SharedFontSystem,
+        spec: &LayoutSpec<'_>,
+        content: &TextContent,
+    ) -> (f32, f32) {
+        self.refresh(shared, spec, content);
+        let key = spec.key();
+        let known = self.kept.iter().flatten().find(|kept| kept.0.key == key);
+        if let Some(kept) = known {
+            return kept.size();
+        }
+        if let Some(at) = self
+            .sizes
+            .iter()
+            .position(|s| s.is_some_and(|(k, _)| k == key))
+        {
+            self.sizes.swap(0, at);
+            return self.sizes[0].expect("found").1;
+        }
+        self.lay_out(shared, spec);
+        let size = RunTotals::of(&self.buffer).size(spec, &self.source);
+        self.sizes[1] = self.sizes[0].replace((key, size));
+        size
     }
 
     /// The layout `block` is drawn with, to attach to it with
@@ -209,7 +268,7 @@ impl PreparedText {
         measurer: &mut crate::TextMeasurer,
         block: &TextBlock,
     ) -> PreparedLayout {
-        let content = block.drawn_content();
+        let content = drawn_content(block);
         let mut shared = measurer.shared();
         let spec = LayoutSpec::of_block(block);
         match spec.cut_width() {
@@ -218,19 +277,19 @@ impl PreparedText {
         }
     }
 
-    /// Prepare again if `spec`'s shaping half, `content` or the fonts differ
-    /// from what was shaped.
-    fn refresh(&mut self, shared: &mut SharedFontSystem, spec: &LayoutSpec<'_>, content: &str) {
+    /// Shape again, into the kept buffer, if `spec`'s shaping half,
+    /// `content` or the fonts differ from what was shaped.
+    fn refresh(
+        &mut self,
+        shared: &mut SharedFontSystem,
+        spec: &LayoutSpec<'_>,
+        content: &TextContent,
+    ) {
         let stale = self.fonts != FontStamp::of(shared)
             || self.shaping != ShapingKey::of(spec)
             || !same_content(&self.content, content);
         if stale {
-            let content = if same_content(&self.content, content) {
-                self.content.clone()
-            } else {
-                TextContent::from(content)
-            };
-            *self = Self::shape(shared, spec, content);
+            self.reshape(shared, spec, content.clone());
         }
     }
 
@@ -255,16 +314,14 @@ impl PreparedText {
         &mut self,
         shared: &mut SharedFontSystem,
         spec: &LayoutSpec<'_>,
-        content: &str,
+        content: &TextContent,
     ) -> PreparedLayout {
         self.refresh(shared, spec, content);
         let key = spec.key();
         if let Some(kept) = self.kept(&key) {
             return kept;
         }
-        set_layout(&mut self.buffer, spec);
-        crate::text::lay_out_buffer(&mut self.buffer, &mut shared.font_system);
-        shared.layouts.laid_out += 1;
+        self.lay_out(shared, spec);
         let layout = PreparedLayout::new(
             extract(&self.buffer, spec, &self.source),
             key,
@@ -281,7 +338,7 @@ impl PreparedText {
         &mut self,
         shared: &mut SharedFontSystem,
         spec: &LayoutSpec<'_>,
-        content: &str,
+        content: &TextContent,
         max_width: f32,
     ) -> PreparedLayout {
         if content.is_empty() || !max_width.is_finite() || max_width <= 0.0 {

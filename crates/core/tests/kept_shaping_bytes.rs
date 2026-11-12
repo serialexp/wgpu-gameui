@@ -4,50 +4,58 @@
 //! retained tree's shaping budget (`docs/design/prepared-text.md`, Phase 0).
 //!
 //! The measurements print and assert nothing about the sizes; they are
-//! ignored. One test is not: what `PreparedText::heap_bytes` estimates is
-//! checked against what the allocator handed out for it.
+//! ignored. Two tests are not: what `PreparedText::heap_bytes` estimates is
+//! checked against what the allocator handed out for it, and a changed
+//! label's allocations against a new one's.
+//!
+//! The allocator counts per thread, so tests running side by side don't
+//! count each other's.
 //!
 //! ```text
 //! cargo test -p wgpu-gameui --release --test kept_shaping_bytes -- --ignored --nocapture
 //! ```
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping, Wrap};
 use wgpu_gameui::{TextBlock, TextMeasurer, WrapMode, shared_font_system};
 
-/// The system allocator, counting what is live and how many blocks.
+/// The system allocator, counting on each thread what it holds live and
+/// how many blocks, and how many allocations it made.
 struct Counting;
 
-static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
-static LIVE_BLOCKS: AtomicIsize = AtomicIsize::new(0);
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // Const-initialised, with nothing to drop: reading them allocates
+    // nothing, and they can be read while the thread is torn down.
+    static LIVE_BYTES: Cell<isize> = const { Cell::new(0) };
+    static LIVE_BLOCKS: Cell<isize> = const { Cell::new(0) };
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn count(bytes: isize, blocks: isize, allocations: usize) {
+    let _ = LIVE_BYTES.try_with(|c| c.set(c.get() + bytes));
+    let _ = LIVE_BLOCKS.try_with(|c| c.set(c.get() + blocks));
+    let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + allocations));
+}
 
 // SAFETY: every call is forwarded to `System` unchanged; the counters only
 // observe.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        LIVE_BYTES.fetch_add(layout.size() as isize, Ordering::Relaxed);
-        LIVE_BLOCKS.fetch_add(1, Ordering::Relaxed);
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        count(layout.size() as isize, 1, 1);
         // SAFETY: the caller's contract is `System`'s.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        LIVE_BYTES.fetch_sub(layout.size() as isize, Ordering::Relaxed);
-        LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
+        count(-(layout.size() as isize), -1, 0);
         // SAFETY: the caller's contract is `System`'s.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        LIVE_BYTES.fetch_add(
-            new_size as isize - layout.size() as isize,
-            Ordering::Relaxed,
-        );
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        count(new_size as isize - layout.size() as isize, 0, 1);
         // SAFETY: the caller's contract is `System`'s.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -58,11 +66,12 @@ static ALLOCATOR: Counting = Counting;
 
 const LABELS: usize = 10_000;
 
+/// This thread's live bytes, live blocks and allocations made.
 fn snapshot() -> (isize, isize, usize) {
     (
-        LIVE_BYTES.load(Ordering::Relaxed),
-        LIVE_BLOCKS.load(Ordering::Relaxed),
-        ALLOCATIONS.load(Ordering::Relaxed),
+        LIVE_BYTES.with(Cell::get),
+        LIVE_BLOCKS.with(Cell::get),
+        ALLOCATIONS.with(Cell::get),
     )
 }
 
@@ -127,6 +136,75 @@ fn a_prepared_texts_counted_bytes_are_what_it_holds() {
     assert!(
         (0.75..=1.33).contains(&ratio),
         "counted {counted} B for {bytes} B held (ratio {ratio:.2})"
+    );
+}
+
+/// A changed label, as the retained tree changes one (a prepared text given
+/// new content, measured at the width it is offered and laid out at the
+/// width it is drawn at), allocates at most two thirds of what preparing the
+/// same label from nothing does: its buffer is set and shaped again, not made
+/// anew, and measuring it makes no layout. (About 17 against 36 when this was
+/// written; a new buffer for each change made it about 34.)
+#[test]
+fn a_changed_label_allocates_less_than_a_new_one() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let block = |text: &str, width: f32| {
+        TextBlock::new(text, 0.0, 0.0)
+            .with_size(13.0)
+            .with_line_height(20.0)
+            .with_max_width(width)
+            .with_wrap(WrapMode::WordOrGlyph)
+    };
+    let mut prepared = measurer.prepare(&block(&label(true, 0), 420.0));
+    const CHANGES: usize = 2_000;
+    let texts: Vec<String> = (0..CHANGES).map(|i| label(true, i + 1)).collect();
+    // Warm the font system's own caches, which are not the text's.
+    for text in &texts[..100] {
+        let (w, _) = prepared.measure(&mut measurer, &block(text, 420.0));
+        let _ = prepared.layout(&mut measurer, &block(text, w.ceil()));
+    }
+    let start = snapshot();
+    for text in &texts {
+        let mut fresh = measurer.prepare(&block(text, 420.0));
+        let (w, _) = fresh.measure(&mut measurer, &block(text, 420.0));
+        let _ = fresh.layout(&mut measurer, &block(text, w.ceil()));
+    }
+    let new = snapshot().2 - start.2;
+    let before = fonts.lock().expect("font system").layout_stats();
+    let (mut measuring, mut laying_out) = (0, 0);
+    for text in &texts {
+        let start = snapshot();
+        let (w, _) = prepared.measure(&mut measurer, &block(text, 420.0));
+        let measured = snapshot();
+        let _ = prepared.layout(&mut measurer, &block(text, w.ceil()));
+        let laid = snapshot();
+        measuring += measured.2 - start.2;
+        laying_out += laid.2 - measured.2;
+    }
+    let stats = fonts.lock().expect("font system").layout_stats();
+    let per = |n: usize| n as f64 / CHANGES as f64;
+    let changed = measuring + laying_out;
+    println!(
+        "{CHANGES} changes: {:.1} allocations a change ({:.1} measuring, {:.1} laying out), \
+         {} shaped, {} laid out; {:.1} a new label",
+        per(changed),
+        per(measuring),
+        per(laying_out),
+        stats.shaped - before.shaped,
+        stats.laid_out - before.laid_out,
+        per(new),
+    );
+    assert_eq!(
+        stats.shaped - before.shaped,
+        CHANGES as u64,
+        "a shape a change"
+    );
+    assert!(
+        changed * 3 <= new * 2,
+        "{:.1} allocations a change against {:.1} a new label",
+        per(changed),
+        per(new)
     );
 }
 

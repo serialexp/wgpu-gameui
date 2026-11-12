@@ -230,6 +230,35 @@ then the dated batches in the order they were written.
       At a load average of 20, `rows-one` 0.218–0.225 ms against immediate
       mode's 0.223 (the tree's share 0.014–0.016); the quiet-machine rerun
       stays open in `TODO.md`.
+- [x] **P3 — a prepared text whose content changes builds a new buffer
+      (core, found 2026-11-12).** `PreparedText::refresh` replaces itself
+      with `Self::shape`, a fresh cosmic-text `Buffer` (about 15 heap blocks
+      for a label), where `set_buffer` could set the new text into the kept
+      one. `panel-chg` (48 labels new every frame): the tree's share is
+      0.37–0.56 ms against 0.40–0.47 before prepared text, though it shapes
+      the same 48; reusing the buffer, and not extracting the measured
+      layout when it is only read for its size, are the candidates. Check:
+      the tree's share in `panel-chg`, and allocations per changed label.
+      **Done 2026-11-12.** Both. `set_buffer_text` sets a text into a
+      kept buffer (cosmic-text reuses each line's text, attributes and
+      shaping vectors; `line_starts_into` reuses the line table), and
+      `PreparedText::reshape` shapes into it; `measure` reads the size off
+      the laid-out buffer (`RunTotals`) and keeps the last two sizes, so a
+      text measured at one width and drawn at another makes one layout, and
+      the buffer remembers the spec it is laid out under, so drawing at the
+      measured width lays nothing out again. `extract` sizes its glyph and
+      line vectors up front. A changed label (measured at 420, drawn at its
+      own width) went from 43 allocations to 17, against 36 for a new one;
+      of the 17, about 15 are cosmic-text's own shaping and layout.
+      `a_changed_label_allocates_less_than_a_new_one`
+      (`kept_shaping_bytes.rs`, now counting per thread) holds it within two
+      thirds of a new label's (a new buffer a change measured 34). Tests:
+      `a_text_given_one_content_after_another_lays_out_as_a_fresh_shape_of_each`,
+      `a_label_given_new_content_is_shaped_once_and_measured_without_a_layout`.
+      Shapes and layouts unchanged (`panel-chg` 11,040 shapes). The tree's
+      share in `panel-chg`, at a load average of about 45: 0.31–0.38 ms over
+      three rounds (0.37–0.56 before, at about 60), so what remains is
+      mostly cosmic-text shaping the 48 labels.
 
 ---
 
