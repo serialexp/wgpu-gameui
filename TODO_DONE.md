@@ -290,6 +290,21 @@ then the dated batches in the order they were written.
       passes. The publish workflow's no-default-features step is now clippy
       over all targets, and wgpu-gameui's `CLAUDE.md` lists it. (Listed
       twice in `TODO.md`, under this section and "Rustdoc links".)
+- [x] **P2 — a tint or span colour change counts as `Place` (core, found by
+      Codex 2026-11-11).** Text recorded under a tint gets
+      `style_range_tint` (`widgets/draw_list.rs:3055`, `:3086`), and
+      `text_change` classes a change of it, or of a span's colour, as `Place`
+      (`render/frame_diff.rs:931`), though it only multiplies colours: a
+      container fading rebuilds the plan and uploads everything.
+      **Done 2026-11-12.** `text_change` counts a span's colour, a style
+      range's colour and `style_range_tint` toward the look, and a span's
+      text and underline and a range's extent and underline toward the
+      place: refreshing a `Look` block resolves every glyph's colour again
+      through the same `append_placements`. Test:
+      `span_and_range_colours_and_the_tint_are_looks` (`text_prep_tests.rs`:
+      each compares as a look, the refresh equals a fresh prepare, and a
+      moved span boundary or range is a place). The range colours were
+      beyond the item: an editor recolouring its syntax was a place too.
 
 ---
 

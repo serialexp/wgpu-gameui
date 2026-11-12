@@ -51,12 +51,6 @@ none chosen yet (Bart).
       view keeps its list. Moot for the bench scenes since only clipping nodes
       keep lists (rows: 2 lists), but a long list of nested scroll panes would
       hold one per pane ever drawn.
-- [ ] **P2 — a tint or span colour change counts as `Place` (core, found by
-      Codex 2026-11-11).** Text recorded under a tint gets
-      `style_range_tint` (`widgets/draw_list.rs:3055`, `:3086`), and
-      `text_change` classes a change of it, or of a span's colour, as `Place`
-      (`render/frame_diff.rs:931`), though it only multiplies colours: a
-      container fading rebuilds the plan and uploads everything.
 - [ ] **P2 — an empty layer moves later lists to other places (core, found
       by both reviewers 2026-11-11).** A list with no paint stream goes
       through `render_unordered` and takes no comparison place

@@ -116,6 +116,71 @@ fn recoloured(font: &FontHandle, hue: u8) -> [TextBlock; 4] {
     ]
 }
 
+/// A span block and a block of style ranges under a tint, coloured by `hue`:
+/// the span colours, the range colours and the tint all follow it.
+fn recoloured_runs(font: &FontHandle, hue: u8) -> [TextBlock; 2] {
+    let h = f32::from(hue) / 255.0;
+    let spans = vec![
+        TextSpan {
+            text: "warm ".into(),
+            color: Some([h, 0.2, 0.2, 1.0]),
+            underline: crate::text::Underline::None,
+        },
+        TextSpan {
+            text: "cold".into(),
+            color: Some([0.2, 0.2, h, 1.0]),
+            underline: crate::text::Underline::None,
+        },
+    ];
+    let mut ranged = block("let x = 1;", font, 40.0).with_style_ranges(vec![
+        TextStyleRange {
+            range: 0..3,
+            color: Some([0.2, h, 0.2, 1.0]),
+            underline: crate::text::Underline::None,
+        },
+        TextStyleRange {
+            range: 8..9,
+            color: Some([h, h, 0.2, 1.0]),
+            underline: crate::text::Underline::None,
+        },
+    ]);
+    ranged.style_range_tint = [1.0, 1.0, 1.0, h];
+    [
+        // As `DrawList::text` records it: the spans' texts as its content.
+        block("warm cold", font, 10.0).with_spans(spans),
+        ranged,
+    ]
+}
+
+/// A span's colour, a style range's colour and the tint the ranges are drawn
+/// under only colour glyphs: a change of them is a look, and refreshing the
+/// blocks in place makes what preparing them from nothing does.
+#[test]
+fn span_and_range_colours_and_the_tint_are_looks() {
+    let (mut cpu, font) = cpu(None);
+    let before = recoloured_runs(&font, 40);
+    let after = recoloured_runs(&font, 220);
+    let changes = [0, 1].map(|i| crate::render::text_change(&before[i], &after[i]));
+    assert_eq!(changes, [Change::Look; 2]);
+    let mut kept = MsdfPrepared::default();
+    cpu.prepare_texts(&mut kept, grid(), &before, once(0..2));
+    assert!(cpu.refresh_texts(&mut kept, grid(), &after, &changes));
+    let mut fresh = MsdfPrepared::default();
+    cpu.prepare_texts(&mut fresh, grid(), &after, once(0..2));
+    assert_ne!(kept.text_instances, MsdfPrepared::default().text_instances);
+    assert_eq!(kept.text_instances, fresh.text_instances);
+    assert_eq!(kept.block_sweeps, fresh.block_sweeps);
+
+    // A span's text or a range's extent is where glyphs are coloured from:
+    // a place.
+    let mut moved = after.clone();
+    moved[0].spans[0].text = "warm".into();
+    moved[0].spans[1].text = " cold".into();
+    std::sync::Arc::make_mut(&mut moved[1].style_ranges)[0].range = 0..2;
+    let changes = [0, 1].map(|i| crate::render::text_change(&after[i], &moved[i]));
+    assert_eq!(changes, [Change::Place; 2]);
+}
+
 /// A block only recoloured is prepared again in place, and what comes out is
 /// what preparing the list from nothing makes; a block the same is not looked
 /// at.

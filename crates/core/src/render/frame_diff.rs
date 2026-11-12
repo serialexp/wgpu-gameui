@@ -882,14 +882,31 @@ pub(crate) fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
         prepared: _,
     } = a;
     let f = |v: f32| v.to_bits();
+    // A span's text and underline are where it is drawn; its colour, like the
+    // tint the style ranges' colours are multiplied by, is only its look:
+    // refreshing a block resolves every glyph's colour again.
     let spans_same = spans.len() == b.spans.len()
-        && spans.iter().zip(&b.spans).all(|(p, q)| {
-            p.text == q.text
-                && p.color.as_ref().map(bits4) == q.color.as_ref().map(bits4)
-                && p.underline == q.underline
-        });
-    let ranges_same =
-        std::sync::Arc::ptr_eq(style_ranges, &b.style_ranges) || **style_ranges == *b.style_ranges;
+        && spans
+            .iter()
+            .zip(&b.spans)
+            .all(|(p, q)| p.text == q.text && p.underline == q.underline);
+    let span_colours_same = spans
+        .iter()
+        .zip(&b.spans)
+        .all(|(p, q)| p.color.as_ref().map(bits4) == q.color.as_ref().map(bits4));
+    // So is a style range's colour: its range and underline are its place.
+    let ranges_shared = std::sync::Arc::ptr_eq(style_ranges, &b.style_ranges);
+    let ranges_same = ranges_shared
+        || (style_ranges.len() == b.style_ranges.len()
+            && style_ranges
+                .iter()
+                .zip(b.style_ranges.iter())
+                .all(|(p, q)| p.range == q.range && p.underline == q.underline));
+    let range_colours_same = ranges_shared
+        || style_ranges
+            .iter()
+            .zip(b.style_ranges.iter())
+            .all(|(p, q)| p.color.as_ref().map(bits4) == q.color.as_ref().map(bits4));
     let faces_same =
         std::sync::Arc::ptr_eq(face_ranges, &b.face_ranges) || **face_ranges == *b.face_ranges;
     // An effect is in the same place if both are there or both are not, and
@@ -931,12 +948,14 @@ pub(crate) fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
         && *style == b.style
         && spans_same
         && ranges_same
-        && bits4(style_range_tint) == bits4(&b.style_range_tint)
         && faces_same
         && *wrap == b.wrap
         && *vertical == b.vertical
         && *selectable == b.selectable;
     let looks = colour_bits(color) == colour_bits(&b.color)
+        && span_colours_same
+        && range_colours_same
+        && bits4(style_range_tint) == bits4(&b.style_range_tint)
         && effect_colour(outline.as_ref().map(|o: &TextOutline| &o.color))
             == effect_colour(b.outline.as_ref().map(|o| &o.color))
         && effect_colour(shadow.as_ref().map(|s| &s.color))
