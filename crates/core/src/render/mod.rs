@@ -64,7 +64,7 @@ pub use icon_font::{
 #[cfg(feature = "phosphor-icons")]
 pub use phosphor::PhosphorIcon;
 
-pub use atlas::{AtlasRegion, AtlasSlot, SpriteAtlas};
+pub use atlas::{AtlasRegion, AtlasSlot, Compaction, SpriteAtlas};
 pub use blur::{Backdrop, BlurParams, ColorEncoding};
 #[cfg(feature = "headless")]
 pub use capture::HeadlessGpu;

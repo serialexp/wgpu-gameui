@@ -259,6 +259,22 @@ then the dated batches in the order they were written.
       share in `panel-chg`, at a load average of about 45: 0.31–0.38 ms over
       three rounds (0.37–0.56 before, at about 60), so what remains is
       mostly cosmic-text shaping the 48 labels.
+- [x] **P2 — replays stopped by changes that change nothing (core, found
+      by Codex 2026-11-11).** `SpriteAtlas::compact` returns `true` with no
+      tombstones (`render/atlas.rs:247`) and `Textures::compact` takes that as
+      "moved" and bumps the resolution epoch (`render/textures.rs:348`);
+      removing an unknown sprite bumps it too (`:593`). Every place then plans
+      from nothing. Bump only when something moved.
+      **Done 2026-11-12.** `SpriteAtlas::compact` returns a `Compaction`
+      (`Unchanged`, `Moved`, `DidNotFit`) and marks the atlas dirty only
+      when a sprite moved: compacting again with nothing removed since
+      (tombstones stay until an insert recycles them) used to repack, bump
+      the epoch and upload the whole atlas each call, as agent-ui's
+      thumbnails and project icons call it. `Textures::compact` bumps the
+      epoch only on `Moved`, `Textures::remove` only when it unloaded
+      something. Tests: `compact_preserves_ids_and_reclaims_shelf_footprint`
+      (compacting again is `Unchanged`, nothing dirty) and
+      `the_epoch_moves_when_what_a_sprite_resolves_to_may_have_changed`.
 
 ---
 

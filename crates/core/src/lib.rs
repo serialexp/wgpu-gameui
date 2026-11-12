@@ -175,10 +175,10 @@ pub use projection::{world_to_screen, world_to_screen_na};
 #[cfg(feature = "headless")]
 pub use render::HeadlessGpu;
 pub use render::{
-    AtlasId, Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, NineSliceMeta,
-    Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, TextContrast, UiRenderer,
-    YuvColour, YuvMatrix, YuvPlane, YuvPlanes, YuvRange, capture_draw_list, capture_layers,
-    capture_with, write_png,
+    AtlasId, Backdrop, BlurParams, CAPTURE_FORMAT, CAPTURE_SPACE, ColorEncoding, Compaction,
+    NineSliceMeta, Placement, RenderStats, SpriteAtlas, SpriteError, SpriteId, TextContrast,
+    UiRenderer, YuvColour, YuvMatrix, YuvPlane, YuvPlanes, YuvRange, capture_draw_list,
+    capture_layers, capture_with, write_png,
 };
 #[cfg(feature = "phosphor-icons")]
 pub use render::{

@@ -413,8 +413,15 @@ fn the_epoch_moves_when_what_a_sprite_resolves_to_may_have_changed() {
     let before_remove = textures.epoch();
     assert!(textures.remove(b));
     assert_ne!(textures.epoch(), before_remove, "a sprite unloaded");
-    // Compacting an atlas moves sprites only when it has anything to repack.
+    let before_unknown = textures.epoch();
+    assert!(!textures.remove(b), "already unloaded");
+    assert_eq!(textures.epoch(), before_unknown, "nothing unloaded");
+    // "a" loaded again left the first "a" a tombstone: compacting moves the
+    // new one into its place, and compacting again moves nothing.
     let before_compact = textures.epoch();
-    let moved = textures.compact(atlas);
-    assert_eq!(textures.epoch() != before_compact, moved);
+    assert!(textures.compact(atlas));
+    assert_ne!(textures.epoch(), before_compact, "a sprite moved");
+    let moved = textures.epoch();
+    assert!(textures.compact(atlas));
+    assert_eq!(textures.epoch(), moved, "nothing moved");
 }

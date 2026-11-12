@@ -63,6 +63,19 @@ impl AtlasRegion {
     }
 }
 
+/// What [`SpriteAtlas::compact`] did.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Compaction {
+    /// Every sprite is where it was: nothing had been removed, or repacking
+    /// put each back in its place. Nothing is uploaded again.
+    Unchanged,
+    /// Sprites moved, and the atlas is uploaded again.
+    Moved,
+    /// The repacked sprites would not fit, so the atlas keeps the layout it
+    /// had.
+    DidNotFit,
+}
+
 #[derive(Clone)]
 struct Shelf {
     y: u32,
@@ -243,11 +256,15 @@ impl SpriteAtlas {
     /// The sprites are repacked tallest first, which fills shelves better than
     /// the order they arrived in, but shelf packing is no perfect fit: a set
     /// that fit as it arrived may not fit repacked. Then the atlas keeps the
-    /// layout it had and this returns `false`.
-    pub fn compact(&mut self) -> bool {
+    /// layout it had ([`Compaction::DidNotFit`]).
+    ///
+    /// The atlas is marked dirty, to be uploaded again, only when a sprite
+    /// moved: compacting again with nothing removed since repacks every
+    /// sprite where it was and is [`Compaction::Unchanged`].
+    pub fn compact(&mut self) -> Compaction {
         // Nothing to reclaim if nothing was ever removed.
         if self.free_list.is_empty() {
-            return true;
+            return Compaction::Unchanged;
         }
         // Snapshot the live sprites (index + dims) up front: repacking mutates
         // `self` (the shelves), which would alias a live iterator over
@@ -291,16 +308,22 @@ impl SpriteAtlas {
                         self.height,
                         self.dirty,
                     ) = before;
-                    return false;
+                    return Compaction::DidNotFit;
                 }
             }
         }
+        let mut moved = false;
         for (id, region) in placed {
             // The slot is still live (compaction doesn't tombstone anything).
-            self.sprites[id as usize].as_mut().unwrap().region = region;
+            let sprite = self.sprites[id as usize].as_mut().unwrap();
+            moved |= sprite.region != region;
+            sprite.region = region;
+        }
+        if !moved {
+            return Compaction::Unchanged;
         }
         self.dirty = true;
-        true
+        Compaction::Moved
     }
 
     fn try_place(&mut self, w: u32, h: u32) -> Option<AtlasRegion> {
@@ -685,7 +708,7 @@ mod tests {
         assert!(atlas.remove(ids[2]));
         let live: Vec<_> = [ids[1], ids[3]].into_iter().collect();
 
-        assert!(atlas.compact());
+        assert_eq!(atlas.compact(), Compaction::Moved);
 
         // All live ids still resolve (index stability — the whole point), with
         // valid, disjoint regions.
@@ -715,6 +738,14 @@ mod tests {
             atlas.next_shelf_y, 258,
             "two 258-tall cells pack onto one shelf after compaction"
         );
+
+        // Compacted again with nothing removed since, every sprite repacks
+        // where it is: nothing moved, nothing to upload.
+        assert!(atlas.take_dirty());
+        assert_eq!(atlas.compact(), Compaction::Unchanged);
+        let again: Vec<_> = live.iter().map(|id| atlas.region(*id).unwrap()).collect();
+        assert_eq!(again, regions);
+        assert!(!atlas.take_dirty(), "nothing to upload again");
     }
 
     #[test]
@@ -733,7 +764,7 @@ mod tests {
         let footprint = atlas.next_shelf_y;
         atlas.take_dirty();
 
-        assert!(!atlas.compact());
+        assert_eq!(atlas.compact(), Compaction::DidNotFit);
         let after: Vec<_> = ids.iter().map(|&id| atlas.region(id).unwrap()).collect();
         assert_eq!(after, before, "every sprite keeps its place");
         assert_eq!(atlas.next_shelf_y, footprint);
@@ -750,7 +781,7 @@ mod tests {
         let id = atlas.insert(8, 8, &pixels).unwrap();
         let region_before = atlas.region(id).unwrap();
         // No tombstones → compaction does nothing (and must not corrupt state).
-        assert!(atlas.compact());
+        assert_eq!(atlas.compact(), Compaction::Unchanged);
         assert_eq!(
             atlas.region(id).unwrap(),
             region_before,

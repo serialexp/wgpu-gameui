@@ -51,12 +51,6 @@ none chosen yet (Bart).
       view keeps its list. Moot for the bench scenes since only clipping nodes
       keep lists (rows: 2 lists), but a long list of nested scroll panes would
       hold one per pane ever drawn.
-- [ ] **P2 — replays stopped by changes that change nothing (core, found
-      by Codex 2026-11-11).** `SpriteAtlas::compact` returns `true` with no
-      tombstones (`render/atlas.rs:247`) and `Textures::compact` takes that as
-      "moved" and bumps the resolution epoch (`render/textures.rs:348`);
-      removing an unknown sprite bumps it too (`:593`). Every place then plans
-      from nothing. Bump only when something moved.
 - [ ] **P2 — a tint or span colour change counts as `Place` (core, found by
       Codex 2026-11-11).** Text recorded under a tint gets
       `style_range_tint` (`widgets/draw_list.rs:3055`, `:3086`), and

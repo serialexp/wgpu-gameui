@@ -28,7 +28,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use super::atlas::{AtlasRegion, AtlasSlot, SpriteAtlas};
+use super::atlas::{AtlasRegion, AtlasSlot, Compaction, SpriteAtlas};
 use super::yuv::{YuvColour, YuvPlane, YuvPlanes, chroma_size};
 
 /// Opaque handle to a loaded sprite, wherever its pixels live. Stable until the
@@ -344,14 +344,20 @@ impl Textures {
 
     /// Repack the atlas' live sprites (see [`SpriteAtlas::compact`]). Returns
     /// `false` for an unknown id, or when the repacked sprites wouldn't fit
-    /// (the atlas then stays as it was).
+    /// (the atlas then stays as it was). Only sprites moving change what
+    /// they resolve to.
     pub fn compact(&mut self, id: AtlasId) -> bool {
-        let moved = self
-            .atlases
-            .get_mut(id.0 as usize)
-            .is_some_and(|shared| shared.atlas.compact());
-        self.epoch += u64::from(moved);
-        moved
+        let Some(shared) = self.atlases.get_mut(id.0 as usize) else {
+            return false;
+        };
+        match shared.atlas.compact() {
+            Compaction::Moved => {
+                self.epoch += 1;
+                true
+            }
+            Compaction::Unchanged => true,
+            Compaction::DidNotFit => false,
+        }
     }
 
     /// Counts the changes to what a sprite resolves to (see the field).
@@ -591,10 +597,10 @@ impl Textures {
     /// finished any work already submitted with it), an atlas slot is
     /// reclaimed. Returns `false` for an unknown or already unloaded id.
     pub fn remove(&mut self, id: SpriteId) -> bool {
-        self.epoch += 1;
         let Some(sprite) = self.sprites.get_mut(id as usize).and_then(Option::take) else {
             return false;
         };
+        self.epoch += 1;
         if let Some(name) = &sprite.name {
             self.names.remove(name);
         }
