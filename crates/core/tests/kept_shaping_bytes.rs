@@ -3,7 +3,9 @@
 //! what the shared cache keeps for their finished layouts. Settles the
 //! retained tree's shaping budget (`docs/design/prepared-text.md`, Phase 0).
 //!
-//! A measurement, not a test: it prints and asserts nothing about the sizes.
+//! The measurements print and assert nothing about the sizes; they are
+//! ignored. One test is not: what `PreparedText::heap_bytes` estimates is
+//! checked against what the allocator handed out for it.
 //!
 //! ```text
 //! cargo test -p wgpu-gameui --release --test kept_shaping_bytes -- --ignored --nocapture
@@ -70,6 +72,62 @@ fn label(unique: bool, i: usize) -> String {
     } else {
         "Row 1234 · 56.7%".to_owned()
     }
+}
+
+/// A text of `i`'s kind: labels, sentences that wrap, and paragraphs.
+fn mixed(i: usize) -> String {
+    match i % 3 {
+        0 => label(true, i),
+        1 => format!("Sentence {i} wraps once it is set in a narrow column of text."),
+        _ => format!("Paragraph {i}. ").repeat(30) + "\nAnd a second line.",
+    }
+}
+
+/// `PreparedText::heap_bytes`, summed over many prepared texts each measured
+/// and laid out at a second width, is within a third of the bytes the
+/// allocator handed out for them: what the retained tree budgets is what it
+/// holds.
+#[test]
+fn a_prepared_texts_counted_bytes_are_what_it_holds() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let block = |text: &str, width: f32| {
+        TextBlock::new(text, 0.0, 0.0)
+            .with_size(16.0)
+            .with_line_height(20.0)
+            .with_max_width(width)
+            .with_wrap(WrapMode::WordOrGlyph)
+    };
+    let texts: Vec<String> = (0..600).map(mixed).collect();
+    let prepare = |measurer: &mut TextMeasurer| {
+        texts
+            .iter()
+            .map(|t| {
+                let mut prepared = measurer.prepare(&block(t, 300.0));
+                let _ = prepared.layout(measurer, &block(t, 180.0));
+                prepared
+            })
+            .collect::<Vec<_>>()
+    };
+    // Warm the font system's own caches, which are not the texts'.
+    drop(prepare(&mut measurer));
+    let start = snapshot();
+    let prepared = prepare(&mut measurer);
+    let held = snapshot();
+    let counted: usize = prepared.iter().map(|p| p.heap_bytes()).sum();
+    drop(prepared);
+    let after = snapshot();
+    let bytes = (held.0 - after.0) as f64;
+    let ratio = counted as f64 / bytes;
+    println!(
+        "{} texts: counted {counted} B, held {bytes} B, ratio {ratio:.2} ({} B left behind)",
+        texts.len(),
+        after.0 - start.0
+    );
+    assert!(
+        (0.75..=1.33).contains(&ratio),
+        "counted {counted} B for {bytes} B held (ratio {ratio:.2})"
+    );
 }
 
 /// Where one label's bytes go: set, shaped, laid out.

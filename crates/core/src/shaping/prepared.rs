@@ -93,6 +93,9 @@ pub struct PreparedText {
     fonts: FontStamp,
     /// The last two layouts made, the latest first.
     kept: [Option<PreparedLayout>; 2],
+    /// Roughly the heap bytes it holds (`heap_bytes`), counted whenever the
+    /// buffer is shaped or laid out.
+    bytes: usize,
 }
 
 impl std::fmt::Debug for PreparedText {
@@ -148,14 +151,38 @@ impl PreparedText {
             content.clone(),
             fonts,
         );
-        Self {
+        let mut prepared = Self {
             buffer,
             source,
             content,
             shaping: ShapingKey::of(spec),
             fonts,
             kept: [Some(first), None],
-        }
+            bytes: 0,
+        };
+        prepared.recount();
+        prepared
+    }
+
+    /// Roughly the heap bytes it holds: its buffer's lines, as set, shaped
+    /// and laid out, and its two kept layouts (a layout shared with a block
+    /// is counted here, once). Read from the capacities of what it holds, so
+    /// it is what the allocator handed out, not what is in use; counted when
+    /// it is shaped or laid out, so asking costs nothing.
+    pub fn heap_bytes(&self) -> usize {
+        self.bytes
+    }
+
+    fn recount(&mut self) {
+        let kept: usize = self
+            .kept
+            .iter()
+            .flatten()
+            .map(|kept| std::mem::size_of::<Made>() + kept.layout().heap_bytes())
+            .sum();
+        self.bytes = buffer_bytes(&self.buffer)
+            + self.source.line_starts.capacity() * std::mem::size_of::<usize>()
+            + kept;
     }
 
     /// `block`'s size as [`TextMeasurer::measure_block`](crate::TextMeasurer::measure_block)
@@ -219,6 +246,7 @@ impl PreparedText {
 
     fn keep(&mut self, layout: PreparedLayout) -> PreparedLayout {
         self.kept[1] = self.kept[0].replace(layout.clone());
+        self.recount();
         layout
     }
 
@@ -285,6 +313,42 @@ impl PreparedText {
         let layout = PreparedLayout::new(layout, key, self.content.clone(), self.fonts);
         self.keep(layout)
     }
+}
+
+/// Roughly the heap bytes `buffer`'s lines hold, from their capacities: the
+/// line table, each line's text and attribute spans, its shaping (spans,
+/// words, glyphs) and its layout (lines, glyphs).
+fn buffer_bytes(buffer: &Buffer) -> usize {
+    use cosmic_text::{
+        AttrsOwned, BufferLine, DecorationSpan, LayoutGlyph, LayoutLine, ShapeGlyph, ShapeSpan,
+        ShapeWord,
+    };
+    use std::mem::size_of;
+    let mut bytes = buffer.lines.capacity() * size_of::<BufferLine>();
+    for line in &buffer.lines {
+        bytes += line.text().len();
+        bytes += line.attrs_list().spans_iter().count()
+            * size_of::<(std::ops::Range<usize>, AttrsOwned)>();
+        if let Some(shape) = line.shape_opt() {
+            bytes += shape.spans.capacity() * size_of::<ShapeSpan>();
+            for span in &shape.spans {
+                bytes += span.words.capacity() * size_of::<ShapeWord>()
+                    + span.decoration_spans.capacity()
+                        * size_of::<(std::ops::Range<usize>, cosmic_text::GlyphDecorationData)>();
+                for word in &span.words {
+                    bytes += word.glyphs.capacity() * size_of::<ShapeGlyph>();
+                }
+            }
+        }
+        if let Some(lines) = line.layout_opt() {
+            bytes += lines.capacity() * size_of::<LayoutLine>();
+            for laid in lines {
+                bytes += laid.glyphs.capacity() * size_of::<LayoutGlyph>()
+                    + laid.decorations.capacity() * size_of::<DecorationSpan>();
+            }
+        }
+    }
+    bytes
 }
 
 /// One layout of a [`PreparedText`], carried on the [`TextBlock`] it was

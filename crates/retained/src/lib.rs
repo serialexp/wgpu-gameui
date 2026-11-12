@@ -13,6 +13,7 @@ pub mod node;
 mod own_drawing;
 mod paint;
 pub mod signal;
+mod texts;
 mod ui;
 
 pub use input::{Button, InputStats};

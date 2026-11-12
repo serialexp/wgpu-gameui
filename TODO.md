@@ -177,11 +177,11 @@ New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios se
       decodes) rather than race it.
 
 - [ ] **`player::tests::a_device_slow_to_open_starts_from_where_the_clock_has_got_to`**
-      (`crates/media/src/player_tests.rs:1019`) fails every time on 2026-11-12 (four runs,
-      alone and in the workspace, load average 12–16): the sound's segment starts at 0, not
-      at 100 ms. Not flaky in that run; nothing in `crates/media` changed since 72e2827, so
-      it is either a load-dependent race in how the late device is handed the clock or broke
-      with the workspace split. Not yet investigated.
+      (`crates/media/src/player_tests.rs:1019`) failed four runs in a row on 2026-11-12,
+      alone and in the workspace (load average 12–16): the sound's segment started at 0, not
+      at 100 ms. It passed in the next workspace run, as load fell, so it races something
+      (how the late device is handed the clock, or `wait_for_device`); nothing in
+      `crates/media` changed since 72e2827. Not yet investigated.
 
 ## Flaky allocation test (found 2026-11-11)
 

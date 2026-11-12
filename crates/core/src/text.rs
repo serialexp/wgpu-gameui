@@ -2270,6 +2270,21 @@ impl TextMeasurer {
         crate::PreparedText::new(&mut self.shared(), block)
     }
 
+    /// Whether `block` carries a [`PreparedLayout`](crate::PreparedLayout)
+    /// ([`TextBlock::with_prepared`]) that drawing or measuring it will use:
+    /// one made for its content and layout, with the fonts as they are now.
+    /// A block that carries none, or one that no longer holds, is looked up
+    /// in the shared cache instead.
+    pub fn prepared_holds(&self, block: &TextBlock) -> bool {
+        block.prepared.as_ref().is_some_and(|prepared| {
+            prepared.is_for(
+                &LayoutSpec::of_block(block),
+                &block.drawn_content(),
+                &self.shared(),
+            )
+        })
+    }
+
     /// Drop all cached measurements: the layouts and font metrics kept in the
     /// shared font system ([`SharedFontSystem::clear_caches`]). Loading a font
     /// through this crate already does this.

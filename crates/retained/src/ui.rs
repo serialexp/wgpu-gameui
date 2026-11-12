@@ -1,12 +1,15 @@
 //! The tree: nodes, their properties, and the frame that lays them out and
 //! draws them.
 
-use wgpu_gameui::{DrawList, FontSystemHandle, PlacedLog, RecordSpan, TextMeasurer};
+use wgpu_gameui::{
+    DrawList, FontSystemHandle, PlacedLog, PreparedLayout, PreparedText, RecordSpan, TextMeasurer,
+};
 
 use crate::input::{Input, Pointer};
 use crate::layout::Avail;
 use crate::node::{CustomPaint, Insets, Look, Node, Prop, Size, Spec, SpecContent, Stack, Text};
 use crate::signal::{Graph, Memo, NodeId, Owner, Readable, Reader, Signal};
+use crate::texts::{Link, Texts};
 
 /// What the frame is drawn in: what, outside the tree, its layout and
 /// drawing depend on.
@@ -74,6 +77,14 @@ pub struct TreeStats {
     /// reserved, live nodes or not (each node's own allocations, such as its
     /// input handlers, are not counted).
     pub node_bytes: u64,
+    /// Texts keeping their shaping, to be measured and laid out again
+    /// without shaping them (see [`Ui::set_text_budget`]).
+    pub texts_prepared: usize,
+    /// Roughly the bytes their shaping holds (see
+    /// `PreparedText::heap_bytes`), kept within the budget.
+    pub text_bytes: u64,
+    /// Shaping dropped to keep to the budget, since the tree was made.
+    pub texts_dropped: u64,
 }
 
 pub(crate) const WIDTH: u8 = 0;
@@ -120,6 +131,15 @@ pub(crate) struct TextContent {
     pub(crate) color: [f32; 4],
     /// The text's measured size, whole pixels.
     pub(crate) size: [f32; 2],
+    /// Its shaping, from its first measure, until the budget drops it
+    /// (`texts.rs`): it is measured and laid out from this, shaped again only
+    /// when what shaping depends on changed or the fonts did.
+    pub(crate) prepared: Option<PreparedText>,
+    /// The layout it is drawn with, made when its size was settled: drawing
+    /// it, and the frame drawn from nothing, only read it.
+    pub(crate) drawn: Option<PreparedLayout>,
+    /// Its place in the tree's chain of texts holding their shaping.
+    pub(crate) link: Link,
 }
 
 /// The list a node keeps (see `Ui::keeps_list`), and the log of what it
@@ -277,6 +297,8 @@ pub struct Ui {
     pub(crate) root: u32,
     pub(crate) fonts: FontSystemHandle,
     pub(crate) measurer: TextMeasurer,
+    /// The texts keeping their shaping, and their budget.
+    pub(crate) texts: Texts,
     pub(crate) epoch: u32,
     pub(crate) pending: bool,
     keys: Vec<u64>,
@@ -298,6 +320,10 @@ pub struct Ui {
     /// comparing a tree that defers with one that does not.
     #[cfg(test)]
     pub(crate) no_defer: bool,
+    /// Laying out from nothing to check the incremental layout: texts are
+    /// measured through the shared cache, their kept shaping untouched.
+    #[cfg(test)]
+    pub(crate) checking: bool,
 }
 
 impl Ui {
@@ -321,6 +347,7 @@ impl Ui {
             root: 0,
             measurer: TextMeasurer::with_font_system(fonts.clone()),
             fonts,
+            texts: Texts::default(),
             epoch: 1,
             pending: true,
             keys: Vec::new(),
@@ -335,6 +362,8 @@ impl Ui {
             piece_list: None,
             #[cfg(test)]
             no_defer: false,
+            #[cfg(test)]
+            checking: false,
         };
         let owner = ui.graph.root();
         ui.root = ui.create(NO_PARENT, owner, root);
@@ -459,6 +488,9 @@ impl Ui {
                     text: t,
                     color: c,
                     size: [0.0; 2],
+                    prepared: None,
+                    drawn: None,
+                    link: Link::default(),
                 }));
             }
             SpecContent::Custom(painter) => {
@@ -621,6 +653,9 @@ impl Ui {
             stack.extend_from_slice(&d.absolute);
             if d.input.is_some() {
                 self.forget_pointer(x);
+            }
+            if self.nodes[x as usize].text.is_some() {
+                self.forget_text(x);
             }
             let d = &mut self.nodes[x as usize];
             d.live = false;
@@ -1142,6 +1177,9 @@ impl Ui {
             node_bytes: (self.nodes.capacity() * std::mem::size_of::<NodeData>()
                 + self.bindings.capacity() * std::mem::size_of::<Binding>())
                 as u64,
+            texts_prepared: self.texts.count,
+            text_bytes: self.texts.bytes,
+            texts_dropped: self.texts.dropped,
             ..TreeStats::default()
         };
         for d in &self.nodes {

@@ -44,6 +44,7 @@ pub(crate) fn check(ui: &mut Ui) {
     }
     ui.check_layout();
     ui.check_pointer();
+    ui.check_drawn_texts();
 }
 
 pub(crate) fn rect(ui: &Ui, node: Node) -> [f32; 4] {
@@ -173,25 +174,30 @@ fn shaped(fonts: &FontSystemHandle) -> u64 {
     fonts.lock().expect("font system").layout_stats().shaped
 }
 
+/// Layouts made from kept shaping, without shaping.
+fn relaid(fonts: &FontSystemHandle) -> u64 {
+    fonts.lock().expect("font system").layout_stats().laid_out
+}
+
 /// Look each of `nodes`' texts up as the renderer does when it prepares the
-/// frame: the block the node records, through the shared layouts. The tests
-/// draw no frame on a GPU, so this is the draw's share of the shaping.
+/// frame: the block the node records, its prepared layout used where it
+/// holds, else through the shared layouts. The tests draw no frame on a GPU,
+/// so this is the draw's share of the shaping.
 fn prepare_texts(ui: &Ui, nodes: &[Node]) {
     let mut list = DrawList::with_font_system(ui.fonts.clone());
     for &node in nodes {
         let d = &ui.nodes[ui.index(node) as usize];
-        let t = d.text.as_ref().expect("a text node");
-        let (x, y, width) = crate::layout::text_place(d);
-        list.measure_block(&crate::layout::text_block(&t.text, t.color, x, y, width));
+        list.measure_block_ink(&crate::own_drawing::drawn_block(d));
     }
 }
 
-/// Today's cost, pinned until prepared text lands
-/// (`docs/design/prepared-text.md`): a hugging label is measured at the
-/// width it is offered and drawn at its own, two layouts each shaped; one of
-/// exact width is measured and drawn at the same width, shaped once.
+/// A label is shaped once, however many widths it is laid out at: a
+/// hugging one is measured at the width it is offered and drawn at its own,
+/// both from its kept shaping (`docs/design/prepared-text.md`); one of exact
+/// width is measured and drawn at the same width. A colour change and a
+/// frame with nothing changed shape nothing.
 #[test]
-fn a_new_or_changed_label_is_shaped_once_per_width_it_is_laid_out_at() {
+fn a_new_or_changed_label_is_shaped_once() {
     let fonts = fonts();
     let mut ui = Ui::new(fonts.clone());
     let hugging = ui.add(
@@ -208,8 +214,8 @@ fn a_new_or_changed_label_is_shaped_once_per_width_it_is_laid_out_at() {
     let start = shaped(&fonts);
     ui.frame(at(0.0));
     prepare_texts(&ui, &texts);
-    assert_eq!(shaped(&fonts) - start, 3, "two hugging, one exact");
-    for (node, content, shapes) in [(hugging, "Hugging 1", 2), (exact, "Exact 1", 1)] {
+    assert_eq!(shaped(&fonts) - start, 2, "one each");
+    for (node, content, shapes) in [(hugging, "Hugging 1", 1), (exact, "Exact 1", 1)] {
         let start = shaped(&fonts);
         ui.set_text(node, Text::new(content, 16.0).no_wrap());
         ui.frame(at(0.0));
@@ -224,6 +230,192 @@ fn a_new_or_changed_label_is_shaped_once_per_width_it_is_laid_out_at() {
     prepare_texts(&ui, &texts);
     assert_eq!(shaped(&fonts), start, "a colour and an unchanged frame");
     check(&mut ui);
+}
+
+/// A text keeps its shaping: laid out at another width, it is laid out from
+/// it, shaped no more; when the fonts change it is shaped once, and drawn
+/// with the layout made then.
+#[test]
+fn a_label_laid_out_at_another_width_or_in_new_fonts_is_shaped_as_little_as_it_can_be() {
+    let fonts = fonts();
+    let mut ui = Ui::new(fonts.clone());
+    let hugging = ui.add(
+        ui.root(),
+        Spec::new().text(Text::new("Hugging", 16.0).no_wrap(), [1.0; 4]),
+    );
+    let exact = ui.add(
+        ui.root(),
+        Spec::new()
+            .width(Size::Fixed(120.0))
+            .text(Text::new("Exact", 16.0).no_wrap(), [1.0; 4]),
+    );
+    let texts = [hugging, exact];
+    let counts = || (shaped(&fonts), relaid(&fonts));
+    let (s, l) = counts();
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &texts);
+    // The hugging label is measured at the room it is offered and drawn at
+    // its own width; the exact one is measured and drawn at its width.
+    assert_eq!(counts(), (s + 2, l + 1), "first frame");
+    assert_eq!(ui.tree_stats().texts_prepared, 2);
+
+    let (s, l) = counts();
+    ui.set_width(exact, Size::Fixed(150.0));
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &texts);
+    assert_eq!(counts(), (s, l + 1), "a width change lays it out once");
+    check(&mut ui);
+
+    // New fonts: each text is shaped again once, and drawn as laid out then.
+    fonts.lock().expect("font system").clear_caches();
+    let (s, l) = counts();
+    let mut context = at(0.0);
+    context.fonts = 1;
+    ui.frame(context);
+    prepare_texts(&ui, &texts);
+    assert_eq!(counts(), (s + 2, l + 1), "new fonts");
+    check(&mut ui);
+}
+
+/// Past the tree's budget, the shaping of the texts laid out longest ago is
+/// dropped; they are still drawn with the layout they had, shaping nothing,
+/// and one measured again is shaped again. Removing texts uncounts theirs.
+#[test]
+fn the_texts_shaping_is_kept_within_its_budget() {
+    let fonts = fonts();
+    let mut ui = Ui::new(fonts.clone());
+    let column = ui.add(ui.root(), Spec::new().stack(Stack::column()));
+    let labels: Vec<Node> = (0..200)
+        .map(|i| {
+            ui.add(
+                column,
+                Spec::new().text(Text::new(format!("Label {i}"), 10.0).no_wrap(), [1.0; 4]),
+            )
+        })
+        .collect();
+    ui.frame(at(0.0));
+    let all = ui.tree_stats();
+    assert_eq!((all.texts_prepared, all.texts_dropped), (200, 0));
+    assert!(all.text_bytes > 0);
+
+    // Room for about fifty: the 150 laid out first go.
+    let budget = all.text_bytes / 4;
+    ui.set_text_budget(budget);
+    let kept = ui.tree_stats();
+    assert!(kept.text_bytes <= budget, "{kept:?} over {budget}");
+    assert_eq!(kept.texts_prepared as u64 + kept.texts_dropped, 200);
+    assert!(kept.texts_dropped >= 140, "{kept:?}");
+    assert!(
+        ui.nodes[ui.index(labels[0]) as usize]
+            .text
+            .as_ref()
+            .unwrap()
+            .prepared
+            .is_none()
+    );
+    assert!(
+        ui.nodes[ui.index(labels[199]) as usize]
+            .text
+            .as_ref()
+            .unwrap()
+            .prepared
+            .is_some()
+    );
+    let start = shaped(&fonts);
+    ui.set_fill(column, [0.2; 4]);
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &labels);
+    assert_eq!(shaped(&fonts), start, "the dropped are drawn as laid out");
+    check(&mut ui);
+    let checked = ui.tree_stats();
+    assert_eq!(
+        (
+            checked.texts_prepared,
+            checked.text_bytes,
+            checked.texts_dropped
+        ),
+        (kept.texts_prepared, kept.text_bytes, kept.texts_dropped),
+        "checking keeps the shaping as it was"
+    );
+
+    // A dropped one changed is shaped again, and kept.
+    let start = shaped(&fonts);
+    ui.set_text(labels[0], Text::new("Label again", 10.0).no_wrap());
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &labels);
+    assert_eq!(shaped(&fonts) - start, 1);
+    let again = ui.tree_stats();
+    assert!(again.text_bytes <= budget);
+    assert_eq!(again.texts_prepared as u64 + again.texts_dropped, 201);
+    check(&mut ui);
+
+    // Removed, they hold nothing.
+    for &label in &labels[100..] {
+        ui.remove(label);
+    }
+    ui.frame(at(0.0));
+    assert!(ui.tree_stats().text_bytes < again.text_bytes);
+    ui.remove(column);
+    ui.frame(at(0.0));
+    let none = ui.tree_stats();
+    assert_eq!((none.texts_prepared, none.text_bytes), (0, 0));
+    check(&mut ui);
+}
+
+/// Scale: ten thousand labels, repeated or each its own, scrolled through
+/// from end to end and changed as they pass: what their shaping holds stays
+/// within the budget, each label shaped as often as it is measured anew.
+#[test]
+fn ten_thousand_labels_scrolled_through_stay_within_the_budget() {
+    for unique in [false, true] {
+        let fonts = fonts();
+        let mut ui = Ui::new(fonts.clone());
+        let list = ui.add(ui.root(), fixed(300.0, 400.0).scroll());
+        let label = |i: usize| {
+            let content = if unique {
+                format!("Row {i} · {:.1}%", (i * 37 % 1000) as f32 / 10.0)
+            } else {
+                "Row 1234 · 56.7%".to_owned()
+            };
+            Text::new(content, 12.0).no_wrap()
+        };
+        let labels: Vec<Node> = (0..10_000)
+            .map(|i| {
+                let row = ui.add(list, fixed(300.0, 20.0));
+                ui.add(row, Spec::new().text(label(i), [1.0; 4]))
+            })
+            .collect();
+        // A budget the list overflows: room for a few thousand labels.
+        let budget = 16 << 20;
+        ui.set_text_budget(budget);
+        let mut most = 0;
+        let mut step = 0;
+        while step * 400 < 200_000 {
+            ui.scroll_to(list, (step * 400) as f32);
+            // A label in view changes as it passes.
+            ui.set_text(
+                labels[step * 20 + 3],
+                Text::new(format!("Changed {step}"), 12.0).no_wrap(),
+            );
+            ui.frame(at(0.0));
+            let tree = ui.tree_stats();
+            assert!(tree.text_bytes <= budget, "{tree:?} at step {step}");
+            most = most.max(tree.texts_prepared);
+            step += 1;
+        }
+        let tree = ui.tree_stats();
+        assert!(tree.texts_dropped > 0, "the list overflows the budget");
+        assert!(most < 10_000, "{most} kept at most");
+        // Each label measured once on the way down (none twice), and the
+        // changed ones once more: no shaping beyond that.
+        let measured_once = 10_000 + step as u64;
+        assert!(
+            shaped(&fonts) <= measured_once + 64,
+            "{} shapes for {measured_once} texts",
+            shaped(&fonts)
+        );
+        check(&mut ui);
+    }
 }
 
 #[test]
@@ -579,6 +771,7 @@ fn a_scroll_lays_out_only_the_rows_near_its_view() {
     // out: the root, the list, and forty rows and their labels.
     ui.frame(at(0.0));
     assert_eq!(counts(&ui), (10_000, 82, 40));
+    assert_eq!(ui.tree_stats().texts_prepared, 40, "only the measured");
     check(&mut ui);
 
     // Five rows more come near.

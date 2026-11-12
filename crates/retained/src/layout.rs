@@ -269,6 +269,9 @@ impl Ui {
             d.size = size;
             self.mark_paint(n);
         }
+        if self.nodes[n as usize].text.is_some() {
+            self.lay_out_drawn_text(n);
+        }
         if scrolls {
             let s = self.nodes[n as usize].scroll.as_mut().expect("it scrolls");
             s.extent = content[m] + pad_sum[m];
@@ -310,14 +313,48 @@ impl Ui {
             Avail::Unbounded => UNLIMITED,
         };
         let block = text_block(&t.text, t.color, 0.0, 0.0, width);
-        let (w, h) = self.measurer.measure_block(&block);
+        // Checking, the layout from nothing measures through the shared
+        // cache: what the kept shaping measures is checked against it, and
+        // the kept shaping is left as it is.
+        #[cfg(test)]
+        if self.checking {
+            let (w, h) = self.measurer.measure_block(&block);
+            let size = [w.ceil().max(0.0), h.ceil().max(0.0)];
+            self.nodes[n as usize]
+                .text
+                .as_mut()
+                .expect("a text node")
+                .size = size;
+            return size;
+        }
+        let t = self.nodes[n as usize].text.as_mut().expect("a text node");
+        let prepared = t
+            .prepared
+            .get_or_insert_with(|| self.measurer.prepare(&block));
+        let (w, h) = prepared.measure(&mut self.measurer, &block);
         let size = [w.ceil().max(0.0), h.ceil().max(0.0)];
-        self.nodes[n as usize]
-            .text
-            .as_mut()
-            .expect("a text node")
-            .size = size;
+        t.size = size;
+        self.touched_text(n);
         size
+    }
+
+    /// Make the layout `n`'s text is drawn with, now that its size is
+    /// settled, from its kept shaping: the one measured when the width it is
+    /// drawn at is the one it was measured at.
+    fn lay_out_drawn_text(&mut self, n: u32) {
+        #[cfg(test)]
+        if self.checking {
+            return;
+        }
+        let d = &self.nodes[n as usize];
+        let (x, y, width) = text_place(d);
+        let t = d.text.as_ref().expect("a text node");
+        let block = text_block(&t.text, t.color, x, y, width);
+        let t = self.nodes[n as usize].text.as_mut().expect("a text node");
+        if let Some(prepared) = t.prepared.as_mut() {
+            t.drawn = Some(prepared.layout(&mut self.measurer, &block));
+            self.touched_text(n);
+        }
     }
 
     fn place(&mut self, parent: u32, child: u32, pos: [f32; 2]) {
@@ -533,6 +570,24 @@ impl Ui {
         content
     }
 
+    /// Check that every text whose layout is settled carries the layout it
+    /// is drawn with, made for it as it is now: drawing it shapes nothing.
+    /// For tests.
+    #[cfg(test)]
+    pub(crate) fn check_drawn_texts(&self) {
+        for (k, d) in self.nodes.iter().enumerate() {
+            if !d.live || d.text.is_none() || d.layout_self || d.avail.is_none() {
+                continue;
+            }
+            let block = crate::own_drawing::drawn_block(d);
+            assert!(
+                self.measurer.prepared_holds(&block),
+                "node {k}'s text is drawn without a layout made for it: {:?}",
+                d.text.as_ref().map(|t| &t.drawn)
+            );
+        }
+    }
+
     /// Lay the whole tree out again from nothing and check it lands where
     /// the incremental layout put it. For tests.
     #[cfg(test)]
@@ -556,7 +611,9 @@ impl Ui {
         let stats = self.stats;
         let context = self.context.expect("a frame was drawn");
         let viewport = context.viewport.map(|v| Avail::Exact(snap(v).max(0.0)));
+        self.checking = true;
         self.layout(self.root, viewport);
+        self.checking = false;
         self.stats = stats;
         for (d, m) in self.nodes.iter_mut().zip(marks) {
             (d.avail, d.layout_self, d.layout_below, d.deferred) = m;

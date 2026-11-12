@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: partial — Phases 0–3 landed, Phases 4–5 outstanding
+Status: partial — Phases 0–4 landed, Phase 5 outstanding
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -80,14 +80,30 @@ everything inside them is checked.
       measuring after drawing still shapes nothing), and needs no layout at
       the width when it is cut. Tests in `shaping/ellipsis_tests.rs`.
 
+- [x] **Phase 4 — the retained tree prepares its texts.** A text node
+      prepares at its first measure (`Ui::measure_text`; a deferred row
+      prepares nothing), lays out its drawn layout as soon as its size is
+      settled (`lay_out_drawn_text`), and records it on its block
+      (`own_drawing::drawn_block`). `crates/retained/src/texts.rs` chains the
+      prepared texts from the most recently laid out, counts their
+      `PreparedText::heap_bytes` (capacities walked when shaped or laid out;
+      `kept_shaping_bytes.rs` checks it within a third of what the allocator
+      holds, 0.99 measured), and drops the oldest's shaping past the budget,
+      a step per text dropped; `Ui::set_text_budget`, and
+      `TreeStats::{texts_prepared, text_bytes, texts_dropped}`. The oracle's
+      layout from nothing measures through the shared cache and leaves the
+      kept shaping alone (it had re-prepared every text, which hid stale
+      drawn layouts), and `check` asserts every settled text carries a drawn
+      layout that holds (`TextMeasurer::prepared_holds`, new), so drawing
+      shapes nothing. Tests in `crates/retained/src/tests.rs`: a label shaped
+      once (hugging: one shape, one relayout), a width change and new fonts,
+      the budget (dropped texts drawn as laid out; one changed shaped again;
+      removal uncounts), and 10,000 labels, repeated and unique, scrolled end
+      to end under a 16 MB budget. The scale check counts bytes, not
+      allocations, the retained tests having no counting allocator.
+
 ### Outstanding
 
-- [ ] **Phase 4 — the retained tree prepares its texts.** A text node
-      prepares at its first measure (deferred rows cost nothing), keeps its
-      `PreparedText` for its life within the tree's byte budget (Bart,
-      2026-11-12), works out its drawn layout when its layout is settled, and
-      draws with the handle. It prepares again only when what shaping
-      depends on changes, or the font system or its generation does.
 - [ ] **Phase 5 — the rows bench and the docs.** `rows-one` shapes one text
       a frame (about 229 in 230 frames, as immediate mode); TODO, TODO_DONE,
       `retained-mode.md`, `shared-text-layout.md` (a note under its "one

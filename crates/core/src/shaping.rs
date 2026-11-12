@@ -515,6 +515,14 @@ pub(crate) struct ShapedLayout {
     pub ink: OnceLock<Option<(f32, f32)>>,
 }
 
+impl ShapedLayout {
+    /// The heap bytes its glyphs and lines were given.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.glyphs.capacity() * std::mem::size_of::<ShapedGlyph>()
+            + self.lines.capacity() * std::mem::size_of::<ShapedLine>()
+    }
+}
+
 struct CachedLayout {
     layout: ShapedLayout,
     /// Where carets stand in it, and its glyphs in visual order, worked out
