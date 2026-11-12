@@ -414,3 +414,187 @@ fn layouts_and_the_blocks_carrying_them_can_cross_threads() {
     fn send<T: Send>() {}
     send::<PreparedText>();
 }
+/// `count` paragraphs of about 50 bytes, the `i`th saying `i`.
+fn paragraphs(count: usize) -> String {
+    (0..count)
+        .map(|i| format!("paragraph {i}: a few words to shape, and a few more"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Give `prepared` the content `content` in `base`'s place, as a retained
+/// node does when its text changes: how many paragraphs that shaped, and
+/// the layouts at `base`'s width and at a second, each checked against the
+/// cache's fresh shape.
+fn edit(
+    fonts: &FontSystemHandle,
+    measurer: &mut TextMeasurer,
+    prepared: &mut PreparedText,
+    base: &TextBlock,
+    content: &str,
+    what: &str,
+) -> u64 {
+    let block = TextBlock {
+        content: content.to_string().into(),
+        ..base.clone()
+    };
+    let before = crate::text::paragraphs_shaped();
+    prepared.measure(measurer, &block);
+    let layout = prepared.layout(measurer, &block);
+    let shaped = crate::text::paragraphs_shaped() - before;
+    assert_exact(layout.layout(), &cached(fonts, &block), what);
+    let narrow = block.clone().with_max_width(97.5);
+    let layout = prepared.layout(measurer, &narrow);
+    assert_exact(
+        layout.layout(),
+        &cached(fonts, &narrow),
+        &format!("{what}, narrower"),
+    );
+    shaped
+}
+
+#[test]
+fn an_edit_shapes_only_the_paragraphs_it_changed() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let text = paragraphs(40);
+    let base = TextBlock::new(text.clone(), 0.0, 0.0).with_max_width(300.0);
+    let mut prepared = measurer.prepare(&base);
+    prepared.layout(&mut measurer, &base);
+    // Each edit is made to the one before.
+    let typed = text.replace("paragraph 20:", "paragraph 20, typed into:");
+    let first = typed.replace("paragraph 0:", "the first paragraph:");
+    let last = first.replace("paragraph 39:", "the last paragraph:");
+    let inserted = last.replace("paragraph 10:", "a new paragraph\nparagraph 10:");
+    let deleted = inserted.replace("a new paragraph\n", "");
+    let joined = deleted.replacen(
+        "and a few more\nparagraph 11:",
+        "and a few more, paragraph 11:",
+        1,
+    );
+    let split = joined.replace(
+        "a few words to shape, and a few more, paragraph 11:",
+        "a few words\nto shape, and a few more, paragraph 11:",
+    );
+    let ended = format!("{split}\n");
+    let crlf = ended.replacen('\n', "\r\n", 3);
+    // A paragraph repeated and then one of the two taken out: the runs kept
+    // at the start and at the end can't overlap in the paragraph both have.
+    let fifth = "paragraph 5: a few words to shape, and a few more\n";
+    let repeated = text.replace(fifth, &fifth.repeat(2));
+    let edits: [(&str, &str, u64); 15] = [
+        ("typed into the middle", &typed, 1),
+        ("the first paragraph", &first, 1),
+        ("the last paragraph", &last, 1),
+        ("a paragraph inserted", &inserted, 1),
+        ("a paragraph deleted", &deleted, 0),
+        ("two paragraphs joined", &joined, 1),
+        ("one paragraph split", &split, 2),
+        // The last line gains a break, and an empty line follows it.
+        ("a line break at the end", &ended, 2),
+        ("line breaks of another kind", &crlf, 3),
+        ("the same text again", &crlf.clone(), 0),
+        ("the break at the end taken off", &split, 4),
+        ("emptied", "", 1),
+        ("filled again", &text, 40),
+        ("a paragraph repeated", &repeated, 1),
+        ("the repeat taken out", &text, 0),
+    ];
+    for (what, content, paragraphs) in edits {
+        let shaped = edit(&fonts, &mut measurer, &mut prepared, &base, content, what);
+        assert_eq!(shaped, paragraphs, "{what}: paragraphs shaped");
+    }
+}
+
+#[test]
+fn an_edit_under_a_forced_direction_keeps_the_first_paragraph_s_mark() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let text = "first אבג\r\nsecond\r\n\r\nשלום fourth";
+    for direction in [TextDirection::Rtl, TextDirection::Ltr] {
+        let base = TextBlock::new(text, 0.0, 0.0)
+            .with_max_width(200.0)
+            .with_direction(direction);
+        let mut prepared = measurer.prepare(&base);
+        prepared.layout(&mut measurer, &base);
+        let what = format!("{direction:?}");
+        let second = text.replace("second", "second, typed");
+        let shaped = edit(&fonts, &mut measurer, &mut prepared, &base, &second, &what);
+        assert_eq!(shaped, 1, "{what}: the second paragraph");
+        // The first line holds the mark: it is kept only if it is the same.
+        let first = second.replace("first", "1st");
+        let shaped = edit(&fonts, &mut measurer, &mut prepared, &base, &first, &what);
+        assert_eq!(shaped, 1, "{what}: the first paragraph");
+    }
+}
+
+#[test]
+fn an_edit_to_a_text_with_face_ranges_or_vertical_shapes_it_whole() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let text = paragraphs(5);
+    let faced = TextBlock::new(text.clone(), 0.0, 0.0)
+        .with_max_width(300.0)
+        .with_face_ranges(vec![FaceRange {
+            range: 0..9,
+            font: None,
+            weight: Weight::BOLD,
+            style: crate::Style::Normal,
+        }]);
+    let mut prepared = measurer.prepare(&faced);
+    prepared.layout(&mut measurer, &faced);
+    let typed = text.replace("paragraph 3:", "paragraph 3, typed:");
+    let shaped = edit(
+        &fonts,
+        &mut measurer,
+        &mut prepared,
+        &faced,
+        &typed,
+        "faces",
+    );
+    assert_eq!(shaped, 5, "faces: every paragraph");
+
+    let vertical = TextBlock::new("縦書き", 0.0, 0.0).with_vertical();
+    let mut prepared = measurer.prepare(&vertical);
+    prepared.layout(&mut measurer, &vertical);
+    let shaped = edit(
+        &fonts,
+        &mut measurer,
+        &mut prepared,
+        &vertical,
+        "縦書きだ",
+        "vertical",
+    );
+    assert_eq!(shaped, 4, "vertical: every cluster's line");
+}
+
+/// The representative size: a 100 KB text of 2,000 paragraphs, edited in
+/// the middle, shapes the one paragraph typed into.
+#[test]
+fn an_edit_to_a_100_kb_text_shapes_one_paragraph() {
+    let fonts = shared_font_system();
+    let mut measurer = TextMeasurer::with_font_system(fonts.clone());
+    let text = paragraphs(2000);
+    assert!(text.len() > 100_000, "{}", text.len());
+    let base = TextBlock::new(text.clone(), 0.0, 0.0).with_max_width(800.0);
+    let mut prepared = measurer.prepare(&base);
+    prepared.layout(&mut measurer, &base);
+    let typed = TextBlock {
+        content: text
+            .replace("paragraph 1000:", "paragraph 1000, typed:")
+            .into(),
+        ..base.clone()
+    };
+    let before = crate::text::paragraphs_shaped();
+    let layout = prepared.layout(&mut measurer, &typed);
+    assert_eq!(crate::text::paragraphs_shaped() - before, 1);
+    assert_eq!(
+        layout.layout().lines.len(),
+        prepared
+            .buffer
+            .lines
+            .iter()
+            .map(|line| line.layout_opt().map_or(0, Vec::len))
+            .sum::<usize>()
+    );
+}

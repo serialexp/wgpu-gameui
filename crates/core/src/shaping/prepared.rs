@@ -14,7 +14,8 @@ use cosmic_text::{Buffer, Metrics};
 
 use super::{
     BufferSource, LayoutKey, LayoutSpec, RunTotals, ShapedLayout, SharedFontSystem, ellipsis,
-    extract, faces_hash, set_buffer_text, set_layout, shape_cut_layout,
+    extract, faces_hash, set_buffer_text, set_layout, shape_cut_layout, splice_buffer_text,
+    splices,
 };
 use crate::text::{
     CaretPos, TextBlock, TextContent, TextDirection, VisualGlyph, family_hash, style_disc,
@@ -77,7 +78,11 @@ impl ShapingKey {
 /// on differs from what was prepared (its content, font, size, weight,
 /// style, letter spacing, faces, direction or vertical setting), or the font
 /// system is another or its fonts have changed, the text is prepared again,
-/// shaping it, so the result is always the block's.
+/// shaping it, so the result is always the block's. When only the content
+/// differs, the paragraphs at its start and end that are the same as before
+/// keep their shaping, and only those between are shaped: an edit to a long
+/// text shapes the paragraphs it changed. A text with face ranges, or
+/// vertical, is shaped whole.
 ///
 /// An ellipsized line that has to be cut is shaped afresh as its shown
 /// bytes and a '…', as the shared cache does, so the glyphs at the cut are
@@ -157,20 +162,28 @@ impl PreparedText {
             sizes: [None, None],
             bytes: 0,
         };
-        prepared.reshape(shared, spec, content);
+        prepared.reshape(shared, spec, content, false);
         prepared
     }
 
     /// Set `content` into the kept buffer, reusing what its lines hold, and
     /// shape it under `spec`'s shaping half, laid out under all of it: the
-    /// layouts and sizes kept before are dropped.
+    /// layouts and sizes kept before are dropped. With `splice`, the buffer
+    /// was shaped under the same shaping half, and the lines whose text is
+    /// unchanged keep their shaping ([`splice_buffer_text`]); else every
+    /// line is shaped again.
     fn reshape(
         &mut self,
         shared: &mut SharedFontSystem,
         spec: &LayoutSpec<'_>,
         content: TextContent,
+        splice: bool,
     ) {
-        set_buffer_text(&mut self.buffer, &mut self.source, spec, &content, None);
+        if splice {
+            splice_buffer_text(&mut self.buffer, &mut self.source, spec, &content);
+        } else {
+            set_buffer_text(&mut self.buffer, &mut self.source, spec, &content, None);
+        }
         set_layout(&mut self.buffer, spec);
         let before = crate::text::shaping_passes();
         crate::text::shape_buffer(&mut self.buffer, &mut shared.font_system);
@@ -285,11 +298,11 @@ impl PreparedText {
         spec: &LayoutSpec<'_>,
         content: &TextContent,
     ) {
-        let stale = self.fonts != FontStamp::of(shared)
-            || self.shaping != ShapingKey::of(spec)
-            || !same_content(&self.content, content);
-        if stale {
-            self.reshape(shared, spec, content.clone());
+        let shaped_alike =
+            self.fonts == FontStamp::of(shared) && self.shaping == ShapingKey::of(spec);
+        if !shaped_alike || !same_content(&self.content, content) {
+            // Only the content changed: keep the paragraphs that didn't.
+            self.reshape(shared, spec, content.clone(), shaped_alike && splices(spec));
         }
     }
 

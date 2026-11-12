@@ -234,6 +234,19 @@ thread_local! {
     static SHAPING_PASSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    static PARAGRAPHS_SHAPED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many paragraphs (buffer lines) this thread has shaped through
+/// cosmic-text: what a test counts to see that an edit shaped only the
+/// paragraphs it changed.
+#[cfg(test)]
+pub(crate) fn paragraphs_shaped() -> u64 {
+    PARAGRAPHS_SHAPED.with(std::cell::Cell::get)
+}
+
 /// How many times this thread has shaped text through cosmic-text, for the
 /// layout cache or any other reason: each pass over a buffer that had at
 /// least one paragraph to shape counts once, and a pass that only laid out
@@ -290,8 +303,15 @@ pub(crate) fn paragraphs(text: &str) -> Vec<std::ops::Range<usize>> {
 /// width, the one buffer change cosmic-text reshapes shaped paragraphs for,
 /// so a paragraph without shaping now is exactly one this pass shapes.
 pub(crate) fn shape_buffer(buffer: &mut Buffer, font_system: &mut FontSystem) {
-    if buffer.lines.iter().any(|line| line.shape_opt().is_none()) {
+    let unshaped = buffer
+        .lines
+        .iter()
+        .filter(|line| line.shape_opt().is_none())
+        .count();
+    if unshaped > 0 {
         SHAPING_PASSES.with(|passes| passes.set(passes.get() + 1));
+        #[cfg(test)]
+        PARAGRAPHS_SHAPED.with(|shaped| shaped.set(shaped.get() + unshaped as u64));
     }
     buffer.shape_until_scroll(font_system, false);
 }

@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight, Wrap, fontdb,
+    Attrs, AttrsList, Buffer, BufferLine, Family, FontSystem, LineEnding, LineIter, Metrics,
+    Shaping, Style, Weight, Wrap, fontdb,
 };
 
 use crate::text::{
@@ -976,60 +977,163 @@ pub(crate) fn set_buffer_text(
     content: &str,
     cut: Option<usize>,
 ) {
-    let family = spec.family();
     let faces = spec.shaped_faces();
-
-    let truncated;
-    let (content, shown): (&str, usize) = match cut {
-        Some(cut) => {
-            truncated = format!("{}…", &content[..cut]);
-            (&truncated, cut)
-        }
-        None => (content, content.len()),
-    };
-
-    // Force the base paragraph direction (if requested) by prepending a
-    // zero-width strong mark; cosmic-text has no base-direction API. The mark
-    // shifts every glyph's byte offset by its UTF-8 length, undone in
-    // `extract` via `prefix_len`. Vertical text skips this — base direction
-    // is meaningless for a one-glyph-per-row column — and instead stacks
-    // each grapheme cluster on its own line (see `vertical_stack_string`).
-    let prefix = if spec.vertical {
-        ""
-    } else {
-        direction_prefix(spec.direction)
-    };
-    let prefix_len = prefix.len();
-    let shaped_text: Cow<str> = if spec.vertical {
-        Cow::Owned(vertical_stack_string(content))
-    } else if prefix.is_empty() {
-        Cow::Borrowed(content)
-    } else {
-        Cow::Owned(format!("{prefix}{content}"))
-    };
-
-    let attrs = Attrs::new()
-        .family(family)
-        .weight(spec.weight)
-        .style(spec.style)
-        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size));
+    let shaped = ShapedText::of(spec, content, cut);
+    let attrs = shaping_attrs(spec);
     // Alignment is the layout's: `set_layout` sets it on every line.
     if faces.is_empty() {
-        buffer.set_text(&shaped_text, &attrs, Shaping::Advanced, None);
+        buffer.set_text(&shaped.text, &attrs, Shaping::Advanced, None);
     } else {
         // The ranges address the content: past the direction prefix, and
         // not into an ellipsis.
-        let runs = face_runs(&shaped_text, prefix_len, shown, faces, &attrs);
+        let runs = face_runs(&shaped.text, shaped.prefix_len, shaped.shown, faces, &attrs);
         buffer.set_rich_text(runs, &attrs, Shaping::Advanced, None);
     }
-    // cosmic-text reports `glyph.start` relative to the glyph's own buffer
-    // line, and span colours address the whole content, so each shaped line's
-    // start byte is added back. Vertical text also subtracts the `line_i`
-    // separators `vertical_stack_string` inserted.
-    source.prefix_len = prefix_len;
-    crate::text::line_starts_into(&shaped_text, &mut source.line_starts);
-    source.shown = shown;
-    source.empty = content.is_empty();
+    shaped.describe(source);
+}
+
+/// Whether a buffer set under `spec` can take a new content by
+/// [`splice_buffer_text`]: its lines are each one paragraph of the content,
+/// with the same attributes throughout. Face ranges address the whole
+/// content, so an edit moves every line's, and vertical text stacks its
+/// clusters in a string of its own.
+pub(crate) fn splices(spec: &LayoutSpec<'_>) -> bool {
+    !spec.vertical && spec.shaped_faces().is_empty()
+}
+
+/// Set `content` into `buffer` as [`set_buffer_text`] sets it, line for
+/// line, keeping the run of lines at the start and the run at the end that
+/// hold the same text and line break as before, with their shaping and
+/// layout: an edit shapes only the paragraphs it changed. cosmic-text shapes
+/// and lays out each line from its own text, attributes and the buffer's
+/// layout settings alone, so a kept line is what setting it afresh would
+/// make. For a buffer set before under the same shaping half of `spec`, for
+/// which [`splices`] holds.
+pub(crate) fn splice_buffer_text(
+    buffer: &mut Buffer,
+    source: &mut BufferSource,
+    spec: &LayoutSpec<'_>,
+    content: &str,
+) {
+    debug_assert!(splices(spec), "only a plain horizontal text is spliced");
+    let shaped = ShapedText::of(spec, content, None);
+    let text = &*shaped.text;
+    let attrs = shaping_attrs(spec);
+    // The lines `Buffer::set_text` makes: one per line `LineIter` finds, and
+    // an empty one without a break after a last line break, or for no text.
+    let mut lines: Vec<(std::ops::Range<usize>, LineEnding)> = LineIter::new(text).collect();
+    if lines
+        .last()
+        .is_none_or(|(_, ending)| *ending != LineEnding::None)
+    {
+        lines.push((text.len()..text.len(), LineEnding::None));
+    }
+    let same = |line: &BufferLine, (range, ending): &(std::ops::Range<usize>, LineEnding)| {
+        line.ending() == *ending && line.text() == &text[range.clone()]
+    };
+    let old = buffer.lines.len();
+    let common = old.min(lines.len());
+    let head = (0..common)
+        .take_while(|&i| same(&buffer.lines[i], &lines[i]))
+        .count();
+    let tail = (0..common - head)
+        .take_while(|&i| same(&buffer.lines[old - 1 - i], &lines[lines.len() - 1 - i]))
+        .count();
+    // Between them, the lines there are take the new text (keeping their
+    // allocations, and their shaping when the text is the same), and the
+    // rest are added or dropped.
+    let changed = head..lines.len() - tail;
+    let replaced = old - tail - head;
+    let reused = replaced.min(changed.len());
+    for (line, (range, ending)) in buffer.lines[head..head + reused]
+        .iter_mut()
+        .zip(&lines[head..head + reused])
+    {
+        line.set_text(&text[range.clone()], *ending, AttrsList::new(&attrs));
+    }
+    let at = head + reused;
+    if changed.len() > reused {
+        let added = lines[at..changed.end].iter().map(|(range, ending)| {
+            BufferLine::new(
+                &text[range.clone()],
+                *ending,
+                AttrsList::new(&attrs),
+                Shaping::Advanced,
+            )
+        });
+        buffer.lines.splice(at..at, added);
+    } else {
+        buffer.lines.drain(at..head + replaced);
+    }
+    shaped.describe(source);
+}
+
+/// The text a buffer is given for `content`: its first `cut` bytes and a
+/// '…' when `cut` is given, with a forced direction's mark ahead of it, or
+/// stacked one cluster to a line for vertical text.
+struct ShapedText<'c> {
+    text: Cow<'c, str>,
+    prefix_len: usize,
+    /// How many bytes of the content it shows.
+    shown: usize,
+    /// Whether what it shows is empty.
+    empty: bool,
+}
+
+impl<'c> ShapedText<'c> {
+    fn of(spec: &LayoutSpec<'_>, content: &'c str, cut: Option<usize>) -> Self {
+        let (content, shown): (Cow<'c, str>, usize) = match cut {
+            Some(cut) => (Cow::Owned(format!("{}…", &content[..cut])), cut),
+            None => (Cow::Borrowed(content), content.len()),
+        };
+        let empty = content.is_empty();
+        // Force the base paragraph direction (if requested) by prepending a
+        // zero-width strong mark; cosmic-text has no base-direction API. The
+        // mark shifts every glyph's byte offset by its UTF-8 length, undone
+        // in `extract` via `prefix_len`. Vertical text skips this — base
+        // direction is meaningless for a one-glyph-per-row column — and
+        // instead stacks each grapheme cluster on its own line (see
+        // `vertical_stack_string`).
+        let prefix = if spec.vertical {
+            ""
+        } else {
+            direction_prefix(spec.direction)
+        };
+        let text = if spec.vertical {
+            Cow::Owned(vertical_stack_string(&content))
+        } else if prefix.is_empty() {
+            content
+        } else {
+            Cow::Owned(format!("{prefix}{content}"))
+        };
+        Self {
+            text,
+            prefix_len: prefix.len(),
+            shown,
+            empty,
+        }
+    }
+
+    /// Say in `source` where the buffer's lines stand: cosmic-text reports
+    /// `glyph.start` relative to the glyph's own buffer line, and span
+    /// colours address the whole content, so each shaped line's start byte
+    /// is added back. Vertical text also subtracts the `line_i` separators
+    /// `vertical_stack_string` inserted.
+    fn describe(&self, source: &mut BufferSource) {
+        source.prefix_len = self.prefix_len;
+        crate::text::line_starts_into(&self.text, &mut source.line_starts);
+        source.shown = self.shown;
+        source.empty = self.empty;
+    }
+}
+
+/// The attributes every line of a text is shaped with under `spec`.
+fn shaping_attrs<'a>(spec: &LayoutSpec<'a>) -> Attrs<'a> {
+    Attrs::new()
+        .family(spec.family())
+        .weight(spec.weight)
+        .style(spec.style)
+        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size))
 }
 
 /// Set the layout half of `spec` on `buffer`: the line height, the width

@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: complete — Phases 0–5 landed, follow-ups on changed texts and on text without a width; one item deferred
+Status: complete — Phases 0–5 landed, follow-ups on changed texts, on text without a width and on edits to long texts; one item deferred
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -129,15 +129,35 @@ everything inside them is checked.
       within the widest (`align_unwrapped` in `shaping.rs`). Every block
       drawn without a width had it, not only `natural()`'s layouts.
 
+- [x] **A prepared text editing its paragraphs in place** (deferred until
+      2026-11-12, done that day). A `PreparedText` given a new content under
+      the same shaping half and fonts keeps the run of buffer lines at the
+      start and the run at the end whose text and line break are unchanged,
+      with their shaping and layout, and sets only the lines between
+      (`splice_buffer_text` in `shaping.rs`): what `Buffer::set_text` would
+      make, line for line, since cosmic-text shapes and lays out each line
+      from its own text. Bart chose (2026-11-12) paragraphs only, the start
+      and end runs rather than matching paragraphs by text, a text with face
+      ranges (or vertical) shaped whole as the shared cache does, and
+      `extract` left copying every glyph. Tests count the paragraphs shaped
+      (`text::paragraphs_shaped`, test-only) and compare each layout with
+      the cache's fresh shape (`prepared_tests.rs`: typing, inserting,
+      deleting, joining and splitting paragraphs, line breaks added, changed
+      and taken off, a paragraph repeated, a forced direction, faces,
+      vertical; a 100 KB text of 2,000 paragraphs shapes one). The
+      `long_text_edit` bench (`crates/core/benches/`) types into the middle
+      of that text: 26 ms before, 0.64 ms after (load 15–22; budget 3 ms),
+      against the shared cache's 0.41 ms.
+
 ### Outstanding
 
-- [ ] **Defer: a prepared text editing its paragraphs in place.** The shared
-      cache shapes only the paragraphs a long text's edit touched
-      (`shaping/paragraphs.rs`); a `PreparedText` prepared again on an edit
-      shapes the whole text. cosmic-text's `Buffer::lines` are per paragraph,
-      so replacing only those that changed is possible later. Until then an
-      edit to a long text in a retained node shapes it whole: a 100 KB
-      paragraph is the representative size to time when this is taken up.
+- [ ] **Defer: one long paragraph edited in place.** cosmic-text shapes a
+      paragraph whole, so an edit to a 100 KB text without line breaks
+      reshapes all of it: 23 ms in `long_text_edit/prepared/one-paragraph`,
+      as in immediate mode (`cache/one-paragraph`). Keeping the shaped words
+      an edit didn't touch would mean building cosmic-text's `ShapeLine`
+      here (bidi runs, script spans) or a fork of it; Bart chose (2026-11-12)
+      to leave it as a known limit.
 
 ## Why this exists
 
@@ -195,7 +215,8 @@ aligning at draw time, or a flag to align within the hugged width.
   `measure_block` does) and then draws it without preparing keeps its two
   shapes; preparing is the way to one.
 - No change to the shared cache's keys or what it shares between callers.
-- Editing a prepared text's paragraphs in place (deferred, above).
+- Editing a prepared text's paragraphs in place (deferred, above; done
+  2026-11-12, see the implementation status).
 - Retained text selection, carets and input (deferred in `retained-mode.md`).
 
 ## The API (core)

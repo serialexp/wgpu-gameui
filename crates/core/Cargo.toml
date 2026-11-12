@@ -223,6 +223,10 @@ name = "relayout"
 harness = false
 
 [[bench]]
+name = "long_text_edit"
+harness = false
+
+[[bench]]
 name = "frame_compare"
 harness = false
 required-features = ["headless"]
