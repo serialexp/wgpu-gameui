@@ -11,3 +11,14 @@ publish = false
 [dependencies]
 slotmap = "1"
 wgpu-gameui = { path = "../core" }
+
+# The window the example draws into (docs/design/retained-mode.md, Phase 6).
+[dev-dependencies]
+pollster = "0.3"
+wgpu = "24"
+winit = "0.30"
+
+# Its tests drive the example's tree without a window; `cargo test` runs them.
+[[example]]
+name = "retained_window"
+test = true
