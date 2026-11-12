@@ -1,7 +1,7 @@
 # One text layout for drawing, caret and hit testing
 
 **Status:** Done
-**Last updated:** 2026-10-22
+**Last updated:** 2026-11-12
 
 ## Implementation status
 
@@ -37,6 +37,15 @@ Text that is drawn goes through one cache: `SharedFontSystem::layout` (`crates/c
 shapes a string once per `LayoutSpec` (font, size, line height, width, wrap, alignment, direction,
 faces, letter spacing) and keeps the `ShapedLayout` until the memory budget pushes it out.
 Selectable text (`text_select.rs`) already hit-tests through that cache.
+
+Later (2026-11-12, `docs/design/prepared-text.md`): the premise gained one
+exception. A block may carry a `PreparedLayout` (`TextBlock::with_prepared`),
+a layout made from a `PreparedText` that keeps its cosmic-text buffer to lay
+it out again at any width; where the block is looked up (the renderer, carets,
+selection, ink) that layout is used when it was made for the block as it is
+and with the fonts as they are, and the cache otherwise
+(`SharedFontSystem::resolve`). One layout still serves drawing, carets and hit
+testing alike; it is just not always the cache's.
 
 `TextInput` doesn't. It places its caret, maps clicks to characters, draws selections, scrolls to
 the caret and tells the IME where the caret is through three other functions in `text.rs`:

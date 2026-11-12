@@ -208,6 +208,28 @@ then the dated batches in the order they were written.
       means and the 2026-11-12 counts (1 of 230 for `static`, 35 for
       `rows-hovr`, 230 for the rest), noted as predating the follow-ups
       until the rerun. Immediate mode needs every frame.
+- [x] **P1 — text shaped twice (retained or core).** Measured at the offered
+      width (`retained/src/layout.rs:276-280`), drawn at its own width
+      (`:111-118`); `LayoutKey` includes `max_width` (`shaping.rs:327`). 512
+      layouts in 230 `rows-one` frames against 229 immediate. Options: draw at
+      the measured-at width (start-aligned only), or drop `max_width` from the
+      key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
+      the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
+      option is good enough; a third is needed before this is taken up.
+      Bart (2026-11-12): a prepared text, shaped once and laid out at each
+      width, carried from measure to draw. **Done 2026-11-12**
+      (`docs/design/prepared-text.md`, Phases 0–5): `PreparedText` keeps a
+      text's cosmic-text buffer and lays it out again at each width, a
+      `PreparedLayout` carried on the `TextBlock` is used wherever the block
+      is looked up (renderer, carets, selection, ink); an ellipsized label
+      that fits is shaped once; the retained tree prepares each text node at
+      its first measure and keeps it within a 64 MB budget
+      (`Ui::set_text_budget`, `TreeStats::text_bytes`). `rows-one`: 391
+      shapes in 230 frames, 162 of them the first frame's labels near the
+      view, so 229 for the 229 changes, as immediate mode (it was 458).
+      At a load average of 20, `rows-one` 0.218–0.225 ms against immediate
+      mode's 0.223 (the tree's share 0.014–0.016); the quiet-machine rerun
+      stays open in `TODO.md`.
 
 ---
 

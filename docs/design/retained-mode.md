@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view and the node table at 384 bytes a node (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view, the node table at 384 bytes a node, and each text shaped once (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -218,16 +218,23 @@ Tick items as they land.
       (`a_node_stays_small`). Animated grid 10,000: `node_bytes` 21.8 →
       13.4 MB.
 
+- [x] **Text shaped once** (2026-11-12; found by the comparison: a text was
+      measured at the width offered and drawn at its measured width, and the
+      layout cache keys on the width, so each new or changed text was shaped
+      twice, 512 layouts in 230 `rows-one` frames against 229 in immediate
+      mode). `docs/design/prepared-text.md`: a text node keeps a
+      `PreparedText` from its first measure, lays out the layout it is drawn
+      with from it once its size is settled, and records it on its block;
+      the tree keeps the shaping within a byte budget (64 MB,
+      `Ui::set_text_budget`, `crates/retained/src/texts.rs`). `rows-one`
+      shapes 229 texts for its 229 changes.
+
 ### Outstanding
 
 - [ ] **Icon content.** Phase 3 built text and custom painters; `Icon` is not
       a content kind yet.
 - [ ] **Phase 6 — an example in a window.** Scrolling list, hover styling, a click
       counter.
-- [ ] **Text shaped twice** (found by the comparison): a text is measured at
-      the width offered and drawn at its measured width, and the layout cache
-      keys on the width, so each new or changed text is shaped twice (512
-      layouts in 230 `rows-one` frames against 229 in immediate mode).
 - [ ] **A list's log is about 245 bytes a piece** (found by the comparison;
       the small lists, 2.3 KB each, went with the cache shape): the grid's
       20,000 pieces log 4.9 MB beside the root's 6.9 MB list, mostly the two

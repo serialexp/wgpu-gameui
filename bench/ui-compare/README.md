@@ -458,7 +458,7 @@ Reading it without overreaching:
 - **Rows**: scrolling (8 us) and hover (2 us) cost the tree almost nothing:
   culling enters the rows in view and the hover moves by binary search. The
   one changed label costs more than in immediate mode (0.266 against 0.206
-  ms), because the tree shapes every new label twice (below).
+  ms), because the tree shapes every new label twice (below; since fixed).
 
 Problems the comparison found (not fixed; in the design doc's Outstanding
 list):
@@ -468,7 +468,13 @@ list):
   cache keys on the width, so each new or changed text is shaped once to
   measure and once to draw: 512 layouts shaped in 230 `rows-one` frames
   against 229 for immediate mode, and 54 extra on the first frame of every
-  rows scene.
+  rows scene. **Fixed 2026-11-12** (`docs/design/prepared-text.md`): a text
+  node keeps its shaping and lays it out again at the width it is drawn at.
+  `rows-one` now shapes 391 in 230 frames: 162 on the first (the labels
+  near the view, as `rows-stat`) and one for each of the 229 changes. At a
+  load average of 20, `rows-one` took 0.218–0.225 ms against immediate
+  mode's 0.223, the tree's share 0.014–0.016 ms; not comparable with the
+  table above, which waits for the rerun on a quiet machine.
 - **The rows build shapes 10,000 labels** that are not in view, to size
   rows whose height is fixed anyway: 108 ms, almost all cosmic-text shaping
   (profiled). Immediate mode shapes the 54 in view.

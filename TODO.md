@@ -26,17 +26,6 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
-- [ ] **P1 — text shaped twice (retained or core).** Measured at the offered
-      width (`retained/src/layout.rs:276-280`), drawn at its own width
-      (`:111-118`); `LayoutKey` includes `max_width` (`shaping.rs:327`). 512
-      layouts in 230 `rows-one` frames against 229 immediate. Options: draw at
-      the measured-at width (start-aligned only), or drop `max_width` from the
-      key when no wrap, no ellipsis, start-aligned, not vertical. Accounts for
-      the `rows-one` gap (0.266 vs 0.206 ms). Bart (2026-11-11): neither
-      option is good enough; a third is needed before this is taken up.
-      Bart (2026-11-12): a prepared text, shaped once and laid out at each
-      width, carried from measure to draw; design in
-      `docs/design/prepared-text.md` (draft).
 - [ ] **P3 — the layout cache counts about three quarters of the bytes its
       layouts hold (core, found 2026-11-12).** 10,000 short labels:
       `LayoutStats::bytes` 8.44 MB, heap 11.29 MB (`kept_shaping_bytes`,
@@ -89,7 +78,8 @@ none chosen yet (Bart).
 - [ ] **P2 — rerun the comparison on a quiet machine.** `rows-scrl` /
       `rows-hovr` differences are noise. The README's retained numbers
       predate the first four items done (prepared text reused, patching,
-      lists only at clips, edits reported to the renderer), and the item 7
+      lists only at clips, edits reported to the renderer) and text shaped
+      once (`docs/design/prepared-text.md`), and the item 7
       build timings and item 5 frame means wait for it too. The effective
       columns (done 2026-11-12, see `TODO_DONE.md`) take their counts from
       the run's `effective` lines.

@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: partial — Phases 0–4 landed, Phase 5 outstanding
+Status: complete — Phases 0–5 landed; two items deferred
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -102,12 +102,17 @@ everything inside them is checked.
       to end under a 16 MB budget. The scale check counts bytes, not
       allocations, the retained tests having no counting allocator.
 
-### Outstanding
-
-- [ ] **Phase 5 — the rows bench and the docs.** `rows-one` shapes one text
-      a frame (about 229 in 230 frames, as immediate mode); TODO, TODO_DONE,
+- [x] **Phase 5 — the rows bench and the docs.** `rows-one`: 391 shapes in
+      230 frames, of which 162 are the first frame's labels near the view
+      (as `rows-stat`), so 229 for its 229 changes, as immediate mode (it
+      was 458). Timed at a load average of 20: 0.218–0.225 ms a frame
+      against immediate mode's 0.223, the tree's share 0.014–0.016 ms; the
+      rerun on a quiet machine is in `TODO.md`. TODO, TODO_DONE,
       `retained-mode.md`, `shared-text-layout.md` (a note under its "one
       cache" premise) and the bench README updated.
+
+### Outstanding
+
 - [ ] **Defer: a prepared text editing its paragraphs in place.** The shared
       cache shapes only the paragraphs a long text's edit touched
       (`shaping/paragraphs.rs`); a `PreparedText` prepared again on an edit
