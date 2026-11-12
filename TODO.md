@@ -26,6 +26,15 @@ at most about 35%; the renderer/tree interface has to change for a large
 win. Estimates below are the reviewer's, not measured. Listed in its order;
 none chosen yet (Bart).
 
+- [ ] **P3 — a prepared text whose content changes builds a new buffer
+      (core, found 2026-11-12).** `PreparedText::refresh` replaces itself
+      with `Self::shape`, a fresh cosmic-text `Buffer` (about 15 heap blocks
+      for a label), where `set_buffer` could set the new text into the kept
+      one. `panel-chg` (48 labels new every frame): the tree's share is
+      0.37–0.56 ms against 0.40–0.47 before prepared text, though it shapes
+      the same 48; reusing the buffer, and not extracting the measured
+      layout when it is only read for its size, are the candidates. Check:
+      the tree's share in `panel-chg`, and allocations per changed label.
 - [ ] **P3 — the layout cache counts about three quarters of the bytes its
       layouts hold (core, found 2026-11-12).** 10,000 short labels:
       `LayoutStats::bytes` 8.44 MB, heap 11.29 MB (`kept_shaping_bytes`,

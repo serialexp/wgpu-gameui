@@ -338,6 +338,81 @@ pub fn row_fill(i: usize, hovered: bool) -> [u8; 3] {
     }
 }
 
+// ---- Panel scenes ----------------------------------------------------------
+//
+// A side panel of text in a column: wrapped paragraphs whose panel is being
+// resized (`panel-rsz`), or short labels all changing at once (`panel-chg`).
+// What they expose is text laid out at a width it was not shaped at: a
+// resize lays every paragraph out at a new width, and a hugging label is
+// measured at the room it is offered and drawn at its own width.
+
+/// Where the panel's top left corner is.
+pub const PANEL_AT: [f32; 2] = [40.0, 40.0];
+/// The panel's padding on every side, and the gap between its texts.
+pub const PANEL_PAD: f32 = 12.0;
+/// Paragraphs in `panel-rsz`.
+pub const PANEL_PARAS: usize = 12;
+/// Text size and line height of a paragraph.
+pub const PANEL_PX: f32 = 14.0;
+pub const PANEL_LINE_H: f32 = 20.0;
+/// The panel's width on the first frame of `panel-rsz`; it grows a pixel a
+/// frame, so every frame lays the paragraphs out at a width not seen before
+/// (as a panel edge being dragged does).
+pub const PANEL_MIN_W: f32 = 380.0;
+/// Labels in `panel-chg`, every one changing every frame.
+pub const PANEL_LABELS: usize = 48;
+/// Text size and line height of a label.
+pub const PANEL_LABEL_PX: f32 = 13.0;
+pub const PANEL_LABEL_H: f32 = 20.0;
+/// The panel's width in `panel-chg`.
+pub const PANEL_LABELS_W: f32 = 420.0;
+
+/// What changes between frames of the panel scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelMode {
+    /// The panel of paragraphs grows a pixel wider.
+    Resize,
+    /// Every label shows a new value.
+    Change,
+}
+
+/// The panel scenarios, with the scene name they are reported as.
+pub const PANEL_MODES: [(&str, PanelMode); 2] = [
+    ("panel-rsz", PanelMode::Resize),
+    ("panel-chg", PanelMode::Change),
+];
+
+/// Paragraph `i` of `panel-rsz`: two to three sentences, each its own.
+pub fn panel_para(i: usize) -> String {
+    const SENTENCES: [&str; 5] = [
+        "Dragging the edge of a panel lays every paragraph in it out again at the new width.",
+        "Where each line breaks moves, and with it how tall the paragraph is.",
+        "The glyphs themselves do not change: only where the lines end does.",
+        "A text that keeps its shaping only has to break its lines again.",
+        "One that keeps nothing shapes every word again for every pixel.",
+    ];
+    let mut out = format!("{}. ", i + 1);
+    for k in 0..2 + i % 2 {
+        out.push_str(SENTENCES[(i + k) % SENTENCES.len()]);
+        out.push(' ');
+    }
+    out.pop();
+    out
+}
+
+/// The panel's width on `frame` of `panel-rsz`.
+pub fn panel_width(frame: u64) -> f32 {
+    PANEL_MIN_W + frame as f32
+}
+
+/// Label `i` of `panel-chg` on `frame`.
+pub fn panel_label(i: usize, frame: u64) -> String {
+    format!(
+        "Metric {i:02}: {:.2} ms",
+        (frame * 37 + i as u64 * 11) as f64 / 100.0
+    )
+}
+
 // ---- Deep scene ------------------------------------------------------------
 //
 // The grid again, but as a tree: [`DEEP_FANOUT`] children per node,
@@ -461,7 +536,7 @@ pub fn text_scenes_wanted() -> bool {
     group_wanted("text")
 }
 
-/// Whether the scene group `name` (`text`, `rows`, `deep`) should run: all
+/// Whether the scene group `name` (`text`, `rows`, `deep`, `panel`) should run: all
 /// of them run when no argument is given, or only the one named first.
 pub fn group_wanted(name: &str) -> bool {
     std::env::args().nth(1).is_none_or(|a| a == name)
@@ -499,7 +574,7 @@ pub fn scene_wanted(name: &str) -> bool {
 pub fn counts() -> Vec<usize> {
     if matches!(
         std::env::args().nth(1).as_deref(),
-        Some("text" | "rows" | "deep")
+        Some("text" | "rows" | "deep" | "panel")
     ) {
         return Vec::new();
     }

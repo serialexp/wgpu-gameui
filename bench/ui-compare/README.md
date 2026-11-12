@@ -342,12 +342,13 @@ prepared text) should be judged on.
 The retained tree in `crates/retained` (`docs/design/retained-mode.md`) set
 beside immediate-mode gameui on the same scenes, drawn by the same renderer
 into the same target. Both binaries live in the `gameui` package, which keeps
-the GPU setup in its `lib.rs`. Two scenes were added for this, to both gameui
+the GPU setup in its `lib.rs`. Three scenes were added for this, to both gameui
 binaries only:
 
 | scene | what it draws | what it exposes |
 | --- | --- | --- |
 | `rows-*` | 10,000 rows of 20 px in a column scrolling through the whole window (54 in view), each a box and a 13 px label; starting at row 5,000. `stat`: nothing changes. `one`: row 5,010's value changes every frame. `scrl`: 3 px of scroll a frame. `hovr`: the pointer moves down 3 px a frame and the row under it takes the hover colour | what a change costs next to what is in view; culling; hover |
+| `panel-*` | A box at (40, 40) stacking texts down a column, 12 px padding. `rsz`: 12 wrapped 14 px paragraphs of two or three sentences, the panel 380 px wide and a pixel wider every frame, as an edge being dragged (every frame a width not seen before). `chg`: 48 hugging 13 px labels, every one showing a new value every frame | text laid out at a width it was not shaped at: a resize, and labels measured at the room offered and drawn at their own width |
 | `deep-*` | 10,000 filled leaves under four levels of inner nodes, ten children each, rows and columns in turn sharing their room (the grid's colours, no labels). `static`, `animated`, `one` as for the grid | what a tree holds and copies per level above a leaf |
 
 Immediate mode draws the rows in view, found by arithmetic, and the leaves
@@ -459,6 +460,34 @@ Reading it without overreaching:
   culling enters the rows in view and the hover moves by binary search. The
   one changed label costs more than in immediate mode (0.266 against 0.206
   ms), because the tree shapes every new label twice (below; since fixed).
+
+### Prepared text, before and after (2026-11-12; load average about 60)
+
+`panel-*` run against the tree as it was before it kept its texts' shaping
+(73e4893, built in a worktree with the same bench sources) and immediate
+mode, interleaved, two rounds. The shapes are counts over 230 frames and do
+not depend on the load; the times are mean CPU ms per frame on a machine at
+a load average of 60, so their size, not their decimals, is the result.
+
+| scene | | shapes | frame | tree's share |
+| --- | --- | ---: | ---: | ---: |
+| `panel-rsz` | retained, keeps shaping | 12 | 0.22–0.25 | 0.050–0.058 |
+| | retained, before | 2,770 | 0.82–0.98 | 0.65–0.78 |
+| | immediate | 2,748 | 0.89–0.95 | — |
+| `panel-chg` | retained, keeps shaping | 11,040 | 0.46–0.69 | 0.37–0.56 |
+| | retained, before | 22,080 | 0.88–1.03 | 0.40–0.47 |
+| | immediate | 10,992 | 0.47–0.51 | — |
+
+- **A resize shapes nothing.** The 12 paragraphs are shaped on the first
+  frame and laid out again at each new width after; before, each was shaped
+  twice a frame (measured at the room, drawn at its own width), and
+  immediate mode shapes each once a frame, every width being new. The frame
+  is about four times cheaper than either.
+- **New text is shaped once.** 48 labels changing every frame shape 48, as
+  immediate mode, against 96 before; the frame is about half what it was,
+  level with immediate mode. The tree's own share did not shrink: it now
+  does all the shaping (preparing a label allocates a new buffer and lays it
+  out twice), where before the renderer shaped the second copy.
 
 Problems the comparison found (not fixed; in the design doc's Outstanding
 list):

@@ -145,6 +145,34 @@ fn main() {
             );
         }
     }
+    if group_wanted("panel") {
+        for (name, mode) in PANEL_MODES {
+            if !scene_wanted(name) {
+                continue;
+            }
+            let mut list = DrawList::with_font_system(fonts.clone());
+            panel(&mut list, mode, 0);
+            gpu.draw(&mut ui, &list);
+            gpu.wait();
+            check_text_frame(lib, name, &gpu.read());
+            let before = shaped(&fonts);
+            let mut last = RenderStats::default();
+            let stats = measure(|frame| {
+                let mut list = DrawList::with_font_system(fonts.clone());
+                panel(&mut list, mode, frame);
+                last = gpu.draw(&mut ui, &list);
+            });
+            gpu.wait();
+            report_scene(lib, name, &stats);
+            report_counts(lib, name, &render_counts(&last));
+            let frames = (WARMUP_FRAMES + stats.frames) as u64;
+            report_counts(
+                lib,
+                name,
+                &[("frames", frames), ("shaped", shaped(&fonts) - before)],
+            );
+        }
+    }
     if group_wanted("deep") {
         for (scenario, mode) in MODES {
             let name = format!("deep-{scenario}");
@@ -282,6 +310,56 @@ fn rows(list: &mut DrawList, labels: &[TextContent], mode: RowMode, frame: u64) 
         );
     }
     list.pop_clip();
+}
+
+/// The panel scenes as an immediate-mode caller draws them: a box, and its
+/// texts stacked down it, each paragraph measured at the panel's width to
+/// find where the next goes (a cache hit when it is drawn).
+fn panel(list: &mut DrawList, mode: PanelMode, frame: u64) {
+    background(list);
+    let (width, texts, gap): (f32, Vec<TextBlock>, f32) = match mode {
+        PanelMode::Resize => {
+            let width = panel_width(frame);
+            let blocks = (0..PANEL_PARAS)
+                .map(|i| {
+                    TextBlock::new(panel_para(i), 0.0, 0.0)
+                        .with_size(PANEL_PX)
+                        .with_line_height(PANEL_LINE_H)
+                        .with_max_width(width - 2.0 * PANEL_PAD)
+                        .with_wrap(WrapMode::WordOrGlyph)
+                        .with_color_f32(rgba(ROW_TEXT))
+                })
+                .collect();
+            (width, blocks, PANEL_PAD)
+        }
+        PanelMode::Change => {
+            let blocks = (0..PANEL_LABELS)
+                .map(|i| {
+                    TextBlock::new(panel_label(i, frame), 0.0, 0.0)
+                        .with_size(PANEL_LABEL_PX)
+                        .with_line_height(PANEL_LABEL_H)
+                        .with_max_width(PANEL_LABELS_W - 2.0 * PANEL_PAD)
+                        .with_wrap(WrapMode::None)
+                        .with_color_f32(rgba(ROW_TEXT))
+                })
+                .collect();
+            (PANEL_LABELS_W, blocks, 0.0)
+        }
+    };
+    let heights: Vec<f32> = texts
+        .iter()
+        .map(|b| list.measure_block(b).1.ceil())
+        .collect();
+    let height = 2.0 * PANEL_PAD + heights.iter().sum::<f32>() + gap * (texts.len() - 1) as f32;
+    let [x, mut y] = PANEL_AT;
+    list.paint_quad(Rect::new(x, y, width, height), solid(row_fill(0, false)));
+    y += PANEL_PAD;
+    for (mut block, h) in texts.into_iter().zip(heights) {
+        block.x = x + PANEL_PAD;
+        block.y = y;
+        list.text(block);
+        y += h + gap;
+    }
 }
 
 /// The deep scene's leaves: an immediate-mode caller has no tree to keep,

@@ -75,6 +75,18 @@ fn main() {
         }
     }
 
+    if group_wanted("panel") {
+        for (name, mode) in PANEL_MODES {
+            if !scene_wanted(name) {
+                continue;
+            }
+            let (frames, tree) = bench.run(&mut PanelTree::new(fonts.clone(), mode), name);
+            report_scene(&bench.lib, name, &frames);
+            report_scene(&bench.tree_lib, name, &tree);
+            check_text_frame(&bench.lib, name, &bench.gpu.read());
+        }
+    }
+
     if group_wanted("deep") {
         let build = bench.builds("deep-bld", || DeepTree::new(fonts.clone(), Mode::Static));
         report_scene(&bench.lib, "deep-bld", &build);
@@ -378,6 +390,92 @@ impl Scene for RowsTree {
             RowMode::Hover => {
                 let [x, y] = row_pointer(frame);
                 self.ui.pointer_moved(x, y);
+            }
+        }
+    }
+}
+
+// ---- Panel -----------------------------------------------------------------
+
+/// The panel: a box placed at [`PANEL_AT`], stacking its texts, each hugging
+/// what it measures.
+struct PanelTree {
+    ui: Ui,
+    panel: Node,
+    texts: Vec<Node>,
+    mode: PanelMode,
+}
+
+impl PanelTree {
+    fn new(fonts: FontSystemHandle, mode: PanelMode) -> Self {
+        let mut ui = Ui::new(fonts);
+        let root = ui.root();
+        ui.set_fill(root, rgba(TEXT_BG));
+        let (width, gap, count) = match mode {
+            PanelMode::Resize => (panel_width(0), PANEL_PAD, PANEL_PARAS),
+            PanelMode::Change => (PANEL_LABELS_W, 0.0, PANEL_LABELS),
+        };
+        let panel = ui.add(
+            root,
+            Spec::new()
+                .width(Size::Fixed(width))
+                .absolute(PANEL_AT)
+                .stack(Stack::column().gap(gap).padding(Insets {
+                    left: PANEL_PAD,
+                    top: PANEL_PAD,
+                    right: PANEL_PAD,
+                    bottom: PANEL_PAD,
+                }))
+                .fill(rgba(row_fill(0, false))),
+        );
+        let texts = (0..count)
+            .map(|i| {
+                let text = match mode {
+                    PanelMode::Resize => panel_text(mode, panel_para(i)),
+                    PanelMode::Change => panel_text(mode, panel_label(i, 0)),
+                };
+                ui.add(panel, Spec::new().text(text, rgba(ROW_TEXT)))
+            })
+            .collect();
+        Self {
+            ui,
+            panel,
+            texts,
+            mode,
+        }
+    }
+}
+
+fn panel_text(mode: PanelMode, content: String) -> Text {
+    match mode {
+        PanelMode::Resize => {
+            let mut text = Text::new(content, PANEL_PX);
+            text.line_height = PANEL_LINE_H;
+            text
+        }
+        PanelMode::Change => {
+            let mut text = Text::new(content, PANEL_LABEL_PX).no_wrap();
+            text.line_height = PANEL_LABEL_H;
+            text
+        }
+    }
+}
+
+impl Scene for PanelTree {
+    fn ui(&mut self) -> &mut Ui {
+        &mut self.ui
+    }
+
+    fn change(&mut self, frame: u64) {
+        match self.mode {
+            PanelMode::Resize => self
+                .ui
+                .set_width(self.panel, Size::Fixed(panel_width(frame))),
+            PanelMode::Change => {
+                for (i, &text) in self.texts.iter().enumerate() {
+                    self.ui
+                        .set_text(text, panel_text(self.mode, panel_label(i, frame)));
+                }
             }
         }
     }
