@@ -56,6 +56,49 @@ impl RecordCounts {
         }
     }
 
+    /// Its positions, in a fixed order (see [`Self::from_fields`]).
+    fn fields(self) -> [u32; COUNT_KINDS] {
+        [
+            self.vertices,
+            self.indices,
+            self.analytic,
+            self.circles,
+            self.nine_slices,
+            self.icons,
+            self.icons_msdf,
+            self.texts,
+            self.selectable,
+            self.viewport_clips,
+        ]
+    }
+
+    fn from_fields(f: [u32; COUNT_KINDS]) -> Self {
+        let [
+            vertices,
+            indices,
+            analytic,
+            circles,
+            nine_slices,
+            icons,
+            icons_msdf,
+            texts,
+            selectable,
+            viewport_clips,
+        ] = f;
+        RecordCounts {
+            vertices,
+            indices,
+            analytic,
+            circles,
+            nine_slices,
+            icons,
+            icons_msdf,
+            texts,
+            selectable,
+            viewport_clips,
+        }
+    }
+
     /// Whether no position is past `limit`'s.
     fn within(self, limit: RecordCounts) -> bool {
         self.vertices <= limit.vertices
@@ -153,20 +196,110 @@ pub struct Placed {
 /// records into the list of the container that keeps one) logs them without
 /// an allocation per piece. [`clear`](Self::clear) keeps the arrays for the
 /// next recording.
+///
+/// And small: a piece's counts are kept as the numbers that are not zero,
+/// each in as few bytes as it needs, and its clip as an index into the clips
+/// the log holds, the same clip of pieces placed one after another once.
+/// A grid of 20,000 pieces reserves about 72 bytes a piece, paint runs
+/// included, where whole `Placed`s took about 240.
 #[derive(Clone, Debug, Default)]
 pub struct PlacedLog {
     pieces: Vec<LoggedPiece>,
     paint_cmds: Vec<PaintCmd>,
+    /// Every piece's numbers that are not zero, as LEB128 varints, in
+    /// piece order: its position's (`at`), then its counts' (`of`), then
+    /// what else placing it adds.
+    numbers: Vec<u8>,
+    /// The clips pieces were placed under.
+    clips: Vec<Rect>,
 }
+
+/// Kinds of record a [`RecordCounts`] counts.
+const COUNT_KINDS: usize = 10;
+/// Bits of a piece's `shape` past the kinds: what else placing it adds is
+/// logged after its counts, when not zero (or `None`).
+const SOUP_COMMITTED: u16 = 1 << COUNT_KINDS;
+const NEXT_REPAINT: u16 = 1 << (COUNT_KINDS + 1);
+const DROPPED_DEGENERATE: u16 = 1 << (COUNT_KINDS + 2);
+/// A piece placed under no clip.
+const NO_CLIP: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug)]
 struct LoggedPiece {
+    /// The offset it was placed at.
+    offset: [f32; 2],
+    /// Its clip in the log's `clips`, or [`NO_CLIP`].
+    clip: u32,
+    /// Where its paint runs start in the log's `paint_cmds`: they end where
+    /// the next piece's start.
+    paint_cmds: u32,
+    /// Where its numbers start in the log's `numbers`.
+    numbers: u32,
+    /// Which kinds of its position are not zero.
+    at: u16,
+    /// Which kinds of its counts are not zero, and which of what else
+    /// placing it adds (`SOUP_COMMITTED` and on).
+    shape: u16,
+    /// [`Placed::whole`].
+    whole: bool,
+}
+
+/// What a piece was placed with, read back from the log.
+struct Logged {
     placed: Placed,
-    /// Its paint runs in the log's `paint_cmds`.
-    paint_cmds: [u32; 2],
+    paint_cmds: std::ops::Range<usize>,
     soup_committed: u32,
     next_repaint: Option<u32>,
     dropped_degenerate: u32,
+}
+
+fn push_varint(bytes: &mut Vec<u8>, mut value: u32) {
+    while value >= 0x80 {
+        bytes.push(value as u8 | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
+}
+
+fn read_varint(bytes: &[u8], at: &mut usize) -> u32 {
+    let mut value = 0u32;
+    let mut shift = 0;
+    loop {
+        let byte = bytes[*at];
+        *at += 1;
+        value |= u32::from(byte & 0x7f) << shift;
+        if byte < 0x80 {
+            return value;
+        }
+        shift += 7;
+    }
+}
+
+/// The fields of `counts` that are not zero, as bits, logged into `bytes`.
+fn push_counts(bytes: &mut Vec<u8>, counts: RecordCounts) -> u16 {
+    let mut kinds = 0;
+    for (kind, value) in counts.fields().into_iter().enumerate() {
+        if value != 0 {
+            kinds |= 1 << kind;
+            push_varint(bytes, value);
+        }
+    }
+    kinds
+}
+
+fn read_counts(bytes: &[u8], at: &mut usize, kinds: u16) -> RecordCounts {
+    let mut fields = [0; COUNT_KINDS];
+    for (kind, field) in fields.iter_mut().enumerate() {
+        if kinds & (1 << kind) != 0 {
+            *field = read_varint(bytes, at);
+        }
+    }
+    RecordCounts::from_fields(fields)
+}
+
+fn same_rect(a: &Rect, b: &Rect) -> bool {
+    [a.x, a.y, a.width, a.height].map(f32::to_bits)
+        == [b.x, b.y, b.width, b.height].map(f32::to_bits)
 }
 
 impl PlacedLog {
@@ -174,6 +307,8 @@ impl PlacedLog {
     pub fn clear(&mut self) {
         self.pieces.clear();
         self.paint_cmds.clear();
+        self.numbers.clear();
+        self.clips.clear();
     }
 
     /// Pieces logged.
@@ -197,41 +332,99 @@ impl PlacedLog {
         clip: Option<Rect>,
     ) -> u32 {
         let placed = list.append_translated(other, offset, clip);
-        let start = self.paint_cmds.len() as u32;
+        let paint_cmds = self.paint_cmds.len() as u32;
         self.paint_cmds.extend_from_slice(&other.paint_cmds);
+        let clip = match placed.clip {
+            None => NO_CLIP,
+            Some(rect) => match self.clips.last() {
+                Some(last) if same_rect(last, &rect) => self.clips.len() as u32 - 1,
+                _ => {
+                    self.clips.push(rect);
+                    self.clips.len() as u32 - 1
+                }
+            },
+        };
+        let numbers = self.numbers.len() as u32;
+        let at = push_counts(&mut self.numbers, placed.at);
+        let mut shape = push_counts(&mut self.numbers, placed.of);
+        if other.soup_committed_indices != 0 {
+            shape |= SOUP_COMMITTED;
+            push_varint(&mut self.numbers, other.soup_committed_indices);
+        }
+        if let Some(repaint) = other.next_repaint {
+            shape |= NEXT_REPAINT;
+            push_varint(&mut self.numbers, repaint.to_bits());
+        }
+        if other.dropped_degenerate != 0 {
+            shape |= DROPPED_DEGENERATE;
+            push_varint(&mut self.numbers, other.dropped_degenerate);
+        }
         self.pieces.push(LoggedPiece {
-            placed,
-            paint_cmds: [start, self.paint_cmds.len() as u32],
-            soup_committed: other.soup_committed_indices,
-            next_repaint: other.next_repaint.map(f32::to_bits),
-            dropped_degenerate: other.dropped_degenerate,
+            offset: placed.offset,
+            clip,
+            paint_cmds,
+            numbers,
+            at,
+            shape,
+            whole: placed.whole,
         });
         self.pieces.len() as u32 - 1
     }
 
+    /// What piece `piece` was placed with, if the log holds it.
+    fn logged(&self, piece: u32) -> Option<Logged> {
+        let p = self.pieces.get(piece as usize)?;
+        let end = self
+            .pieces
+            .get(piece as usize + 1)
+            .map_or(self.paint_cmds.len(), |next| next.paint_cmds as usize);
+        let bytes = &self.numbers[..];
+        let mut at = p.numbers as usize;
+        let position = read_counts(bytes, &mut at, p.at);
+        let of = read_counts(bytes, &mut at, p.shape);
+        let mut extra = |bit: u16| (p.shape & bit != 0).then(|| read_varint(bytes, &mut at));
+        let soup_committed = extra(SOUP_COMMITTED).unwrap_or(0);
+        let next_repaint = extra(NEXT_REPAINT);
+        let dropped_degenerate = extra(DROPPED_DEGENERATE).unwrap_or(0);
+        Some(Logged {
+            placed: Placed {
+                offset: p.offset,
+                clip: (p.clip != NO_CLIP).then(|| self.clips[p.clip as usize]),
+                at: position,
+                of,
+                whole: p.whole,
+            },
+            paint_cmds: p.paint_cmds as usize..end,
+            soup_committed,
+            next_repaint,
+            dropped_degenerate,
+        })
+    }
+
     /// Where piece `piece` was placed, if the log holds it.
-    pub fn placed(&self, piece: u32) -> Option<&Placed> {
-        self.pieces.get(piece as usize).map(|p| &p.placed)
+    pub fn placed(&self, piece: u32) -> Option<Placed> {
+        self.logged(piece).map(|logged| logged.placed)
     }
 
     /// Whether `other` has the shape piece `piece` had when placed, so that
     /// it can be patched over it.
     pub fn fits(&self, piece: u32, other: &DrawList) -> bool {
-        let Some(p) = self.pieces.get(piece as usize) else {
+        let Some(p) = self.logged(piece) else {
             return false;
         };
-        let [start, end] = p.paint_cmds;
         other.record_counts() == p.placed.of
             && other.soup_committed_indices == p.soup_committed
             && other.next_repaint.map(f32::to_bits) == p.next_repaint
             && other.dropped_degenerate == p.dropped_degenerate
-            && other.paint_cmds[..] == self.paint_cmds[start as usize..end as usize]
+            && other.paint_cmds[..] == self.paint_cmds[p.paint_cmds]
     }
 
     /// Bytes the log has reserved.
     pub fn heap_bytes(&self) -> usize {
         self.pieces.capacity() * std::mem::size_of::<LoggedPiece>()
             + self.paint_cmds.capacity() * std::mem::size_of::<PaintCmd>()
+            + self.numbers.capacity()
+            + self.clips.capacity() * std::mem::size_of::<Rect>()
     }
 }
 

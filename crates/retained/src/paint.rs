@@ -96,7 +96,7 @@ impl Ui {
             return false;
         }
         let piece = d.piece;
-        let Some(placed) = p.kept.as_ref().and_then(|k| k.log.placed(piece)).copied() else {
+        let Some(placed) = p.kept.as_ref().and_then(|k| k.log.placed(piece)) else {
             return false;
         };
         if self.offset_in(c, n) != placed.offset {

@@ -321,6 +321,28 @@ then the dated batches in the order they were written.
       place every frame, the refilled one replays its plan, and each frame
       draws as a fresh renderer's; without the fix the top layer lost its
       place when the middle one emptied and when it refilled.
+- [x] **P2 — a list's `PlacedLog` is about 245 bytes a piece (retained/core,
+      found 2026-11-11).** The grid's 20,000 pieces log 4.9 MB beside the
+      root's 6.9 MB list (`TreeStats::list_bytes` 11.8 MB, the estimate was
+      ~7): each `LoggedPiece` holds a whole `Placed` (offset, clip, two
+      `RecordCounts` of ten `u32`s). Most pieces place one or two records, so
+      counts relative to the piece before, or a shared clip, would shrink it.
+      Check: `list_bytes` on the grid.
+      **Done 2026-11-12.** A piece logs its offset, a clip index, where its
+      paint runs and numbers start, and two masks of which counts are not
+      zero (28 bytes); the counts that are not zero, and the soup, repaint
+      and degenerate extras, go as LEB128 varints into one byte pool, and a
+      clip into a table deduplicated against the last one pushed. A paint
+      run ends where the next piece's starts. `PlacedLog::placed` returns a
+      `Placed` by value. Grid at 10,000: `list_bytes` 11,928,384 →
+      8,520,560, the log 4.85 → 1.44 MB (about 72 bytes a piece as
+      reserved, paint runs included). Test:
+      `a_placed_log_reads_back_every_piece_as_placed`
+      (`render/append_oracle.rs`): 600 pieces with positions past a byte,
+      repeated and alternating clips, culled shadows and repaints read back
+      equal to the `Placed` a twin list's `append_translated` returned, and
+      fit only lists of their shape; it fails with the varint shift or the
+      clip deduplication broken.
 
 ---
 

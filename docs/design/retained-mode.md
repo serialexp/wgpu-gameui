@@ -1,6 +1,6 @@
 # Retained mode — Design
 
-Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view, the node table at 384 bytes a node, and each text shaped once (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
+Status: partial — Phases 0 to 5 landed (`DrawList::append`, `append_translated`, signals, the tree with layout and cached drawing, pointer input, the comparison; 2026-11-10 to 11), and lists patched in place in their ancestors', kept only at the root and at nodes that clip, the root's list reporting its edits to the renderer (2026-11-11), a scroll's rows laid out only near its view, the node table at 384 bytes a node, each text shaped once, and the list's log at about 72 bytes a piece (2026-11-12); Phase 6 and the rest of the comparison's findings outstanding. A prototype.
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -228,6 +228,10 @@ Tick items as they land.
       the tree keeps the shaping within a byte budget (64 MB,
       `Ui::set_text_budget`, `crates/retained/src/texts.rs`). `rows-one`
       shapes 229 texts for its 229 changes.
+- [x] **A list's log is about 72 bytes a piece, not 245** (found by the
+      comparison, 2026-11-12): a piece's counts are logged as the ones that
+      are not zero, in varints in one pool, and its clip as an index into a
+      deduplicated table; the grid's log went from 4.85 to 1.44 MB.
 
 ### Outstanding
 
@@ -235,10 +239,6 @@ Tick items as they land.
       a content kind yet.
 - [ ] **Phase 6 — an example in a window.** Scrolling list, hover styling, a click
       counter.
-- [ ] **A list's log is about 245 bytes a piece** (found by the comparison;
-      the small lists, 2.3 KB each, went with the cache shape): the grid's
-      20,000 pieces log 4.9 MB beside the root's 6.9 MB list, mostly the two
-      `RecordCounts` of each `Placed`.
 - [ ] **Defer: keyboard focus, text input, selection and highlight** in retained
       subtrees.
 - [ ] **Defer: virtualised lists** (an item count and a row factory instead of a

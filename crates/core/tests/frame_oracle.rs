@@ -823,7 +823,7 @@ fn a_list_patched_in_place_that_reports_its_edits_looks_as_a_fresh_one_does() {
                         log.fits(i as u32, &piece),
                         "step {n}: cell {i} keeps its shape"
                     );
-                    let placed = *log.placed(i as u32).expect("placed");
+                    let placed = log.placed(i as u32).expect("placed");
                     assert!(list.patch_translated(&placed, &piece, &RecordSpan::all_of(&piece)));
                 }
             }

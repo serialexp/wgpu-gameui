@@ -39,13 +39,6 @@ none chosen yet (Bart).
       Only advances and sizes are read from it today (the ellipsis cut,
       measuring), so nothing is drawn wrong; anything that places its glyphs
       would be. `docs/design/prepared-text.md`, deferred bullet.
-- [ ] **P2 — a list's `PlacedLog` is about 245 bytes a piece (retained/core,
-      found 2026-11-11).** The grid's 20,000 pieces log 4.9 MB beside the
-      root's 6.9 MB list (`TreeStats::list_bytes` 11.8 MB, the estimate was
-      ~7): each `LoggedPiece` holds a whole `Placed` (offset, clip, two
-      `RecordCounts` of ten `u32`s). Most pieces place one or two records, so
-      counts relative to the piece before, or a shared clip, would shrink it.
-      Check: `list_bytes` on the grid.
 - [ ] **P2 — lists of clipping nodes out of view are kept (retained, found
       2026-11-11).** A clip or scroll container scrolled out of its holder's
       view keeps its list. Moot for the bench scenes since only clipping nodes

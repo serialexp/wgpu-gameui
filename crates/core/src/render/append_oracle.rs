@@ -690,7 +690,7 @@ fn a_piece_patched_where_it_was_placed_is_the_new_piece_placed() {
         let mut list = recorded(&lists, &before);
         let mut log = PlacedLog::default();
         let piece = log.place(&mut list, &old, offset, clip);
-        let placed = *log.placed(piece).expect("logged");
+        let placed = log.placed(piece).expect("logged");
         for call in &after {
             call.draw(&mut list);
         }
@@ -803,7 +803,7 @@ fn reported_edits_cover_what_a_comparison_finds() {
                         if !log.fits(k as u32, &new) {
                             continue;
                         }
-                        let placed = *log.placed(k as u32).expect("logged");
+                        let placed = log.placed(k as u32).expect("logged");
                         bodies[k] = next;
                         changed = true;
                         if !list.patch_translated(&placed, &new, &RecordSpan::all_of(&new)) {
@@ -905,6 +905,76 @@ fn a_placed_log_holds_each_piece_shape() {
     );
     log.clear();
     assert!(log.is_empty() && !log.fits(0, &a));
+}
+
+/// A log reads back each piece as it was placed, however its numbers and
+/// clips are packed: positions past what a byte holds, clips repeated, taken
+/// turns with and culling, and pieces that ask for a repaint.
+#[test]
+fn a_placed_log_reads_back_every_piece_as_placed() {
+    let lists = Lists::new();
+    let near = Rect::new(0.0, 0.0, 400.0, 300.0);
+    let narrow = Rect::new(10.0, 20.0, 30.0, 40.0);
+    let away = Rect::new(5000.0, 5000.0, 10.0, 10.0);
+    let clips = [
+        None,
+        Some(near),
+        Some(near),
+        Some(narrow),
+        Some(near),
+        Some(away),
+    ];
+    let pieces: Vec<DrawList> = (0..600)
+        .map(|i: usize| {
+            // A shadow now and then, the record a clip that misses culls.
+            let calls: Vec<Call> = (0..1 + i % 4)
+                .map(|k| Call {
+                    op: if k == 0 && i.is_multiple_of(11) {
+                        Op::Shadow
+                    } else {
+                        OPS[(i * 7 + k * 3) % OPS.len()]
+                    },
+                    at: [(i % 13) as f32 * 9.0, (k * 5) as f32],
+                    n: (i + k) as u32,
+                })
+                .filter(|call| !matches!(call.op, Op::ClipPush | Op::ClipPop))
+                .collect();
+            recorded(&lists, &calls)
+        })
+        .collect();
+    let mut list = lists.list();
+    let mut twin = lists.list();
+    let mut log = PlacedLog::default();
+    let mut placements = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        let offset = [i as f32 * 0.5, -(i as f32)];
+        // Runs of one clip, so a clip repeats and the pieces each one
+        // falls on vary.
+        let clip = clips[(i / 5) % clips.len()];
+        assert_eq!(log.place(&mut list, piece, offset, clip), i as u32);
+        placements.push(twin.append_translated(piece, offset, clip));
+    }
+    let last = placements.last().expect("placed");
+    assert!(last.at.vertices > 1 << 7, "{:?}", last.at);
+    assert!(pieces.iter().any(|p| p.next_repaint().is_some()));
+    let culled = placements.iter().filter(|p| !p.whole).count();
+    assert!(culled > 0 && culled < placements.len(), "{culled} culled");
+    for (i, (piece, placed)) in pieces.iter().zip(&placements).enumerate() {
+        assert_eq!(log.placed(i as u32).as_ref(), Some(placed), "piece {i}");
+        assert!(log.fits(i as u32, piece), "piece {i}");
+        let other = &pieces[(i + 1) % pieces.len()];
+        let same = other.record_counts() == piece.record_counts()
+            && other.paint_cmds == piece.paint_cmds
+            && other.next_repaint().map(f32::to_bits) == piece.next_repaint().map(f32::to_bits)
+            && other.soup_committed_indices == piece.soup_committed_indices
+            && other.dropped_degenerate() == piece.dropped_degenerate();
+        assert_eq!(
+            log.fits(i as u32, other),
+            same,
+            "piece {i} against the next"
+        );
+    }
+    assert_eq!(log.placed(600), None);
 }
 
 /// A placement whose clip culled a record cannot be patched; nor can a list
