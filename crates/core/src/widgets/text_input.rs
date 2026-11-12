@@ -847,6 +847,14 @@ impl TextInput {
             let target = self
                 .paragraphs
                 .adjacent(list, *field, self.cursor_pos, dir, desired);
+            // No line beyond this one: go to the end of the text (down) or its
+            // start (up), as other editors do, so the rest of the line is
+            // selected with Shift instead of being left out.
+            let target = if target == was {
+                if dir > 0 { self.value.len() } else { 0 }
+            } else {
+                target
+            };
             if input.shift_pressed {
                 if self.selection_start.is_none() {
                     self.selection_start = Some(was);
@@ -2790,28 +2798,30 @@ mod tests {
     }
 
     #[test]
-    fn up_at_top_and_down_at_bottom_are_noops() {
+    fn up_at_top_and_down_at_bottom_go_to_the_text_edges() {
         let mut ti = make_input("foo\nbar").with_multiline(true);
-        let layout = caret_layout("foo\nbar");
         ti.cursor_pos = 1; // line 0
         let mut up = fake_input();
         up.key_up = true;
         keys_laid_out(&mut ti, &up);
-        assert_eq!(
-            caret_for_byte(&layout, ti.cursor_pos).line,
-            0,
-            "up at top stays on line 0"
-        );
+        assert_eq!(ti.cursor_pos, 0, "up on the first line goes to the start");
 
-        ti.cursor_pos = 5; // line 1 ("bar")
+        ti.cursor_pos = 5; // line 1 ("bar"), not at its end
         let mut down = fake_input();
         down.key_down = true;
         keys_laid_out(&mut ti, &down);
-        assert_eq!(
-            caret_for_byte(&layout, ti.cursor_pos).line,
-            1,
-            "down at bottom stays on line 1"
-        );
+        assert_eq!(ti.cursor_pos, 7, "down on the last line goes to the end");
+    }
+
+    #[test]
+    fn shift_down_on_the_last_line_selects_the_rest() {
+        let mut ti = make_input("foo\nbar").with_multiline(true);
+        ti.cursor_pos = 5;
+        let mut ev = fake_input();
+        ev.key_down = true;
+        ev.shift_pressed = true;
+        keys_laid_out(&mut ti, &ev);
+        assert_eq!(ti.selection_range(), Some((5, 7)));
     }
 
     #[test]
