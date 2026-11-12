@@ -429,6 +429,23 @@ then the dated batches in the order they were written.
       the worker rests at exactly two until the player takes one: 0 of 200 runs failed at load
       11, and it passed with the 500 ms sleep in. Only the test changed.
 
+## Rustdoc links (found 2026-11-10)
+
+- [x] **P2 — `RUSTDOCFLAGS="-D warnings" cargo doc -p wgpu-gameui --no-deps`
+      fails on 48 broken or private intra-doc links** (50 by 2026-11-12, plus 3 in
+      `wgpu-gameui-code`, 1 in `-media` and 1 in `-retained`). Also recorded as
+      "P3 — `cargo doc` has 28 warnings again".
+      **Done 2026-11-12.** Links to items not in scope got full crate paths, and
+      links to private items say what the item does. The 30 "See the [module
+      docs](self)" links sat on types in private modules, whose docs users never
+      see: Bart chose to move each module's `//!` docs onto its main type (the
+      module keeps its first paragraph) and point the secondary types at it, across
+      23 modules. That exposed a link the private module had hidden
+      (`super::Tree`, now `TreeNode`). `RUSTDOCFLAGS="-D warnings" cargo doc
+      --workspace --no-deps` is clean and is now in the gate (CLAUDE.md's build list
+      and `publish.yml`). Follow-ups in TODO.md: other private modules' docs, and
+      the links that break without default features.
+
 ## Flaky allocation test (found 2026-11-11)
 
 - [x] **`render::draw_plan::tests::lists::planning_a_warmed_frame_allocates_nothing`**

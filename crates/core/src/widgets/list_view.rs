@@ -1,43 +1,6 @@
 //! List view — the dense, selectable list for sidebars (Forge `ListView`):
 //! projects, sessions, files, recent items. Use [`Tree`](super::Tree) for
 //! hierarchy and [`Table`](super::Table) for columns.
-//!
-//! A [`List`] underneath does the scrolling, virtualisation, keyboard and
-//! row backgrounds (zebra, hover, the focus-aware selection); this widget
-//! paints each row's content from a [`ListRow`]:
-//!
-//! - an optional glyph (a Phosphor icon) or [`Thumb`](super::Thumb)
-//!   monogram, the label (sans or mono, cut with `…` when it doesn't fit),
-//!   and an optional right-aligned mono `meta`;
-//! - with [`two_line`](ListView::two_line), a mono subtitle under the label
-//!   (34 px rows instead of 22) — put a short id there rather than showing a
-//!   raw id as the label;
-//! - the first case-insensitive match of [`highlight`](ListView::highlight)
-//!   in the label, tinted `AccentMatch`, or underlined on an accent row;
-//! - disabled rows dimmed, never hovered, selected or opened, and skipped by
-//!   the arrow keys.
-//!
-//! With no rows it shows the [`empty`](ListView::empty) message under a
-//! magnifier.
-//!
-//! Rows come from a per-index closure, so only the visible ones are built.
-//! The caller owns which row is selected (by index, mapped from its own ids
-//! each frame); [`ListViewOutput::select`] reports the row the user picked
-//! and [`ListViewOutput::open`] the one opened with `Enter` or a
-//! double-click.
-//!
-//! Gated behind the `phosphor-icons` feature.
-//!
-//! # Example
-//! ```ignore
-//! let out = ListView::new()
-//!     .highlight(&query)
-//!     .empty("No projects match")
-//!     .focused(focus.is_focused(PROJECTS_ID))
-//!     .draw(rect, matches.len(), selected, &mut state, list, &style, &mut input,
-//!         |i| ListRow::new(name_of(matches[i])));
-//! if let Some(i) = out.select { selected = Some(i); }
-//! ```
 
 use std::ops::Range;
 
@@ -180,7 +143,48 @@ pub struct ListViewOutput {
     pub action: Option<usize>,
 }
 
-/// A dense selectable list. See the [module docs](self).
+/// A dense selectable list.
+///
+/// List view — the dense, selectable list for sidebars (Forge `ListView`):
+/// projects, sessions, files, recent items. Use [`TreeNode`](crate::TreeNode) for
+/// hierarchy and [`Table`](crate::Table) for columns.
+///
+/// A [`List`] underneath does the scrolling, virtualisation, keyboard and
+/// row backgrounds (zebra, hover, the focus-aware selection); this widget
+/// paints each row's content from a [`ListRow`]:
+///
+/// - an optional glyph (a Phosphor icon) or [`Thumb`](super::Thumb)
+///   monogram, the label (sans or mono, cut with `…` when it doesn't fit),
+///   and an optional right-aligned mono `meta`;
+/// - with [`two_line`](ListView::two_line), a mono subtitle under the label
+///   (34 px rows instead of 22) — put a short id there rather than showing a
+///   raw id as the label;
+/// - the first case-insensitive match of [`highlight`](ListView::highlight)
+///   in the label, tinted `AccentMatch`, or underlined on an accent row;
+/// - disabled rows dimmed, never hovered, selected or opened, and skipped by
+///   the arrow keys.
+///
+/// With no rows it shows the [`empty`](ListView::empty) message under a
+/// magnifier.
+///
+/// Rows come from a per-index closure, so only the visible ones are built.
+/// The caller owns which row is selected (by index, mapped from its own ids
+/// each frame); [`ListViewOutput::select`] reports the row the user picked
+/// and [`ListViewOutput::open`] the one opened with `Enter` or a
+/// double-click.
+///
+/// Gated behind the `phosphor-icons` feature.
+///
+/// # Example
+/// ```ignore
+/// let out = ListView::new()
+///     .highlight(&query)
+///     .empty("No projects match")
+///     .focused(focus.is_focused(PROJECTS_ID))
+///     .draw(rect, matches.len(), selected, &mut state, list, &style, &mut input,
+///         |i| ListRow::new(name_of(matches[i])));
+/// if let Some(i) = out.select { selected = Some(i); }
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct ListView<'a> {
     two_line: bool,

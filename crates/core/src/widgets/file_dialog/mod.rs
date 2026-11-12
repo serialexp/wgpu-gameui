@@ -1,44 +1,5 @@
 //! FileDialog — open a file, save one, or choose a folder (Forge
 //! `FileDialog`).
-//!
-//! An in-app dialog, so the theme, keys and behaviour are the same on every
-//! platform, and so it can show a disk that isn't this machine's. The caller
-//! owns the filesystem through a [`FileSource`]; the dialog owns navigation.
-//!
-//! Places is one list: Recent (when the caller passes recent entries), the
-//! caller's fixed places, a rule, then the user's ★ favourites. ☆ in the
-//! toolbar pins the folder shown (not a fixed place); hovering a favourite
-//! shows × to unpin it. Folders sort first; double-click or Enter goes in;
-//! Backspace or Ctrl/Cmd+↑ goes up; Alt+← / Alt+→ walk the history; typing
-//! jumps to the first name that starts with what was typed. A click on the
-//! path well's empty space or `/` turns it into a field for typing a path
-//! ([`FileDialogState::edit_path`] does the same, for a host's Ctrl/Cmd+L); a
-//! path that can't be listed keeps the field open with the error in it.
-//!
-//! The type strip shows only accepted types present in the folder: one is a
-//! caption, two or three are latching [`FilterChip`]s, more show the top
-//! three and a "+N" chip that expands the rest inline. Files of other types
-//! are not listed, and the empty state says how many were skipped. In folder
-//! mode files are listed dimmed, for context. Saving puts the name in a well
-//! with its base selected, the extension as a suffix; a name that exists
-//! turns the primary key into a danger "Replace". New folder adds a row in
-//! rename mode; Enter asks the caller to create it. Escape backs out one
-//! layer at a time: the path field, the new folder row, then the dialog.
-//!
-//! ```ignore
-//! // Each frame, while open, in a modal layer:
-//! let out = FileDialog::new(FileDialogMode::Folder)
-//!     .title("Choose project")
-//!     .root_label("~")
-//!     .places(&places)
-//!     .draw(DIALOG_ID, screen, &mut state, &mut disk, &mut ctx);
-//! match out.event {
-//!     Some(FileDialogEvent::Confirm { path, .. }) => open_project(path),
-//!     Some(FileDialogEvent::CreateFolder { path, name }) => disk.mkdir(&path, &name),
-//!     Some(FileDialogEvent::FavouritesChanged) => save(state.favourites()),
-//!     _ => {}
-//! }
-//! ```
 
 mod model;
 mod paint;
@@ -571,7 +532,49 @@ impl FileDialogState {
     }
 }
 
-/// The per-frame dialog. See the [module docs](self).
+/// The per-frame dialog.
+///
+/// FileDialog — open a file, save one, or choose a folder (Forge
+/// `FileDialog`).
+///
+/// An in-app dialog, so the theme, keys and behaviour are the same on every
+/// platform, and so it can show a disk that isn't this machine's. The caller
+/// owns the filesystem through a [`FileSource`]; the dialog owns navigation.
+///
+/// Places is one list: Recent (when the caller passes recent entries), the
+/// caller's fixed places, a rule, then the user's ★ favourites. ☆ in the
+/// toolbar pins the folder shown (not a fixed place); hovering a favourite
+/// shows × to unpin it. Folders sort first; double-click or Enter goes in;
+/// Backspace or Ctrl/Cmd+↑ goes up; Alt+← / Alt+→ walk the history; typing
+/// jumps to the first name that starts with what was typed. A click on the
+/// path well's empty space or `/` turns it into a field for typing a path
+/// ([`FileDialogState::edit_path`] does the same, for a host's Ctrl/Cmd+L); a
+/// path that can't be listed keeps the field open with the error in it.
+///
+/// The type strip shows only accepted types present in the folder: one is a
+/// caption, two or three are latching [`FilterChip`]s, more show the top
+/// three and a "+N" chip that expands the rest inline. Files of other types
+/// are not listed, and the empty state says how many were skipped. In folder
+/// mode files are listed dimmed, for context. Saving puts the name in a well
+/// with its base selected, the extension as a suffix; a name that exists
+/// turns the primary key into a danger "Replace". New folder adds a row in
+/// rename mode; Enter asks the caller to create it. Escape backs out one
+/// layer at a time: the path field, the new folder row, then the dialog.
+///
+/// ```ignore
+/// // Each frame, while open, in a modal layer:
+/// let out = FileDialog::new(FileDialogMode::Folder)
+///     .title("Choose project")
+///     .root_label("~")
+///     .places(&places)
+///     .draw(DIALOG_ID, screen, &mut state, &mut disk, &mut ctx);
+/// match out.event {
+///     Some(FileDialogEvent::Confirm { path, .. }) => open_project(path),
+///     Some(FileDialogEvent::CreateFolder { path, name }) => disk.mkdir(&path, &name),
+///     Some(FileDialogEvent::FavouritesChanged) => save(state.favourites()),
+///     _ => {}
+/// }
+/// ```
 #[derive(Clone, Copy)]
 pub struct FileDialog<'a> {
     mode: FileDialogMode,

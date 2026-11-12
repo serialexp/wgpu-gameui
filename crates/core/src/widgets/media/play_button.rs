@@ -1,13 +1,4 @@
 //! Play button — a latch key that plays and pauses (Forge `PlayButton`).
-//!
-//! Playing, or waiting to ([`PlayState::Loading`]), holds the key in with
-//! the accent face, so the state reads at a glance without the icon. The
-//! icon is play while paused, pause while playing, a spinner while loading
-//! and replay once ended. One that can't play shows a red "!" and takes no
-//! click.
-//!
-//! An optional [`progress`](PlayButton::progress) strip runs 2 px along the
-//! bottom of the face, for previews in list rows.
 
 use crate::layout::Rect;
 use crate::render::PhosphorIcon;
@@ -26,7 +17,18 @@ const SPIN: f32 = 8.0;
 /// The arc the spinner draws.
 const SWEEP: f32 = 1.6;
 
-/// A play / pause key. See the [module docs](self).
+/// A play / pause key.
+///
+/// Play button — a latch key that plays and pauses (Forge `PlayButton`).
+///
+/// Playing, or waiting to ([`PlayState::Loading`]), holds the key in with
+/// the accent face, so the state reads at a glance without the icon. The
+/// icon is play while paused, pause while playing, a spinner while loading
+/// and replay once ended. One that can't play shows a red "!" and takes no
+/// click.
+///
+/// An optional [`progress`](PlayButton::progress) strip runs 2 px along the
+/// bottom of the face, for previews in list rows.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayButton {
     state: PlayState,

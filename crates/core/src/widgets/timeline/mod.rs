@@ -1,47 +1,4 @@
 //! Timeline: a keyframe dope sheet for a bottom dock (Forge `Timeline`).
-//!
-//! A transport strip on top (first frame, previous key, play, next key, last
-//! frame, the frame field, timecode and rate, markers, loop, zoom, fit), then
-//! a ruler with the playhead, the play range and the markers, then one lane
-//! per visible track beside a label column. The ruler and the label column
-//! stay put while the lanes scroll under them.
-//!
-//! Track data and markers are the caller's and are edited **in place**; every
-//! change also comes back in [`TimelineOutput::edits`], with what an undo
-//! needs to reverse it. The view — frame, playback, play range, zoom, scroll,
-//! selection, collapsed groups — lives in the caller-owned [`TimelineState`].
-//!
-//! ```ignore
-//! let out = Timeline::new(TIMELINE).length(240).fps(24).draw(
-//!     rect, &mut tracks, &mut markers, &mut timeline, &mut drag, &mut ctx,
-//! );
-//! for edit in out.edits {
-//!     undo.push(edit);
-//! }
-//! if out.frame_changed {
-//!     scene.seek(timeline.frame);
-//! }
-//! ```
-//!
-//! Mouse: click or drag the ruler to scrub. Click a key to select it (Shift or
-//! Ctrl toggles it), drag to move every selected key, snapped to frames and
-//! clamped to 0…length. Drag empty lane space to marquee-select; double-click
-//! a lane to add a key. The wheel scrolls the rows, Shift + wheel scrolls
-//! time, Ctrl + wheel zooms around the pointer. Drag a marker's flag to move
-//! it, click it to jump there, double-click it to rename it. Drag a range
-//! bracket to move that end.
-//!
-//! Keys, while the timeline has focus: ← → step a frame (Shift: ten), Home and
-//! End jump to the range ends, `,` and `.` to the previous and next key, Space
-//! plays and pauses, Delete removes the selected keys (or else the selected
-//! marker), Ctrl+A selects every key, `=` and `-` zoom, `M` adds a marker at
-//! the playhead (or renames the one there), Esc clears the selection. The
-//! letter and punctuation shortcuts read
-//! [`InputState::keys`](crate::InputState::keys).
-//!
-//! Each frame is a cell: grid lines sit on cell edges, keys and markers at
-//! cell centres, and the current frame lights its whole column. The play
-//! range is inclusive.
 
 mod model;
 #[cfg(test)]
@@ -125,7 +82,52 @@ const EMPTY: &str = "No tracks · select an object to see its keys";
 /// Pixels per frame of a new [`TimelineState`].
 pub const TIMELINE_DEFAULT_ZOOM: f32 = 6.0;
 
-/// A keyframe dope sheet. See the [module docs](self).
+/// A keyframe dope sheet.
+///
+/// Timeline: a keyframe dope sheet for a bottom dock (Forge `Timeline`).
+///
+/// A transport strip on top (first frame, previous key, play, next key, last
+/// frame, the frame field, timecode and rate, markers, loop, zoom, fit), then
+/// a ruler with the playhead, the play range and the markers, then one lane
+/// per visible track beside a label column. The ruler and the label column
+/// stay put while the lanes scroll under them.
+///
+/// Track data and markers are the caller's and are edited **in place**; every
+/// change also comes back in [`TimelineOutput::edits`], with what an undo
+/// needs to reverse it. The view — frame, playback, play range, zoom, scroll,
+/// selection, collapsed groups — lives in the caller-owned [`TimelineState`].
+///
+/// ```ignore
+/// let out = Timeline::new(TIMELINE).length(240).fps(24).draw(
+///     rect, &mut tracks, &mut markers, &mut timeline, &mut drag, &mut ctx,
+/// );
+/// for edit in out.edits {
+///     undo.push(edit);
+/// }
+/// if out.frame_changed {
+///     scene.seek(timeline.frame);
+/// }
+/// ```
+///
+/// Mouse: click or drag the ruler to scrub. Click a key to select it (Shift or
+/// Ctrl toggles it), drag to move every selected key, snapped to frames and
+/// clamped to 0…length. Drag empty lane space to marquee-select; double-click
+/// a lane to add a key. The wheel scrolls the rows, Shift + wheel scrolls
+/// time, Ctrl + wheel zooms around the pointer. Drag a marker's flag to move
+/// it, click it to jump there, double-click it to rename it. Drag a range
+/// bracket to move that end.
+///
+/// Keys, while the timeline has focus: ← → step a frame (Shift: ten), Home and
+/// End jump to the range ends, `,` and `.` to the previous and next key, Space
+/// plays and pauses, Delete removes the selected keys (or else the selected
+/// marker), Ctrl+A selects every key, `=` and `-` zoom, `M` adds a marker at
+/// the playhead (or renames the one there), Esc clears the selection. The
+/// letter and punctuation shortcuts read
+/// [`InputState::keys`](crate::InputState::keys).
+///
+/// Each frame is a cell: grid lines sit on cell edges, keys and markers at
+/// cell centres, and the current frame lights its whole column. The play
+/// range is inclusive.
 #[derive(Clone, Copy, Debug)]
 pub struct Timeline {
     id: u64,

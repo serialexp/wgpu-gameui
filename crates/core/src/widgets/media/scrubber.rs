@@ -2,27 +2,6 @@
 //! buffered part dim under the played part in the accent, and a knob that
 //! is always shown (Forge never hides controls; [`knob(false)`](Scrubber::knob)
 //! makes a bare meter).
-//!
-//! Hovering shows the time under the pointer in a tip above it. A press
-//! seeks there and a drag seeks live, the output saying when the drag
-//! [`started`](ScrubberOutput::started) and [`ended`](ScrubberOutput::ended)
-//! so a player can hold its picture meanwhile. While focused, ←/→ step (5 s
-//! over a timeline longer than 30 s, a fiftieth of a shorter one; Shift
-//! steps six times as far) and Home and End go to the ends.
-//!
-//! Values are in whatever the caller counts in (seconds for a timeline,
-//! `0..=1` for a volume); [`format`](Scrubber::format) turns one into the
-//! tip's text.
-//!
-//! # Example
-//! ```ignore
-//! let output = Scrubber::new(length)
-//!     .buffered(buffered)
-//!     .draw(time, SEEK_DRAG, &mut capture, rect, &mut ctx);
-//! if let Some(to) = output.seek {
-//!     player.seek(to);
-//! }
-//! ```
 
 use std::time::Duration;
 
@@ -71,7 +50,33 @@ pub struct ScrubberOutput {
     pub hovered: bool,
 }
 
-/// A media timeline. See the [module docs](self).
+/// A media timeline.
+///
+/// Scrubber — a media timeline (Forge `Scrubber`): a sunken track with the
+/// buffered part dim under the played part in the accent, and a knob that
+/// is always shown (Forge never hides controls; [`knob(false)`](Scrubber::knob)
+/// makes a bare meter).
+///
+/// Hovering shows the time under the pointer in a tip above it. A press
+/// seeks there and a drag seeks live, the output saying when the drag
+/// [`started`](ScrubberOutput::started) and [`ended`](ScrubberOutput::ended)
+/// so a player can hold its picture meanwhile. While focused, ←/→ step (5 s
+/// over a timeline longer than 30 s, a fiftieth of a shorter one; Shift
+/// steps six times as far) and Home and End go to the ends.
+///
+/// Values are in whatever the caller counts in (seconds for a timeline,
+/// `0..=1` for a volume); [`format`](Scrubber::format) turns one into the
+/// tip's text.
+///
+/// # Example
+/// ```ignore
+/// let output = Scrubber::new(length)
+///     .buffered(buffered)
+///     .draw(time, SEEK_DRAG, &mut capture, rect, &mut ctx);
+/// if let Some(to) = output.seek {
+///     player.seek(to);
+/// }
+/// ```
 pub struct Scrubber<'a> {
     max: f32,
     buffered: Option<f32>,

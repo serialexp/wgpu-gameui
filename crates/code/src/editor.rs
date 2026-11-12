@@ -2,25 +2,6 @@
 //! draws one, in a sunken well with a line-number gutter down its left, the
 //! caret line's band, the selection, and Tree-sitter colours, over a status
 //! strip with the caret's line and column.
-//!
-//! Only the lines in view are measured, coloured and drawn. The gutter
-//! stays put while long lines scroll sideways under it.
-//!
-//! Problems the host reports ([`CodeEditor::set_diagnostics`]) are drawn
-//! as Forge draws them: a wavy underline in the severity's ink, a wash
-//! across the worst one's line, and a dot in its gutter. The message of the
-//! one under the pointer is drawn above everything by
-//! [`CodeEditor::draw_layers`], and the status strip counts them.
-//!
-//! Typing a word, or Ctrl-Space, opens a completion list under it: the
-//! language's keywords and the document's own words, and the host's items
-//! when it has a language server. Ctrl-Space and the host's trigger
-//! characters ask the host ([`CodeEditorOutput::completion_asked`]), which
-//! answers with [`CodeEditor::offer`]. An item the host can say more about
-//! is resolved while it is chosen ([`CodeEditorOutput::resolve`],
-//! [`CodeEditor::resolved`]); accepting one before that has come back waits
-//! for it a moment, the keys typed meanwhile kept and played after. The list
-//! is drawn by `draw_layers` too.
 
 use std::ops::Range;
 
@@ -247,7 +228,31 @@ pub(crate) struct Drawn {
     pub(crate) origin: [f32; 2],
 }
 
-/// A source code editor. See the [module docs](self).
+/// A source code editor.
+///
+/// The `CodeEditor` widget: a [`Document`] drawn as Forge's `CodeEditor`
+/// draws one, in a sunken well with a line-number gutter down its left, the
+/// caret line's band, the selection, and Tree-sitter colours, over a status
+/// strip with the caret's line and column.
+///
+/// Only the lines in view are measured, coloured and drawn. The gutter
+/// stays put while long lines scroll sideways under it.
+///
+/// Problems the host reports ([`CodeEditor::set_diagnostics`]) are drawn
+/// as Forge draws them: a wavy underline in the severity's ink, a wash
+/// across the worst one's line, and a dot in its gutter. The message of the
+/// one under the pointer is drawn above everything by
+/// [`CodeEditor::draw_layers`], and the status strip counts them.
+///
+/// Typing a word, or Ctrl-Space, opens a completion list under it: the
+/// language's keywords and the document's own words, and the host's items
+/// when it has a language server. Ctrl-Space and the host's trigger
+/// characters ask the host ([`CodeEditorOutput::completion_asked`]), which
+/// answers with [`CodeEditor::offer`]. An item the host can say more about
+/// is resolved while it is chosen ([`CodeEditorOutput::resolve`],
+/// [`CodeEditor::resolved`]); accepting one before that has come back waits
+/// for it a moment, the keys typed meanwhile kept and played after. The list
+/// is drawn by `draw_layers` too.
 pub struct CodeEditor {
     document: Document,
     syntax: Syntax,

@@ -1,29 +1,5 @@
 //! A [`Player`] as the media widgets' [`MediaSource`]: its pictures kept in
 //! a YUV sprite, and what the user does told to it at the app's moment.
-//!
-//! Each frame, before drawing, the app calls [`PlayerSource::update`] with
-//! the moment and where pictures go (the [`UiRenderer`], or anything else
-//! that is a [`PictureSink`]). That moves playback on and puts a new picture
-//! in the sprite, made the first time and again only when the picture's size
-//! changes. When the source is done with, [`release`](PlayerSource::release)
-//! frees the sprite.
-//!
-//! ```no_run
-//! use std::time::Instant;
-//! use wgpu_gameui::{VideoPlayer, VideoPlayerState};
-//! use wgpu_gameui_media::{Player, PlayerSource};
-//!
-//! # fn frame(renderer: &mut wgpu_gameui::UiRenderer, ctx: &mut wgpu_gameui::DrawContext, rect: wgpu_gameui::layout::Rect) -> Result<(), wgpu_gameui_media::MediaError> {
-//! let mut source = PlayerSource::new(Player::open("clip.mp4")?, Instant::now());
-//! let mut state = VideoPlayerState::new();
-//! // Each frame:
-//! source.update(Instant::now(), renderer);
-//! VideoPlayer::new(1).draw(&mut source, &mut state, rect, ctx);
-//! // Done with it:
-//! source.release(renderer);
-//! # Ok(())
-//! # }
-//! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -65,7 +41,34 @@ impl PictureSink for UiRenderer {
     }
 }
 
-/// A [`Player`] the media widgets can show. See the [module docs](self).
+/// A [`Player`] the media widgets can show.
+///
+/// A [`Player`] as the media widgets' [`MediaSource`]: its pictures kept in
+/// a YUV sprite, and what the user does told to it at the app's moment.
+///
+/// Each frame, before drawing, the app calls [`PlayerSource::update`] with
+/// the moment and where pictures go (the [`UiRenderer`], or anything else
+/// that is a [`PictureSink`]). That moves playback on and puts a new picture
+/// in the sprite, made the first time and again only when the picture's size
+/// changes. When the source is done with, [`release`](PlayerSource::release)
+/// frees the sprite.
+///
+/// ```no_run
+/// use std::time::Instant;
+/// use wgpu_gameui::{VideoPlayer, VideoPlayerState};
+/// use wgpu_gameui_media::{Player, PlayerSource};
+///
+/// # fn frame(renderer: &mut wgpu_gameui::UiRenderer, ctx: &mut wgpu_gameui::DrawContext, rect: wgpu_gameui::layout::Rect) -> Result<(), wgpu_gameui_media::MediaError> {
+/// let mut source = PlayerSource::new(Player::open("clip.mp4")?, Instant::now());
+/// let mut state = VideoPlayerState::new();
+/// // Each frame:
+/// source.update(Instant::now(), renderer);
+/// VideoPlayer::new(1).draw(&mut source, &mut state, rect, ctx);
+/// // Done with it:
+/// source.release(renderer);
+/// # Ok(())
+/// # }
+/// ```
 pub struct PlayerSource {
     player: Player,
     /// The moment of the last update, which what the user does happens at.

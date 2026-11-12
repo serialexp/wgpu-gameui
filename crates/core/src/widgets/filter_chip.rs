@@ -1,10 +1,4 @@
 //! FilterChip — a latching pill key (Forge `FilterChip`).
-//!
-//! Up on the key face while off, held down into the well in the accent chip
-//! colours while on. Several can be on at once: it is a filter toggle, not a
-//! choice. A click (or Space / Enter while focused) asks to flip it; the
-//! caller owns whether it is on. Hover and press show as the bare key's
-//! wash over the pill.
 
 use crate::color::{HUE_ACCENT, oklch};
 use crate::layout::Rect;
@@ -36,7 +30,15 @@ const HELD_SHADE: BoxShadow = BoxShadow {
     inset: true,
 };
 
-/// A latching pill key. See the [module docs](self).
+/// A latching pill key.
+///
+/// FilterChip — a latching pill key (Forge `FilterChip`).
+///
+/// Up on the key face while off, held down into the well in the accent chip
+/// colours while on. Several can be on at once: it is a filter toggle, not a
+/// choice. A click (or Space / Enter while focused) asks to flip it; the
+/// caller owns whether it is on. Hover and press show as the bare key's
+/// wash over the pill.
 #[derive(Clone, Debug)]
 pub struct FilterChip<'a> {
     label: &'a str,

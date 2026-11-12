@@ -119,7 +119,13 @@ cargo build --all-targets      # must be warning-clean
 cargo test --lib               # all widget/layout/text unit tests
 cargo clippy -p wgpu-gameui --no-default-features --all-targets -- -D warnings
                                # tests needing a feature are gated on it
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+                               # no broken or private intra-doc links
 ```
+
+A type's usage docs go on the type, not in its module's `//!` docs: most modules are
+private (their items are re-exported from the crate root), so module docs are never
+shown to users and rustdoc doesn't check their links.
 
 The tracked pre-commit hook rejects unformatted Rust. Enable it once per clone:
 

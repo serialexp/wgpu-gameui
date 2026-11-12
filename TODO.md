@@ -37,14 +37,21 @@ none chosen yet (Bart).
 
 ---
 
-## Rustdoc links (found 2026-11-10)
+## Docs users never see (found 2026-11-12)
 
-- [ ] **P2 — `RUSTDOCFLAGS="-D warnings" cargo doc -p wgpu-gameui --no-deps`
-      fails on 48 broken or private intra-doc links**, spread over `frame.rs`,
-      `frame_result.rs`, `text.rs`, `ui_context.rs`, `render/ui_renderer.rs` and
-      many widgets (e.g. `syntax_theme.rs:69` links `crate::SyntaxHighlighting`,
-      `text.rs:91` links the private `system_font_db`). Fix them and add the
-      doc check to the gate.
+- [ ] **P3 — Usage docs left in private modules.** Moving the widgets' module docs
+      onto their types (2026-11-12) covered the 23 modules whose types linked to
+      `[module docs](self)`. Other private modules still keep their usage docs in
+      `//!` and point at them in plain text ("see the module docs"), which rustdoc
+      does not flag: `click_tracker`, `frame`, `drag_tracker`, `animation`,
+      `render/msdf_atlas`, and in `widgets/` `field_paragraphs`, `scroll_view`,
+      `drag_handle`, `hit_zone`, `status_detail`, `row_heights` and `menu_screens`.
+      Move each onto its main type the same way.
+- [ ] **P3 — `cargo doc --no-default-features` has 5 broken links**, to items behind
+      a feature: `lib.rs:44` (`HeadlessGpu`, `headless`), `text.rs:967`
+      (`render_icons`, `phosphor-icons`), `chrome.rs:251`, `:296`, `:337`
+      (`GroupList`, `Timeline`, `DockStack`, `phosphor-icons`). The gate documents
+      default features (what docs.rs shows), so these don't fail it.
 
 ---
 
@@ -588,11 +595,6 @@ harden those foundations rather than create parallel replacements.
   declared rect, and `overflows_declared` flags each one. Either the report
   learns that a 1 px outset lip is intended, or those widgets declare the
   lip in their scope rect.
-- [ ] **P3 — `cargo doc` has 28 warnings again.** It was clean once (see
-  "Rustdoc on all public types"). Unresolved links (`Frame::run`,
-  `UiState::end_frame`, `TooltipLayer::hover_zone`, `UiFrameResult`, …)
-  and links to private items, such as `Thumb`'s "See the module docs",
-  which points into a private module whose docs users never see.
 - [ ] **P3 — Our `Group` isn't Forge's `Group`.** Forge's is a *sunken*,
   collapsible card (`rgba(0,0,0,.22)`, mono-caps header with ▸ caret and a
   right-aligned summary). Ours is a raised panel with a sans title strip.

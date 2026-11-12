@@ -1,64 +1,5 @@
 //! Window — a movable in-app window with a title strip, a close key, and an
 //! optional bottom-right resize grip.
-//!
-//! Unlike [`Group`](super::Group) (a stateless titled box), a `Window` is
-//! interactive: dragging its title strip moves it, the close key reports
-//! [`WindowOutput::close_clicked`], and — when [`resizable`](Window::resizable)
-//! — dragging the corner grip resizes it. It paints the theme's
-//! [`WindowChrome`](crate::WindowChrome) and returns the **body rect** for the
-//! caller to lay content into.
-//!
-//! # State ownership
-//!
-//! [`WindowState`] (the outer rect) is caller-owned and persisted across
-//! frames, like [`DockPanelState`](super::DockPanelState). Store it however you
-//! like — e.g. serialize `state.rect` when [`WindowOutput::interaction_ended`]
-//! fires to remember the window's placement between launches.
-//!
-//! Drag ownership goes through the shared [`DragCapture`] (usually
-//! [`UiState::drag`](crate::UiState)), so a window never fights a slider or
-//! splitter for the same gesture. The per-frame movement comes from a
-//! caller-owned [`DragTracker`](crate::DragTracker): run
-//! `tracker.update(&mut input)` once per frame **before** drawing, exactly as
-//! for [`DragHandle`](super::DragHandle). A window claims two ids: `id` for
-//! moving and `id + 1` for resizing.
-//!
-//! # Layers
-//!
-//! The window draws into `ctx.draw_list` and reads `ctx.input`; the caller
-//! picks the layer. Push the layer with the window's *current* rect and draw
-//! with that layer's input:
-//!
-//! * **Blocking** — [`LayerStack::push_modal`](crate::LayerStack::push_modal):
-//!   everything below ignores the pointer while the window is open.
-//! * **Floating** — [`LayerStack::push_popup`](crate::LayerStack::push_popup):
-//!   only the window's own rect captures the pointer; the rest of the UI keeps
-//!   working.
-//!
-//! ```ignore
-//! let layer = layers.push_popup(state.rect);
-//! layers.pop_layer();
-//! // ... draw the base UI with layers.input_for_base(&input) ...
-//! let input = layers.input_for_layer(layer, &input);
-//! let mut ctx = DrawContext::new(&mut layers.layers_mut()[layer].list, focus, theme, &input, w, h)
-//!     .with_cursor(&mut cursor);
-//! let out = Window::new(WINDOW_ID, "Inspector")
-//!     .resizable(true)
-//!     .bounds(workspace)
-//!     .draw(&mut state, &mut ui_state.drag, &mut ctx);
-//! if out.close_clicked { open = false; }
-//! draw_contents(out.body);
-//! if out.interaction_ended { save_layout(state.rect); }
-//! ```
-//!
-//! # Geometry
-//!
-//! The title strip is [`StyleKey::WindowTitleHeight`] tall, measured from the
-//! outer top edge. The close key is a square inset [`WINDOW_CLOSE_KEY_INSET`] from the
-//! strip on every side, so it always fits the strip. A resizable window
-//! reserves a [`WINDOW_RESIZE_GRIP_SIZE`] band along its bottom for the grip, keeping
-//! the grip out of the body so body widgets (e.g. a scroll bar in the corner)
-//! never share a press with it.
 
 use crate::chrome::SurfacePainter;
 use crate::layout::Rect;
@@ -117,7 +58,69 @@ pub struct WindowOutput {
     pub interaction_ended: bool,
 }
 
-/// A movable in-app window. See the [module docs](self).
+/// A movable in-app window.
+///
+/// Window — a movable in-app window with a title strip, a close key, and an
+/// optional bottom-right resize grip.
+///
+/// Unlike [`Group`](super::Group) (a stateless titled box), a `Window` is
+/// interactive: dragging its title strip moves it, the close key reports
+/// [`WindowOutput::close_clicked`], and — when [`resizable`](Window::resizable)
+/// — dragging the corner grip resizes it. It paints the theme's
+/// [`WindowChrome`](crate::WindowChrome) and returns the **body rect** for the
+/// caller to lay content into.
+///
+/// # State ownership
+///
+/// [`WindowState`] (the outer rect) is caller-owned and persisted across
+/// frames, like [`DockPanelState`](super::DockPanelState). Store it however you
+/// like — e.g. serialize `state.rect` when [`WindowOutput::interaction_ended`]
+/// fires to remember the window's placement between launches.
+///
+/// Drag ownership goes through the shared [`DragCapture`] (usually
+/// [`UiState::drag`](crate::UiState)), so a window never fights a slider or
+/// splitter for the same gesture. The per-frame movement comes from a
+/// caller-owned [`DragTracker`](crate::DragTracker): run
+/// `tracker.update(&mut input)` once per frame **before** drawing, exactly as
+/// for [`DragHandle`](super::DragHandle). A window claims two ids: `id` for
+/// moving and `id + 1` for resizing.
+///
+/// # Layers
+///
+/// The window draws into `ctx.draw_list` and reads `ctx.input`; the caller
+/// picks the layer. Push the layer with the window's *current* rect and draw
+/// with that layer's input:
+///
+/// * **Blocking** — [`LayerStack::push_modal`](crate::LayerStack::push_modal):
+///   everything below ignores the pointer while the window is open.
+/// * **Floating** — [`LayerStack::push_popup`](crate::LayerStack::push_popup):
+///   only the window's own rect captures the pointer; the rest of the UI keeps
+///   working.
+///
+/// ```ignore
+/// let layer = layers.push_popup(state.rect);
+/// layers.pop_layer();
+/// // ... draw the base UI with layers.input_for_base(&input) ...
+/// let input = layers.input_for_layer(layer, &input);
+/// let mut ctx = DrawContext::new(&mut layers.layers_mut()[layer].list, focus, theme, &input, w, h)
+///     .with_cursor(&mut cursor);
+/// let out = Window::new(WINDOW_ID, "Inspector")
+///     .resizable(true)
+///     .bounds(workspace)
+///     .draw(&mut state, &mut ui_state.drag, &mut ctx);
+/// if out.close_clicked { open = false; }
+/// draw_contents(out.body);
+/// if out.interaction_ended { save_layout(state.rect); }
+/// ```
+///
+/// # Geometry
+///
+/// The title strip is [`StyleKey::WindowTitleHeight`] tall, measured from the
+/// outer top edge. The close key is a square inset [`WINDOW_CLOSE_KEY_INSET`] from the
+/// strip on every side, so it always fits the strip. A resizable window
+/// reserves a [`WINDOW_RESIZE_GRIP_SIZE`] band along its bottom for the grip, keeping
+/// the grip out of the body so body widgets (e.g. a scroll bar in the corner)
+/// never share a press with it.
 pub struct Window<'a> {
     id: DragId,
     title: &'a str,

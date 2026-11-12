@@ -1,37 +1,5 @@
 //! HUD bars: strips of keys floating over a 3D viewport (Forge `HudBar`,
 //! `HudKey`, `HudSep` and `HudSelect`), on HUD glass.
-//!
-//! Everything over the scene sits on [`hud_glass`]: dark, hard-edged, because
-//! the pixels behind it are unknown. Keep bars in the corners and along the
-//! edges; the centre belongs to the scene. A toggle latches with
-//! [`HudKey::on`], so its state reads from across the room.
-//!
-//! A [`HudSelect`] opens a radio sheet, which floats on a layer above
-//! everything else. Like [`DropdownState`](crate::DropdownState), a
-//! caller-owned [`HudState`] (one per surface, shared by all its bars) holds
-//! the open sheet, and the frame is split around the base draw:
-//!
-//! ```ignore
-//! hud.begin_frame(&mut raw_input);                    // before focus.begin_frame
-//! focus.begin_frame(&raw_input);
-//! let sheet = hud.push_open_layer(&mut layers, &styles, viewport);
-//! let input = layers.input_for_base(&raw_input);
-//! // … base widgets, including the bars:
-//! let items = [
-//!     HudItem::Select(HudSelect::new(&SHADING, shading).caption("View")),
-//!     HudItem::Separator,
-//!     HudItem::Key(HudKey::new("#").on(grid)),
-//! ];
-//! let out = HudBar::new(TOP_BAR, &items).draw([12.0, 12.0], &mut hud, &mut ctx);
-//! if out.clicked == Some(2) { grid = !grid; }
-//! // after the base scope:
-//! if let Some(choice) = hud.draw_open_layer(&mut layers, sheet, &styles, &raw_input, &mut focus, viewport) {
-//!     if choice.bar == TOP_BAR && choice.item == 0 { shading = choice.option; }
-//! }
-//! ```
-//!
-//! The glass has no backdrop blur yet: the draw list has no backdrop
-//! primitive (see `TODO.md`).
 
 use crate::layout::Rect;
 use crate::text::TextBlock;
@@ -269,6 +237,41 @@ pub struct HudChoice {
 
 /// A floating strip of HUD keys pinned to a viewport edge or corner (Forge
 /// `HudBar`). Built fresh each frame over borrowed items.
+///
+/// HUD bars: strips of keys floating over a 3D viewport (Forge `HudBar`,
+/// `HudKey`, `HudSep` and `HudSelect`), on HUD glass.
+///
+/// Everything over the scene sits on [`hud_glass`]: dark, hard-edged, because
+/// the pixels behind it are unknown. Keep bars in the corners and along the
+/// edges; the centre belongs to the scene. A toggle latches with
+/// [`HudKey::on`], so its state reads from across the room.
+///
+/// A [`HudSelect`] opens a radio sheet, which floats on a layer above
+/// everything else. Like [`DropdownState`](crate::DropdownState), a
+/// caller-owned [`HudState`] (one per surface, shared by all its bars) holds
+/// the open sheet, and the frame is split around the base draw:
+///
+/// ```ignore
+/// hud.begin_frame(&mut raw_input);                    // before focus.begin_frame
+/// focus.begin_frame(&raw_input);
+/// let sheet = hud.push_open_layer(&mut layers, &styles, viewport);
+/// let input = layers.input_for_base(&raw_input);
+/// // … base widgets, including the bars:
+/// let items = [
+///     HudItem::Select(HudSelect::new(&SHADING, shading).caption("View")),
+///     HudItem::Separator,
+///     HudItem::Key(HudKey::new("#").on(grid)),
+/// ];
+/// let out = HudBar::new(TOP_BAR, &items).draw([12.0, 12.0], &mut hud, &mut ctx);
+/// if out.clicked == Some(2) { grid = !grid; }
+/// // after the base scope:
+/// if let Some(choice) = hud.draw_open_layer(&mut layers, sheet, &styles, &raw_input, &mut focus, viewport) {
+///     if choice.bar == TOP_BAR && choice.item == 0 { shading = choice.option; }
+/// }
+/// ```
+///
+/// The glass has no backdrop blur yet: the draw list has no backdrop
+/// primitive (see `TODO.md`).
 #[derive(Clone, Copy, Debug)]
 pub struct HudBar<'a> {
     id: HudBarId,
@@ -584,8 +587,8 @@ struct OpenSelect {
 }
 
 /// The open [`HudSelect`] sheet of one surface, shared by all its bars (at
-/// most one sheet is open). Caller-owned; persists across frames. See the
-/// [module docs](self) for the per-frame calls.
+/// most one sheet is open). Caller-owned; persists across frames. See
+/// [`HudBar`] for the per-frame calls.
 #[derive(Clone, Debug, Default)]
 pub struct HudState {
     menu: ContextMenuState,

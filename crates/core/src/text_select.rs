@@ -3,29 +3,6 @@
 //! text starts a selection, a drag extends it (across blocks too), a double
 //! click takes a word and a triple click a paragraph, and the shortcut copy
 //! key copies it when no text field has focus.
-//!
-//! Each selectable block carries a [`TextKey`]: a scope and its place in
-//! that scope. A selection stays within the scope it began in, and spans the
-//! blocks between its ends in key order, so the order text reads in is the
-//! caller's to say, not the order it happens to be drawn.
-//!
-//! [`UiState`](crate::UiState) keeps a [`TextSelection`] and drives it; the
-//! host adds two calls to its frame:
-//!
-//! 1. [`UiState::begin_frame`](crate::UiState::begin_frame) hit-tests the
-//!    frame's pointer against the text drawn **last** frame — what is on
-//!    screen when the user presses — and handles the copy key.
-//! 2. Before drawing, [`LayerStack::set_text_highlight`] with
-//!    [`TextSelection::highlight`], so each selected block paints its
-//!    highlight behind its glyphs as it is drawn.
-//! 3. After drawing, [`TextSelection::collect`] with the frame's
-//!    [`LayerStack`], to keep what was drawn for the next frame.
-//!
-//! Text the selection covers but that was never drawn while it was made
-//! (rows of a virtualized list scrolled past in one jump) is not in
-//! [`TextSelection::text`] unless the host hands it over: it asks
-//! [`TextSelection::has_text_in`] which keys it lacks, and gives their
-//! content with [`TextSelection::remember`].
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -230,7 +207,36 @@ enum Side {
 }
 
 /// The selection over selectable text, and what it needs from the last frame
-/// to hit-test the pointer. See the [module docs](self).
+/// to hit-test the pointer.
+///
+/// Selecting text outside fields: labels, transcripts, anything drawn as a
+/// [`TextBlock`] marked [`selectable`](TextBlock::selectable). A press on such
+/// text starts a selection, a drag extends it (across blocks too), a double
+/// click takes a word and a triple click a paragraph, and the shortcut copy
+/// key copies it when no text field has focus.
+///
+/// Each selectable block carries a [`TextKey`]: a scope and its place in
+/// that scope. A selection stays within the scope it began in, and spans the
+/// blocks between its ends in key order, so the order text reads in is the
+/// caller's to say, not the order it happens to be drawn.
+///
+/// [`UiState`](crate::UiState) keeps a [`TextSelection`] and drives it; the
+/// host adds two calls to its frame:
+///
+/// 1. [`UiState::begin_frame`](crate::UiState::begin_frame) hit-tests the
+///    frame's pointer against the text drawn **last** frame — what is on
+///    screen when the user presses — and handles the copy key.
+/// 2. Before drawing, [`LayerStack::set_text_highlight`] with
+///    [`TextSelection::highlight`], so each selected block paints its
+///    highlight behind its glyphs as it is drawn.
+/// 3. After drawing, [`TextSelection::collect`] with the frame's
+///    [`LayerStack`], to keep what was drawn for the next frame.
+///
+/// Text the selection covers but that was never drawn while it was made
+/// (rows of a virtualized list scrolled past in one jump) is not in
+/// [`TextSelection::text`] unless the host hands it over: it asks
+/// [`TextSelection::has_text_in`] which keys it lacks, and gives their
+/// content with [`TextSelection::remember`].
 #[derive(Default)]
 pub struct TextSelection {
     anchor: Option<TextPoint>,

@@ -1,48 +1,5 @@
 //! Dock stack — collapsible sections stacked inside a dock (Forge `DockStack`
 //! and `DockSection`).
-//!
-//! Use it when a dock holds more than one list or block (Projects + Sessions,
-//! Outliner + Layers). Each [`DockSection`] gets a raised 22 px header — a
-//! disclosure caret, a mono-capitals title, an optional count and ghost
-//! [`IconKey`] actions on the right — an optional recessed toolbar strip under
-//! it (search, scope, filters), and a body the caller fills.
-//!
-//! Sizing follows the design's flex rules:
-//! - expanded sections share the height by [`weight`](DockSection::weight),
-//!   never below their minimum body ([`min_body`](DockSection::min_body),
-//!   66 px by default);
-//! - [`fixed`](DockSection::fixed) sections take their content height;
-//! - collapsed sections shrink to their header;
-//! - a 6 px [`Splitter`] sits between two neighbouring expanded sections.
-//!   Dragging one turns every expanded section's weight into its current
-//!   height, so the sections that aren't being resized hold still.
-//!
-//! Clicking a header anywhere but its keys collapses or expands the section.
-//!
-//! # State ownership
-//!
-//! Weights, collapsed flags and the splitter grab live in a caller-owned
-//! [`DockStackState`], one per stack. It takes the sections' initial weights
-//! and collapsed flags the first time it sees them, and again whenever the
-//! number of sections changes.
-//!
-//! The widget draws only the chrome; the caller draws each section's toolbar
-//! and body into the rects in [`DockStackOutput::sections`].
-//!
-//! ```ignore
-//! let sections = [
-//!     DockSection::new("Projects").count(24).toolbar(SearchField::HEIGHT)
-//!         .actions(&[PhosphorIcon::ArrowsClockwise]),
-//!     DockSection::new("Sessions").count(12).weight(1.4)
-//!         .actions(&[PhosphorIcon::Plus]),
-//! ];
-//! let out = DockStack::new(&sections).draw(STACK_ID, body, &mut stack, &mut capture, &mut ctx);
-//! if out.action == Some((0, 0)) { rescan(); }
-//! if let Some(bar) = out.sections[0].toolbar { draw_search(bar); }
-//! if let Some(body) = out.sections[0].body { draw_projects(body); }
-//! ```
-//!
-//! Gated behind the `phosphor-icons` feature (the header keys are icons).
 
 use crate::chrome::Edge;
 use crate::layout::Rect;
@@ -73,7 +30,7 @@ const TOOLBAR_RULE: f32 = 1.0;
 /// Smallest weight a section can carry, so a zero weight still divides.
 const MIN_WEIGHT: f32 = 1e-3;
 
-/// One section's per-frame description. See the [module docs](self).
+/// One section's per-frame description. See [`DockStack`].
 #[derive(Clone, Copy, Debug)]
 pub struct DockSection<'a> {
     title: &'a str,
@@ -236,8 +193,53 @@ pub struct DockStackOutput {
     pub toggled: Option<usize>,
 }
 
-/// A vertical stack of [`DockSection`]s filling a dock. See the
-/// [module docs](self).
+/// A vertical stack of [`DockSection`]s filling a dock.
+///
+/// Dock stack — collapsible sections stacked inside a dock (Forge `DockStack`
+/// and `DockSection`).
+///
+/// Use it when a dock holds more than one list or block (Projects + Sessions,
+/// Outliner + Layers). Each [`DockSection`] gets a raised 22 px header — a
+/// disclosure caret, a mono-capitals title, an optional count and ghost
+/// [`IconKey`] actions on the right — an optional recessed toolbar strip under
+/// it (search, scope, filters), and a body the caller fills.
+///
+/// Sizing follows the design's flex rules:
+/// - expanded sections share the height by [`weight`](DockSection::weight),
+///   never below their minimum body ([`min_body`](DockSection::min_body),
+///   66 px by default);
+/// - [`fixed`](DockSection::fixed) sections take their content height;
+/// - collapsed sections shrink to their header;
+/// - a 6 px [`Splitter`] sits between two neighbouring expanded sections.
+///   Dragging one turns every expanded section's weight into its current
+///   height, so the sections that aren't being resized hold still.
+///
+/// Clicking a header anywhere but its keys collapses or expands the section.
+///
+/// # State ownership
+///
+/// Weights, collapsed flags and the splitter grab live in a caller-owned
+/// [`DockStackState`], one per stack. It takes the sections' initial weights
+/// and collapsed flags the first time it sees them, and again whenever the
+/// number of sections changes.
+///
+/// The widget draws only the chrome; the caller draws each section's toolbar
+/// and body into the rects in [`DockStackOutput::sections`].
+///
+/// ```ignore
+/// let sections = [
+///     DockSection::new("Projects").count(24).toolbar(SearchField::HEIGHT)
+///         .actions(&[PhosphorIcon::ArrowsClockwise]),
+///     DockSection::new("Sessions").count(12).weight(1.4)
+///         .actions(&[PhosphorIcon::Plus]),
+/// ];
+/// let out = DockStack::new(&sections).draw(STACK_ID, body, &mut stack, &mut capture, &mut ctx);
+/// if out.action == Some((0, 0)) { rescan(); }
+/// if let Some(bar) = out.sections[0].toolbar { draw_search(bar); }
+/// if let Some(body) = out.sections[0].body { draw_projects(body); }
+/// ```
+///
+/// Gated behind the `phosphor-icons` feature (the header keys are icons).
 #[derive(Clone, Copy, Debug)]
 pub struct DockStack<'a> {
     sections: &'a [DockSection<'a>],

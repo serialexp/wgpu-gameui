@@ -1,27 +1,6 @@
 //! Thumb — the tiny leading tile of a row (Forge `Thumb`): a project's
 //! monogram, an image, a colour swatch, a glyph, or an empty slot, all with
 //! the same hard 1 px edge and lit top so mixed rows line up.
-//!
-//! What it shows depends on what it's given, in this order:
-//!
-//! 1. an [`image`](Thumb::image) (a sprite on a raised plate, or edge to edge
-//!    with [`ImageFit::Cover`]);
-//! 2. a [`fill`](Thumb::fill) (sample paint, such as a gradient);
-//! 3. a [`color`](Thumb::color) swatch;
-//! 4. a [`name`](Thumb::name), shown as a monogram of its [`initials`] on a
-//!    plate tinted by [`hue_of`] the name, so a project keeps its colour
-//!    everywhere it appears;
-//! 5. a [`glyph`](Thumb::glyph);
-//! 6. otherwise, or with [`slot`](Thumb::slot), a dashed, hatched empty slot.
-//!
-//! The tile is drawn at its top-left corner and returns its rect.
-//!
-//! Gated behind the `phosphor-icons` feature (the glyph is a Phosphor icon).
-//!
-//! # Example
-//! ```ignore
-//! Thumb::new().name("agent-ui").size(14.0).draw(x, y, list, &style);
-//! ```
 
 use crate::SpriteId;
 use crate::chrome::{Background, GradientAxis};
@@ -89,7 +68,32 @@ pub fn initials(name: &str) -> String {
     out.to_ascii_uppercase()
 }
 
-/// A row's leading tile. See the [module docs](self).
+/// A row's leading tile.
+///
+/// Thumb — the tiny leading tile of a row (Forge `Thumb`): a project's
+/// monogram, an image, a colour swatch, a glyph, or an empty slot, all with
+/// the same hard 1 px edge and lit top so mixed rows line up.
+///
+/// What it shows depends on what it's given, in this order:
+///
+/// 1. an [`image`](Thumb::image) (a sprite on a raised plate, or edge to edge
+///    with [`ImageFit::Cover`]);
+/// 2. a [`fill`](Thumb::fill) (sample paint, such as a gradient);
+/// 3. a [`color`](Thumb::color) swatch;
+/// 4. a [`name`](Thumb::name), shown as a monogram of its [`initials`] on a
+///    plate tinted by [`hue_of`] the name, so a project keeps its colour
+///    everywhere it appears;
+/// 5. a [`glyph`](Thumb::glyph);
+/// 6. otherwise, or with [`slot`](Thumb::slot), a dashed, hatched empty slot.
+///
+/// The tile is drawn at its top-left corner and returns its rect.
+///
+/// Gated behind the `phosphor-icons` feature (the glyph is a Phosphor icon).
+///
+/// # Example
+/// ```ignore
+/// Thumb::new().name("agent-ui").size(14.0).draw(x, y, list, &style);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct Thumb<'a> {
     image: Option<SpriteId>,

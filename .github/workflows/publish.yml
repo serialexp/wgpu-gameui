@@ -47,6 +47,12 @@ jobs:
       - name: Library and tests without default features
         run: cargo clippy -p wgpu-gameui --no-default-features --all-targets -- -D warnings
 
+      # What docs.rs shows (default features): no broken or private links.
+      - name: Docs
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       - uses: actions/setup-node@v5
         with:
           node-version: 'lts/*'

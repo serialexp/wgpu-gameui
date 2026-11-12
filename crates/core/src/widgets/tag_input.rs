@@ -1,23 +1,6 @@
 //! Tag input — the design's chip-list text field (Forge `TagInput`): a
 //! well holding pill tags, each with a × that removes it, and the text being
 //! typed after the last of them.
-//!
-//! The tags are the caller's; the typing is a [`TextInput`] the caller keeps
-//! (as [`UiContext::tag_input`](crate::UiContext::tag_input) does, by focus
-//! id), drawn inside the well without its own. Enter adds what was typed,
-//! Backspace in an empty field removes the last tag, and text left typed
-//! when the field lets go of the keyboard is added too, so it is never lost
-//! to a click elsewhere. The tags wrap onto as many lines as they need:
-//! [`TagInput::height`] says how tall the well is for a width.
-//!
-//! # Example
-//! ```ignore
-//! let tags = TagInput::new(&exts).placeholder(".lua  ↵");
-//! let rect = Rect::new(x, y, w, tags.height(w, list, &styles));
-//! let out = tags.draw(&mut typing, FIELD_ID, rect, ctx);
-//! if let Some(index) = out.removed { exts.remove(index); }
-//! if let Some(tag) = out.added { exts.push(tag); }
-//! ```
 
 use crate::DrawList;
 use crate::layout::Rect;
@@ -50,7 +33,28 @@ pub struct TagOutput {
     pub added: Option<String>,
 }
 
-/// A tag input over `tags` (see the [module docs](self)).
+/// A tag input over `tags`.
+///
+/// Tag input — the design's chip-list text field (Forge `TagInput`): a
+/// well holding pill tags, each with a × that removes it, and the text being
+/// typed after the last of them.
+///
+/// The tags are the caller's; the typing is a [`TextInput`] the caller keeps
+/// (as [`UiContext::tag_input`](crate::UiContext::tag_input) does, by focus
+/// id), drawn inside the well without its own. Enter adds what was typed,
+/// Backspace in an empty field removes the last tag, and text left typed
+/// when the field lets go of the keyboard is added too, so it is never lost
+/// to a click elsewhere. The tags wrap onto as many lines as they need:
+/// [`TagInput::height`] says how tall the well is for a width.
+///
+/// # Example
+/// ```ignore
+/// let tags = TagInput::new(&exts).placeholder(".lua  ↵");
+/// let rect = Rect::new(x, y, w, tags.height(w, list, &styles));
+/// let out = tags.draw(&mut typing, FIELD_ID, rect, ctx);
+/// if let Some(index) = out.removed { exts.remove(index); }
+/// if let Some(tag) = out.added { exts.push(tag); }
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct TagInput<'a> {
     tags: &'a [String],

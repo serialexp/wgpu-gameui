@@ -1,30 +1,5 @@
 //! Icon key — a square key holding one Phosphor icon or text glyph (Forge
 //! `IconKey`).
-//!
-//! The design uses three sizes: [`IconKey::TOOLBAR`] (24), [`IconKey::STATUS`]
-//! (18, status-bar toggles) and [`IconKey::HEADER`] (17, dock and section
-//! headers, inline keys). The size is the face; the key's rect is one
-//! [`StyleKey::Travel`] taller, because the face rests on its plinth and drops
-//! by `travel` while pressed or [`held`](IconKey::held) — the icon rides down
-//! with it.
-//!
-//! Interaction, focus and the key material come from [`Pressable`]; this
-//! widget adds the icon and the design's per-tone icon inks.
-//!
-//! Icon faces ([`IconKey::new`]) need the `phosphor-icons` feature; glyph
-//! faces ([`IconKey::glyph`]) are always available.
-//!
-//! # Example
-//! ```ignore
-//! let [w, h] = IconKey::new(PhosphorIcon::Plus, IconKey::HEADER).outer_size(&styles);
-//! if IconKey::new(PhosphorIcon::Plus, IconKey::HEADER)
-//!     .tone(Tone::Ghost)
-//!     .draw(Rect::new(x, y, w, h), &mut ctx)
-//!     .clicked
-//! {
-//!     new_session();
-//! }
-//! ```
 
 use crate::Weight;
 use crate::layout::Rect;
@@ -53,8 +28,35 @@ enum KeyFace {
 /// The design's `--carve` text shadow: black at 50%, 1 px up.
 const CARVE_ALPHA: u8 = 128;
 
-/// A square key with a vector icon or a text glyph. See the
-/// [module docs](self).
+/// A square key with a vector icon or a text glyph.
+///
+/// Icon key — a square key holding one Phosphor icon or text glyph (Forge
+/// `IconKey`).
+///
+/// The design uses three sizes: [`IconKey::TOOLBAR`] (24), [`IconKey::STATUS`]
+/// (18, status-bar toggles) and [`IconKey::HEADER`] (17, dock and section
+/// headers, inline keys). The size is the face; the key's rect is one
+/// [`StyleKey::Travel`] taller, because the face rests on its plinth and drops
+/// by `travel` while pressed or [`held`](IconKey::held) — the icon rides down
+/// with it.
+///
+/// Interaction, focus and the key material come from [`Pressable`]; this
+/// widget adds the icon and the design's per-tone icon inks.
+///
+/// Icon faces ([`IconKey::new`]) need the `phosphor-icons` feature; glyph
+/// faces ([`IconKey::glyph`]) are always available.
+///
+/// # Example
+/// ```ignore
+/// let [w, h] = IconKey::new(PhosphorIcon::Plus, IconKey::HEADER).outer_size(&styles);
+/// if IconKey::new(PhosphorIcon::Plus, IconKey::HEADER)
+///     .tone(Tone::Ghost)
+///     .draw(Rect::new(x, y, w, h), &mut ctx)
+///     .clicked
+/// {
+///     new_session();
+/// }
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct IconKey {
     face: KeyFace,

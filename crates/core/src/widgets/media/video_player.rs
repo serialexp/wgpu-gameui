@@ -1,34 +1,5 @@
 //! Video player — a picture with a toolbar strip beneath it (Forge
 //! `VideoPlayer`). The controls never hide: Forge doesn't auto-hide UI.
-//!
-//! The picture is fitted inside the frame on black. Before the first one
-//! arrives the frame is a striped well showing the time. Clicking the frame
-//! plays or pauses, and a double-click asks for full screen. The toolbar
-//! holds the timeline, then a row of the [`PlayButton`], a mute key, a
-//! volume scrubber, the time, the speed key and the full screen key. While
-//! the player has the keyboard, Space and K play or pause, ←/→ go 5 s back
-//! or on, M mutes and F asks for full screen.
-//!
-//! Playback is a [`MediaSource`]'s. Full screen is the app's: the player is
-//! told whether it is [`fullscreen`](VideoPlayer::fullscreen), drawn without
-//! its border then, and says when the user asked to go in or out
-//! ([`VideoPlayerOutput::toggle_fullscreen`]).
-//!
-//! It takes the Tab ring as `id` (the frame), `id + 1` (the timeline),
-//! `id + 2` (play), `id + 3` (mute), `id + 4` (volume), `id + 5` (speed) and
-//! `id + 6` (full screen).
-//!
-//! # Example
-//! ```ignore
-//! let height = player.height_for(width, 16.0 / 9.0, &ctx.styles());
-//! let output = VideoPlayer::new(PLAYER)
-//!     .title("intro.mp4")
-//!     .fullscreen(ui.fullscreen.is_fullscreen())
-//!     .draw(&mut source, &mut state, rect, &mut ctx);
-//! if output.toggle_fullscreen {
-//!     ui.fullscreen.toggle();
-//! }
-//! ```
 
 use std::time::Duration;
 
@@ -118,7 +89,39 @@ pub struct VideoPlayerOutput {
     pub toggle_fullscreen: bool,
 }
 
-/// A video player. See the [module docs](self).
+/// A video player.
+///
+/// Video player — a picture with a toolbar strip beneath it (Forge
+/// `VideoPlayer`). The controls never hide: Forge doesn't auto-hide UI.
+///
+/// The picture is fitted inside the frame on black. Before the first one
+/// arrives the frame is a striped well showing the time. Clicking the frame
+/// plays or pauses, and a double-click asks for full screen. The toolbar
+/// holds the timeline, then a row of the [`PlayButton`], a mute key, a
+/// volume scrubber, the time, the speed key and the full screen key. While
+/// the player has the keyboard, Space and K play or pause, ←/→ go 5 s back
+/// or on, M mutes and F asks for full screen.
+///
+/// Playback is a [`MediaSource`]'s. Full screen is the app's: the player is
+/// told whether it is [`fullscreen`](VideoPlayer::fullscreen), drawn without
+/// its border then, and says when the user asked to go in or out
+/// ([`VideoPlayerOutput::toggle_fullscreen`]).
+///
+/// It takes the Tab ring as `id` (the frame), `id + 1` (the timeline),
+/// `id + 2` (play), `id + 3` (mute), `id + 4` (volume), `id + 5` (speed) and
+/// `id + 6` (full screen).
+///
+/// # Example
+/// ```ignore
+/// let height = player.height_for(width, 16.0 / 9.0, &ctx.styles());
+/// let output = VideoPlayer::new(PLAYER)
+///     .title("intro.mp4")
+///     .fullscreen(ui.fullscreen.is_fullscreen())
+///     .draw(&mut source, &mut state, rect, &mut ctx);
+/// if output.toggle_fullscreen {
+///     ui.fullscreen.toggle();
+/// }
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct VideoPlayer<'a> {
     id: FocusId,
@@ -131,11 +134,10 @@ const TIMELINE_DRAG: u64 = 1;
 const VOLUME_DRAG: u64 = 2;
 
 impl<'a> VideoPlayer<'a> {
-    /// How many focus ids it takes, from its `id` (see the [module
-    /// docs](self)).
+    /// How many focus ids it takes, from its `id` (see [`VideoPlayer`]).
     pub const FOCUS_IDS: FocusId = 7;
 
-    /// A player taking the Tab ring from `id` (see the [module docs](self)).
+    /// A player taking the Tab ring from `id` (see [`VideoPlayer`]).
     pub fn new(id: FocusId) -> Self {
         Self {
             id,

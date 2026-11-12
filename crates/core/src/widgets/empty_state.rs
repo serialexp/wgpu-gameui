@@ -1,26 +1,5 @@
 //! Empty state — the message a list, tree or pane shows when it has nothing
 //! to show (Forge `EmptyState`).
-//!
-//! A sunken box (the deep well colour, a hard 1 px edge and an inset shadow)
-//! with a centred column, 9 px apart:
-//! - a 20 px glyph in the empty ink (a text glyph such as "◫", or, with
-//!   `phosphor-icons`, a [`PhosphorIcon`]);
-//! - an optional title at the menu size in the tab ink;
-//! - an optional hint, dense and centred at a 1.5 line height, in the
-//!   caption ink;
-//! - an optional accent key (the call to action).
-//!
-//! The box fills the rect it is given; [`EmptyState::HEIGHT`] is the design's
-//! default height. Content that doesn't fit starts at the padding and runs
-//! past the bottom rather than above the top.
-//!
-//! ```ignore
-//! let clicked = EmptyState::new()
-//!     .glyph("◫")
-//!     .title("No session selected")
-//!     .hint("Pick a session, or start a new one with +")
-//!     .draw(rect, &mut ctx);
-//! ```
 
 use crate::layout::Rect;
 #[cfg(feature = "phosphor-icons")]
@@ -56,8 +35,32 @@ pub enum EmptyGlyph<'a> {
     Icon(PhosphorIcon),
 }
 
-/// An empty-state message (see the [module docs](self)). Build it per frame
+/// An empty-state message. Build it per frame
 /// and [`draw`](Self::draw) it into the rect it should fill.
+///
+/// Empty state — the message a list, tree or pane shows when it has nothing
+/// to show (Forge `EmptyState`).
+///
+/// A sunken box (the deep well colour, a hard 1 px edge and an inset shadow)
+/// with a centred column, 9 px apart:
+/// - a 20 px glyph in the empty ink (a text glyph such as "◫", or, with
+///   `phosphor-icons`, a [`PhosphorIcon`]);
+/// - an optional title at the menu size in the tab ink;
+/// - an optional hint, dense and centred at a 1.5 line height, in the
+///   caption ink;
+/// - an optional accent key (the call to action).
+///
+/// The box fills the rect it is given; [`EmptyState::HEIGHT`] is the design's
+/// default height. Content that doesn't fit starts at the padding and runs
+/// past the bottom rather than above the top.
+///
+/// ```ignore
+/// let clicked = EmptyState::new()
+///     .glyph("◫")
+///     .title("No session selected")
+///     .hint("Pick a session, or start a new one with +")
+///     .draw(rect, &mut ctx);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmptyState<'a> {
     glyph: EmptyGlyph<'a>,

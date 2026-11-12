@@ -2,20 +2,6 @@
 //! card rather than a bare radio row: a radio dot or a checkbox, a label, and
 //! a wrapped description under it. The Agent Desktop design's question
 //! dialog lists its options this way, ending with a dashed "Other" card.
-//!
-//! The card is only the picture and the click: the caller owns what is
-//! picked, and tells the card with [`selected`](ChoiceCard::selected).
-//!
-//! # Example
-//! ```ignore
-//! let card = ChoiceCard::new("Postgres")
-//!     .description("Runs as its own service.")
-//!     .selected(picked == 0);
-//! let h = card.height(width, list, &style);
-//! if card.draw(Rect::new(x, y, width, h), list, &style, &input).clicked {
-//!     picked = 0;
-//! }
-//! ```
 
 use crate::InputState;
 use crate::layout::Rect;
@@ -60,7 +46,26 @@ pub struct ChoiceResponse {
     pub clicked: bool,
 }
 
-/// One answer to pick. See the [module docs](self).
+/// One answer to pick.
+///
+/// Choice card — one answer in a list of answers to pick from, as a bordered
+/// card rather than a bare radio row: a radio dot or a checkbox, a label, and
+/// a wrapped description under it. The Agent Desktop design's question
+/// dialog lists its options this way, ending with a dashed "Other" card.
+///
+/// The card is only the picture and the click: the caller owns what is
+/// picked, and tells the card with [`selected`](ChoiceCard::selected).
+///
+/// # Example
+/// ```ignore
+/// let card = ChoiceCard::new("Postgres")
+///     .description("Runs as its own service.")
+///     .selected(picked == 0);
+/// let h = card.height(width, list, &style);
+/// if card.draw(Rect::new(x, y, width, h), list, &style, &input).clicked {
+///     picked = 0;
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChoiceCard<'a> {
     label: &'a str,

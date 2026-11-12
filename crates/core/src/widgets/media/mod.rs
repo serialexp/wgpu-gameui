@@ -1,16 +1,5 @@
 //! The media widgets (Forge `components/media`): [`Scrubber`],
 //! [`PlayButton`] and [`VideoPlayer`].
-//!
-//! They decode nothing. A [`MediaSource`] the app implements says where
-//! playback is (its [`PlayState`], time, length, how much is buffered, the
-//! volume and speed) and which [`Picture`] to show, and is told what the
-//! user did: play, pause, seek, change the volume or the speed. The
-//! `wgpu-gameui-media` crate has one over its `Player`; a test or a gallery
-//! has its own.
-//!
-//! A picture is a sprite the app keeps current (a YUV sprite updated in
-//! place as frames arrive): the widgets draw whatever it holds, and ask for
-//! a frame when [`MediaSource::next_change`] says something shown changes.
 
 use std::time::Duration;
 
@@ -67,7 +56,21 @@ pub struct Picture {
 }
 
 /// Where the media widgets' playback comes from, and where what the user did
-/// goes. See the [module docs](self).
+/// goes.
+///
+/// The media widgets (Forge `components/media`): [`Scrubber`],
+/// [`PlayButton`] and [`VideoPlayer`].
+///
+/// They decode nothing. A [`MediaSource`] the app implements says where
+/// playback is (its [`PlayState`], time, length, how much is buffered, the
+/// volume and speed) and which [`Picture`] to show, and is told what the
+/// user did: play, pause, seek, change the volume or the speed. The
+/// `wgpu-gameui-media` crate has one over its `Player`; a test or a gallery
+/// has its own.
+///
+/// A picture is a sprite the app keeps current (a YUV sprite updated in
+/// place as frames arrive): the widgets draw whatever it holds, and ask for
+/// a frame when [`MediaSource::next_change`] says something shown changes.
 pub trait MediaSource {
     /// What playback is doing.
     fn state(&self) -> PlayState;

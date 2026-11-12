@@ -1,9 +1,5 @@
 //! The text being edited: a rope, the selection, and the history that undo
 //! and redo walk.
-//!
-//! Positions are byte offsets, always on character boundaries, because
-//! Tree-sitter speaks bytes. Only `\n` ends a line (the rope is built without
-//! Unicode line breaks), so a line here is a row to Tree-sitter.
 
 use std::ops::Range;
 
@@ -89,7 +85,14 @@ struct Step {
     kind: EditKind,
 }
 
-/// The text being edited. See the [module docs](self).
+/// The text being edited.
+///
+/// The text being edited: a rope, the selection, and the history that undo
+/// and redo walk.
+///
+/// Positions are byte offsets, always on character boundaries, because
+/// Tree-sitter speaks bytes. Only `\n` ends a line (the rope is built without
+/// Unicode line breaks), so a line here is a row to Tree-sitter.
 #[derive(Clone, Debug)]
 pub struct Document {
     rope: Rope,

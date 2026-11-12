@@ -1,24 +1,6 @@
 //! Search field — a round well holding a magnifier, the text and a clear key
 //! (Forge `SearchField`). The round shape (`--radius-search`) is what tells
 //! the user a field filters rather than stores a value.
-//!
-//! Editing (caret, selection, clipboard, scrolling) is the caller's retained
-//! [`TextInput`], drawn inside the round well without its own; the placeholder
-//! is the input's. Once there is text, a small round ghost key at the right
-//! empties it.
-//!
-//! The design's scopes (a latching key inside the well that picks what the
-//! search looks in) are not built yet.
-//!
-//! Gated behind the `phosphor-icons` feature.
-//!
-//! # Example
-//! ```ignore
-//! let rect = Rect::new(x, y, width, SearchField::HEIGHT);
-//! if SearchField::new().draw(&mut search, SEARCH_ID, rect, &mut ctx) {
-//!     refilter(&search.value);
-//! }
-//! ```
 
 use crate::layout::Rect;
 use crate::render::PhosphorIcon;
@@ -40,7 +22,29 @@ const CLEAR_KEY: f32 = 16.0;
 /// The clear key's travel (the design's small inline keys travel 1 px).
 const CLEAR_TRAVEL: f32 = 1.0;
 
-/// A round search well around a [`TextInput`]. See the [module docs](self).
+/// A round search well around a [`TextInput`].
+///
+/// Search field — a round well holding a magnifier, the text and a clear key
+/// (Forge `SearchField`). The round shape (`--radius-search`) is what tells
+/// the user a field filters rather than stores a value.
+///
+/// Editing (caret, selection, clipboard, scrolling) is the caller's retained
+/// [`TextInput`], drawn inside the round well without its own; the placeholder
+/// is the input's. Once there is text, a small round ghost key at the right
+/// empties it.
+///
+/// The design's scopes (a latching key inside the well that picks what the
+/// search looks in) are not built yet.
+///
+/// Gated behind the `phosphor-icons` feature.
+///
+/// # Example
+/// ```ignore
+/// let rect = Rect::new(x, y, width, SearchField::HEIGHT);
+/// if SearchField::new().draw(&mut search, SEARCH_ID, rect, &mut ctx) {
+///     refilter(&search.value);
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SearchField;
 

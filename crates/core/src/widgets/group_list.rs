@@ -1,49 +1,6 @@
 //! Group list — a sidebar list whose items sit under collapsible group
 //! headers (Forge's session sidebar): a project header, its sessions, and a
 //! "… N older" row that folds the rest away.
-//!
-//! Three kinds of row, each a fixed height (including the 1 px rule under it):
-//!
-//! - **Header** ([`GroupHeader`], 23 px): a disclosure triangle, an optional
-//!   [`Thumb`], the group's name and a right-aligned count, on an opaque
-//!   raised bar; before the count, a ringed amber dot and how many of its
-//!   items ask the user something, when any do. Clicking it asks to toggle
-//!   the group.
-//! - **Item** ([`GroupItem`], 37 px): a [`status_dot`], a title with a mono
-//!   sub line under it, and on the right a compact hue [`Badge`](crate::Badge) over a meta text (an
-//!   age). An item that asks the user something says what in amber sans in
-//!   the sub line's place. While hovered, the meta gives way to a ghost `⋯`
-//!   key that asks for the item's menu. The selected item wears the held accent
-//!   chip, dark enough that its status dot still reads.
-//! - **More** ([`GroupMore`], 23 px): a quiet mono "… 3 older" row with a
-//!   meta on the right. Clicking it asks to show what it hides.
-//!
-//! The widget owns no data and no grouping rules. The caller decides which
-//! rows exist, builds a [`GroupLayout`] from their kinds whenever they change
-//! (a prefix sum of row tops, so finding the visible rows is a binary
-//! search), and hands each frame a closure that builds row `i` from borrowed
-//! strings. Only visible rows are built and drawn, so 10 000 rows cost what a
-//! screenful does.
-//!
-//! The caller owns the selection (by index, mapped from its own ids each
-//! frame). [`GroupListOutput`] reports what the user asked for: a new
-//! selection, an opened item, a header to toggle, a "more" row to expand, or
-//! a menu for an item (with the point to open it at). While
-//! [`focused`](GroupList::focused), the arrow keys walk every row: landing on
-//! an item selects it, `Enter` opens an item, toggles a header or expands a
-//! "more" row, and `←` / `→` fold and unfold a header (`←` on an item jumps to
-//! its header).
-//!
-//! Gated behind the `phosphor-icons` feature.
-//!
-//! # Example
-//! ```ignore
-//! if rows_changed { layout.rebuild(rows.iter().map(Row::kind)); }
-//! let out = GroupList::new().focused(focused).draw(
-//!     rect, &layout, selected, &mut state, list, &style, &mut input,
-//!     |i| rows[i].as_group_row());
-//! if let Some(i) = out.toggle { open.toggle(rows[i].group()); }
-//! ```
 
 use std::ops::Range;
 
@@ -208,7 +165,7 @@ impl GroupLayout {
     }
 }
 
-/// A group header row. See the [module docs](self).
+/// A group header row. See [`GroupList`].
 #[derive(Clone, Copy, Debug)]
 pub struct GroupHeader<'a> {
     /// The group's name.
@@ -296,7 +253,7 @@ impl<'a> GroupHeader<'a> {
     }
 }
 
-/// An item row. See the [module docs](self).
+/// An item row. See [`GroupList`].
 #[derive(Clone, Copy, Debug)]
 pub struct GroupItem<'a> {
     /// The title.
@@ -394,7 +351,7 @@ impl<'a> GroupItem<'a> {
     }
 }
 
-/// A "more" row. See the [module docs](self).
+/// A "more" row. See [`GroupList`].
 #[derive(Clone, Copy, Debug)]
 pub struct GroupMore<'a> {
     /// The label ("3 older").
@@ -553,7 +510,54 @@ impl GroupListState {
     }
 }
 
-/// A grouped sidebar list. See the [module docs](self).
+/// A grouped sidebar list.
+///
+/// Group list — a sidebar list whose items sit under collapsible group
+/// headers (Forge's session sidebar): a project header, its sessions, and a
+/// "… N older" row that folds the rest away.
+///
+/// Three kinds of row, each a fixed height (including the 1 px rule under it):
+///
+/// - **Header** ([`GroupHeader`], 23 px): a disclosure triangle, an optional
+///   [`Thumb`], the group's name and a right-aligned count, on an opaque
+///   raised bar; before the count, a ringed amber dot and how many of its
+///   items ask the user something, when any do. Clicking it asks to toggle
+///   the group.
+/// - **Item** ([`GroupItem`], 37 px): a [`status_dot`], a title with a mono
+///   sub line under it, and on the right a compact hue [`Badge`](crate::Badge) over a meta text (an
+///   age). An item that asks the user something says what in amber sans in
+///   the sub line's place. While hovered, the meta gives way to a ghost `⋯`
+///   key that asks for the item's menu. The selected item wears the held accent
+///   chip, dark enough that its status dot still reads.
+/// - **More** ([`GroupMore`], 23 px): a quiet mono "… 3 older" row with a
+///   meta on the right. Clicking it asks to show what it hides.
+///
+/// The widget owns no data and no grouping rules. The caller decides which
+/// rows exist, builds a [`GroupLayout`] from their kinds whenever they change
+/// (a prefix sum of row tops, so finding the visible rows is a binary
+/// search), and hands each frame a closure that builds row `i` from borrowed
+/// strings. Only visible rows are built and drawn, so 10 000 rows cost what a
+/// screenful does.
+///
+/// The caller owns the selection (by index, mapped from its own ids each
+/// frame). [`GroupListOutput`] reports what the user asked for: a new
+/// selection, an opened item, a header to toggle, a "more" row to expand, or
+/// a menu for an item (with the point to open it at). While
+/// [`focused`](GroupList::focused), the arrow keys walk every row: landing on
+/// an item selects it, `Enter` opens an item, toggles a header or expands a
+/// "more" row, and `←` / `→` fold and unfold a header (`←` on an item jumps to
+/// its header).
+///
+/// Gated behind the `phosphor-icons` feature.
+///
+/// # Example
+/// ```ignore
+/// if rows_changed { layout.rebuild(rows.iter().map(Row::kind)); }
+/// let out = GroupList::new().focused(focused).draw(
+///     rect, &layout, selected, &mut state, list, &style, &mut input,
+///     |i| rows[i].as_group_row());
+/// if let Some(i) = out.toggle { open.toggle(rows[i].group()); }
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GroupList {
     focused: bool,

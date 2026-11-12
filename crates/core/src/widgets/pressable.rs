@@ -1,29 +1,4 @@
 //! Pressable — the key every clickable key is built on (Forge `Key`).
-//!
-//! A `Pressable` owns everything about being pressed: hover, press, click and
-//! keyboard activation, focus, and the key material (a face on a plinth that
-//! drops `travel` px while pressed). It knows nothing about what its face
-//! shows. The caller draws that in a closure, which gets the face rect and
-//! the key's [`PressState`]. [`Button`](super::Button) is a pressable with a
-//! label and [`IconKey`](super::IconKey) one with an icon; an image button is
-//! a pressable with an [`Image`](super::Image) in it:
-//!
-//! ```ignore
-//! let clicked = Pressable::new()
-//!     .tone(Tone::Ghost)
-//!     .draw(rect, &mut ctx, |key, ctx| {
-//!         Image::key("play.png")
-//!             .fit(ImageFit::Contain)
-//!             .draw(key.face.inset(4.0), ctx.draw_list);
-//!     })
-//!     .clicked;
-//! ```
-//!
-//! Everything the closure draws fades with the key while it is disabled. The
-//! fade goes through the draw list's tint, so it reaches text, icons and
-//! sprites looked up by name alike. A [`bare`](Pressable::bare) pressable has
-//! no material; its hover and press feedback is a translucent wash laid over
-//! the content.
 
 use crate::layout::Rect;
 use crate::{CursorIcon, Response, StyleKey, StyleResolver, WidgetId};
@@ -50,7 +25,34 @@ pub struct PressState {
     pub tone: Tone,
 }
 
-/// A clickable key with caller-drawn content. See the [module docs](self).
+/// A clickable key with caller-drawn content.
+///
+/// Pressable — the key every clickable key is built on (Forge `Key`).
+///
+/// A `Pressable` owns everything about being pressed: hover, press, click and
+/// keyboard activation, focus, and the key material (a face on a plinth that
+/// drops `travel` px while pressed). It knows nothing about what its face
+/// shows. The caller draws that in a closure, which gets the face rect and
+/// the key's [`PressState`]. [`Button`](super::Button) is a pressable with a
+/// label and [`IconKey`](super::IconKey) one with an icon; an image button is
+/// a pressable with an [`Image`](super::Image) in it:
+///
+/// ```ignore
+/// let clicked = Pressable::new()
+///     .tone(Tone::Ghost)
+///     .draw(rect, &mut ctx, |key, ctx| {
+///         Image::key("play.png")
+///             .fit(ImageFit::Contain)
+///             .draw(key.face.inset(4.0), ctx.draw_list);
+///     })
+///     .clicked;
+/// ```
+///
+/// Everything the closure draws fades with the key while it is disabled. The
+/// fade goes through the draw list's tint, so it reaches text, icons and
+/// sprites looked up by name alike. A [`bare`](Pressable::bare) pressable has
+/// no material; its hover and press feedback is a translucent wash laid over
+/// the content.
 #[derive(Clone, Debug)]
 pub struct Pressable {
     enabled: bool,
