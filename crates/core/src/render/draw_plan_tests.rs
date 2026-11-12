@@ -425,21 +425,34 @@ mod lists {
             fill_mixed(&mut list);
             list
         };
+        let warm = |lists: &mut Lists, plan: &mut DrawPlan, draws: &mut BatchDraws| {
+            let list = frame(lists);
+            lists.plan(&list, &target, plan);
+            draws.fill(plan, &list, &lists.prepared, None);
+            draws.push_soup(&list.indices[..3]);
+        };
         // Two warm-up frames reach every buffer's high-water mark and fill
         // the glyph atlases.
-        for _ in 0..2 {
+        warm(&mut lists, &mut plan, &mut draws);
+        let allocations = loop {
+            // Icon fonts are registered process-wide, and other tests
+            // register theirs while this one runs: a frame after one arrives
+            // snapshots the longer registry, so it isn't warmed. Measure
+            // again until none arrived since the warm-up.
+            let fonts = crate::render::icon_font::icon_font_count();
+            warm(&mut lists, &mut plan, &mut draws);
+            // Recording the list is the caller's; planning and filling it is
+            // ours.
             let list = frame(&lists);
-            lists.plan(&list, &target, &mut plan);
-            draws.fill(&plan, &list, &lists.prepared, None);
-            draws.push_soup(&list.indices[..3]);
-        }
-        // Recording the list is the caller's; planning and filling it is ours.
-        let list = frame(&lists);
-        let ((), allocations) = count_allocations(|| {
-            lists.plan(&list, &target, &mut plan);
-            draws.fill(&plan, &list, &lists.prepared, None);
-            draws.push_soup(&list.indices[..3]);
-        });
+            let ((), allocations) = count_allocations(|| {
+                lists.plan(&list, &target, &mut plan);
+                draws.fill(&plan, &list, &lists.prepared, None);
+                draws.push_soup(&list.indices[..3]);
+            });
+            if crate::render::icon_font::icon_font_count() == fonts {
+                break allocations;
+            }
+        };
         assert!(plan.batches().len() > 4, "{:?}", plan.batches().len());
         assert!(!draws.draws.is_empty());
         assert_eq!(allocations, 0);

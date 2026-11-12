@@ -166,6 +166,12 @@ pub(crate) fn icon_font_snapshot(out: &mut Vec<&'static [u8]>) {
     }
 }
 
+/// How many fonts are registered: what [`icon_font_snapshot`] holds.
+#[cfg(test)]
+pub(crate) fn icon_font_count() -> usize {
+    registry().read().map_or(0, |fonts| fonts.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

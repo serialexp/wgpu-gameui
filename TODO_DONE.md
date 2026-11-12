@@ -429,6 +429,21 @@ then the dated batches in the order they were written.
       the worker rests at exactly two until the player takes one: 0 of 200 runs failed at load
       11, and it passed with the 500 ms sleep in. Only the test changed.
 
+## Flaky allocation test (found 2026-11-11)
+
+- [x] **`render::draw_plan::tests::lists::planning_a_warmed_frame_allocates_nothing`**
+      (`crates/core/src/render/draw_plan_tests.rs`) failed once in five
+      `cargo test --workspace` runs (`allocations` not 0).
+      **Done 2026-11-12.** The suspected cause was confirmed: `prepare_icons` snapshots the
+      process-wide icon-font registry into a `Vec` that starts at capacity 4, and the lib run
+      registers five fonts (Phosphor and four from tests in `icon_font.rs` and `text.rs`), so a
+      fifth arriving between the warm-up and the measured frame regrows it on the measuring
+      thread (registering four fonts there gave `allocations` 1). Bart chose to keep
+      production as it is: a frame after a registration isn't warmed. The test reads the
+      registry's count (`icon_font_count`, test-only) before its last warm-up and after
+      measuring, and warms and measures again if it changed (checked by registering fonts in
+      the first round: it measured 1, then 0).
+
 ---
 
 ## Cross-notifier follow-up audit (2026-08-19)

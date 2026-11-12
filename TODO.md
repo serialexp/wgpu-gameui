@@ -102,17 +102,6 @@ Structural (larger designs; judge on the new ui-compare scenarios first):
 
 New benchmark scenarios proposed: see `bench/ui-compare/README.md` (scenarios section).
 
-## Flaky allocation test (found 2026-11-11)
-
-- [ ] **`render::draw_plan::tests::lists::planning_a_warmed_frame_allocates_nothing`**
-      (`crates/core/src/render/draw_plan_tests.rs:415`) failed once in five
-      `cargo test --workspace` runs (`allocations` not 0) and passes alone and in the lib
-      suite. Likely cause, not yet confirmed: the measured frame's `prepare_icons` snapshots
-      the process-wide icon-font registry (`icon_font_snapshot`, `render/icon_font.rs:162`)
-      into a `Vec` that grows when a test on another thread (`icon_font::tests`) has just
-      registered a second font. The test should not share the registry (or should warm a
-      snapshot of a fixed set).
-
 ## UI scenario follow-ups (2026-10-23)
 
 - [ ] **Explicit test ids on hit zones** (option B in
