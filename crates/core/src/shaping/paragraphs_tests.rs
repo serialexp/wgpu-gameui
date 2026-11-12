@@ -186,6 +186,31 @@ fn the_cache_lays_a_long_text_out_from_its_last_version() {
 }
 
 #[test]
+fn a_layout_made_only_from_kept_paragraphs_is_not_counted_as_shaped() {
+    let handle = shared_font_system();
+    let mut shared = handle.lock().unwrap();
+    let spec = specs()[0];
+    let text = long_text();
+    shared.layout(&spec, &text);
+    let start = shared.layout_stats();
+    assert_eq!(start.shaped, 1, "the first version is shaped");
+    // The same lines, the last moved to the front: every paragraph is kept.
+    let (rest, last) = text.rsplit_once('\n').expect("several lines");
+    let moved = format!("{last}\n{rest}");
+    shared.layout(&spec, &moved);
+    let after = shared.layout_stats();
+    assert_eq!(
+        after.reshaped - start.reshaped,
+        1,
+        "laid out from the first"
+    );
+    assert_eq!(after.shaped, start.shaped, "nothing shaped");
+    // A line typed into shapes that paragraph: counted once.
+    shared.layout(&spec, &edited(&text, 120));
+    assert_eq!(shared.layout_stats().shaped, start.shaped + 1);
+}
+
+#[test]
 fn short_vertical_ellipsized_and_faced_text_is_shaped_whole() {
     let base = specs()[0];
     let long = long_text();

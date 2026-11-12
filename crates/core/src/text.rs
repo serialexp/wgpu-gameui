@@ -234,8 +234,10 @@ thread_local! {
     static SHAPING_PASSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has run cosmic-text's shaping over a buffer,
-/// for the layout cache or any other reason: what tests and benches count to
+/// How many times this thread has shaped text through cosmic-text, for the
+/// layout cache or any other reason: each pass over a buffer that had at
+/// least one paragraph to shape counts once, and a pass that only laid out
+/// paragraphs already shaped does not count. What tests and benches count to
 /// see how much text work a frame did. Per thread, because widgets measure and
 /// the renderer prepares text on the thread that draws, and so tests running
 /// side by side don't count each other's.
@@ -269,9 +271,14 @@ pub(crate) fn paragraphs(text: &str) -> Vec<std::ops::Range<usize>> {
     out
 }
 
-/// Shape `buffer` as every caller here does, counted in [`shaping_passes`].
+/// Shape `buffer` as every caller here does, counted in [`shaping_passes`]
+/// when a paragraph of it had not been shaped yet. Gameui never sets a tab
+/// width, the one buffer change cosmic-text reshapes shaped paragraphs for,
+/// so a paragraph without shaping now is exactly one this pass shapes.
 pub(crate) fn shape_buffer(buffer: &mut Buffer, font_system: &mut FontSystem) {
-    SHAPING_PASSES.with(|passes| passes.set(passes.get() + 1));
+    if buffer.lines.iter().any(|line| line.shape_opt().is_none()) {
+        SHAPING_PASSES.with(|passes| passes.set(passes.get() + 1));
+    }
     buffer.shape_until_scroll(font_system, false);
 }
 

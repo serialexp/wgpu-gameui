@@ -223,7 +223,9 @@ impl SharedFontSystem {
 pub struct LayoutStats {
     /// Layouts served without shaping, since the font system was made.
     pub hits: u64,
-    /// Layouts shaped through cosmic-text, since the font system was made.
+    /// Layouts that shaped text through cosmic-text, since the font system
+    /// was made: a layout built only from paragraphs already shaped does not
+    /// count (see [`shaping_passes`](crate::shaping_passes)).
     pub shaped: u64,
     /// Of those, the long texts laid out from the paragraphs of another
     /// layout, shaping only the paragraphs it didn't have.
@@ -575,9 +577,14 @@ impl LayoutCache {
             self.hits += 1;
             slot
         } else {
-            self.shaped += 1;
-            let layout = if let Some(max_width) = spec.cut_width() {
-                let cut = self.ellipsis_cut(spec, content, max_width, font_system);
+            // Counted where shaping happens, so a layout built from kept
+            // paragraphs alone shapes nothing; the cut's own lookups count
+            // themselves.
+            let cut = spec
+                .cut_width()
+                .map(|max_width| self.ellipsis_cut(spec, content, max_width, font_system));
+            let before = crate::text::shaping_passes();
+            let layout = if let Some(cut) = cut {
                 shape_cut_layout(font_system, spec, content, cut)
             } else if let Some(layout) = self.reshaped(&key, spec, content, font_system) {
                 self.reshaped += 1;
@@ -585,6 +592,7 @@ impl LayoutCache {
             } else {
                 shape_layout(font_system, spec, content)
             };
+            self.shaped += crate::text::shaping_passes() - before;
             let bytes = content.len()
                 + layout.glyphs.len() * std::mem::size_of::<ShapedGlyph>()
                 + layout.lines.len() * std::mem::size_of::<ShapedLine>()

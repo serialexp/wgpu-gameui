@@ -168,6 +168,64 @@ fn hugging_text_is_as_big_as_it_measures() {
     check(&mut ui);
 }
 
+/// Text layouts the font system has shaped so far.
+fn shaped(fonts: &FontSystemHandle) -> u64 {
+    fonts.lock().expect("font system").layout_stats().shaped
+}
+
+/// Look each of `nodes`' texts up as the renderer does when it prepares the
+/// frame: the block the node records, through the shared layouts. The tests
+/// draw no frame on a GPU, so this is the draw's share of the shaping.
+fn prepare_texts(ui: &Ui, nodes: &[Node]) {
+    let mut list = DrawList::with_font_system(ui.fonts.clone());
+    for &node in nodes {
+        let d = &ui.nodes[ui.index(node) as usize];
+        let t = d.text.as_ref().expect("a text node");
+        let (x, y, width) = crate::layout::text_place(d);
+        list.measure_block(&crate::layout::text_block(&t.text, t.color, x, y, width));
+    }
+}
+
+/// Today's cost, pinned until prepared text lands
+/// (`docs/design/prepared-text.md`): a hugging label is measured at the
+/// width it is offered and drawn at its own, two layouts each shaped; one of
+/// exact width is measured and drawn at the same width, shaped once.
+#[test]
+fn a_new_or_changed_label_is_shaped_once_per_width_it_is_laid_out_at() {
+    let fonts = fonts();
+    let mut ui = Ui::new(fonts.clone());
+    let hugging = ui.add(
+        ui.root(),
+        Spec::new().text(Text::new("Hugging 0", 16.0).no_wrap(), [1.0; 4]),
+    );
+    let exact = ui.add(
+        ui.root(),
+        Spec::new()
+            .width(Size::Fixed(120.0))
+            .text(Text::new("Exact 0", 16.0).no_wrap(), [1.0; 4]),
+    );
+    let texts = [hugging, exact];
+    let start = shaped(&fonts);
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &texts);
+    assert_eq!(shaped(&fonts) - start, 3, "two hugging, one exact");
+    for (node, content, shapes) in [(hugging, "Hugging 1", 2), (exact, "Exact 1", 1)] {
+        let start = shaped(&fonts);
+        ui.set_text(node, Text::new(content, 16.0).no_wrap());
+        ui.frame(at(0.0));
+        prepare_texts(&ui, &texts);
+        assert_eq!(shaped(&fonts) - start, shapes, "{content}");
+    }
+    let start = shaped(&fonts);
+    ui.set_text_color(hugging, [0.5; 4]);
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &texts);
+    ui.frame(at(0.0));
+    prepare_texts(&ui, &texts);
+    assert_eq!(shaped(&fonts), start, "a colour and an unchanged frame");
+    check(&mut ui);
+}
+
 #[test]
 fn layout_dirt_stops_at_a_node_whose_size_does_not_follow_its_content() {
     let mut ui = Ui::new(fonts());

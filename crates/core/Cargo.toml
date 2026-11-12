@@ -215,6 +215,10 @@ name = "append_translated"
 harness = false
 
 [[bench]]
+name = "relayout"
+harness = false
+
+[[bench]]
 name = "frame_compare"
 harness = false
 required-features = ["headless"]

@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: draft, not yet implemented
+Status: partial — Phase 0 landed; the shaping budget waits on Bart
 Owner: Bart
 Last updated: 2026-11-12
 
@@ -12,19 +12,26 @@ everything inside them is checked.
 
 ### Done
 
-_(nothing yet)_
+- [x] **Phase 0 — count shaping apart from layout, and measure both.**
+      `shaping_passes()` and `LayoutStats::shaped` count a pass only when a
+      paragraph in it had no shaping yet, counted where shaping happens, so
+      a cached layout built from kept paragraphs alone counts nothing
+      (`a_layout_made_only_from_kept_paragraphs_is_not_counted_as_shaped`).
+      The `relayout` bench (`crates/core/benches/relayout.rs`), the
+      `kept_shaping_bytes` measurement (`crates/core/tests/`, ignored), and
+      `a_new_or_changed_label_is_shaped_once_per_width_it_is_laid_out_at`
+      in the retained tests pin today's two shapes per changed hugging label.
+      Results below ("Phase 0's numbers"). Changed from the plan: the count
+      is of passes that shaped, not of paragraphs, so the existing counts
+      keep their meaning; `laid_out` and the relayout check move to Phase 1,
+      which first makes layouts from kept shaping; the whole path is
+      `ui-compare-gameui-retained`'s `rows-one`, which already measures it
+      with the renderer, rather than a second bench.
+- [x] **Settle: what laying out again costs against shaping** (Phase 0's
+      bench): about a twentieth (below).
 
 ### Outstanding
 
-- [ ] **Phase 0 — count shaping apart from layout, and measure both.**
-      `LayoutStats` counts cosmic-text paragraphs shaped (`shaped`, moved to
-      where shaping happens, not the cache miss) and layouts made from kept
-      shaping (`laid_out`); a test helper proves a relayout shaped nothing.
-      Criterion benches: shaping against laying out again, for a label, a
-      sentence and a paragraph; and the whole measure → layout → record →
-      prepare path. The bytes and allocations a kept `Buffer` holds, for
-      10,000 repeated and 10,000 unique labels. A counted retained test pins
-      today's two shapes per changed label.
 - [ ] **Phase 1 — one extraction, and `PreparedText` in core.** The glyph
       extraction of `shape_cut_layout` (direction marks, vertical stacking
       and centring, cell x, empty lines) becomes one function over a laid-out
@@ -32,6 +39,8 @@ _(nothing yet)_
       prepare` shapes a block once and keeps the `Buffer`; `measure` and
       `layout` lay it out without shaping; a `PreparedLayout` handle attaches
       to a `TextBlock`. `ShapedLayout`'s lazy fields become thread-safe.
+      `LayoutStats::laid_out` counts layouts made from kept shaping, and the
+      one relayout function asserts in debug builds that it shaped nothing.
 - [ ] **Phase 2 — every lookup of a recorded block honours the handle.** One
       resolver takes the spec and content a site would look up and the
       block's handle, and returns the handle's layout when it was made for
@@ -55,8 +64,6 @@ _(nothing yet)_
       cache" premise) and the bench README updated.
 - [ ] **Settle the tree's shaping budget** from Phase 0's bytes, with Bart:
       its default, and what the bench scenes hold under it.
-- [ ] **Settle: what laying out again costs against shaping** (Phase 0's
-      bench); a relayout that costs nearly a shape is brought to Bart.
 - [ ] **Settle: cosmic-text's relayout of a kept `Buffer` gives the glyphs a
       fresh shape at that width gives**, in every case the exactness tests
       cover; a case that differs stops the work and goes to Bart.
@@ -384,6 +391,30 @@ Rejected, each checked in the code:
 - That `DrawList::text` turns spans into face ranges (Antigravity): it joins
   their texts into the content (`draw_list.rs:3051`); spans are joined
   before preparing all the same.
+
+## Phase 0's numbers (2026-11-12)
+
+On leviticus under load (load average 16), so the times are rough; the
+counts and bytes are not.
+
+| `relayout` bench | shape at a width | lay out again |
+| --- | --- | --- |
+| label, 16 characters, unwrapped | 4.0 µs | 0.20 µs |
+| sentence, 70 characters, unwrapped | 23 µs | 1.1 µs |
+| paragraph, about 600 characters, wrapped | 150 µs | 6.1 µs |
+
+Laying out again costs about a twentieth of shaping, so the premise holds.
+
+A kept cosmic-text `Buffer` is much larger than the first draft assumed
+(Antigravity's 1.6 to 2 KB a label). One 16-character label holds about
+7.5 KB in 15 heap blocks: 1.3 KB set (the line, its text and attributes),
+4.5 KB in 11 blocks shaped, 1.7 KB in 3 blocks laid out. cosmic-text keeps
+a reset layout's allocation for reuse, so the laid-out part cannot be freed
+without dropping the line. 10,000 kept buffers hold 74 MB, repeated or
+unique labels alike (each node holds its own), against 11.3 MB of heap for
+the cache's 10,000 finished layouts of the same labels.
+
+`rows-one` today: 458 shapes in 230 frames, two for each of the 229 changes.
 
 ## Questions only building can answer
 
