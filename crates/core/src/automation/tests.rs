@@ -74,7 +74,11 @@ fn scenario(steps: &str) -> Scenario {
 fn play(steps: &str) -> (Report, Counter) {
     let mut app = Counter::new();
     let mut layers = LayerStack::new();
+    // `run` takes the GPU it screenshots with only when it can make one.
+    #[cfg(feature = "headless")]
     let report = run(&scenario(steps), &mut app, &mut layers, None);
+    #[cfg(not(feature = "headless"))]
+    let report = run(&scenario(steps), &mut app, &mut layers);
     (report, app)
 }
 

@@ -63,12 +63,6 @@ none chosen yet (Bart).
       (`ui_renderer.rs:2040`), so the lists after it are compared, planned
       and stored in the place of the one before. Correct, but a layer
       emptying rebuilds every later one. Give such a list its place.
-- [ ] **P2 — test targets do not compile without default features (core,
-      found 2026-11-11).** `cargo clippy -p wgpu-gameui --no-default-features
-      --all-targets` fails: `tests/frame_oracle.rs` imports `HeadlessGpu`
-      (behind `headless`), and `automation/tests.rs:77` calls `run` with a
-      fourth argument the featureless `run` does not take. The library itself
-      is clean without them.
 - [ ] **P2 — rerun the comparison on a quiet machine.** `rows-scrl` /
       `rows-hovr` differences are noise. The README's retained numbers
       predate the first four items done (prepared text reused, patching,
@@ -88,12 +82,6 @@ none chosen yet (Bart).
       many widgets (e.g. `syntax_theme.rs:69` links `crate::SyntaxHighlighting`,
       `text.rs:91` links the private `system_font_db`). Fix them and add the
       doc check to the gate.
-- [ ] **P2 — the test targets do not build without default features**
-      (`cargo clippy -p wgpu-gameui --no-default-features --all-targets`;
-      the library itself does). `tests/frame_oracle.rs` imports `HeadlessGpu`
-      (feature `headless`), and `automation/tests.rs:77` passes `run` the
-      `gpu` argument that exists only with `headless`. Gate those tests on
-      their features, and add the no-default-features test build to the gate.
 
 ---
 

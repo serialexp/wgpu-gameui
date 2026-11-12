@@ -275,6 +275,21 @@ then the dated batches in the order they were written.
       something. Tests: `compact_preserves_ids_and_reclaims_shelf_footprint`
       (compacting again is `Unchanged`, nothing dirty) and
       `the_epoch_moves_when_what_a_sprite_resolves_to_may_have_changed`.
+- [x] **P2 — test targets do not compile without default features (core,
+      found 2026-11-11).** `cargo clippy -p wgpu-gameui --no-default-features
+      --all-targets` fails: `tests/frame_oracle.rs` imports `HeadlessGpu`
+      (behind `headless`), and `automation/tests.rs:77` calls `run` with a
+      fourth argument the featureless `run` does not take. The library itself
+      is clean without them.
+      **Done 2026-11-12.** `frame_oracle` requires `headless` in
+      `Cargo.toml`, as the other GPU tests do; the automation test passes
+      `run` its `gpu` argument only under `headless`; `block_glyphs_len`,
+      read only by the icon tests, is gated on `phosphor-icons`; the
+      `cursor` doctest calls `CursorIcon::image` only under
+      `forge-cursors`. `cargo test -p wgpu-gameui --no-default-features`
+      passes. The publish workflow's no-default-features step is now clippy
+      over all targets, and wgpu-gameui's `CLAUDE.md` lists it. (Listed
+      twice in `TODO.md`, under this section and "Rustdoc links".)
 
 ---
 

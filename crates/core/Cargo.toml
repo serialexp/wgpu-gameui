@@ -147,6 +147,10 @@ name = "alignment_gallery"
 required-features = ["headless"]
 
 [[test]]
+name = "frame_oracle"
+required-features = ["headless"]
+
+[[test]]
 name = "batch_order"
 required-features = ["headless"]
 

@@ -20,8 +20,11 @@
 //! // ... draw the UI; widgets call ctx.request_cursor(..) ...
 //! let icon = cursor.resolve();   // CursorIcon::Default if nothing asked
 //! // Draw it once per (icon, scale) and keep the window's custom cursor:
+//! # #[cfg(feature = "forge-cursors")]
 //! let image = icon.image(2.0);   // 64×64 RGBA, hotspot scaled with it
+//! # #[cfg(feature = "forge-cursors")]
 //! # let _ = image;
+//! # let _ = icon;
 //! ```
 //!
 //! The artwork is `assets/cursors/cursors.css`, Forge's `tokens/cursors.css`

@@ -117,6 +117,8 @@ unchanged — that is a bug to fix by moving it into `Theme`.
 ```
 cargo build --all-targets      # must be warning-clean
 cargo test --lib               # all widget/layout/text unit tests
+cargo clippy -p wgpu-gameui --no-default-features --all-targets -- -D warnings
+                               # tests needing a feature are gated on it
 ```
 
 The tracked pre-commit hook rejects unformatted Rust. Enable it once per clone:

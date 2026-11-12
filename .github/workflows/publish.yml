@@ -43,8 +43,9 @@ jobs:
       - name: Library without the test switches
         run: cargo clippy -p wgpu-gameui --lib -- -D warnings
 
-      - name: Library without default features
-        run: cargo build -p wgpu-gameui --lib --no-default-features
+      # The tests too: those needing a feature are gated on it.
+      - name: Library and tests without default features
+        run: cargo clippy -p wgpu-gameui --no-default-features --all-targets -- -D warnings
 
       - uses: actions/setup-node@v5
         with:
