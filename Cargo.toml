@@ -15,10 +15,10 @@ repository = "https://github.com/serialexp/wgpu-gameui"
 # QP); the fix is on our fork's branch until it is released upstream.
 [patch.crates-io]
 rust_h264 = { git = "https://github.com/serialexp/rust_h264", branch = "fix/chroma-dc-dequant-rounding" }
-# Local checkout of cosmic-text 0.19.0 on branch feat/incremental-paragraph-edit,
-# for editing one long paragraph without reshaping and re-wrapping all of it
-# (docs/design/prepared-text.md). Switch to a git remote once the fork is pushed.
-cosmic-text = { path = "../cosmic-text" }
+# cosmic-text 0.19.0 plus shaping and laying out again only what an edit to a
+# paragraph touched, so one long paragraph is edited in place
+# (docs/design/prepared-text.md); ~/Projects/cosmic-text is a checkout of it.
+cosmic-text = { git = "https://github.com/Aeolun/cosmic-text", branch = "feat/incremental-paragraph-edit" }
 
 # Glyph and icon MSDFs are generated on the CPU by fdsm; unoptimised, the
 # atlas warm-up and the MSDF quality tests run about thirty times slower.

@@ -1,6 +1,6 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: complete — Phases 0–5 landed, follow-ups on changed texts, on text without a width and on edits to long texts (one long paragraph through a local cosmic-text fork); the fork's remote outstanding
+Status: complete — Phases 0–5 landed, follow-ups on changed texts, on text without a width and on edits to long texts (one long paragraph through a cosmic-text fork)
 Owner: Bart
 Last updated: 2026-11-13
 
@@ -159,9 +159,9 @@ everything inside them is checked.
 
       Follow-up (2026-11-13): that choice was made from options that did not
       say the paragraph itself stayed unfixed; once it was clear, Bart asked
-      for the fork. The root `Cargo.toml` patches cosmic-text to a local
-      checkout, `../cosmic-text`, branch `feat/incremental-paragraph-edit`
-      from the 0.19.0 tag, where `BufferLine::set_text` remembers the edit
+      for the fork. The root `Cargo.toml` patches cosmic-text to branch
+      `feat/incremental-paragraph-edit` of `github.com/Aeolun/cosmic-text`,
+      from the 0.19.0 tag (`~/Projects/cosmic-text` is a checkout), where `BufferLine::set_text` remembers the edit
       (common prefix and suffix) when only the text changed and the
       attributes have no spans. Shaping then keeps every word wholly outside
       the changed bytes (`ShapeLine::rebuild_edited`), skips the bidi
@@ -178,13 +178,14 @@ everything inside them is checked.
       wgpu-gameui itself is unchanged: `splice_buffer_text` already sets a
       changed paragraph's text with `BufferLine::set_text`.
 
+- [x] **Publish the cosmic-text fork** (2026-11-13). Pushed to
+      `github.com/Aeolun/cosmic-text`, and both patches point at the branch
+      there. Patches apply only in the workspace that builds, so agent-ui
+      patches cosmic-text in its own root `Cargo.toml` too.
+
 ### Outstanding
 
-- [ ] **Publish the cosmic-text fork.** Bart makes the remote fork; the
-      patch then points at it (as `rust_h264` does) instead of `../cosmic-text`.
-      Patches apply only in the workspace that builds, so agent-ui patches
-      cosmic-text to the same checkout in its own root `Cargo.toml` (agent-ui
-      a130ca8, 2026-11-13); both move to the remote together.
+_(nothing)_
 
 ## Why this exists
 
