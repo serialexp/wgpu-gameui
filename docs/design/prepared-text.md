@@ -182,9 +182,9 @@ everything inside them is checked.
 
 - [ ] **Publish the cosmic-text fork.** Bart makes the remote fork; the
       patch then points at it (as `rust_h264` does) instead of `../cosmic-text`.
-      Patches apply only in the workspace that builds, so agent-ui, which
-      patches wgpu-gameui to its checkout, builds stock cosmic-text until its
-      own root `Cargo.toml` patches cosmic-text too.
+      Patches apply only in the workspace that builds, so agent-ui patches
+      cosmic-text to the same checkout in its own root `Cargo.toml` (agent-ui
+      a130ca8, 2026-11-13); both move to the remote together.
 
 ## Why this exists
 
