@@ -55,7 +55,9 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 'lts/*'
+          # A version number, not `lts/*`: resolving that alias asks github.com's
+          # API with this forge's token, which it rejects ("Bad credentials").
+          node-version: '24'
 
       - name: Publish to crates.io and create the GitHub release
         run: npx just-release
