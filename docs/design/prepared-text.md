@@ -1,8 +1,8 @@
 # Prepared text: shape once, lay out at any width — Design
 
-Status: complete — Phases 0–5 landed, follow-ups on changed texts, on text without a width and on edits to long texts; one item deferred
+Status: complete — Phases 0–5 landed, follow-ups on changed texts, on text without a width and on edits to long texts (one long paragraph through a local cosmic-text fork); the fork's remote outstanding
 Owner: Bart
-Last updated: 2026-11-12
+Last updated: 2026-11-13
 
 ## Implementation status
 
@@ -148,16 +148,43 @@ everything inside them is checked.
       `long_text_edit` bench (`crates/core/benches/`) types into the middle
       of that text: 26 ms before, 0.64 ms after (load 15–22; budget 3 ms),
       against the shared cache's 0.41 ms.
+- [x] **One long paragraph edited in place** (deferred 2026-11-12, done
+      2026-11-13 in a fork of cosmic-text). cosmic-text shapes a paragraph
+      whole, so an edit to a 100 KB text without line breaks reshaped all of
+      it: 23 ms in `long_text_edit/prepared/one-paragraph`, as in immediate
+      mode (`cache/one-paragraph`). Keeping the shaped words an edit didn't
+      touch would mean building cosmic-text's `ShapeLine` here (bidi runs,
+      script spans) or a fork of it; Bart chose (2026-11-12) to leave it as
+      a known limit.
+
+      Follow-up (2026-11-13): that choice was made from options that did not
+      say the paragraph itself stayed unfixed; once it was clear, Bart asked
+      for the fork. The root `Cargo.toml` patches cosmic-text to a local
+      checkout, `../cosmic-text`, branch `feat/incremental-paragraph-edit`
+      from the 0.19.0 tag, where `BufferLine::set_text` remembers the edit
+      (common prefix and suffix) when only the text changed and the
+      attributes have no spans. Shaping then keeps every word wholly outside
+      the changed bytes (`ShapeLine::rebuild_edited`), skips the bidi
+      analysis when a plain left-to-right line gained nothing that can turn
+      it, and the layout of a one-span, wrapped, unellipsized line is changed
+      only where the edit moved the wrapping: wrapping starts again at the
+      last line beginning at a kept word and rejoins the old lines where a
+      new line starts a kept tail word an old line started. The fork's tests
+      compare against shaping and laying out from nothing (left-to-right,
+      right-to-left, mixed, tabs, every wrap mode and alignment; 960 random
+      edits, 16,000 once) and count words shaped and lines laid out.
+      `prepared/one-paragraph`: 20.3 ms before, 1.6 ms after (load 18–36);
+      `extract`, still copying every glyph, is about 40% of what is left.
+      wgpu-gameui itself is unchanged: `splice_buffer_text` already sets a
+      changed paragraph's text with `BufferLine::set_text`.
 
 ### Outstanding
 
-- [ ] **Defer: one long paragraph edited in place.** cosmic-text shapes a
-      paragraph whole, so an edit to a 100 KB text without line breaks
-      reshapes all of it: 23 ms in `long_text_edit/prepared/one-paragraph`,
-      as in immediate mode (`cache/one-paragraph`). Keeping the shaped words
-      an edit didn't touch would mean building cosmic-text's `ShapeLine`
-      here (bidi runs, script spans) or a fork of it; Bart chose (2026-11-12)
-      to leave it as a known limit.
+- [ ] **Publish the cosmic-text fork.** Bart makes the remote fork; the
+      patch then points at it (as `rust_h264` does) instead of `../cosmic-text`.
+      Patches apply only in the workspace that builds, so agent-ui, which
+      patches wgpu-gameui to its checkout, builds stock cosmic-text until its
+      own root `Cargo.toml` patches cosmic-text too.
 
 ## Why this exists
 

@@ -16,12 +16,15 @@
 //!   version's paragraphs.
 //!
 //! The texts: `paragraphs`, 2,000 paragraphs of about 50 characters (the
-//! representative size), and `one-paragraph`, 100 KB without a line break,
-//! which both paths shape whole: cosmic-text shapes a paragraph at a time.
+//! representative size), and `one-paragraph`, 100 KB without a line break.
+//! cosmic-text shapes a paragraph at a time; the patched fork (root
+//! `Cargo.toml`) shapes again only the words an edit touched and lays out
+//! again only the lines it moved, so the prepared path does that, while the
+//! cache path, laying out a fresh buffer, shapes the paragraph whole.
 //!
-//! Budget: `prepared/paragraphs` within 3 ms on Bart's machine, with no
-//! load; the copy of every glyph into the layout is about half of it.
-//! `prepared/one-paragraph` is the known limit, near `cache/one-paragraph`.
+//! Budget: `prepared/paragraphs` and `prepared/one-paragraph` each within
+//! 3 ms on Bart's machine, with no load; the copy of every glyph into the
+//! layout is about half of the first and 40% of the second.
 //!
 //! [`PreparedText`]: wgpu_gameui::PreparedText
 
