@@ -579,11 +579,20 @@ impl TextInput {
             .map(|(start, end)| &self.value[start..end])
     }
 
+    /// The text changed under the pointer: a drag's anchor and a double-click's
+    /// word are byte offsets into the text they were taken from, so they end
+    /// here. Kept past an edit, a hold would select past the end of the text.
+    fn forget_drag(&mut self) {
+        self.drag_selection_anchor = None;
+        self.drag_unit = None;
+    }
+
     /// Delete the current selection, if any, and return the deleted text.
     /// Returns `None` if there was no selection.
     pub fn delete_selection(&mut self) -> Option<String> {
         let range = self.selection_range()?;
         let deleted = self.value[range.0..range.1].to_string();
+        self.forget_drag();
         self.value.replace_range(range.0..range.1, "");
         self.cursor_pos = range.0;
         self.selection_start = None;
@@ -600,6 +609,7 @@ impl TextInput {
                 .last()
                 .map(|(i, c)| (i, c.len_utf8()))
                 .unwrap_or((0, 0));
+            self.forget_drag();
             self.value.replace_range(prev.0..self.cursor_pos, "");
             self.cursor_pos = prev.0;
         }
@@ -615,6 +625,7 @@ impl TextInput {
                 .next()
                 .map(|(i, c)| (self.cursor_pos + i, c.len_utf8()))
                 .unwrap_or((self.cursor_pos, 0));
+            self.forget_drag();
             self.value
                 .replace_range(self.cursor_pos..next.0 + next.1, "");
         }
@@ -690,6 +701,7 @@ impl TextInput {
 
     /// Empty the field, back to its first line and column.
     pub fn clear(&mut self) {
+        self.forget_drag();
         self.value.clear();
         self.cursor_pos = 0;
         self.selection_start = None;
@@ -730,6 +742,7 @@ impl TextInput {
         if self.selection_start.is_some() {
             self.delete_selection();
         }
+        self.forget_drag();
         self.value.insert_str(self.cursor_pos, &clip);
         self.cursor_pos += clip.len();
         self.selection_start = None;
@@ -824,6 +837,7 @@ impl TextInput {
             if self.selection_start.is_some() {
                 self.delete_selection();
             }
+            self.forget_drag();
             self.value.insert(self.cursor_pos, '\n');
             self.cursor_pos += 1;
             self.selection_start = None;
@@ -979,6 +993,7 @@ impl TextInput {
             if self.selection_start.is_some() {
                 self.delete_selection();
             }
+            self.forget_drag();
             self.value.insert_str(self.cursor_pos, &input.text_input);
             self.cursor_pos += input.text_input.len();
             self.selection_start = None;
@@ -3019,3 +3034,7 @@ mod tests {
 #[cfg(test)]
 #[path = "text_input_layout_tests.rs"]
 mod layout_tests;
+
+#[cfg(test)]
+#[path = "text_input_fuzz_tests.rs"]
+mod fuzz_tests;
