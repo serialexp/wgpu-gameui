@@ -293,6 +293,23 @@ fn dots_show_while_there_is_room_for_them() {
 }
 
 #[test]
+fn a_label_is_not_said_twice_side_by_side() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    // Eleven points, labelled every third from the newest (10, 7, 4, 1),
+    // two days of them.
+    let values: Vec<_> = (0..11).map(|i| Some(f64::from(i))).collect();
+    let names: Vec<&str> = (0..11).map(|i| if i < 6 { "mon" } else { "tue" }).collect();
+    let series = [line("Input", RED, &values)];
+    let chart = LineChart::new(&series, &format)
+        .labels(&names)
+        .legend(false);
+    let (list, _) = paint(&chart, &s, &away());
+    let count = |day: &str| list.texts.iter().filter(|t| t.content == day).count();
+    assert_eq!((count("mon"), count("tue")), (1, 1));
+}
+
+#[test]
 fn the_running_point_is_hollow_and_says_now_clearing_the_labels_beside_it() {
     let theme = Theme::default();
     let s = StyleResolver::new(&theme);

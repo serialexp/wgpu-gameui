@@ -885,7 +885,13 @@ impl<'a> LineChart<'a> {
             _ => {
                 let step = n.div_ceil(most).max(1);
                 for i in (0..n).rev().step_by(step) {
-                    labels.push((layout.px(self.xv(i)), self.x_label(i), Some(i)));
+                    // The same as the label just right of it (points of one
+                    // day, labelled by the day), it would only say it again.
+                    let label = self.x_label(i);
+                    if labels.last().is_some_and(|(_, right, _)| *right == label) {
+                        continue;
+                    }
+                    labels.push((layout.px(self.xv(i)), label, Some(i)));
                 }
                 labels.reverse();
             }

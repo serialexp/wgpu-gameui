@@ -293,6 +293,43 @@ fn many_bars_label_only_every_so_many_counting_from_the_newest() {
     assert!(shown.len() < 10, "not every bar: {shown:?}");
 }
 
+#[test]
+fn a_label_is_not_said_twice_side_by_side() {
+    let theme = Theme::default();
+    let s = StyleResolver::new(&theme);
+    let series = series();
+    let segments = [1.0, 1.0];
+    // Five bars a day, as five-hour windows are, labelled by their day.
+    let labels: Vec<String> = (0..30).map(|i| format!("d{}", i / 5)).collect();
+    let bars: Vec<Bar<'_>> = labels
+        .iter()
+        .map(|label| Bar {
+            label,
+            ..bar(&segments)
+        })
+        .collect();
+    let chart = BarChart::new(&bars, &series, &format).legend(false);
+    let (list, _) = paint(&chart, 900.0, &s, &away());
+    let mut shown: Vec<(f32, &str)> = list
+        .texts
+        .iter()
+        .filter(|t| t.content.starts_with('d'))
+        .map(|t| (t.x, t.content.as_str()))
+        .collect();
+    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let shown: Vec<&str> = shown.into_iter().map(|(_, text)| text).collect();
+    assert_eq!(
+        shown.last(),
+        Some(&"d5"),
+        "the newest is labelled: {shown:?}"
+    );
+    assert!(
+        shown.windows(2).all(|pair| pair[0] != pair[1]),
+        "no day twice in a row: {shown:?}"
+    );
+    assert_eq!(shown.len(), 6, "every day once: {shown:?}");
+}
+
 /// The shapes of `bars` plain bars of two series, 900px wide, no legend.
 fn shapes_of(bars: usize) -> crate::PrimCounts {
     let theme = Theme::default();

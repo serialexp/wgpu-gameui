@@ -926,12 +926,20 @@ impl<'a> BarChart<'a> {
         let step = n.div_ceil(fits).max(1);
         let size = s.text_size(TextSize::Caption);
         let y = crate::text::vcentered_line_y(base + 4.0, 12.0, size);
-        for k in 0..n {
+        // From the newest, which is always labelled: a label the same as the
+        // one just drawn to its right (five-hour bars of one day) would only
+        // say it again, so it is left out.
+        let mut right: Option<&str> = None;
+        for k in (0..n).rev() {
             if !(n - 1 - k).is_multiple_of(step) {
                 continue;
             }
             let index = layout.drawn(k, lit);
             let bar = &self.bars[index];
+            if !bar.current && right == Some(bar.label) {
+                continue;
+            }
+            right = Some(if bar.current { "now" } else { bar.label });
             let center = area.x + layout.gutter + layout.center(k);
             let (text, ink) = if bar.current {
                 ("now", None)
