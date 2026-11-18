@@ -248,6 +248,14 @@ pub struct UiState {
     /// draws; [`end_frame`](Self::end_frame) puts the window change in the
     /// frame result.
     pub fullscreen: crate::FullscreenState,
+    /// The pointer shape this frame's widgets ask for: every widget a
+    /// `UiContext` verb draws can ask (a text field for the I-beam, a button
+    /// for the hand), and [`begin_frame`](Self::begin_frame) asks for the
+    /// I-beam over [selectable](crate::TextBlock::selectable) text. The host
+    /// hands its own widgets' contexts the same one
+    /// ([`DrawContext::with_cursor`]), and after the frame
+    /// [`take`](crate::CursorState::take)s the shape to show.
+    pub cursor: crate::CursorState,
 }
 
 impl UiState {
@@ -376,6 +384,13 @@ impl UiState {
         self.advance_clocks(input, dt);
         self.frame_timings.reset(dt);
         self.text_selection.handle_input(input);
+        self.cursor.begin_frame();
+        if self
+            .text_selection
+            .hovers_text(input.mouse_x, input.mouse_y)
+        {
+            self.cursor.request(crate::CursorIcon::Text);
+        }
         // A focused field copies its own selection.
         let field_focused = self
             .focus
@@ -1848,12 +1863,14 @@ impl<'a> UiContext<'a> {
                 anim,
                 interactions,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim)
                 .with_interactions(interactions);
             button.focusable(fid).animated(fid).draw(local, &mut ctx)
@@ -1929,12 +1946,14 @@ impl<'a> UiContext<'a> {
                 anim,
                 interactions,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim)
                 .with_interactions(interactions);
             key.focusable(fid).draw(local, &mut ctx)
@@ -2026,7 +2045,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             // Reuse the DragId value as the FocusId so the slider is also
             // keyboard-adjustable (arrow keys) through the façade.
             Slider::new(min, max)
@@ -2070,12 +2090,14 @@ impl<'a> UiContext<'a> {
                 focus,
                 anim,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim);
             checkbox
                 .focusable(fid)
@@ -2130,7 +2152,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             RadioGroup::new(options)
                 .focusable(fid)
                 .draw(selected, local, &mut ctx)
@@ -2322,6 +2345,7 @@ impl<'a> UiContext<'a> {
                 clipboard_get,
                 clipboard_set,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let ti = text_inputs.entry(id).or_insert_with(|| {
@@ -2350,6 +2374,7 @@ impl<'a> UiContext<'a> {
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim)
                 .with_interactions(interactions);
             draw(ti, local, id, &mut ctx);
@@ -2480,6 +2505,7 @@ impl<'a> UiContext<'a> {
                 text_inputs,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let ti = text_inputs
@@ -2488,7 +2514,8 @@ impl<'a> UiContext<'a> {
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             let out = NumberInput::new()
                 .with_range(min, max)
                 .with_step(step)
@@ -2560,12 +2587,14 @@ impl<'a> UiContext<'a> {
                 tree,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             let out = node.with_depth(depth).draw(id, local, tree, &mut ctx);
             // Focus ring on the selected row while the tree holds keyboard focus.
             if ctx.focus.is_focused(TREE_FOCUS_ID) && tree.is_selected(id) {
@@ -2688,12 +2717,14 @@ impl<'a> UiContext<'a> {
                 anim,
                 interactions,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim)
                 .with_interactions(interactions);
             key.focusable(fid).draw(local, &mut ctx, content).clicked
@@ -2747,12 +2778,14 @@ impl<'a> UiContext<'a> {
                 drag,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             ColorPicker::new().draw(*hsva, id, drag, local, &mut ctx)
         };
         if out.changed {
@@ -2787,12 +2820,14 @@ impl<'a> UiContext<'a> {
                 drag,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             DragHandle::new().draw(id, drag, local, &mut ctx)
         };
         self.advance(h);
@@ -2948,12 +2983,14 @@ impl<'a> UiContext<'a> {
                 dropdowns,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             dropdown.draw(id, local, dropdowns, &mut ctx)
         };
         self.advance(height);
@@ -2999,7 +3036,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             toggle.focusable(fid).draw(on, local, &mut ctx)
         };
         self.advance(height);
@@ -3227,12 +3265,14 @@ impl<'a> UiContext<'a> {
                 focus,
                 anim,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim);
             chip.focusable(fid).draw(local, &mut ctx)
         };
@@ -3346,12 +3386,14 @@ impl<'a> UiContext<'a> {
                 anim,
                 interactions,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
                 .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor)
                 .with_animations(anim)
                 .with_interactions(interactions);
             es.action_focus_or(fid).draw(local, &mut ctx)
@@ -3393,7 +3435,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             bc.draw(local, &mut ctx)
         };
         self.advance(height);
@@ -3440,7 +3483,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             Pager::new().draw(page, total, local, &mut ctx)
         };
         self.advance(height);
@@ -3483,7 +3527,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             AssetGrid::new(items, glyph).draw(local, selected, &mut ctx)
         };
         self.advance(h);
@@ -3529,12 +3574,14 @@ impl<'a> UiContext<'a> {
                 drag,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             vf.draw(local, scrub, drag, id, &mut ctx)
         };
         self.advance(height);
@@ -3585,12 +3632,14 @@ impl<'a> UiContext<'a> {
                 drag,
                 focus,
                 screen,
+                cursor,
                 ..
             } = &mut **state;
             let mut ctx = DrawContext::new(list, focus, theme, &local_input, screen[0], screen[1])
                 .with_enabled(!self.input_disabled)
                 .with_active_layer(self.drawing_layers.last().copied())
-                .with_style(self.style_stack.last().expect("style stack is never empty"));
+                .with_style(self.style_stack.last().expect("style stack is never empty"))
+                .with_cursor(cursor);
             draw_gradient_ramp(local, stops, selected, drag_stop, drag, id, &mut ctx)
         };
         self.advance(height);
@@ -3636,7 +3685,8 @@ impl<'a> UiContext<'a> {
             )
             .with_enabled(!self.input_disabled)
             .with_active_layer(self.drawing_layers.last().copied())
-            .with_style(self.style_stack.last().expect("style stack is never empty"));
+            .with_style(self.style_stack.last().expect("style stack is never empty"))
+            .with_cursor(&mut state.cursor);
             draw_combo_trigger(local, label, open, focused, &mut ctx)
         };
         self.advance(height);
@@ -5763,6 +5813,46 @@ mod tests {
         };
         assert!(frame(true));
         assert!(!frame(false));
+    }
+
+    #[test]
+    fn the_pointer_is_an_i_beam_over_a_field_and_selectable_text_and_a_hand_over_a_button() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut layers = crate::LayerStack::new();
+        let mut buffer = String::from("value");
+        let mut frame = |state: &mut UiState, x: f32, y: f32| {
+            let mut input = InputState {
+                mouse_x: x,
+                mouse_y: y,
+                ..InputState::default()
+            };
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            layers.clear();
+            {
+                let list = layers.base_mut();
+                list.text(
+                    crate::TextBlock::new("selectable words", 10.0, 200.0)
+                        .with_size(16.0)
+                        .selectable(crate::TextKey::new(1, 0)),
+                );
+                let mut ui = UiContext::interactive(list, &input, state, &theme);
+                ui.text_input(3, &mut buffer, "", Some(160.0));
+                ui.text_button("Press", Some(80.0), None);
+            }
+            state.end_frame(&[]);
+            state.text_selection.collect(&layers);
+            state.cursor.take()
+        };
+        let button_y = theme.input_height + theme.spacing + 4.0;
+        frame(&mut state, -10.0, -10.0); // lays the selectable text out
+        assert_eq!(frame(&mut state, 20.0, 8.0), crate::CursorIcon::Text);
+        assert_eq!(
+            frame(&mut state, 20.0, button_y),
+            crate::CursorIcon::Pointer
+        );
+        assert_eq!(frame(&mut state, 30.0, 208.0), crate::CursorIcon::Text);
+        assert_eq!(frame(&mut state, 400.0, 400.0), crate::CursorIcon::Default);
     }
 
     #[test]
