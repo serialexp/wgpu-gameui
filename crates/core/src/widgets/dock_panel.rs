@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```ignore
-//! let tabs = &[DockTab { label: "Outliner" }, DockTab { label: "Layers" }];
+//! let tabs = &[DockTab::new("Outliner"), DockTab::new("Layers").dirty(true)];
 //! let out = DockPanel::new(DockSide::Left, tabs)
 //!     .closable()
 //!     .draw(rect, &mut dock_state, &mut ctx);
@@ -33,6 +33,7 @@
 
 use crate::chrome::SurfacePainter;
 use crate::layout::Rect;
+use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey};
 use crate::text::TextBlock;
 
@@ -54,10 +55,34 @@ pub enum DockSide {
 }
 
 /// One dock tab's per-frame data, borrowed from the caller.
+#[derive(Clone, Copy, Debug)]
 pub struct DockTab<'a> {
     /// Tab label text.
     pub label: &'a str,
+    /// Something under the tab has changed: a dot after the label, in
+    /// `--accent-dirty` with the accent's glow, as a [`SpanTab`](super::SpanTab)'s.
+    pub dirty: bool,
 }
+
+impl<'a> DockTab<'a> {
+    /// A tab labelled `label`, with no dot.
+    pub const fn new(label: &'a str) -> Self {
+        Self {
+            label,
+            dirty: false,
+        }
+    }
+
+    /// Show the changed dot after the label (builder pattern).
+    pub const fn dirty(mut self, dirty: bool) -> Self {
+        self.dirty = dirty;
+        self
+    }
+}
+
+/// The changed dot's size, and its gap after the label.
+const DIRTY_DOT: f32 = 5.0;
+const DIRTY_GAP: f32 = 4.0;
 
 // ---------------------------------------------------------------------------
 // State
@@ -247,8 +272,14 @@ impl<'a> DockPanel<'a> {
                     .with_size(font_size)
                     .with_font_opt(s.theme().font.clone());
                 let (text_w, _) = ctx.draw_list.measure_block(&block);
-                // Chip width = text + horizontal padding on each side + border (1px each side).
-                tab_widths.push(text_w + tab_pad_h * 2.0 + 2.0);
+                let dot_w = if tab.dirty {
+                    DIRTY_GAP + DIRTY_DOT
+                } else {
+                    0.0
+                };
+                // Chip width = text (and dot) + horizontal padding on each
+                // side + border (1px each side).
+                tab_widths.push(text_w + dot_w + tab_pad_h * 2.0 + 2.0);
             }
 
             // Second pass: draw.
@@ -302,6 +333,30 @@ impl<'a> DockPanel<'a> {
                         .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0)
                         .with_font_opt(s.theme().font.clone()),
                 );
+                if tab.dirty {
+                    let dot = Rect::new(
+                        tab_rect.right() - 1.0 - tab_pad_h - DIRTY_DOT,
+                        tab_rect.y + (tab_rect.height - DIRTY_DOT) * 0.5,
+                        DIRTY_DOT,
+                        DIRTY_DOT,
+                    );
+                    let mut glow = s.color(StyleKey::Accent);
+                    glow[3] = 0.65;
+                    ctx.draw_list.box_shadow_outset(
+                        dot,
+                        CornerRadii::uniform(DIRTY_DOT * 0.5),
+                        BoxShadow {
+                            blur: 5.0,
+                            color: glow,
+                            ..BoxShadow::default()
+                        },
+                    );
+                    ctx.draw_list.rounded_rect(
+                        dot,
+                        DIRTY_DOT * 0.5,
+                        s.color(StyleKey::AccentDirty),
+                    );
+                }
 
                 if tab_clicked {
                     out.tab_clicked = Some(i);
@@ -355,9 +410,9 @@ mod tests {
 
     fn tabs() -> Vec<DockTab<'static>> {
         vec![
-            DockTab { label: "Outliner" },
-            DockTab { label: "Layers" },
-            DockTab { label: "Assets" },
+            DockTab::new("Outliner"),
+            DockTab::new("Layers"),
+            DockTab::new("Assets"),
         ]
     }
 
@@ -386,6 +441,54 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
         assert_eq!(out.tab_clicked, Some(1));
+    }
+
+    #[test]
+    fn a_dirty_tab_has_a_dot_after_its_label_and_room_for_it() {
+        let theme = Theme::default();
+        let s = crate::StyleResolver::new(&theme);
+        let dirty = s.color(StyleKey::AccentDirty);
+        let rect = Rect::new(0.0, 0.0, 300.0, 150.0);
+        let draw = |tabs: &[DockTab<'_>]| {
+            let mut state = DockPanelState::new(300.0);
+            let input = InputState::default();
+            let mut list = DrawList::new();
+            let mut focus = FocusState::new();
+            DockPanel::new(DockSide::Left, tabs).draw(
+                rect,
+                &mut state,
+                &mut ctx(&mut list, &mut focus, &theme, &input),
+            );
+            list
+        };
+        let x_of = |list: &DrawList, label: &str| {
+            list.texts
+                .iter()
+                .find(|t| t.content == label)
+                .map(|t| t.x)
+                .unwrap()
+        };
+        let plain = draw(&[DockTab::new("General"), DockTab::new("Context")]);
+        let marked = draw(&[DockTab::new("General").dirty(true), DockTab::new("Context")]);
+        assert_eq!(
+            plain.chrome_instances().filter(|c| c.bg == dirty).count(),
+            0
+        );
+        let dots: Vec<_> = marked
+            .chrome_instances()
+            .filter(|c| c.bg == dirty)
+            .collect();
+        assert_eq!(dots.len(), 1, "one dot");
+        let dot = dots[0].rect;
+        let next = x_of(&marked, "Context");
+        assert!(
+            dot[0] > x_of(&marked, "General") && dot[0] + dot[2] < next,
+            "the dot sits in its own chip, after the label"
+        );
+        assert!(
+            (next - x_of(&plain, "Context") - (DIRTY_GAP + DIRTY_DOT)).abs() < 0.01,
+            "its chip grows by the dot"
+        );
     }
 
     #[test]

@@ -72,8 +72,8 @@ const MENUS: &[Menu] = &[
     Menu::new("Preset").with_items(PRESET_ITEMS),
 ];
 
-const SEEDS_TAB: &[DockTab] = &[DockTab { label: "Seeds" }];
-const TOKENS_TAB: &[DockTab] = &[DockTab { label: "Tokens" }];
+const SEEDS_TAB: &[DockTab] = &[DockTab::new("Seeds")];
+const TOKENS_TAB: &[DockTab] = &[DockTab::new("Tokens")];
 
 /// The dialogs' focus ids (each takes a few after its own).
 const ID_PROMPT: u64 = 0xD1A1_0000;

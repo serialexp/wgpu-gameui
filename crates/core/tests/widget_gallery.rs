@@ -7375,9 +7375,9 @@ fn render_widget_gallery() {
             // editor DocTabs. A synthetic pointer keeps Hover visible in the
             // static gallery alongside Active and Idle.
             let tabs = vec![
-                DPanelTab { label: "Active" },
-                DPanelTab { label: "Hover" },
-                DPanelTab { label: "Idle" },
+                DPanelTab::new("Active"),
+                DPanelTab::new("Hover"),
+                DPanelTab::new("Idle"),
             ];
             let mut state = DockPanelState::new(240.0);
             state.active_tab = 0;
