@@ -6,7 +6,40 @@ const LONG: &str = "a label far too long for the hundred and twenty pixels it ge
 fn ellipsized(max_width: f32) -> LayoutSpec<'static> {
     LayoutSpec {
         ellipsize: true,
+        single_line: true,
         ..LayoutSpec::plain(14.0, Some(max_width))
+    }
+}
+
+/// A hard line break in an ellipsized label is shown as a space: the label is
+/// drawn, measured and cut as one line, with every glyph still at its own
+/// byte of the content.
+#[test]
+fn a_line_break_in_an_ellipsized_label_is_a_space() {
+    let handle = shared_font_system();
+    let mut shared = handle.lock().unwrap();
+    let broken = "first line\nsecond\r\nthird";
+    let spaced = "first line second  third";
+    for width in [1000.0, 80.0] {
+        let spec = ellipsized(width);
+        for spec in [spec, spec.natural()] {
+            let got = shared.layout(&spec, broken);
+            let got = (
+                got.lines.len(),
+                got.size,
+                got.shown,
+                got.glyphs.iter().map(|g| g.byte_start).collect::<Vec<_>>(),
+            );
+            let want = shared.layout(&spec, spaced);
+            let want = (
+                want.lines.len(),
+                want.size,
+                want.shown,
+                want.glyphs.iter().map(|g| g.byte_start).collect::<Vec<_>>(),
+            );
+            assert_eq!(got.0, 1, "{width}: one line");
+            assert_eq!(got, want, "{width}");
+        }
     }
 }
 

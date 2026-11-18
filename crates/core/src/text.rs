@@ -3609,7 +3609,9 @@ pub struct TextBlock {
     pub direction: TextDirection,
     /// Single-line ellipsis mode: when `true`, the block is laid out on one line
     /// (no wrapping) and truncated with a trailing `'…'` if it would exceed
-    /// `max_width`. When `false` (default) the block wraps at `max_width`.
+    /// `max_width`. A hard line break in the content is shown as a space, so
+    /// the block is one line tall whatever it holds. When `false` (default)
+    /// the block wraps at `max_width`.
     pub ellipsize: bool,
     /// Font weight selector (default [`Weight::NORMAL`]). Picks the matching face
     /// (e.g. [`Weight::BOLD`]) from the block's family during shaping; cosmic-text

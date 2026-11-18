@@ -330,6 +330,10 @@ pub(crate) struct LayoutSpec<'a> {
     pub vertical: bool,
     /// One line, cut to `max_width` with a trailing '…'.
     pub ellipsize: bool,
+    /// Line breaks are shaped as spaces, so the text is one line: an
+    /// ellipsized block's, kept by [`natural`](Self::natural) so it measures
+    /// and is cut as the one line it draws.
+    pub single_line: bool,
 }
 
 impl<'a> LayoutSpec<'a> {
@@ -349,6 +353,7 @@ impl<'a> LayoutSpec<'a> {
             direction: block.direction,
             vertical: block.vertical,
             ellipsize: block.ellipsize,
+            single_line: block.ellipsize && !block.vertical,
         }
     }
 
@@ -369,6 +374,7 @@ impl<'a> LayoutSpec<'a> {
             direction: TextDirection::default(),
             vertical: false,
             ellipsize: false,
+            single_line: false,
         }
     }
 
@@ -410,6 +416,7 @@ impl<'a> LayoutSpec<'a> {
             vertical: self.vertical,
             // Vertical text is never cut, so its layout doesn't depend on it.
             ellipsize: self.ellipsize && !self.vertical,
+            single_line: self.single_line && !self.vertical,
         }
     }
 
@@ -438,6 +445,7 @@ struct LayoutKey {
     direction: TextDirection,
     vertical: bool,
     ellipsize: bool,
+    single_line: bool,
 }
 
 /// A hash of `faces` for [`LayoutKey`]: `0` when there are none, so plain
@@ -1085,6 +1093,13 @@ impl<'c> ShapedText<'c> {
         let (content, shown): (Cow<'c, str>, usize) = match cut {
             Some(cut) => (Cow::Owned(format!("{}…", &content[..cut])), cut),
             None => (Cow::Borrowed(content), content.len()),
+        };
+        // cosmic-text breaks lines at `\r` and `\n` alone, each one byte, as
+        // a space is: every glyph keeps its byte offset into the content.
+        let content = if spec.single_line && !spec.vertical && content.contains(['\r', '\n']) {
+            Cow::Owned(content.replace(['\r', '\n'], " "))
+        } else {
+            content
         };
         let empty = content.is_empty();
         // Force the base paragraph direction (if requested) by prepending a

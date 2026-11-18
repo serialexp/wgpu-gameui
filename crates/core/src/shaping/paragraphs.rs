@@ -41,7 +41,11 @@ pub(super) fn is_long(content: &str) -> bool {
 /// an ellipsized one is a line cut from the whole, and face ranges address
 /// the whole content.
 pub(super) fn reusable(spec: &LayoutSpec<'_>, content: &str) -> bool {
-    !spec.vertical && !spec.ellipsize && spec.shaped_faces().is_empty() && is_long(content)
+    !spec.vertical
+        && !spec.ellipsize
+        && !spec.single_line
+        && spec.shaped_faces().is_empty()
+        && is_long(content)
 }
 
 /// One paragraph of a layout: its bytes in the content (without its line

@@ -141,6 +141,12 @@ fn walk(fonts: &FontSystemHandle, base: &TextBlock, what: &str) {
     let mut steps = layouts();
     let back: Vec<_> = steps.iter().rev().copied().collect();
     steps.extend(back);
+    // An ellipsized text shapes its line breaks as spaces, so going into or
+    // out of an ellipsis shapes a text that has any again.
+    let flattened = |block: &TextBlock| {
+        block.ellipsize && !block.vertical && block.drawn_content().contains(['\r', '\n'])
+    };
+    let mut was_flattened = flattened(base);
     for (step, layout) in steps.into_iter().enumerate() {
         let block = with_layout(base, layout);
         let what = format!("{what}, step {step} {layout:?}");
@@ -152,10 +158,12 @@ fn walk(fonts: &FontSystemHandle, base: &TextBlock, what: &str) {
         let cut = block.ellipsize
             && !block.vertical
             && drawn.layout().shown < block.drawn_content().len() as u32;
+        let reflattened = flattened(&block) != was_flattened;
+        was_flattened = flattened(&block);
         // A cut line is shaped afresh, and once kept is not shaped again;
-        // nothing else shapes.
+        // nothing else shapes but a change of flattening.
         assert!(
-            after.shaped - start.shaped <= u64::from(cut),
+            after.shaped - start.shaped <= u64::from(cut) + u64::from(reflattened),
             "{what}: shaped {}",
             after.shaped - start.shaped
         );

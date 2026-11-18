@@ -50,10 +50,13 @@ struct ShapingKey {
     faces: u64,
     direction: TextDirection,
     vertical: bool,
+    /// Its line breaks were shaped as spaces ([`LayoutSpec::single_line`]):
+    /// only when it has any, so a text without one shapes alike either way.
+    flattened: bool,
 }
 
 impl ShapingKey {
-    fn of(spec: &LayoutSpec<'_>) -> Self {
+    fn of(spec: &LayoutSpec<'_>, content: &str) -> Self {
         Self {
             font_size: spec.font_size.to_bits(),
             letter_spacing: spec.letter_spacing.to_bits(),
@@ -63,6 +66,7 @@ impl ShapingKey {
             faces: faces_hash(spec.shaped_faces()),
             direction: spec.direction,
             vertical: spec.vertical,
+            flattened: spec.single_line && !spec.vertical && content.contains(['\r', '\n']),
         }
     }
 }
@@ -155,7 +159,7 @@ impl PreparedText {
             buffer: Buffer::new_empty(Metrics::new(spec.font_size, spec.line_height)),
             source: BufferSource::default(),
             content: content.clone(),
-            shaping: ShapingKey::of(spec),
+            shaping: ShapingKey::of(spec, &content),
             fonts: FontStamp::of(shared),
             laid_out: spec.key(),
             kept: [None, None],
@@ -189,7 +193,7 @@ impl PreparedText {
         crate::text::shape_buffer(&mut self.buffer, &mut shared.font_system);
         shared.layouts.shaped += crate::text::shaping_passes() - before;
         self.fonts = FontStamp::of(shared);
-        self.shaping = ShapingKey::of(spec);
+        self.shaping = ShapingKey::of(spec, &content);
         self.content = content;
         self.laid_out = spec.key();
         self.kept = [None, None];
@@ -299,7 +303,7 @@ impl PreparedText {
         content: &TextContent,
     ) {
         let shaped_alike =
-            self.fonts == FontStamp::of(shared) && self.shaping == ShapingKey::of(spec);
+            self.fonts == FontStamp::of(shared) && self.shaping == ShapingKey::of(spec, content);
         if !shaped_alike || !same_content(&self.content, content) {
             // Only the content changed: keep the paragraphs that didn't.
             self.reshape(shared, spec, content.clone(), shaped_alike && splices(spec));

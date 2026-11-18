@@ -179,6 +179,7 @@ impl DrawnBlock {
             direction: self.direction,
             vertical: self.vertical,
             ellipsize: self.ellipsize,
+            single_line: self.ellipsize && !self.vertical,
         }
     }
 }
