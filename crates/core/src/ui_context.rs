@@ -3969,6 +3969,38 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_toggle_and_slider_are_dimmed_like_the_rest() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut faces = |enabled: bool| {
+            let mut input = InputState::default();
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            {
+                let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+                ui.enabled_scope(enabled, |ui| {
+                    ui.push();
+                    ui.translate(10.0, 10.0);
+                    ui.toggle("", true);
+                    ui.slider(7, 0.5, 0.0, 1.0, Some(120.0));
+                    ui.pop();
+                });
+            }
+            state.end_frame(&[]);
+            list.chrome_instances()
+                .map(|i| (i.bg, i.bg2, i.border))
+                .collect::<Vec<_>>()
+        };
+        let (lit, dim) = (faces(true), faces(false));
+        assert!(!lit.is_empty());
+        assert_eq!(lit.len(), dim.len(), "the same faces are drawn");
+        let dimmed = |a: [f32; 4], b: [f32; 4]| (0..3).all(|c| approx(b[c], a[c] * 0.55));
+        for ((bg, bg2, border), (dbg, dbg2, dborder)) in lit.into_iter().zip(dim) {
+            assert!(dimmed(bg, dbg) && dimmed(bg2, dbg2) && dimmed(border, dborder));
+        }
+    }
+
+    #[test]
     fn disabled_scope_swallows_button_click() {
         let theme = Theme::default();
         let input = click_at(10.0, 10.0); // inside a 100x30 button at the origin
