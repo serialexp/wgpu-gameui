@@ -5,11 +5,12 @@
 use super::*;
 use crate::text::byte_on_adjacent_line;
 
-const FIELD: FieldText = FieldText {
+const FIELD: FieldText<'static> = FieldText {
     font_size: 16.0,
     wrap: WrapMode::WordOrGlyph,
     max_width: 160.0,
     direction: crate::TextDirection::Auto,
+    font: None,
 };
 
 /// How far apart two positions may be, in px.
@@ -246,6 +247,23 @@ fn a_new_width_turns_every_height_back_into_an_estimate() {
     };
     assert_eq!(paragraphs.sync("one\ntwo", wider), None);
     assert!(!paragraphs.is_measured(0));
+}
+
+#[test]
+fn a_new_font_turns_every_height_back_into_an_estimate() {
+    let mut list = DrawList::new();
+    let mut paragraphs = synced("one\ntwo");
+    paragraphs.carets(&mut list, FIELD, 0);
+    let mono = crate::FontHandle("Field Mono".into());
+    let set_in_mono = FieldText {
+        font: Some(&mono),
+        ..FIELD
+    };
+    assert_eq!(paragraphs.sync("one\ntwo", set_in_mono), None);
+    assert!(!paragraphs.is_measured(0));
+    paragraphs.carets(&mut list, set_in_mono, 0);
+    assert_eq!(paragraphs.sync("one\ntwo", set_in_mono), None);
+    assert!(paragraphs.is_measured(0), "the same font keeps it");
 }
 
 #[test]

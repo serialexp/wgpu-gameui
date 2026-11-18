@@ -144,6 +144,16 @@ impl Default for FontSpec {
     }
 }
 
+/// How [`UiContext::text_input_with`] draws its field, past the text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextInputOptions {
+    /// The error border and ring: what it holds was refused.
+    pub invalid: bool,
+    /// Set in the theme's [`mono_font`](crate::Theme::mono_font): a command,
+    /// a path, a handle.
+    pub mono: bool,
+}
+
 /// Reserved [`FocusId`] the façade's tree occupies in the Tab ring — the whole
 /// tree is a single Tab stop. Picked at the top of the id space to avoid clashing
 /// with caller-supplied ids.
@@ -2139,7 +2149,14 @@ impl<'a> UiContext<'a> {
         placeholder: &str,
         w: Option<f32>,
     ) -> bool {
-        self.text_input_masked(id, buffer, placeholder, w, None, false)
+        self.text_input_masked(
+            id,
+            buffer,
+            placeholder,
+            w,
+            None,
+            TextInputOptions::default(),
+        )
     }
 
     /// [`text_input`](Self::text_input) with the error border and ring while
@@ -2152,7 +2169,24 @@ impl<'a> UiContext<'a> {
         invalid: bool,
         w: Option<f32>,
     ) -> bool {
-        self.text_input_masked(id, buffer, placeholder, w, None, invalid)
+        let options = TextInputOptions {
+            invalid,
+            ..TextInputOptions::default()
+        };
+        self.text_input_masked(id, buffer, placeholder, w, None, options)
+    }
+
+    /// [`text_input`](Self::text_input) drawn as `options` says: refused, or
+    /// set in the mono face.
+    pub fn text_input_with(
+        &mut self,
+        id: FocusId,
+        buffer: &mut String,
+        placeholder: &str,
+        w: Option<f32>,
+        options: TextInputOptions,
+    ) -> bool {
+        self.text_input_masked(id, buffer, placeholder, w, None, options)
     }
 
     /// Password field: like [`text_input`](Self::text_input) but characters are
@@ -2165,7 +2199,14 @@ impl<'a> UiContext<'a> {
         placeholder: &str,
         w: Option<f32>,
     ) -> bool {
-        self.text_input_masked(id, buffer, placeholder, w, Some('•'), false)
+        self.text_input_masked(
+            id,
+            buffer,
+            placeholder,
+            w,
+            Some('•'),
+            TextInputOptions::default(),
+        )
     }
 
     /// Search field: a round well with a magnifier, the text, and a clear key
@@ -2199,7 +2240,7 @@ impl<'a> UiContext<'a> {
 
     /// Shared body for [`text_input`](Self::text_input) /
     /// [`password_input`](Self::password_input): `mask` selects plaintext (`None`)
-    /// vs masked (`Some(ch)`) display, and `invalid` the error ring.
+    /// vs masked (`Some(ch)`) display, and `options` the error ring and face.
     fn text_input_masked(
         &mut self,
         id: FocusId,
@@ -2207,12 +2248,17 @@ impl<'a> UiContext<'a> {
         placeholder: &str,
         w: Option<f32>,
         mask: Option<char>,
-        invalid: bool,
+        options: TextInputOptions,
     ) -> bool {
         let Some((_, theme)) = self.interactive_refs() else {
             return false;
         };
         let width = w.unwrap_or_else(|| self.default_field_width());
+        let font = if options.mono {
+            theme.mono_font.clone()
+        } else {
+            None
+        };
         self.retained_text_field(
             id,
             buffer,
@@ -2221,7 +2267,8 @@ impl<'a> UiContext<'a> {
             TextInput::new,
             |ti, _, id, ctx| {
                 ti.mask = mask;
-                ti.invalid = invalid;
+                ti.invalid = options.invalid;
+                ti.font = font;
                 ti.draw(id, ctx);
             },
         )
@@ -5673,6 +5720,36 @@ mod tests {
         };
         assert!(frame(true));
         assert!(!frame(false));
+    }
+
+    #[test]
+    fn a_mono_text_input_is_set_in_the_themes_mono_font() {
+        let mut theme = Theme::default();
+        theme.mono_font = Some(FontHandle("Some Mono".into()));
+        let mut state = UiState::new();
+        let mut buffer = String::from("cargo check");
+        let mut frame = |mono: bool| {
+            let mut input = InputState::default();
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            {
+                let mut ui = UiContext::interactive(&mut list, &input, &mut state, &theme);
+                let options = TextInputOptions {
+                    mono,
+                    ..TextInputOptions::default()
+                };
+                ui.text_input_with(6, &mut buffer, "", Some(160.0), options);
+            }
+            state.end_frame(&[]);
+            list.texts
+                .iter()
+                .find(|t| t.content == "cargo check")
+                .expect("the value is drawn")
+                .font
+                .clone()
+        };
+        assert_eq!(frame(true), theme.mono_font);
+        assert_eq!(frame(false), None, "back to the theme's font");
     }
 
     #[test]

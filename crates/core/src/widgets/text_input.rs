@@ -246,6 +246,11 @@ pub struct TextInput {
     /// reading-start alignment + caret home edge) for direction-neutral content.
     /// Set via [`with_direction`](Self::with_direction).
     pub direction: crate::TextDirection,
+    /// The face the field's text is set in; `None` (the default) is the
+    /// theme's [`font`](crate::Theme::font). A field for a command, a path or
+    /// a handle takes the theme's [`mono_font`](crate::Theme::mono_font). Set
+    /// via [`with_font`](Self::with_font).
+    pub font: Option<crate::FontHandle>,
     /// Paint the field's own input well (the default). A widget that paints
     /// its own frame around the field, like the
     /// [`SearchField`](super::SearchField)'s round well, turns this off.
@@ -302,6 +307,7 @@ impl Default for TextInput {
             caret_at: None,
             mask: None,
             direction: crate::TextDirection::Auto,
+            font: None,
             well: true,
             invalid: false,
             insets: None,
@@ -363,7 +369,7 @@ impl TextInput {
 
     /// Bring a multi-line field's paragraphs in step with `value`, keeping
     /// the scroll on the paragraph it was on wherever an edit moved it.
-    fn sync_paragraphs(&mut self, field: FieldText) {
+    fn sync_paragraphs(&mut self, field: FieldText<'_>) {
         if let Some(splice) = self.paragraphs.sync(&self.value, field) {
             self.scroll_anchor.0 = splice.index(self.scroll_anchor.0).0;
         }
@@ -394,6 +400,13 @@ impl TextInput {
     /// [`invalid`](Self::invalid).
     pub fn with_invalid(mut self, invalid: bool) -> Self {
         self.invalid = invalid;
+        self
+    }
+
+    /// Set the text in `font`, or the theme's font for `None`. See
+    /// [`font`](Self::font).
+    pub fn with_font(mut self, font: Option<crate::FontHandle>) -> Self {
+        self.font = font;
         self
     }
 
@@ -525,7 +538,7 @@ impl TextInput {
     fn byte_under(
         &mut self,
         list: &mut DrawList,
-        field: FieldText,
+        field: FieldText<'_>,
         pick_vis: &[VisualGlyph],
         multiline: bool,
         local: [f32; 2],
@@ -773,7 +786,7 @@ impl TextInput {
     fn handle_keyboard(
         &mut self,
         input: &InputState,
-        mut nav: Option<(&mut DrawList, FieldText)>,
+        mut nav: Option<(&mut DrawList, FieldText<'_>)>,
         vis: &[VisualGlyph],
     ) {
         // Masking forces single-line semantics (Enter submits, Up/Down inert).
@@ -1078,11 +1091,15 @@ impl TextInput {
         } else {
             WrapMode::None
         };
+        // The field's own face, else the theme's: the text is shaped in it
+        // and the single-line field centres on its metrics.
+        let font = self.font.clone().or_else(|| s.theme().font.clone());
         let field_text = FieldText {
             font_size: s.scalar(StyleKey::FontSize),
             wrap,
             max_width: text_max_w,
             direction: self.direction,
+            font: font.as_ref(),
         };
         // Laid-out line height — matches `TextBlock::with_size`
         // (font_size * 1.25). Single-line keeps font_size for the selection/caret
@@ -1100,7 +1117,7 @@ impl TextInput {
         let text_top = if multiline {
             self.y + eff_pad_h
         } else {
-            let m = list.font_vmetrics(s.theme().font.as_ref());
+            let m = list.font_vmetrics(font.as_ref());
             let font_size = s.scalar(StyleKey::FontSize);
             self.y + self.height / 2.0 - font_size * m.baseline_ratio + font_size * m.x_ratio / 2.0
         };
@@ -1910,6 +1927,34 @@ mod tests {
         let clip = text.clip.expect("the text is clipped");
         assert_eq!(clip.x, theme.padding);
         assert_eq!(clip.x + clip.width, ti.width - theme.padding);
+    }
+
+    #[test]
+    fn a_field_is_set_in_its_own_font_else_the_themes() {
+        let mut theme = Theme::default();
+        theme.font = Some(crate::FontHandle("Theme Sans".into()));
+        let drawn_font = |ti: &mut TextInput| {
+            let mut focus = FocusState::new();
+            let mut list = DrawList::new();
+            let input = InputState::default();
+            focus.begin_frame(&input);
+            draw_input(ti, 1, &mut focus, &mut list, &theme, &input);
+            list.texts
+                .iter()
+                .find(|t| t.content == "value")
+                .expect("the value is drawn")
+                .font
+                .clone()
+        };
+        for multiline in [false, true] {
+            let mut ti = TextInput::new(0.0, 0.0, 120.0, 48.0)
+                .with_multiline(multiline)
+                .with_value("value");
+            assert_eq!(drawn_font(&mut ti), theme.font, "{multiline}: the theme's");
+            let mono = Some(crate::FontHandle("Field Mono".into()));
+            let mut ti = ti.with_font(mono.clone());
+            assert_eq!(drawn_font(&mut ti), mono, "{multiline}: its own");
+        }
     }
 
     #[test]
@@ -2740,11 +2785,12 @@ mod tests {
     // ---- Multi-line behaviour ----
 
     /// How the keyboard tests lay a multi-line field out.
-    const FIELD: FieldText = FieldText {
+    const FIELD: FieldText<'static> = FieldText {
         font_size: 16.0,
         wrap: WrapMode::WordOrGlyph,
         max_width: 1000.0,
         direction: crate::TextDirection::Auto,
+        font: None,
     };
 
     /// Build a `[CaretPos]` layout matching what a multiline field lays out, so

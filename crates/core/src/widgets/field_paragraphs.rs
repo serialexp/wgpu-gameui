@@ -20,7 +20,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::DrawList;
 use super::row_heights::{Row, RowHeights};
 use crate::text::{
-    CaretPos, TextBlock, WrapMode, byte_at_point, byte_under_point, caret_for_byte, on_line,
+    CaretPos, FontHandle, TextBlock, WrapMode, byte_at_point, byte_under_point, caret_for_byte,
+    on_line,
 };
 
 /// The most bytes laid out as one block. A longer paragraph is cut into
@@ -35,14 +36,16 @@ const AVERAGE_ADVANCE: f32 = 0.55;
 /// glyphs. Every caret, click, selection and scroll position is read from the
 /// layout of a block built here, so it is the layout the text is drawn with.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct FieldText {
+pub(super) struct FieldText<'f> {
     pub font_size: f32,
     pub wrap: WrapMode,
     pub max_width: f32,
     pub direction: crate::TextDirection,
+    /// The face it is set in; `None` is the default sans-serif.
+    pub font: Option<&'f FontHandle>,
 }
 
-impl FieldText {
+impl FieldText<'_> {
     /// `content` laid out as the field draws it, at (`x`, `y`).
     pub fn block(self, content: impl Into<crate::TextContent>, x: f32, y: f32) -> TextBlock {
         TextBlock::new(content, x, y)
@@ -50,6 +53,7 @@ impl FieldText {
             .with_wrap(self.wrap)
             .with_max_width(self.max_width)
             .with_direction(self.direction)
+            .with_font_opt(self.font.cloned())
     }
 
     /// The height of one laid-out line (`TextBlock::with_size`'s).
@@ -67,6 +71,37 @@ impl FieldText {
             (width / self.max_width).ceil().max(1.0)
         };
         Row::estimated(lines * self.line_height())
+    }
+}
+
+/// The [`FieldText`] a field's heights were measured for, kept past the
+/// frame that drew it.
+#[derive(Debug)]
+struct MeasuredFor {
+    font_size: f32,
+    wrap: WrapMode,
+    max_width: f32,
+    direction: crate::TextDirection,
+    font: Option<FontHandle>,
+}
+
+impl MeasuredFor {
+    fn of(field: FieldText<'_>) -> Self {
+        Self {
+            font_size: field.font_size,
+            wrap: field.wrap,
+            max_width: field.max_width,
+            direction: field.direction,
+            font: field.font.cloned(),
+        }
+    }
+
+    fn is(&self, field: FieldText<'_>) -> bool {
+        self.font_size == field.font_size
+            && self.wrap == field.wrap
+            && self.max_width == field.max_width
+            && self.direction == field.direction
+            && self.font.as_ref() == field.font
     }
 }
 
@@ -128,7 +163,7 @@ pub(super) struct FieldParagraphs {
     segments: Vec<Range<usize>>,
     heights: RowHeights,
     /// What the heights were measured for.
-    field: Option<FieldText>,
+    field: Option<MeasuredFor>,
 }
 
 impl FieldParagraphs {
@@ -136,14 +171,17 @@ impl FieldParagraphs {
     /// the paragraphs an edit touched are split again and estimated; the
     /// others keep their heights. A new width or font re-estimates them all.
     /// Returns what moved, when the text changed.
-    pub fn sync(&mut self, value: &str, field: FieldText) -> Option<Splice> {
-        if self.field.is_some_and(|old| old != field) {
-            let text = &self.text;
-            let segments = &self.segments;
-            self.heights
-                .reestimate(|i| field.estimate(&text[segments[i].clone()]));
+    pub fn sync(&mut self, value: &str, field: FieldText<'_>) -> Option<Splice> {
+        let same = self.field.as_ref().is_some_and(|old| old.is(field));
+        if !same {
+            if self.field.is_some() {
+                let text = &self.text;
+                let segments = &self.segments;
+                self.heights
+                    .reestimate(|i| field.estimate(&text[segments[i].clone()]));
+            }
+            self.field = Some(MeasuredFor::of(field));
         }
-        self.field = Some(field);
         if !self.segments.is_empty() && self.text == value {
             return None;
         }
@@ -258,7 +296,7 @@ impl FieldParagraphs {
     pub fn carets(
         &mut self,
         list: &mut DrawList,
-        field: FieldText,
+        field: FieldText<'_>,
         segment: usize,
     ) -> Arc<[CaretPos]> {
         let range = self.range(segment);
@@ -279,7 +317,7 @@ impl FieldParagraphs {
     pub fn shown(
         &mut self,
         list: &mut DrawList,
-        field: FieldText,
+        field: FieldText<'_>,
         top: f32,
         bottom: f32,
     ) -> Vec<Shown> {
@@ -304,7 +342,7 @@ impl FieldParagraphs {
 
     /// Where the caret at `byte` stands: [`caret_for_byte`] over its
     /// paragraph.
-    pub fn caret(&mut self, list: &mut DrawList, field: FieldText, byte: usize) -> Caret {
+    pub fn caret(&mut self, list: &mut DrawList, field: FieldText<'_>, byte: usize) -> Caret {
         let segment = self.caret_segment(byte);
         let carets = self.carets(list, field, segment);
         let start = self.segments[segment].start;
@@ -321,7 +359,7 @@ impl FieldParagraphs {
 
     /// The caret nearest the point (`x`, `y`) in the field's coordinates:
     /// [`byte_at_point`] over the paragraph at `y`.
-    pub fn byte_at(&mut self, list: &mut DrawList, field: FieldText, x: f32, y: f32) -> usize {
+    pub fn byte_at(&mut self, list: &mut DrawList, field: FieldText<'_>, x: f32, y: f32) -> usize {
         let segment = self.segment_at(y);
         let carets = self.carets(list, field, segment);
         self.segments[segment].start + byte_at_point(&carets, x, y - self.top(segment))
@@ -329,7 +367,13 @@ impl FieldParagraphs {
 
     /// The character under the point: [`byte_under_point`] over the
     /// paragraph at `y`.
-    pub fn byte_under(&mut self, list: &mut DrawList, field: FieldText, x: f32, y: f32) -> usize {
+    pub fn byte_under(
+        &mut self,
+        list: &mut DrawList,
+        field: FieldText<'_>,
+        x: f32,
+        y: f32,
+    ) -> usize {
         let segment = self.segment_at(y);
         let carets = self.carets(list, field, segment);
         self.segments[segment].start + byte_under_point(&carets, x, y - self.top(segment))
@@ -341,7 +385,7 @@ impl FieldParagraphs {
     pub fn adjacent(
         &mut self,
         list: &mut DrawList,
-        field: FieldText,
+        field: FieldText<'_>,
         byte: usize,
         dir: i32,
         desired_x: f32,
@@ -372,7 +416,7 @@ impl FieldParagraphs {
     pub fn line_bounds(
         &mut self,
         list: &mut DrawList,
-        field: FieldText,
+        field: FieldText<'_>,
         byte: usize,
     ) -> (usize, usize) {
         let caret = self.caret(list, field, byte);

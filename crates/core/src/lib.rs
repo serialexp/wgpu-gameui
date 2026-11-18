@@ -190,7 +190,7 @@ pub use style::{
     Ink, StyleKey, StyleOverlay, StyleResolver, StyleShape, StyleValue, TextSize, Tracking,
 };
 pub use theme::Theme;
-pub use ui_context::{AlignH, AlignV, FontSpec, UiContext, UiState};
+pub use ui_context::{AlignH, AlignV, FontSpec, TextInputOptions, UiContext, UiState};
 pub use widgets::*;
 
 /// Input state passed to UI for interaction.
