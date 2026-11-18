@@ -233,7 +233,7 @@ pub use placeholder::Placeholder;
 pub use popover::{
     POPOVER_CONTENT_TOP, POPOVER_PAD, POPOVER_TITLE_H, Popover, PopoverFrame, PopoverOutput,
     PopoverPlacement, PopoverSide, draw_frame as draw_popover_frame, measure_sheet_height,
-    place_popover,
+    place_popover, popover_close_key,
 };
 pub use pressable::{PressState, Pressable};
 pub use progress_bar::{

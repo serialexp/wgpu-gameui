@@ -7069,6 +7069,7 @@ fn render_widget_gallery() {
                 Rect::new(r.x, r.y + 6.0, 240.0, 90.0),
                 PopoverSide::Below,
                 "rate limit usage",
+                true,
                 list,
                 &s,
             );

@@ -149,11 +149,23 @@ const TITLE_TRACKING: f32 = 0.14;
 const TITLE_RULE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const TITLE_RULE_HI: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 
+/// Where the close key of a popover at `body` goes: at the right end of
+/// its title bar. For a caller that hit-tests the key before it draws the
+/// frame.
+pub fn popover_close_key(body: Rect) -> Rect {
+    Rect::new(
+        body.right() - POPOVER_PAD - CLOSE_KEY,
+        body.y + (POPOVER_TITLE_H - CLOSE_KEY) * 0.5,
+        CLOSE_KEY,
+        CLOSE_KEY,
+    )
+}
+
 /// A drawn popover frame (see [`draw_frame`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PopoverFrame {
-    /// The close key, for hit-testing.
-    pub close: Rect,
+    /// The close key, for hit-testing; `None` for a frame drawn without one.
+    pub close: Option<Rect>,
     /// Where the content goes: the body under the title bar, inside the pad.
     pub content: Rect,
 }
@@ -170,7 +182,7 @@ pub fn draw_sheet(
     list: &mut DrawList,
     s: &StyleResolver,
 ) -> Rect {
-    let frame = draw_frame(body, side, title, list, s);
+    let frame = draw_frame(body, side, title, true, list, s);
     let font_size = s.scalar(StyleKey::FontSize);
     let dim = s.color(StyleKey::TextDim);
     let width = frame.content.width;
@@ -187,17 +199,19 @@ pub fn draw_sheet(
         );
         y += th + 4.0;
     }
-    frame.close
+    popover_close_key(body)
 }
 
 /// Draw a Forge popover's frame: the raised sheet with its arrow toward the
-/// anchor, a title bar (mono caps title, a ghost × key, a two-line rule),
-/// and nothing inside, for the caller to fill [`PopoverFrame::content`]
-/// with any controls.
+/// anchor, a title bar (mono caps title, a ghost × key when `closable`, a
+/// two-line rule), and nothing inside, for the caller to fill
+/// [`PopoverFrame::content`] with any controls. A popover that comes and
+/// goes with the pointer (a hover card) has nothing to close.
 pub fn draw_frame(
     body: Rect,
     side: PopoverSide,
     title: &str,
+    closable: bool,
     list: &mut DrawList,
     s: &StyleResolver,
 ) -> PopoverFrame {
@@ -262,12 +276,9 @@ pub fn draw_frame(
 
         // Title bar: 9px mono caps in `--ink-glyph`, a ghost × key, and a
         // two-line rule under it.
-        close = Rect::new(
-            body.right() - POPOVER_PAD - CLOSE_KEY,
-            body.y + (POPOVER_TITLE_H - CLOSE_KEY) * 0.5,
-            CLOSE_KEY,
-            CLOSE_KEY,
-        );
+        close = closable.then(|| popover_close_key(body));
+        // The title runs up to the key, or to the pad without one.
+        let title_end = close.map_or(body.right(), |key| key.x - POPOVER_PAD);
         let size = s.text_size(TextSize::Caption);
         list.text(
             s.mono_block(
@@ -278,18 +289,20 @@ pub fn draw_frame(
                 Ink::Glyph,
             )
             .with_letter_spacing(size * TITLE_TRACKING)
-            .with_max_width((close.x - body.x - POPOVER_PAD * 2.0).max(0.0))
+            .with_max_width((title_end - body.x - POPOVER_PAD * 2.0).max(0.0))
             .with_ellipsis(),
         );
-        let x_size = s.text_size(TextSize::Row);
-        let (xw, _) = list.measure_text("×", x_size, None);
-        list.text(s.sans_block(
-            "×",
-            close.x + (CLOSE_KEY - xw) * 0.5,
-            crate::text::vcentered_line_y(close.y, close.height, x_size),
-            TextSize::Row,
-            Ink::Cell,
-        ));
+        if let Some(close) = close {
+            let x_size = s.text_size(TextSize::Row);
+            let (xw, _) = list.measure_text("×", x_size, None);
+            list.text(s.sans_block(
+                "×",
+                close.x + (CLOSE_KEY - xw) * 0.5,
+                crate::text::vcentered_line_y(close.y, close.height, x_size),
+                TextSize::Row,
+                Ink::Cell,
+            ));
+        }
         list.quad(
             body.x,
             body.y + POPOVER_TITLE_H,
@@ -455,6 +468,7 @@ mod tests {
             body,
             PopoverSide::Below,
             "context usage",
+            true,
             &mut list,
             &styles,
         );
@@ -467,12 +481,41 @@ mod tests {
                 300.0 - POPOVER_CONTENT_TOP - POPOVER_PAD
             )
         );
-        assert!(frame.close.right() <= body.right() - POPOVER_PAD + 0.01);
-        assert!(frame.close.bottom() <= body.y + POPOVER_TITLE_H);
+        let close = frame.close.expect("a closable frame has a key");
+        assert_eq!(close, popover_close_key(body));
+        assert!(close.right() <= body.right() - POPOVER_PAD + 0.01);
+        assert!(close.bottom() <= body.y + POPOVER_TITLE_H);
         assert!(
             list.texts.iter().any(|t| t.content == "CONTEXT USAGE"),
             "the title is in caps"
         );
+        assert!(list.texts.iter().any(|t| t.content == "×"));
+    }
+
+    #[test]
+    fn a_frame_that_cannot_close_has_no_key_and_lends_its_room_to_the_title() {
+        let theme = Theme::default();
+        let styles = StyleResolver::new(&theme);
+        let body = Rect::new(10.0, 20.0, 200.0, 120.0);
+        let title_width = |closable| {
+            let mut list = DrawList::new();
+            let frame = draw_frame(
+                body,
+                PopoverSide::Below,
+                "hover card",
+                closable,
+                &mut list,
+                &styles,
+            );
+            assert_eq!(frame.close.is_some(), closable);
+            assert_eq!(list.texts.iter().any(|t| t.content == "×"), closable);
+            list.texts
+                .iter()
+                .find(|t| t.content == "HOVER CARD")
+                .map(|t| t.max_width)
+                .expect("the title is drawn")
+        };
+        assert!(title_width(false) > title_width(true));
     }
 
     #[test]
