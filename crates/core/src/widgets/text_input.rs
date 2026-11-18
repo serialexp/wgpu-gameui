@@ -21,6 +21,17 @@ use tree_sitter_highlight::Highlighter;
 use super::field_paragraphs::{FieldParagraphs, FieldText, Shown};
 use super::{DrawContext, DrawList, FocusId};
 
+/// Write over `text`'s bytes in place, then empty it, so a secret it held
+/// is not left in the freed memory.
+pub(crate) fn overwrite(text: &mut String) {
+    let len = text.len();
+    text.clear();
+    // Within the capacity the text already has, so the same bytes.
+    text.extend(std::iter::repeat_n('\0', len));
+    std::hint::black_box(text.as_str());
+    text.clear();
+}
+
 /// Shared clipboard reader used by retained text editors.
 pub type ClipboardGet = Rc<RefCell<dyn FnMut() -> String>>;
 /// Shared clipboard writer used by retained text editors.
@@ -724,8 +735,24 @@ impl TextInput {
         self.horizontal_scroll_offset = 0.0;
     }
 
-    /// Cut: copy selection to clipboard then delete it.
+    /// Overwrite every copy of the text the field keeps, then empty it: for
+    /// a field that held a secret, before it is dropped
+    /// ([`UiState::forget_text_input`](crate::UiState::forget_text_input)).
+    pub(crate) fn wipe(&mut self) {
+        overwrite(&mut self.value);
+        self.paragraphs.wipe();
+        #[cfg(feature = "syntax-highlighting")]
+        overwrite(&mut self.syntax_cached_value);
+        self.clear();
+    }
+
+    /// Cut: copy selection to clipboard then delete it. A masked field
+    /// neither copies nor cuts, as a password field doesn't: what it shows
+    /// is bullets, and what it holds must not reach the clipboard.
     fn cut(&mut self) {
+        if self.mask.is_some() {
+            return;
+        }
         let text = self.selected_text().map(|s| s.to_string());
         if let (Some(text), Some(set)) = (&text, &self.clipboard_set) {
             (set.borrow_mut())(text.clone());
@@ -733,8 +760,12 @@ impl TextInput {
         }
     }
 
-    /// Copy: copy selection to clipboard.
+    /// Copy: copy selection to clipboard. Not from a masked field (see
+    /// [`cut`](Self::cut)).
     fn copy(&mut self) {
+        if self.mask.is_some() {
+            return;
+        }
         let text = self.selected_text().map(|s| s.to_string());
         if let (Some(text), Some(set)) = (&text, &self.clipboard_set) {
             (set.borrow_mut())(text.clone());
@@ -2643,6 +2674,31 @@ mod tests {
         assert_eq!(ti.cursor_pos, 0);
         assert_eq!(ti.selection_start, None);
         assert_eq!(*copied.borrow(), "hello");
+    }
+
+    #[test]
+    fn a_masked_field_neither_copies_nor_cuts() {
+        let copied = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let mut ti = make_input("hunter2").password();
+        ti.select_all();
+        ti.set_clipboard_set({
+            let copied = copied.clone();
+            move |t| *copied.borrow_mut() = t
+        });
+        ti.copy();
+        ti.cut();
+        assert_eq!(*copied.borrow(), "", "nothing reached the clipboard");
+        assert_eq!(ti.value, "hunter2", "the cut took nothing out");
+    }
+
+    #[test]
+    fn a_wiped_field_keeps_no_text() {
+        let mut ti = make_input("one\ntwo").with_multiline(true);
+        ti.paragraphs.sync(&ti.value, FIELD);
+        ti.wipe();
+        assert_eq!(ti.value, "");
+        assert_eq!(ti.cursor_pos, 0);
+        assert_eq!(ti.paragraphs.len(), 0);
     }
 
     #[test]

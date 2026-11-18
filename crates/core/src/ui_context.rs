@@ -301,6 +301,17 @@ impl UiState {
         true
     }
 
+    /// Let go of the editor kept for the text field `id`: its copy of the
+    /// text is overwritten and dropped, with its caret, selection and scroll.
+    /// The field's next draw starts afresh from the caller's buffer. For a
+    /// field that held a secret (a password once it is sent), so the text
+    /// lives nowhere but the caller's buffer, which the caller clears.
+    pub fn forget_text_input(&mut self, id: FocusId) {
+        if let Some(mut field) = self.text_inputs.remove(&id) {
+            field.wipe();
+        }
+    }
+
     /// Per-frame setup: fill this frame's navigation intents via `nav`, let each
     /// consumer **claim** the intents it will act on, arm focus navigation for
     /// whatever is left, seed the auto-advance gap from the theme, and advance the
@@ -5720,6 +5731,36 @@ mod tests {
         };
         assert!(frame(true));
         assert!(!frame(false));
+    }
+
+    #[test]
+    fn a_forgotten_field_starts_again_from_the_callers_buffer() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let frame = |state: &mut UiState, buffer: &mut String| {
+            let mut input = InputState::default();
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            let mut list = DrawList::new();
+            UiContext::interactive(&mut list, &input, state, &theme).password_input(
+                5,
+                buffer,
+                "",
+                Some(160.0),
+            );
+            state.end_frame(&[]);
+        };
+        let mut password = String::from("hunter2");
+        frame(&mut state, &mut password);
+        state.focus.focus(5);
+        state.text_inputs.get_mut(&5).unwrap().select_all();
+        state.forget_text_input(5);
+        assert!(!state.text_inputs.contains_key(&5), "the editor is gone");
+        password.clear();
+        frame(&mut state, &mut password);
+        let field = &state.text_inputs[&5];
+        assert_eq!(field.value, "");
+        assert_eq!(field.selection_start, None, "its selection went with it");
+        state.forget_text_input(99); // a field never drawn: nothing to do
     }
 
     #[test]

@@ -167,6 +167,13 @@ pub(super) struct FieldParagraphs {
 }
 
 impl FieldParagraphs {
+    /// Overwrite the copy of the value they keep and forget them all (see
+    /// [`TextInput::wipe`](super::TextInput::wipe)).
+    pub fn wipe(&mut self) {
+        super::text_input::overwrite(&mut self.text);
+        *self = Self::default();
+    }
+
     /// Bring the paragraphs in step with `value` laid out as `field`. Only
     /// the paragraphs an edit touched are split again and estimated; the
     /// others keep their heights. A new width or font re-estimates them all.
