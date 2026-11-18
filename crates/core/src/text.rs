@@ -2859,22 +2859,8 @@ pub fn caret_for_byte(layout: &[CaretPos], byte: usize) -> CaretPos {
 /// brackets `y` (clamping above the first / below the last line), then the
 /// nearest caret `x` on that line.
 pub fn byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
-    if layout.is_empty() {
+    let Some(target_line) = line_at(layout, y) else {
         return 0;
-    }
-    let first = layout.first().unwrap();
-    let last = layout.last().unwrap();
-    let target_line = if y < first.line_top {
-        first.line
-    } else if y >= last.line_top + last.line_height {
-        last.line
-    } else {
-        // Lines are kept top to bottom, so the first caret whose line ends
-        // below `y` is on the line holding it, if any does.
-        layout
-            .get(layout.partition_point(|p| p.line_top + p.line_height <= y))
-            .filter(|p| y >= p.line_top)
-            .map_or(last.line, |p| p.line)
     };
 
     let mut best_byte = 0usize;
@@ -2889,18 +2875,53 @@ pub fn byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
     best_byte
 }
 
-/// Hit-test a point like [`byte_at_point`], but to the character **under**
-/// it rather than the caret nearest it: the byte of the last caret stop at or
-/// left of `x` on the line, so the right half of a character is still that
-/// character. What a double-click picks its word around.
-pub fn byte_under_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
-    let caret = byte_at_point(layout, x, y);
-    let line = on_line(layout, caret_for_byte(layout, caret).line, |p| p.line);
-    line.iter()
-        .filter(|p| p.x <= x)
-        .max_by(|a, b| a.x.total_cmp(&b.x))
-        .or_else(|| line.first())
-        .map_or(0, |p| p.byte)
+/// The visual line whose `[line_top, line_top+line_height)` band brackets
+/// `y`, clamping above the first line and below the last; `None` for no
+/// carets.
+fn line_at(layout: &[CaretPos], y: f32) -> Option<usize> {
+    let first = layout.first()?;
+    let last = layout.last()?;
+    Some(if y < first.line_top {
+        first.line
+    } else if y >= last.line_top + last.line_height {
+        last.line
+    } else {
+        // Lines are kept top to bottom, so the first caret whose line ends
+        // below `y` is on the line holding it, if any does.
+        layout
+            .get(layout.partition_point(|p| p.line_top + p.line_height <= y))
+            .filter(|p| y >= p.line_top)
+            .map_or(last.line, |p| p.line)
+    })
+}
+
+/// Hit-test a point (relative to the text block's top-left origin) to the
+/// character **under** it rather than the caret nearest it: on the visual
+/// line [`byte_at_point`] picks from `carets`, the start byte of the glyph
+/// whose cell holds `x`, so either half of a character is that character,
+/// whichever way it reads. Left or right of the line, the glyph at that end;
+/// on an empty line, where the line starts. What a double-click picks its
+/// word around.
+///
+/// `carets` and `glyphs` are one block's
+/// [`caret_layout`](crate::DrawList::caret_layout) and
+/// [`visual_layout`](crate::DrawList::visual_layout). The lines come from the
+/// carets, which an empty line has too; the character from the glyphs, since
+/// in right-to-left text a character's start stop is on its right edge, and
+/// where two runs meet two stops share an x, so the stops alone don't say
+/// which character a point is over.
+pub fn byte_under_point(carets: &[CaretPos], glyphs: &[VisualGlyph], x: f32, y: f32) -> usize {
+    let Some(line) = line_at(carets, y) else {
+        return 0;
+    };
+    visual_hit(on_line(glyphs, line, |g| g.line), x).map_or_else(
+        || {
+            on_line(carets, line, |p| p.line)
+                .first()
+                .map_or(0, |p| p.byte)
+        },
+        |hit| hit.under,
+    )
 }
 
 /// Move the caret to the visual line `dir` steps away (`-1` up, `+1` down),

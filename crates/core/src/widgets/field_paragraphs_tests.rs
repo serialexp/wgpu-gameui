@@ -34,6 +34,10 @@ fn whole(list: &mut DrawList, text: &str) -> Arc<[CaretPos]> {
     list.caret_layout(&FIELD.block(text, 0.0, 0.0))
 }
 
+fn whole_glyphs(list: &mut DrawList, text: &str) -> Arc<[VisualGlyph]> {
+    list.visual_layout(&FIELD.block(text, 0.0, 0.0))
+}
+
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() <= NEAR
 }
@@ -102,6 +106,7 @@ fn every_caret_is_where_the_whole_text_puts_it() {
 fn a_point_picks_the_byte_the_whole_text_picks() {
     let mut list = DrawList::new();
     let all = whole(&mut list, MIXED);
+    let all_glyphs = whole_glyphs(&mut list, MIXED);
     let mut paragraphs = synced(MIXED);
     let bottom = all.last().map_or(0.0, |p| p.line_top + p.line_height);
     let mut y = -10.0;
@@ -114,7 +119,7 @@ fn a_point_picks_the_byte_the_whole_text_picks() {
             );
             assert_eq!(
                 paragraphs.byte_under(&mut list, FIELD, x, y),
-                byte_under_point(&all, x, y),
+                byte_under_point(&all, &all_glyphs, x, y),
                 "under ({x}, {y})"
             );
         }

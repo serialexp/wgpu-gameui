@@ -45,13 +45,12 @@ fn reference_caret_for_byte(layout: &[CaretPos], byte: usize) -> Option<CaretPos
         .or_else(|| layout.last().copied())
 }
 
-fn reference_byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
-    if layout.is_empty() {
-        return 0;
-    }
-    let first = layout.first().unwrap();
-    let last = layout.last().unwrap();
-    let target_line = if y < first.line_top {
+/// The line whose band holds `y`, by a scan of every caret: the first above
+/// them all, the last below.
+fn reference_line_at(layout: &[CaretPos], y: f32) -> Option<usize> {
+    let first = layout.first()?;
+    let last = layout.last()?;
+    Some(if y < first.line_top {
         first.line
     } else if y >= last.line_top + last.line_height {
         last.line
@@ -61,6 +60,12 @@ fn reference_byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
             .find(|p| y >= p.line_top && y < p.line_top + p.line_height)
             .map(|p| p.line)
             .unwrap_or(last.line)
+    })
+}
+
+fn reference_byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
+    let Some(target_line) = reference_line_at(layout, y) else {
+        return 0;
     };
     let mut best_byte = 0usize;
     let mut best_dx = f32::MAX;
@@ -74,17 +79,33 @@ fn reference_byte_at_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
     best_byte
 }
 
-fn reference_byte_under_point(layout: &[CaretPos], x: f32, y: f32) -> usize {
-    let caret = reference_byte_at_point(layout, x, y);
-    let Some(line) = reference_caret_for_byte(layout, caret).map(|p| p.line) else {
+/// The glyph under the point, by a scan of every caret and glyph: on the
+/// line whose band holds `y`, the glyph whose cell holds `x`, or the
+/// leftmost or rightmost one past the line's ends; on a line without glyphs,
+/// its first caret.
+fn reference_byte_under_point(
+    layout: &[CaretPos],
+    glyphs: &[VisualGlyph],
+    x: f32,
+    y: f32,
+) -> usize {
+    let Some(line) = reference_line_at(layout, y) else {
         return 0;
     };
-    layout
-        .iter()
-        .filter(|p| p.line == line && p.x <= x)
-        .max_by(|a, b| a.x.total_cmp(&b.x))
-        .or_else(|| layout.iter().find(|p| p.line == line))
-        .map_or(0, |p| p.byte)
+    let on_line = || glyphs.iter().filter(|g| g.line == line);
+    let Some(leftmost) = on_line().min_by(|a, b| a.x.total_cmp(&b.x)) else {
+        return layout.iter().find(|p| p.line == line).map_or(0, |p| p.byte);
+    };
+    let rightmost = on_line()
+        .max_by(|a, b| (a.x + a.w).total_cmp(&(b.x + b.w)))
+        .unwrap();
+    if x < leftmost.x {
+        return leftmost.byte_start;
+    }
+    on_line()
+        .find(|g| x >= g.x && x < g.x + g.w)
+        .unwrap_or(rightmost)
+        .byte_start
 }
 
 fn reference_byte_on_adjacent_line(
@@ -199,6 +220,7 @@ fn caret_for_byte_answers_as_a_scan_of_every_caret() {
 fn hit_tests_answer_as_a_scan_of_every_caret() {
     for block in blocks() {
         let layout = DrawList::new().caret_layout(&block);
+        let glyphs = DrawList::new().visual_layout(&block);
         let bottom = layout.last().map_or(0.0, |p| p.line_top + p.line_height);
         let mut y = -12.0;
         while y < bottom + 12.0 {
@@ -211,8 +233,8 @@ fn hit_tests_answer_as_a_scan_of_every_caret() {
                     "byte_at_point, {what}"
                 );
                 assert_eq!(
-                    byte_under_point(&layout, x, y),
-                    reference_byte_under_point(&layout, x, y),
+                    byte_under_point(&layout, &glyphs, x, y),
+                    reference_byte_under_point(&layout, &glyphs, x, y),
                     "byte_under_point, {what}"
                 );
                 x += 3.0;
@@ -220,6 +242,35 @@ fn hit_tests_answer_as_a_scan_of_every_caret() {
             y += 2.5;
         }
     }
+}
+
+/// Either half of a character is that character, in text read either way
+/// and where the two directions meet: the byte the old caret-stop rule got
+/// one character off in right-to-left runs.
+#[test]
+fn the_character_under_a_point_is_the_one_drawn_there_in_either_direction() {
+    for block in blocks() {
+        let carets = DrawList::new().caret_layout(&block);
+        let glyphs = DrawList::new().visual_layout(&block);
+        for g in glyphs.iter().filter(|g| g.w > 1.0) {
+            let y = g.line_top + g.line_height / 2.0;
+            for x in [g.x + g.w * 0.25, g.x + g.w * 0.75] {
+                assert_eq!(
+                    byte_under_point(&carets, &glyphs, x, y),
+                    g.byte_start,
+                    "{:?} at ({x}, {y}), over {:?}",
+                    block.content,
+                    &block.content[g.byte_start..g.byte_end]
+                );
+            }
+        }
+    }
+    assert!(
+        blocks()
+            .iter()
+            .any(|block| DrawList::new().visual_layout(block).iter().any(|g| g.rtl)),
+        "the texts read right to left somewhere"
+    );
 }
 
 #[test]

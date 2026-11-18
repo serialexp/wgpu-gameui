@@ -20,8 +20,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::DrawList;
 use super::row_heights::{Row, RowHeights};
 use crate::text::{
-    CaretPos, FontHandle, TextBlock, WrapMode, byte_at_point, byte_under_point, caret_for_byte,
-    on_line,
+    CaretPos, FontHandle, TextBlock, VisualGlyph, WrapMode, byte_at_point, byte_under_point,
+    caret_for_byte, on_line,
 };
 
 /// The most bytes laid out as one block. A longer paragraph is cut into
@@ -318,6 +318,18 @@ impl FieldParagraphs {
         carets
     }
 
+    /// Paragraph `segment`'s glyphs in visual order, laid out as `field`
+    /// draws it (through the shared layout cache).
+    pub fn glyphs(
+        &mut self,
+        list: &mut DrawList,
+        field: FieldText<'_>,
+        segment: usize,
+    ) -> Arc<[VisualGlyph]> {
+        let range = self.range(segment);
+        list.visual_layout(&field.block(&self.text[range], 0.0, 0.0))
+    }
+
     /// The paragraphs meeting the band from `top` to `bottom`, each laid out
     /// (and so measured) top to bottom, so each one's top counts the
     /// measured heights of those drawn above it.
@@ -373,7 +385,7 @@ impl FieldParagraphs {
     }
 
     /// The character under the point: [`byte_under_point`] over the
-    /// paragraph at `y`.
+    /// paragraph at `y`, its carets and its glyphs.
     pub fn byte_under(
         &mut self,
         list: &mut DrawList,
@@ -383,7 +395,8 @@ impl FieldParagraphs {
     ) -> usize {
         let segment = self.segment_at(y);
         let carets = self.carets(list, field, segment);
-        self.segments[segment].start + byte_under_point(&carets, x, y - self.top(segment))
+        let glyphs = self.glyphs(list, field, segment);
+        self.segments[segment].start + byte_under_point(&carets, &glyphs, x, y - self.top(segment))
     }
 
     /// The caret nearest `desired_x` on the visual line `dir` steps from the
