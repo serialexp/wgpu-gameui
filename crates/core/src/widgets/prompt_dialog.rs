@@ -104,6 +104,7 @@ pub struct PromptDialog<'a> {
     placeholder: Option<&'a str>,
     validate: Option<Validate<'a>>,
     required: bool,
+    mono: bool,
     ok_label: &'a str,
     cancel_label: &'a str,
     width: f32,
@@ -120,6 +121,7 @@ impl<'a> PromptDialog<'a> {
             placeholder: None,
             validate: None,
             required: true,
+            mono: false,
             ok_label: "OK",
             cancel_label: "Cancel",
             width: PROMPT_DIALOG_WIDTH,
@@ -166,6 +168,14 @@ impl<'a> PromptDialog<'a> {
     #[must_use]
     pub fn required(mut self, required: bool) -> Self {
         self.required = required;
+        self
+    }
+
+    /// Set the field in the theme's [`mono_font`](crate::Theme::mono_font),
+    /// for a path, a command or an identifier (default `false`).
+    #[must_use]
+    pub fn mono(mut self, mono: bool) -> Self {
+        self.mono = mono;
         self
     }
 
@@ -297,6 +307,11 @@ impl<'a> PromptDialog<'a> {
             field.width = c.width;
             field.height = height;
             field.invalid = shown.is_some();
+            field.font = if self.mono {
+                s.theme().mono_font.clone()
+            } else {
+                None
+            };
             field.placeholder.clear();
             field
                 .placeholder
@@ -392,6 +407,34 @@ mod tests {
 
     fn taken(v: &str) -> Option<String> {
         (v.trim() == "Terrain").then(|| "A layer with that name already exists".to_owned())
+    }
+
+    #[test]
+    fn a_mono_prompt_sets_its_field_in_the_mono_face() {
+        let mut theme = Theme::default();
+        theme.mono_font = Some(crate::FontHandle("Prompt Mono".into()));
+        let mut state = PromptDialogState::new();
+        let mut focus = FocusState::new();
+        state.open("src/main.rs");
+        for (mono, font) in [(true, theme.mono_font.clone()), (false, None)] {
+            let dialog = PromptDialog::new("Move file").mono(mono);
+            let mut input = idle();
+            let mut list = DrawList::new();
+            state.modal.begin_frame(&mut input);
+            focus.begin_frame(&input);
+            {
+                let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0)
+                    .with_layer(0);
+                dialog.draw(30, SCREEN, &mut state, &mut ctx);
+            }
+            focus.end_frame(Some(0));
+            let drawn = list
+                .texts
+                .iter()
+                .find(|t| t.content == "src/main.rs")
+                .expect("the value is drawn");
+            assert_eq!(drawn.font, font, "mono: {mono}");
+        }
     }
 
     #[test]

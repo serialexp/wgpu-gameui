@@ -601,8 +601,6 @@ harden those foundations rather than create parallel replacements.
 
 ## 2026-09-26 — Missing Forge components, batch B (dialogs)
 
-- [ ] **P3 — `TextInput` has one font.** Its caret layout assumes the
-  default font, so `PromptDialog` can't offer Forge's `mono` field.
 - [ ] **P3 — Dialog backdrop blur is up to the app.** Forge blurs behind the
   backdrop (3 px) and the sheet (18 px). `DrawList` can't sample the
   framebuffer, so `Modal` only exposes `MODAL_BACKDROP_BLUR` /
@@ -756,11 +754,12 @@ sharp at any size, list selection and gamepad navigation.
       primitive would close both. Until then `hud_glass` is a darker, more
       opaque fill (`ChromeTheme::hud`).
 - [ ] **P2 — The timeline's marker rename field uses the theme's field
-      font.** Forge edits a marker's name in place at the flag's 8.5 px mono
-      size. `TextInput` takes its font and size from the theme
-      (`StyleKey::FontSize`), so the field is a normal 19 px field. Giving
-      `TextInput` a font and size override would fix it; the same override
-      would suit other compact in-place editors.
+      size.** Forge edits a marker's name in place at the flag's 8.5 px mono
+      size. `TextInput` can take a font (`with_font`, the theme's
+      `mono_font`), but its size comes from the theme
+      (`StyleKey::FontSize`), so the field is a normal 19 px field. A size
+      override would fix it (then set the rename field in mono); the same
+      override would suit other compact in-place editors.
 - [ ] **P3 — Nearby marker labels overlap.** When the timeline is zoomed out,
       marker flags a few frames apart draw their labels over each other.
       Forge does the same. They could be staggered onto a second line, or
