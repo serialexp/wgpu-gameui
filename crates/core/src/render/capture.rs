@@ -166,6 +166,11 @@ pub fn capture_with(
 ///
 /// `scale_factor` maps logical to physical pixels; pass `1.0` unless you are
 /// reproducing a HiDPI window.
+///
+/// # Panics
+///
+/// When `ui` was built for another format than [`CAPTURE_FORMAT`] (its
+/// [`color_space`](UiRenderer::color_space) is not [`CAPTURE_SPACE`]).
 pub fn capture_draw_list(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -175,14 +180,27 @@ pub fn capture_draw_list(
     scale_factor: f32,
     clear: Srgb,
 ) -> Vec<u8> {
+    check_capture_space(ui);
     ui.begin_frame();
     capture_with(device, queue, size, clear, |encoder, view| {
         ui.render(device, queue, encoder, view, size, scale_factor, list);
     })
 }
 
+/// A renderer built for another format than [`CAPTURE_FORMAT`] draws for
+/// that format's colour space (an `*Srgb` one through its offscreen layer,
+/// composited as linear light), so its colours would come out wrong here
+/// and nothing would say so.
+fn check_capture_space(ui: &UiRenderer) {
+    assert_eq!(
+        ui.color_space(),
+        CAPTURE_SPACE,
+        "a capture needs a renderer built for CAPTURE_FORMAT"
+    );
+}
+
 /// [`capture_draw_list`] for a whole [`LayerStack`] — base list plus every
-/// overlay layer, in z order.
+/// overlay layer, in z order. Panics as that does.
 pub fn capture_layers(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -192,6 +210,7 @@ pub fn capture_layers(
     scale_factor: f32,
     clear: Srgb,
 ) -> Vec<u8> {
+    check_capture_space(ui);
     ui.begin_frame();
     capture_with(device, queue, size, clear, |encoder, view| {
         ui.render_layers(device, queue, encoder, view, size, scale_factor, layers);
@@ -414,5 +433,59 @@ mod tests {
     fn write_png_rejects_a_mismatched_buffer() {
         let path = std::env::temp_dir().join("wgpu_gameui_capture_bad.png");
         write_png(path, &[0u8; 4], (2, 2)).ok();
+    }
+
+    /// A renderer built for a window's `*Srgb` surface is refused, for a
+    /// list and for a layer stack; one built for the capture format is not.
+    #[cfg(feature = "headless")]
+    #[test]
+    fn a_capture_refuses_a_renderer_built_for_another_colour_space() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let Some(mut gpu) = HeadlessGpu::new() else {
+            return;
+        };
+        let (device, queue) = (gpu.device().clone(), gpu.queue().clone());
+        let mut window = UiRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            gpu.font_system(),
+        );
+        assert_eq!(window.color_space(), ColorSpace::Linear);
+        let list = gpu.draw_list();
+        let layers = gpu.layer_stack();
+        let refused = |result: std::thread::Result<Vec<u8>>| {
+            let panic = result.expect_err("captured through the wrong renderer");
+            let message = panic.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert!(message.contains("CAPTURE_FORMAT"), "{message}");
+        };
+        refused(catch_unwind(AssertUnwindSafe(|| {
+            capture_draw_list(
+                &device,
+                &queue,
+                &mut window,
+                &list,
+                (4, 4),
+                1.0,
+                Srgb::TRANSPARENT,
+            )
+        })));
+        refused(catch_unwind(AssertUnwindSafe(|| {
+            capture_layers(
+                &device,
+                &queue,
+                &mut window,
+                &layers,
+                (4, 4),
+                1.0,
+                Srgb::TRANSPARENT,
+            )
+        })));
+        assert_eq!(gpu.capture(&list, (4, 4)).len(), 4 * 4 * 4);
+        assert_eq!(
+            gpu.capture_layers(&layers, (4, 4), Srgb::TRANSPARENT).len(),
+            4 * 4 * 4
+        );
     }
 }
