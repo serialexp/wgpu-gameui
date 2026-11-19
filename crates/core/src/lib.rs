@@ -123,6 +123,7 @@ mod sense;
 mod shadow;
 mod style;
 mod theme;
+mod typography;
 mod ui_context;
 mod widgets;
 
@@ -190,6 +191,7 @@ pub use style::{
     Ink, StyleKey, StyleOverlay, StyleResolver, StyleShape, StyleValue, TextSize, Tracking,
 };
 pub use theme::Theme;
+pub use typography::{FontFamily, TextRole, TextStyle, Typography};
 pub use ui_context::{AlignH, AlignV, FontSpec, TextInputOptions, UiContext, UiState};
 pub use widgets::*;
 

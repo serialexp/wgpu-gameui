@@ -2545,7 +2545,7 @@ impl TextMeasurer {
     }
 
     /// The size layout reserves for `text` laid out under `spec`.
-    fn measure_spec(&mut self, text: &str, spec: &LayoutSpec<'_>) -> (f32, f32) {
+    pub(crate) fn measure_spec(&mut self, text: &str, spec: &LayoutSpec<'_>) -> (f32, f32) {
         if text.is_empty() {
             return (0.0, spec.line_height);
         }

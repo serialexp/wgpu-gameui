@@ -316,6 +316,15 @@ pub struct Theme {
     /// without the `bundled-font` feature) falls back to the sans font.
     pub mono_font: Option<FontHandle>,
 
+    /// Font for headings and display text (every [`TextStyle`](crate::TextStyle)
+    /// in [`FontFamily::Display`](crate::FontFamily::Display)). `None` draws it
+    /// in [`font`](Self::font).
+    pub display_font: Option<FontHandle>,
+
+    /// How each kind of text looks: family, size, weight, style, tracking,
+    /// case and figures per [`TextRole`](crate::TextRole).
+    pub typography: crate::Typography,
+
     /// Mod-defined style values keyed by [`StyleKey::custom`] name-hash. Built-in
     /// styles live in the typed fields above; this map holds keys the core
     /// doesn't know about, so a custom widget can theme itself without core
@@ -534,6 +543,8 @@ impl Theme {
             mono_font: Some(FontHandle(crate::text::BUNDLED_MONO_FAMILY.to_string())),
             #[cfg(not(feature = "bundled-font"))]
             mono_font: None,
+            display_font: None,
+            typography: crate::Typography::from_scale(&crate::typography::TypeScale::FORGE),
             custom: CustomStyles::default(),
         }
     }

@@ -27,7 +27,8 @@ use crate::chrome::{
 use crate::color::{HUE_DANGER, HUE_OK, HUE_WARN, hex, oklch, rgba8, to_oklch, with_alpha};
 use crate::preset::{ColorFamily, ColorSeed, ThemeSeeds};
 use crate::shadow::{BoxShadow, CornerRadii};
-use crate::{Ink, Theme};
+use crate::typography::TypeScale;
+use crate::{Ink, Theme, Typography};
 
 /// The design's default accent, a warm bone (`#ede6d8`).
 pub(crate) const BONE: [f32; 4] = hex(0xede6d8);
@@ -298,6 +299,16 @@ impl Theme {
         t.font_size = 15.0;
         t.font_size_title = 18.0;
         t.text_sizes = [11.0, 12.0, 13.0, 14.0, 14.0];
+        t.typography = Typography::from_scale(&TypeScale {
+            body: 15.0,
+            title: 18.0,
+            caption: 11.0,
+            meta: 12.0,
+            dense: 13.0,
+            row: 14.0,
+            menu: 14.0,
+            ..TypeScale::FORGE
+        });
         t.button_height = 36.0;
         t.input_height = 34.0;
         t.list_row_height = 34.0;

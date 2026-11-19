@@ -659,6 +659,8 @@ impl Tracking {
 #[derive(Clone, Debug, Default)]
 pub struct StyleOverlay {
     entries: Vec<(StyleKey, StyleValue)>,
+    /// Per-role text styles (see [`StyleOverlay::set_text_style`]).
+    pub(crate) typography: Vec<(crate::TextRole, crate::TextStyle)>,
     menu_bar: Option<crate::MenuBarChrome>,
     menu_sheet: Option<crate::MenuSheetChrome>,
     toolbar: Option<crate::ToolbarChrome>,
@@ -890,6 +892,7 @@ impl StyleOverlay {
     /// Whether the overlay has no scalar, color, or component overrides.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+            && self.typography.is_empty()
             && self.menu_bar.is_none()
             && self.menu_sheet.is_none()
             && self.toolbar.is_none()
@@ -915,6 +918,7 @@ impl StyleOverlay {
     /// the scalar/color entry allocation for reuse.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.typography.clear();
         self.menu_bar = None;
         self.menu_sheet = None;
         self.toolbar = None;
@@ -976,6 +980,11 @@ impl<'a> StyleResolver<'a> {
     /// The theme this resolver reads from (for non-style fields like `font`).
     pub fn theme(&self) -> &'a Theme {
         self.theme
+    }
+
+    /// The overlay layered over the theme, if any.
+    pub(crate) fn overlay(&self) -> Option<&'a StyleOverlay> {
+        self.overlay
     }
 
     /// Resolve `key` to its value: overlay first, then theme. `None` only for a

@@ -1,6 +1,6 @@
 # Typography roles — Design
 
-Status: draft, not yet implemented (reviewed by Codex; Antigravity review pending)
+Status: partial — phase 0a landed, 0b onward outstanding
 Owner: Bart
 Last updated: 2026-11-20
 
@@ -12,15 +12,19 @@ inside them is checked.
 
 ### Done
 
-_(nothing yet)_
+- [x] **Phase 0a — the role table.** `FontFamily`, `TextStyle`, `TextRole`,
+      `Typography` in `src/typography.rs`; `Theme::display_font` and
+      `Theme::typography` (both built-ins derive theirs from a private
+      `TypeScale`); `StyleOverlay::{set_text_style, text_style}`;
+      `StyleResolver::{text_style, role_size, role_line_height, family_font,
+      role_font, role_block, role_block_sized, style_block, role_width,
+      style_width}`. Additive; nothing reads it yet. Extended beyond the
+      plan: `style_block` / `style_width` for a style no role holds, and a
+      `Value` app role (a prominent stat or name, which Slab sets in its
+      display face).
 
 ### Outstanding
 
-- [ ] **Phase 0a — the role table.** `FontFamily`, `TextStyle`, `TextRole`,
-      `Typography` in a new `src/typography.rs`; `Theme::display_font` and
-      `Theme::typography`; Forge and Overlay tables; `StyleOverlay` per-role
-      overrides; `StyleResolver::{text_style, role_size, role_font,
-      role_block, role_block_sized, role_width}`. Additive.
 - [ ] **Phase 0b — tabular figures.** `TextBlock::tabular` threaded through
       shaping, every layout and prepared-text cache key, the selection
       snapshot (`text_select.rs`), frame-diff placement classification and
@@ -207,12 +211,13 @@ records it here, with each role's callers, before Phase 1 starts.
 | `Title` | Panel and dialog titles | display→sans 15 |
 | `Heading` | App section headings | display→sans 15 |
 | `Display` | App screen titles | display→sans 24 |
+| `Value` | App prominent values: a stat, a name | sans 12 |
 | `Numeric` | Clocks, counters, quantities | sans 12, tabular |
 
 "display→sans" means family `Display`, which in Forge and Overlay falls
 back to sans. So the built-ins look unchanged, and setting `display_font`
-visibly changes titles and headings. `Heading` and `Display` have no gameui
-caller. They are app roles that games use for their own screens.
+visibly changes titles and headings. `Heading`, `Display`, `Value` and
+`Numeric` have no gameui caller. They are app roles that games use for their own screens.
 
 `Tracking::Brand` has no caller today and is not carried over.
 
@@ -460,9 +465,8 @@ and all accepted:
 - **Parity can't prove the new behaviour.** Added the contrast test theme,
   DPI scales and a pinned baseline commit.
 
-**Antigravity:** not yet run. Its quota was exhausted on 2026-11-20 (resets
-in about 137 hours). This doc is not to be acted on until that review is
-recorded here, or Bart waives it.
+**Antigravity:** not run; its quota was exhausted. Bart waived it
+(2026-11-20: "Just be ok with the codex one and proceed").
 
 ## References
 
