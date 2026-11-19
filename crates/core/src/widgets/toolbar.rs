@@ -32,10 +32,9 @@
 //! ```
 
 use crate::chrome::{Background, Edge, QuadStyle, StructuralLine, SurfacePainter};
-use crate::color::{hex, rgba8};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
-use crate::style::{StyleKey, StyleResolver};
+use crate::style::{Ink, StyleKey, StyleResolver};
 use crate::widgets::drag::{DragCapture, DragId};
 use crate::widgets::icon::Icon;
 use crate::widgets::material::{self, Material, Tone};
@@ -762,15 +761,15 @@ impl<'a> Toolbar<'a> {
             icon_size,
         );
         let icon_tint = if is_active {
-            hex(0xeafaff)
+            s.color(StyleKey::OnLatch)
         } else if !tool.enabled {
-            rgba8([0xb6, 0xbe, 0xc5], 0.45)
-        } else if pressed {
-            hex(0xb7bfc6)
-        } else if hovered {
-            hex(0xeef2f6)
+            let mut idle = s.ink(Ink::Icon);
+            idle[3] *= 0.45;
+            idle
+        } else if hovered && !pressed {
+            s.ink(Ink::Value)
         } else {
-            hex(0xb6bec5)
+            s.ink(Ink::Icon)
         };
         tool.icon.tint(icon_tint).draw(icon_rect, ctx.draw_list);
 
@@ -1218,7 +1217,7 @@ impl ToolbarState {
                 style
                     .text_block(title, rect.x + 8.0, title_y)
                     .with_size(10.0)
-                    .with_color(220, 225, 230)
+                    .with_color_f32(style.ink(Ink::Emph))
                     .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
             );
             match geometry.kind {
@@ -1247,9 +1246,15 @@ impl ToolbarState {
                                 row.y,
                                 row.width,
                                 row.height,
-                                style.color(StyleKey::Accent),
+                                style.color(StyleKey::Selection),
                             );
                         }
+                        let (mark_ink, label_ink) = if hovered {
+                            let on = style.color(StyleKey::OnSelection);
+                            (on, on)
+                        } else {
+                            (style.color(StyleKey::AccentTick), style.ink(Ink::Emph))
+                        };
                         let label = match edge {
                             ToolbarEdge::Top => "Top",
                             ToolbarEdge::Right => "Right",
@@ -1268,14 +1273,14 @@ impl ToolbarState {
                             style
                                 .text_block(mark, row.x + 4.0, y)
                                 .with_size(11.0)
-                                .with_color(140, 210, 215)
+                                .with_color_f32(mark_ink)
                                 .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
                         );
                         list.text(
                             style
                                 .text_block(label, row.x + 18.0, y)
                                 .with_size(11.0)
-                                .with_color(225, 230, 235)
+                                .with_color_f32(label_ink)
                                 .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
                         );
                         if hovered && layer_input.mouse_clicked {
@@ -1311,9 +1316,14 @@ impl ToolbarState {
                                 row.y,
                                 row.width,
                                 row.height,
-                                style.color(StyleKey::ButtonHover),
+                                style.color(StyleKey::Selection),
                             );
                         }
+                        let label_ink = if hovered {
+                            style.color(StyleKey::OnSelection)
+                        } else {
+                            style.ink(Ink::Emph)
+                        };
                         let y = list.vcentered_text_y(
                             row.y,
                             row.height,
@@ -1325,7 +1335,7 @@ impl ToolbarState {
                             style
                                 .text_block(tool.label, row.x + 7.0, y)
                                 .with_size(11.0)
-                                .with_color(225, 230, 235)
+                                .with_color_f32(label_ink)
                                 .with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0),
                         );
                         if hovered && layer_input.mouse_clicked {

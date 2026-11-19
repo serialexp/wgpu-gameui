@@ -13,8 +13,6 @@ use super::{DrawList, Stroke};
 
 /// Ink on an axis-tinted chip (`#0a0d0f`).
 const CHIP_INK: [f32; 4] = [0.039, 0.051, 0.059, 1.0];
-/// The overlays' white (`#f1f5f9`).
-const WHITE: [f32; 4] = [0.945, 0.961, 0.976, 1.0];
 /// The text-shadow `--carve` (`0 -1px 0 rgba(0,0,0,.5)`).
 const CARVE_ALPHA: u8 = 128;
 
@@ -772,7 +770,7 @@ impl<'a> MeasureLine<'a> {
             &Stroke::new(MEASURE_WIDTH + 2.0).dashed(MEASURE_DASH[0], MEASURE_DASH[1]),
             MEASURE_HALO,
         );
-        list.stroke_line(self.a, self.b, &dash, WHITE);
+        list.stroke_line(self.a, self.b, &dash, s.ink(Ink::Max));
         for (p, snapped) in [(self.a, self.snapped[0]), (self.b, self.snapped[1])] {
             draw_end(list, s, p, snapped);
         }
@@ -807,11 +805,15 @@ fn draw_end(list: &mut DrawList, s: &StyleResolver, p: [f32; 2], snapped: bool) 
         list.stroke_closed(&diamond(d + 0.5), &Stroke::new(1.0), END_RING);
         let inner = diamond(d - END_EDGE * 0.5);
         list.filled_polygon(&inner.map(|q| (q[0], q[1])), s.color(StyleKey::WarnMeta));
-        list.stroke_closed(&diamond(d - END_EDGE * 0.5), &Stroke::new(END_EDGE), WHITE);
+        list.stroke_closed(
+            &diamond(d - END_EDGE * 0.5),
+            &Stroke::new(END_EDGE),
+            s.ink(Ink::Max),
+        );
     } else {
         let r = Rect::new(p[0] - half, p[1] - half, END_SIZE, END_SIZE);
         list.chrome_rect(r.inset(-1.0), half + 1.0, 1.0, [0.0; 4], END_RING);
-        list.chrome_rect(r, half, END_EDGE, END_FILL, WHITE);
+        list.chrome_rect(r, half, END_EDGE, END_FILL, s.ink(Ink::Max));
     }
 }
 

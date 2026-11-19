@@ -270,8 +270,8 @@ impl Slider {
             knob_rect,
             s.scalar(StyleKey::BorderRadius),
             1.0,
-            [0.949, 0.965, 0.976, 1.0], // #f2f6f9
-            [0.765, 0.800, 0.831, 1.0], // #c3ccd4
+            s.color(StyleKey::KnobTop),
+            s.color(StyleKey::KnobBottom),
             [0.0, 0.0, 0.0, 0.55],
         );
         // 1px inset highlight under the knob's top edge.

@@ -214,6 +214,15 @@ impl Theme {
         // (`.fo-row.is-selected`), not a solid plate.
         t.selection = accent.wash;
         t.on_selection = INK_MAX;
+        // `.fo-chip.is-on`, `.fo-badge.is-accent`: the wash, ringed and
+        // inked in the accent.
+        t.accent_held_top = accent.wash;
+        t.accent_held_bottom = accent.wash;
+        t.accent_held_edge = accent.ring;
+        t.on_accent_held = accent.base;
+        // `.fo-range` thumb.
+        t.knob_top = hex(0xf4f4f1);
+        t.knob_bottom = hex(0xa8a8a4);
         // A latched key is a pressed key ringed and inked in the accent.
         t.latch_face_top = white(0.07);
         t.latch_face_bottom = white(0.03);

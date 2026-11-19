@@ -215,8 +215,8 @@ const KNOB_INK: [f32; 4] = [0.039, 0.051, 0.059, 1.0];
 /// A negative knob's fill (`rgba(10,13,15,.75)`) and ring width.
 const NEG_FILL: [f32; 4] = [0.039, 0.051, 0.059, 0.75];
 const NEG_RING: f32 = 1.5;
-/// The hover ring (`0 0 0 2px #f1f5f9`) and glow (`0 0 8px` white .4).
-const HOVER_RING: [f32; 4] = [0.945, 0.961, 0.976, 1.0];
+/// The hover ring is `Ink::Max` (`0 0 0 2px #f1f5f9`); its glow is
+/// `0 0 8px` white .4.
 const HOVER_GLOW: [f32; 4] = [1.0, 1.0, 1.0, 0.4];
 /// The disc under the pointer (`rgba(16,20,24,.5)`, a white .06 rim).
 const DISC_FILL: [f32; 4] = [0.063, 0.078, 0.094, 0.5];
@@ -544,7 +544,7 @@ fn draw_knob(list: &mut DrawList, s: &StyleResolver, knob: &Knob, centre: [f32; 
         );
         // Only outside the knob, like a CSS spread shadow: a negative knob's
         // fill is translucent.
-        list.chrome_rect(bounds.inset(-2.0), r + 2.0, 2.0, [0.0; 4], HOVER_RING);
+        list.chrome_rect(bounds.inset(-2.0), r + 2.0, 2.0, [0.0; 4], s.ink(Ink::Max));
     } else {
         list.box_shadow_outset(
             bounds,

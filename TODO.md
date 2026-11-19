@@ -17,13 +17,16 @@ still open.
 
 ## Overlay, the default theme (2026-11-20)
 
-- [ ] **P1 — Widgets that hard-code Forge.** About 40 sites still draw
-  Forge's teal hue (`HUE_ACCENT`, `oklch(…, 200.0, …)`) or its blue-grey inks
-  (`rgb8([0xd5, 0xdc, 0xe2])`, `rgb8([4, 20, 24])`, `0x78818a`) instead of
-  reading the theme: menu bar and sheet inks, context menu, toolbar inks,
-  filter chip, status zones, slider and scrubber knobs, badges, status icon,
-  progress sweep, asset grid plate, view gizmo. Under Overlay they show as
-  teal chips and bluish text. Move each into `Theme`/`ChromeTheme`.
+- [ ] **P2 — The last widgets that hard-code Forge.** What is left after
+  the sweep (see `TODO_DONE.md`) draws Forge greys or its teal on purpose
+  for now, and should still move into `Theme`/`ChromeTheme`:
+  the `AssetGrid` plate (`#2a3138` / `#171b20`), `CountBubble`'s ink and
+  danger, the `ViewGizmo` disc, knob and chip inks (`DISC_FILL`, `KNOB_INK`,
+  `CHIP_INK`), `ScatterPlot`'s default series (`oklch(.68, .1, 200)`), and
+  the code crate's `CodeTheme::default` (Forge's accent hue and greys). The
+  semantic hues (badge ok/warn/danger, `StatusDot`, the dialogs' danger and
+  warn hints, `Severity::accent`) and the file dialog's folder hue are
+  identity colours, not Forge's; they stay unless a theme needs them.
 - [ ] **P2 — Backdrop blur behind Overlay glass.** The design blurs what is
   behind its glass (16px); the theme only sets the translucent fill.
 - [ ] **P2 — Carved and lifted text.** The design's `--carve` and `--lift`

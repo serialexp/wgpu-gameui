@@ -13,18 +13,14 @@ use crate::text::TextBlock;
 
 use super::{DrawList, Icon, Image, ImageFit};
 
-/// The edge of an unselected tile (`--edge-hard`).
+/// The edge of a tile (`--edge-hard`), on a selected row too.
 const EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.65];
-/// The edge of a tile on a selected (accent) row.
-const EDGE_SELECTED: [f32; 4] = [4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 0.55];
 /// The lit top line of a swatch or monogram (`inset 0 1px 0`).
 const LIT_TOP: [f32; 4] = [1.0, 1.0, 1.0, 0.14];
 /// The drop under a swatch or monogram (`0 1px 1px`).
 const LIT_DROP: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
 /// The drop under an image or fill tile.
 const PLATE_DROP: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
-/// The raised plate an image sits on: a white sheen over `#1d2328`.
-const PLATE_BASE: [f32; 4] = [29.0 / 255.0, 35.0 / 255.0, 40.0 / 255.0, 1.0];
 /// The bevel drawn over an image tile: top, left, right and bottom lines.
 const SHEEN: [[f32; 4]; 4] = [
     [1.0, 1.0, 1.0, 0.3],
@@ -34,9 +30,10 @@ const SHEEN: [[f32; 4]; 4] = [
 ];
 /// The monogram's text shadow (`0 1px 0 rgba(0,0,0,.35)`).
 const MONOGRAM_SHADOW: u8 = 89;
-/// The dashed edge of an empty slot, plain and on a selected row.
+/// The dashed edge of an empty slot; on a selected row it is the row's
+/// [`OnSelection`](StyleKey::OnSelection) ink at [`SLOT_EDGE_SELECTED_ALPHA`].
 const SLOT_EDGE: [f32; 4] = [1.0, 1.0, 1.0, 0.16];
-const SLOT_EDGE_SELECTED: [f32; 4] = [4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 0.45];
+const SLOT_EDGE_SELECTED_ALPHA: f32 = 0.45;
 /// The slot's hatch lines and their spacing.
 const HATCH: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 const HATCH_STEP: f32 = 3.0;
@@ -210,8 +207,8 @@ impl<'a> Thumb<'a> {
         self
     }
 
-    /// The tile sits on a selected (accent) row: darker edges and an
-    /// on-accent glyph.
+    /// The tile sits on a selected row ([`Theme::selection`](crate::Theme::selection)):
+    /// its glyph and an empty slot's edge take the row's ink.
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
@@ -254,9 +251,9 @@ impl<'a> Thumb<'a> {
     /// Draw the tile with its top-left corner at `(x, y)`; returns its rect.
     pub fn draw(&self, x: f32, y: f32, list: &mut DrawList, s: &StyleResolver) -> Rect {
         let rect = Rect::new(x, y, self.size, self.size);
-        let edge = if self.selected { EDGE_SELECTED } else { EDGE };
+        let edge = EDGE;
         match self.face() {
-            Face::Plate { image, fill } => self.draw_plate(list, rect, edge, image, fill),
+            Face::Plate { image, fill } => self.draw_plate(list, s, rect, edge, image, fill),
             Face::Swatch(color) => {
                 self.lit_box(list, rect, edge, Background::Solid(color));
             }
@@ -353,6 +350,7 @@ impl<'a> Thumb<'a> {
     fn draw_plate(
         &self,
         list: &mut DrawList,
+        s: &StyleResolver,
         rect: Rect,
         edge: [f32; 4],
         image: Option<SpriteId>,
@@ -369,9 +367,11 @@ impl<'a> Thumb<'a> {
                 ..BoxShadow::default()
             },
         );
+        // The raised plate an image sits on: a sheen over the key face.
+        let base = s.color(StyleKey::Button);
         let plate = fill.unwrap_or(Background::LinearGradient {
-            start: super::sheen_over(PLATE_BASE, [1.0, 1.0, 1.0, 0.2]),
-            end: super::sheen_over(PLATE_BASE, [0.0, 0.0, 0.0, 0.12]),
+            start: super::sheen_over(base, [1.0, 1.0, 1.0, 0.2]),
+            end: super::sheen_over(base, [0.0, 0.0, 0.0, 0.12]),
             axis: GradientAxis::Vertical,
         });
         self.edged(list, rect, edge, plate);
@@ -401,7 +401,9 @@ impl<'a> Thumb<'a> {
         list.rounded_rect(rect, radius, s.color(StyleKey::WellDeep));
         list.hatch(rect, HATCH_STEP, HATCH);
         let edge = if self.selected {
-            SLOT_EDGE_SELECTED
+            let mut ink = s.color(StyleKey::OnSelection);
+            ink[3] *= SLOT_EDGE_SELECTED_ALPHA;
+            ink
         } else {
             SLOT_EDGE
         };

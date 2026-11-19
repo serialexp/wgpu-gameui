@@ -36,11 +36,11 @@ const LINE_INSET: f32 = 4.0;
 const LINE_H: f32 = 2.0;
 const LINE_GLOW_BLUR: f32 = 7.0;
 const LINE_GLOW_ALPHA: f32 = 0.7;
-/// The ghost: offset from the pointer, padding, fill, edge and shadows
-/// (`--shadow-ghost`).
+/// The ghost: offset from the pointer, padding, the opacity of its key-face
+/// fill, edge and shadows (`--shadow-ghost`).
 const GHOST_OFFSET: [f32; 2] = [12.0, 10.0];
 const GHOST_PAD: (f32, f32) = (8.0, 3.0);
-const GHOST_FILL: [f32; 4] = [31.0 / 255.0, 36.0 / 255.0, 41.0 / 255.0, 0.92];
+const GHOST_ALPHA: f32 = 0.92;
 const GHOST_EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.7];
 const GHOST_SHADOW: BoxShadow = BoxShadow {
     offset: [0.0, 8.0],
@@ -408,7 +408,9 @@ impl<'a> DragList<'a> {
         let radius = s.scalar(StyleKey::BorderRadius);
         list.push_debug_scope_rect("DragList ghost", rect.union(GHOST_SHADOW.ink_rect(rect)));
         list.box_shadow_outset(rect, CornerRadii::uniform(radius), GHOST_SHADOW);
-        list.chrome_rect(rect, radius, border, GHOST_FILL, GHOST_EDGE);
+        let mut fill = s.color(StyleKey::Button);
+        fill[3] *= GHOST_ALPHA;
+        list.chrome_rect(rect, radius, border, fill, GHOST_EDGE);
         let inner = rect.inset(border);
         list.box_shadow_inset(
             inner,

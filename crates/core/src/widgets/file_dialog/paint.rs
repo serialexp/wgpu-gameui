@@ -14,8 +14,9 @@ use super::{FileEntry, FileKind};
 
 /// The folder glyph's hue (`oklch(… 0.06 230)` in the design).
 const FOLDER_HUE: f32 = 230.0;
-/// The page glyph's border on an accent row.
-const PAGE_EDGE_ON: [f32; 4] = [4.0 / 255.0, 20.0 / 255.0, 24.0 / 255.0, 0.45];
+/// The page glyph's border on a selected row: the row's
+/// [`OnSelection`](crate::StyleKey::OnSelection) ink at this alpha.
+const PAGE_EDGE_ON_ALPHA: f32 = 0.45;
 const PAGE_EDGE: [f32; 4] = [1.0, 1.0, 1.0, 0.22];
 const GLYPH_DROP: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
 const GLYPH_HI: [f32; 4] = [1.0, 1.0, 1.0, 0.3];
@@ -108,7 +109,14 @@ pub(super) fn file_glyph(
         },
         CornerRadii::uniform(radius),
     );
-    list.rounded_rect_outline(page, radius, 1.0, if on { PAGE_EDGE_ON } else { PAGE_EDGE });
+    let edge = if on {
+        let mut ink = s.color(crate::StyleKey::OnSelection);
+        ink[3] *= PAGE_EDGE_ON_ALPHA;
+        ink
+    } else {
+        PAGE_EDGE
+    };
+    list.rounded_rect_outline(page, radius, 1.0, edge);
     if size >= 28.0 && !ext.is_empty() {
         let text_size = (size * 0.17).round().max(8.0);
         let ink = if on {

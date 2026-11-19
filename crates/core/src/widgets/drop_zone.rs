@@ -1,8 +1,7 @@
 //! DropZone — a dashed-outline drop target (Forge `DropZone`).
 
-use crate::color::{HUE_ACCENT, oklch};
 use crate::layout::Rect;
-use crate::style::{Ink, StyleResolver, TextSize};
+use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 use crate::text::TextAlign;
 
 use super::DrawList;
@@ -55,15 +54,11 @@ impl<'a> DropZone<'a> {
     pub fn draw(&self, rect: Rect, list: &mut DrawList, s: &StyleResolver) {
         list.push_debug_scope_rect(super::scope_name("DropZone", self.label), rect);
         if self.active {
-            list.quad(
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                oklch(0.74, 0.11, HUE_ACCENT, 0.1),
-            );
-            list.rect_outline(rect.inset(1.0), 1.0, oklch(0.74, 0.11, HUE_ACCENT, 0.35));
-            list.dashed_rect_outline(rect, DASH, oklch(0.8, 0.1, HUE_ACCENT, 1.0));
+            let accent = s.color(StyleKey::Accent);
+            let with = |alpha: f32| [accent[0], accent[1], accent[2], accent[3] * alpha];
+            list.quad(rect.x, rect.y, rect.width, rect.height, with(0.1));
+            list.rect_outline(rect.inset(1.0), 1.0, with(0.35));
+            list.dashed_rect_outline(rect, DASH, s.color(StyleKey::AccentTick));
         } else {
             list.quad(rect.x, rect.y, rect.width, rect.height, IDLE_FILL);
             list.dashed_rect_outline(rect, DASH, IDLE_EDGE);

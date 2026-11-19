@@ -1,6 +1,5 @@
 //! FilterChip — a latching pill key (Forge `FilterChip`).
 
-use crate::color::{HUE_ACCENT, oklch};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
@@ -18,9 +17,8 @@ const COUNT_GAP: f32 = 5.0;
 const COUNT_SIZE: f32 = 9.0;
 /// The count's opacity against the label's ink.
 const COUNT_ALPHA: f32 = 0.7;
-/// The pill's edge, off and on.
+/// The pill's edge while off.
 const EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
-const EDGE_ON: [f32; 4] = [0.0, 0.0, 0.0, 0.65];
 /// The shade pressing the on pill into the well.
 const HELD_SHADE: BoxShadow = BoxShadow {
     offset: [0.0, 2.0],
@@ -129,16 +127,16 @@ impl<'a> FilterChip<'a> {
                 pill,
                 radius,
                 1.0,
-                oklch(0.42, 0.07, HUE_ACCENT, 1.0),
-                oklch(0.52, 0.09, HUE_ACCENT, 1.0),
-                EDGE_ON,
+                s.color(StyleKey::AccentHeldTop),
+                s.color(StyleKey::AccentHeldBottom),
+                s.color(StyleKey::AccentHeldEdge),
             );
             list.box_shadow_inset(
                 pill.inset(1.0),
                 CornerRadii::uniform((radius - 1.0).max(0.0)),
                 HELD_SHADE,
             );
-            oklch(0.93, 0.08, HUE_ACCENT, 1.0)
+            s.color(StyleKey::OnAccentHeld)
         } else {
             // Up: the key face. A pill's top edge is curved; a straight,
             // full-width 1px highlight reads as a white slash, so the face
@@ -260,7 +258,7 @@ mod tests {
         let (_, off) = draw(rect, &FilterChip::new("info"), &away());
         assert_eq!(
             on.chrome_instance(0).unwrap().bg,
-            oklch(0.42, 0.07, HUE_ACCENT, 1.0)
+            Theme::default().accent_held_top
         );
         assert_ne!(
             on.chrome_instance(0).unwrap().bg,

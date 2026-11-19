@@ -8,7 +8,7 @@
 //! - [`keycap`]: a keyboard-key cap (`⇧` `Ctrl` `F`) — raised face over a
 //!   black edge with a bottom drop line.
 
-use crate::color::{HUE_ACCENT, HUE_DANGER, HUE_OK, HUE_WARN, HUE_WARN_INK, oklch};
+use crate::color::{HUE_DANGER, HUE_OK, HUE_WARN, HUE_WARN_INK, oklch};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
@@ -105,9 +105,9 @@ struct BadgePaint {
 }
 
 impl BadgeTone {
-    /// The tone's paint. `on_accent` flattens the plate so it reads on a
-    /// selected (accent) row's brighter fill.
-    fn paint(self, s: &StyleResolver, on_accent: bool) -> BadgePaint {
+    /// The tone's paint. `on_selection` flattens the plate so it reads on a
+    /// selected row's fill ([`Theme::selection`](crate::Theme::selection)).
+    fn paint(self, s: &StyleResolver, on_selection: bool) -> BadgePaint {
         let edge_hard = [0.0, 0.0, 0.0, 0.65];
         let mut paint = match self {
             BadgeTone::Draft => BadgePaint {
@@ -138,16 +138,17 @@ impl BadgeTone {
                 edge: [0.0, 0.0, 0.0, 0.7],
                 inset: (3.0, 0.55),
             },
+            // The held accent: a filter chip that is on wears the same.
             BadgeTone::Live => BadgePaint {
-                top: oklch(0.4, 0.07, HUE_ACCENT, 1.0),
-                bottom: oklch(0.48, 0.08, HUE_ACCENT, 1.0),
-                ink: oklch(0.92, 0.09, HUE_ACCENT, 1.0),
-                edge: edge_hard,
+                top: s.color(StyleKey::AccentHeldTop),
+                bottom: s.color(StyleKey::AccentHeldBottom),
+                ink: s.color(StyleKey::OnAccentHeld),
+                edge: s.color(StyleKey::AccentHeldEdge),
                 inset: (3.0, 0.5),
             },
-            // On the accent a hue plate goes flat at its own, slightly more
-            // chromatic color, with a brighter ink to hold contrast.
-            BadgeTone::Hue(hue) if on_accent => {
+            // On a selected row a hue plate goes flat at its own, slightly
+            // more chromatic color, with a brighter ink to hold contrast.
+            BadgeTone::Hue(hue) if on_selection => {
                 let flat = oklch(0.30, 0.06, hue, 1.0);
                 BadgePaint {
                     top: flat,
@@ -165,7 +166,7 @@ impl BadgeTone {
                 inset: (3.0, 0.5),
             },
         };
-        if on_accent {
+        if on_selection {
             paint.bottom = paint.top;
         }
         paint
@@ -184,14 +185,14 @@ impl BadgeTone {
 /// Badge::new(BadgeTone::Live).draw(list, s, x, y, "running");
 /// Badge::new(BadgeTone::Hue(160.0))
 ///     .compact()
-///     .on_accent(row_selected)
+///     .on_selection(row_selected)
 ///     .draw_right(list, s, column_right, y, "codex");
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Badge {
     tone: BadgeTone,
     compact: bool,
-    on_accent: bool,
+    on_selection: bool,
 }
 
 impl Badge {
@@ -209,10 +210,10 @@ impl Badge {
         self
     }
 
-    /// Whether the badge sits on a selected (accent) row, which flattens its
-    /// plate so it reads on the brighter fill.
-    pub fn on_accent(mut self, on_accent: bool) -> Self {
-        self.on_accent = on_accent;
+    /// Whether the badge sits on a selected row, which flattens its plate so
+    /// it reads on the row's [`Theme::selection`](crate::Theme::selection) fill.
+    pub fn on_selection(mut self, on_selection: bool) -> Self {
+        self.on_selection = on_selection;
         self
     }
 
@@ -285,7 +286,7 @@ impl Badge {
 
     /// Paint the plate in `r`, and the measured text `block` on it.
     fn paint(&self, list: &mut DrawList, s: &StyleResolver, r: Rect, mut block: TextBlock) {
-        let paint = self.tone.paint(s, self.on_accent);
+        let paint = self.tone.paint(s, self.on_selection);
         let radius = s.scalar(StyleKey::BorderRadius);
         let recess = |(blur, alpha): (f32, f32)| BoxShadow {
             offset: [0.0, 1.0],
@@ -374,12 +375,12 @@ mod tests {
         );
         assert_eq!(text.x, 5.0 + BADGE_COMPACT_PAD);
 
-        let mut accent = DrawList::new();
+        let mut selected = DrawList::new();
         badge
-            .on_accent(true)
-            .draw(&mut accent, &s, 0.0, 0.0, "codex");
-        let face = accent.chrome_instance(0).unwrap();
-        assert_eq!(face.bg, face.bg2, "flat on the accent");
+            .on_selection(true)
+            .draw(&mut selected, &s, 0.0, 0.0, "codex");
+        let face = selected.chrome_instance(0).unwrap();
+        assert_eq!(face.bg, face.bg2, "flat on a selected row");
         assert_eq!(face.bg, oklch(0.30, 0.06, 160.0, 1.0));
     }
 
@@ -405,16 +406,16 @@ mod tests {
     }
 
     #[test]
-    fn on_accent_flattens_a_status_tone_too() {
+    fn on_selection_flattens_a_status_tone_too() {
         let theme = theme();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         Badge::new(BadgeTone::Live)
-            .on_accent(true)
+            .on_selection(true)
             .draw(&mut list, &s, 0.0, 0.0, "running");
         let face = list.chrome_instance(0).unwrap();
         assert_eq!(face.bg, face.bg2);
-        assert_eq!(face.bg, oklch(0.4, 0.07, HUE_ACCENT, 1.0));
+        assert_eq!(face.bg, theme.accent_held_top);
     }
 
     #[test]
@@ -427,14 +428,11 @@ mod tests {
         assert_eq!((r.x, r.y, r.height), (4.0, 6.0, BADGE_HEIGHT));
         assert!((r.width - badge.width(&mut list, &s, "running")).abs() < 0.01);
         let face = list.chrome_instance(0).unwrap();
-        assert_eq!(face.bg, oklch(0.4, 0.07, HUE_ACCENT, 1.0));
-        assert_eq!(face.bg2, oklch(0.48, 0.08, HUE_ACCENT, 1.0));
+        assert_eq!(face.bg, theme.accent_held_top);
+        assert_eq!(face.bg2, theme.accent_held_bottom);
         let text = list.texts.iter().find(|t| t.content == "RUNNING").unwrap();
         assert_eq!(text.x, 4.0 + BADGE_PAD);
-        assert_eq!(
-            text.color,
-            crate::color::text_color(oklch(0.92, 0.09, HUE_ACCENT, 1.0))
-        );
+        assert_eq!(text.color, crate::color::text_color(theme.on_accent_held));
         assert_eq!(list.shadow_instance_count(), 1, "the recess");
 
         let mut other = DrawList::new();

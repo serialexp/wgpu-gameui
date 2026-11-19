@@ -27,11 +27,9 @@ const MIN_WIDTH: f32 = 200.0;
 /// Inside the sheet's edges.
 const PAD_X: f32 = 10.0;
 const PAD_Y: f32 = 9.0;
-/// Between sections (the title, the rows, the spark), and a rule's lines
-/// between the two after the title.
+/// Between sections (the title, the rows, the spark). The rule between the
+/// two after the title is the status bar's divider pair.
 const SECTION_GAP: f32 = 9.0;
-const RULE: [f32; 4] = [0.039, 0.047, 0.051, 1.0];
-const RULE_HI: [f32; 4] = [0.149, 0.169, 0.184, 1.0];
 /// The spark: its well, the space inside its ends, between its bars and
 /// over its caption line; how far the tallest of value and budget reaches
 /// up it; its budget line's dashes.
@@ -283,13 +281,20 @@ impl<'a> StatusDetail<'a> {
         let right = rect.right() - PAD_X;
         let mut y = rect.y + PAD_Y;
         let mut index = 0;
+        let [rule, rule_hi] = s.status_bar().divider;
         // Move `y` to section `index`, drawing the rule before it if any.
         let mut next = |y: &mut f32, list: &mut DrawList| {
             let before = self.before(index);
             if before > SECTION_GAP {
                 let rule_y = *y + SECTION_GAP;
-                list.quad(rect.x + 1.0, rule_y, rect.width - 2.0, 1.0, RULE);
-                list.quad(rect.x + 1.0, rule_y + 1.0, rect.width - 2.0, 1.0, RULE_HI);
+                list.quad(rect.x + 1.0, rule_y, rect.width - 2.0, 1.0, rule.color);
+                list.quad(
+                    rect.x + 1.0,
+                    rule_y + 1.0,
+                    rect.width - 2.0,
+                    1.0,
+                    rule_hi.color,
+                );
             }
             *y += before;
             index += 1;

@@ -1,7 +1,6 @@
 //! StatusIcon — a round raised badge carrying a tone glyph (Forge
 //! `StatusIcon`).
 
-use crate::color::{HUE_ACCENT, oklch};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
 use crate::style::{StyleKey, StyleResolver};
@@ -77,7 +76,7 @@ impl<'a> StatusIcon<'a> {
     /// The glyph's colour for `tone`.
     pub fn tone_ink(tone: Severity, s: &StyleResolver) -> [f32; 4] {
         match tone {
-            Severity::Info => oklch(0.72, 0.09, HUE_ACCENT, 1.0),
+            Severity::Info => s.color(StyleKey::Accent),
             Severity::Success => s.color(StyleKey::StatusOk),
             Severity::Warning => s.color(StyleKey::WarnMeta),
             Severity::Error => s.color(StyleKey::DangerText),

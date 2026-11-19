@@ -45,6 +45,11 @@ fn texts(list: &DrawList) -> Vec<&str> {
     list.texts.iter().map(|t| t.content.as_str()).collect()
 }
 
+/// The top of the knob's face, under the theme [`draw`] uses.
+fn knob_top() -> [f32; 4] {
+    Theme::default().knob_top
+}
+
 /// Its fills and knob, by colour.
 fn fills(list: &DrawList, color: [f32; 4]) -> Vec<[f32; 4]> {
     list.chrome_instances()
@@ -184,7 +189,7 @@ fn the_knob_shows_unless_asked_not_to() {
     let mut capture = DragCapture::new();
     let mut focus = FocusState::new();
     let (with, _) = draw(&Scrubber::new(10.0), 5.0, &mut capture, &mut focus, &away());
-    assert_eq!(fills(&with, KNOB_TOP).len(), 1);
+    assert_eq!(fills(&with, knob_top()).len(), 1);
     let (bare, _) = draw(
         &Scrubber::new(10.0).knob(false),
         5.0,
@@ -192,7 +197,7 @@ fn the_knob_shows_unless_asked_not_to() {
         &mut focus,
         &away(),
     );
-    assert!(fills(&bare, KNOB_TOP).is_empty());
+    assert!(fills(&bare, knob_top()).is_empty());
 }
 
 #[test]
@@ -255,7 +260,7 @@ fn a_disabled_scrubber_takes_no_input() {
     assert!(!output.dragging && !output.hovered);
     assert!(capture.is_free());
     assert!(texts(&list).is_empty(), "no tip");
-    assert!(fills(&list, KNOB_TOP).is_empty(), "no knob");
+    assert!(fills(&list, knob_top()).is_empty(), "no knob");
 }
 
 #[test]

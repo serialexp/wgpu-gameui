@@ -399,6 +399,8 @@ pub struct StatusBarChrome {
     pub divider: [EdgeStyle; 2],
     /// Authored inset for a latched status toggle.
     pub latched_inset: BoxShadow,
+    /// Fill of a status toggle or drop-up key under the pointer.
+    pub hover: [f32; 4],
 }
 
 /// One floating surface with exactly one authored elevation shadow.
@@ -972,6 +974,7 @@ impl ChromeTheme {
                     },
                 ],
                 latched_inset: shadow(2.0, 4.0, latch_shade, true),
+                hover: rgb8([0x2f, 0x33, 0x38]),
             },
             dropdown: floating(panel, 10.0, 26.0, 0.6),
             popover: floating(
@@ -1417,11 +1420,13 @@ impl Visit for StatusBarChrome {
             lines,
             divider,
             latched_inset,
+            hover,
         } = self;
         surface.visit(v);
         lines.visit(v);
         divider.visit(v);
         latched_inset.visit(v);
+        hover.visit(v);
     }
 }
 

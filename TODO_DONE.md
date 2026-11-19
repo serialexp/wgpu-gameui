@@ -18,6 +18,22 @@ then the dated batches in the order they were written.
       combo box, context menu, menu bar and sheet, the code-completion popup
       and text selection all read them. Test:
       `a_selected_row_is_the_wash_and_its_inks_read_on_it`.
+- [x] **P1 — Widgets that hard-code Forge.** **Done 2026-11-20.** New
+      tokens: `Theme::knob_top` / `knob_bottom` (`StyleKey::KnobTop`,
+      `KnobBottom`) for the switch, slider and scrubber knobs, and the held
+      accent `accent_held_top` / `accent_held_bottom` / `accent_held_edge` /
+      `on_accent_held` (`StyleKey::AccentHeld*`, `OnAccentHeld`) that an on
+      `FilterChip` and a `BadgeTone::Live` badge wear; `StatusBarChrome::hover`.
+      Overlay holds the accent wash and ring there, as its design's
+      `.fo-chip.is-on`. The toolbar's tool and popup inks, the status zones'
+      latch and hover, the status detail rules, the measure line, the view
+      gizmo's hover ring, the progress sweep, the info status icon, the drop
+      zone, the drag ghost, the thumb plate, and a selected thumb's slot edge
+      and the file dialog's page edge now read the theme. `Badge::on_accent`
+      is now `Badge::on_selection` (it is for a selected row, whose fill is
+      `Theme::selection`). Forge renders as before, but its live badge's
+      top moved from oklch 0.40 to 0.42 and a selected thumb's edge is now
+      the plain edge.
 
 ## Retained-mode performance (comparison and Fable review, 2026-11-11)
 

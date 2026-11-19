@@ -47,11 +47,12 @@ impl Severity {
         }
     }
 
-    /// The default accent color for this severity, resolver-free.
+    /// Forge's accent color for this severity, resolver-free.
     ///
-    /// Mirrors the default [`Theme`](crate::Theme) severity palette so callers
-    /// without a [`StyleResolver`] still get the canonical colors; the rendered
-    /// path resolves through [`style_key`](Self::style_key) so themes/overlays win.
+    /// Mirrors the [`Theme::forge`](crate::Theme::forge) severity palette so
+    /// callers without a [`StyleResolver`] still get a color; the rendered
+    /// path resolves through [`style_key`](Self::style_key), so the active
+    /// theme wins.
     pub fn accent(self) -> [f32; 4] {
         match self {
             Severity::Info => [0.3692, 0.6736, 0.92, 1.0],

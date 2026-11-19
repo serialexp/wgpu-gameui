@@ -4932,14 +4932,14 @@ fn render_widget_gallery() {
                 .draw(x, r.y, list, &s);
             x += 22.0;
             Thumb::new().size(24.0).draw(x, r.y, list, &s);
-            // On an accent row.
+            // On a selected row.
             let accent = Rect::new(r.x, r.y + 34.0, 240.0, 22.0);
             list.quad(
                 accent.x,
                 accent.y,
                 accent.width,
                 accent.height,
-                theme.accent,
+                theme.selection,
             );
             let mut x = accent.x + 6.0;
             for thumb in [
@@ -5474,10 +5474,10 @@ fn render_widget_gallery() {
                        r: Rect,
                        badges: &[(&str, BadgeTone)],
                        compact: bool,
-                       on_accent: bool| {
+                       on_selection: bool| {
                 let mut x = r.x;
                 for &(text, tone) in badges {
-                    let mut badge = Badge::new(tone).on_accent(on_accent);
+                    let mut badge = Badge::new(tone).on_selection(on_selection);
                     if compact {
                         badge = badge.compact();
                     }
@@ -5503,9 +5503,9 @@ fn render_widget_gallery() {
             row(list, r, &hues, false, false);
             let r = flow.cell(list, "Any hue, compact", 300.0, BADGE_HEIGHT);
             row(list, r, &hues, true, false);
-            // On a selected row the plate goes flat to read on the accent.
-            let r = flow.cell(list, "On accent: regular, then compact", 460.0, 20.0);
-            list.quad(r.x, r.y, r.width, r.height, theme.accent);
+            // On a selected row the plate goes flat to read on its fill.
+            let r = flow.cell(list, "On selection: regular, then compact", 460.0, 20.0);
+            list.quad(r.x, r.y, r.width, r.height, theme.selection);
             let inner = Rect::new(r.x + 4.0, r.y + 2.5, r.width - 8.0, BADGE_HEIGHT);
             let pair = [hues[0], tones[4]];
             row(list, inner, &pair, false, true);

@@ -169,10 +169,12 @@ impl ProgressBar {
 
         if let Some(step) = self.sweep {
             // `linear-gradient(90deg, transparent, --accent-sweep,
-            // transparent)` at 0.85 opacity, clipped by the track.
+            // transparent)` at 0.85 opacity, clipped by the track. The
+            // sweep is the accent face's lit top.
             let inner = track.inset(1.0);
             if inner.width > 0.0 && inner.height > 0.0 {
-                let sweep = crate::color::oklch(0.78, 0.1, 200.0, 0.85);
+                let mut sweep = style.color(StyleKey::AccentFaceTop);
+                sweep[3] *= 0.85;
                 let clear = [sweep[0], sweep[1], sweep[2], 0.0];
                 let w = inner.width * SWEEP_W;
                 let x = inner.x + inner.width * sweep_left(step);

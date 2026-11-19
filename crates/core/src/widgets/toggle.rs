@@ -4,7 +4,6 @@
 //! a light circular knob sliding between the ends. Click (or Space/Enter when
 //! focused) flips it.
 
-use crate::color::hex;
 use crate::layout::Rect;
 use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
@@ -98,7 +97,7 @@ impl Toggle {
         // the toggle's depth cue regardless of state.
         draw_inset_shadow(list, &s, switch_rect, 3.0, 1.0);
 
-        // Knob: 11×11 disc at the active end with a white→#c6ced5 vertical
+        // Knob: 11×11 disc at the active end with the knob's vertical
         // gradient, a 1px black border, and an inset highlight + drop shadow.
         let knob_d = SWITCH_H - 4.0; // 11px knob in a 15px track
         let margin = 2.0;
@@ -112,8 +111,8 @@ impl Toggle {
             Rect::new(knob_x, cy - knob_d * 0.5, knob_d, knob_d),
             knob_d * 0.5,
             0.0,
-            hex(0xffffff),
-            hex(0xc6ced5),
+            s.color(StyleKey::KnobTop),
+            s.color(StyleKey::KnobBottom),
             [0.0; 4],
         );
         list.circle_outline(

@@ -23,11 +23,6 @@ const WELL: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 pub(super) const BUFFERED: [f32; 4] = [1.0, 1.0, 1.0, 0.2];
 /// The layer up to the pointer: `rgba(255,255,255,0.08)`.
 const HOVER: [f32; 4] = [1.0, 1.0, 1.0, 0.08];
-/// The knob's face, top to bottom: `#f1f5f9` to `#c6ced5`; while dragged,
-/// `#cfd6dd` to `#f1f5f9`.
-pub(super) const KNOB_TOP: [f32; 4] = [0.945, 0.961, 0.976, 1.0];
-const KNOB_BOTTOM: [f32; 4] = [0.776, 0.808, 0.835, 1.0];
-const KNOB_DRAGGED_TOP: [f32; 4] = [0.812, 0.839, 0.867, 1.0];
 /// The knob's edge: `rgba(0,0,0,0.6)`.
 const KNOB_EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
 /// The tip's bottom sits this far above the track's middle.
@@ -344,11 +339,13 @@ impl<'a> Scrubber<'a> {
         }
         let center = (inner.x + width, track.y + TRACK * 0.5);
         let knob = Rect::new(center.0 - KNOB * 0.5, center.1 - KNOB * 0.5, KNOB, KNOB);
+        // The knob's face; a dragged knob turns it over, lit from below.
+        let (lit, shaded) = (s.color(StyleKey::KnobTop), s.color(StyleKey::KnobBottom));
         let (top, bottom) = if dragging {
             list.circle(center, KNOB * 0.5 + 2.0, s.color(StyleKey::AccentRing));
-            (KNOB_DRAGGED_TOP, KNOB_TOP)
+            (shaded, lit)
         } else {
-            (KNOB_TOP, KNOB_BOTTOM)
+            (lit, shaded)
         };
         list.chrome_rect_gradient(knob, KNOB * 0.5, 1.0, top, bottom, KNOB_EDGE);
         Some(knob)

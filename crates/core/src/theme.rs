@@ -202,6 +202,19 @@ pub struct Theme {
     pub selection: [f32; 4],
     /// Text and glyphs on a [`Theme::selection`] row.
     pub on_selection: [f32; 4],
+    /// Top of a knob's face (slider thumb, switch and scrubber knobs).
+    pub knob_top: [f32; 4],
+    /// Bottom of a knob's face.
+    pub knob_bottom: [f32; 4],
+    /// Face top of an accent control held into its well (a filter chip that
+    /// is on, an accent badge).
+    pub accent_held_top: [f32; 4],
+    /// Face bottom of a held accent control.
+    pub accent_held_bottom: [f32; 4],
+    /// Edge of a held accent control.
+    pub accent_held_edge: [f32; 4],
+    /// Text and glyphs on a held accent control.
+    pub on_accent_held: [f32; 4],
     /// Danger-face gradient top (idle) — destructive actions.
     pub danger_face_top: [f32; 4],
     /// Danger-face gradient top (hovered).
@@ -439,6 +452,12 @@ impl Theme {
             // Forge selects with the solid accent plate.
             selection: oklch(0.74, 0.11, 200.0, 1.0),
             on_selection: hex(0x04171d),
+            knob_top: hex(0xf1f5f9),
+            knob_bottom: hex(0xc6ced5),
+            accent_held_top: oklch(0.42, 0.07, 200.0, 1.0),
+            accent_held_bottom: oklch(0.52, 0.09, 200.0, 1.0),
+            accent_held_edge: [0.0, 0.0, 0.0, 0.65],
+            on_accent_held: oklch(0.93, 0.08, 200.0, 1.0),
             danger_face_top: oklch(0.57, 0.17, 25.0, 1.0),
             danger_face_top_hover: oklch(0.62, 0.18, 25.0, 1.0),
             danger_face_top_pressed: oklch(0.5, 0.14, 25.0, 1.0),
@@ -763,6 +782,12 @@ impl Theme {
             OnAccent => StyleValue::Color(self.on_accent),
             Selection => StyleValue::Color(self.selection),
             OnSelection => StyleValue::Color(self.on_selection),
+            KnobTop => StyleValue::Color(self.knob_top),
+            KnobBottom => StyleValue::Color(self.knob_bottom),
+            AccentHeldTop => StyleValue::Color(self.accent_held_top),
+            AccentHeldBottom => StyleValue::Color(self.accent_held_bottom),
+            AccentHeldEdge => StyleValue::Color(self.accent_held_edge),
+            OnAccentHeld => StyleValue::Color(self.on_accent_held),
             DangerFaceTop => StyleValue::Color(self.danger_face_top),
             DangerFaceTopHover => StyleValue::Color(self.danger_face_top_hover),
             DangerFaceTopPressed => StyleValue::Color(self.danger_face_top_pressed),
@@ -892,6 +917,12 @@ impl Theme {
             (OnAccent, StyleValue::Color(c)) => self.on_accent = c,
             (Selection, StyleValue::Color(c)) => self.selection = c,
             (OnSelection, StyleValue::Color(c)) => self.on_selection = c,
+            (KnobTop, StyleValue::Color(c)) => self.knob_top = c,
+            (KnobBottom, StyleValue::Color(c)) => self.knob_bottom = c,
+            (AccentHeldTop, StyleValue::Color(c)) => self.accent_held_top = c,
+            (AccentHeldBottom, StyleValue::Color(c)) => self.accent_held_bottom = c,
+            (AccentHeldEdge, StyleValue::Color(c)) => self.accent_held_edge = c,
+            (OnAccentHeld, StyleValue::Color(c)) => self.on_accent_held = c,
             (DangerFaceTop, StyleValue::Color(c)) => self.danger_face_top = c,
             (DangerFaceTopHover, StyleValue::Color(c)) => self.danger_face_top_hover = c,
             (DangerFaceTopPressed, StyleValue::Color(c)) => self.danger_face_top_pressed = c,

@@ -55,11 +55,8 @@ const DROP_UP_LIP: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
 const MARKER_W: f32 = 5.0;
 const MARKER_H: f32 = 3.0;
 const MARKER_GAP: f32 = PART_GAP - 1.0;
-/// A toggle latched on (`--accent-toggle-*`, `--key-inset-latched`), and
-/// hovered while off.
+/// A toggle latched on: its edge.
 const TOGGLE_EDGE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
-const TOGGLE_HOVER: [f32; 4] = [0.184, 0.2, 0.22, 1.0];
-const ON_LATCH: [f32; 4] = [0.918, 0.98, 1.0, 1.0];
 
 /// One part of a [`StatusZone`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -345,31 +342,26 @@ fn draw_toggle(
 ) {
     let radius = s.scalar(crate::StyleKey::BorderRadius);
     let ink = if toggle.on {
-        let top = crate::color::oklch(0.6, 0.1, 200.0, 1.0);
-        let bottom = crate::color::oklch(0.68, 0.11, 200.0, 1.0);
+        // A latched key: the latch face, `--key-inset-latched`'s shade from
+        // above and its lit top line.
+        let top = s.color(crate::StyleKey::LatchFaceTop);
+        let bottom = s.color(crate::StyleKey::LatchFaceBottom);
         list.chrome_rect_gradient(r, radius, 1.0, top, bottom, TOGGLE_EDGE);
-        // `--key-inset-latched`: a shade from above and a lit top line.
         list.box_shadow_inset(
             r.inset(1.0),
             CornerRadii::uniform(0.0),
-            BoxShadow {
-                offset: [0.0, 2.0],
-                blur: 4.0,
-                color: crate::color::oklch(0.32, 0.07, 200.0, 1.0),
-                inset: true,
-                ..BoxShadow::default()
-            },
+            s.status_bar().latched_inset,
         );
         list.quad(
             r.x + 1.0,
             r.y + 1.0,
             r.width - 2.0,
             1.0,
-            crate::color::oklch(0.55, 0.09, 200.0, 1.0),
+            s.color(crate::StyleKey::LatchHighlight),
         );
-        ON_LATCH
+        s.color(crate::StyleKey::OnLatch)
     } else if hovered {
-        list.chrome_rect(r, radius, 0.0, TOGGLE_HOVER, [0.0; 4]);
+        list.chrome_rect(r, radius, 0.0, s.status_bar().hover, [0.0; 4]);
         s.ink(Ink::Value)
     } else {
         s.ink(Ink::Muted)
@@ -515,7 +507,7 @@ fn draw_drop_up_key(list: &mut DrawList, s: &StyleResolver, key: Rect, open: boo
             },
         );
     } else if hovered {
-        list.chrome_rect(key, radius, 0.0, TOGGLE_HOVER, [0.0; 4]);
+        list.chrome_rect(key, radius, 0.0, s.status_bar().hover, [0.0; 4]);
     }
 }
 

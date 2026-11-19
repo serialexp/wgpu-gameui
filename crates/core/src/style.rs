@@ -263,6 +263,19 @@ style_keys! {
     /// Text and glyphs on a [`StyleKey::Selection`] row. Secondary text there
     /// is [`Ink::OnSelectionSecond`].
     OnSelection("on_selection", Color),
+    /// Top of a knob's face: a slider thumb, a switch's or a scrubber's knob.
+    KnobTop("knob_top", Color),
+    /// Bottom of a knob's face.
+    KnobBottom("knob_bottom", Color),
+    /// Face top of an accent control held into its well: a filter chip that
+    /// is on, an accent badge.
+    AccentHeldTop("accent_held_top", Color),
+    /// Face bottom of a held accent control.
+    AccentHeldBottom("accent_held_bottom", Color),
+    /// Edge of a held accent control.
+    AccentHeldEdge("accent_held_edge", Color),
+    /// Text and glyphs on a held accent control.
+    OnAccentHeld("on_accent_held", Color),
     /// Danger-face gradient top, idle (destructive controls).
     DangerFaceTop("danger_face_top", Color),
     /// Danger-face gradient top, hovered.
