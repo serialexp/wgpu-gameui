@@ -1,6 +1,6 @@
 # Typography roles — Design
 
-Status: partial — phases 0a–0c landed, 0d onward outstanding
+Status: partial — phase 0 landed, 1 onward outstanding
 Owner: Bart
 Last updated: 2026-11-20
 
@@ -41,13 +41,14 @@ inside them is checked.
       (`font_vmetrics`, `vcentered_text_y`, `x_centered_text_y`) stay for
       the sites not yet on roles, documented as regular face in the
       default line box.
+- [x] **Phase 0d — the per-site role table.** Every theme-derived text
+      site mapped to a role under "Roles", with the fixes the migration
+      makes, the geometry-derived sizes and the emphasis rule. 28 roles
+      added to the 25 of 0a (53), each in `TypeScale::style` with the look
+      its widget has today (leading, weight, tracking included).
 
 ### Outstanding
 
-- [ ] **Phase 0d — the per-site role table.** The survey of every
-      theme-derived text site (chrome scale and body text) mapped to a role,
-      recorded under "Roles" below, before Phase 1 starts. A site that fits
-      no role gets a new one. Literal-size sites are Phase 7's.
 - [ ] **Phase 1 — the chrome scale moves to roles.** Every `sans_block`,
       `mono_block`, `caption_block`, `sans_width`, `mono_width`,
       `text_size(TextSize::…)` and `Tracking::…` user (51 files) names a role.
@@ -203,46 +204,130 @@ is recorded, and measurement stays in logical coordinates.
 
 Roles name what the text is, not how big it is. Where two widgets show the
 same kind of text at different sizes today, they get separate roles, so
-parity holds and a theme can still style them apart. The rows below are
-the set known so far. Phase 0d completes the list from the full survey and
-records it here, with each role's callers, before Phase 1 starts.
+parity holds and a theme can still style them apart. Phase 0d completed
+the list from the survey of every theme-derived text site; the table
+gives each role's callers, the sites Phases 1 and 2 move onto it. Sizes in
+the Forge column are the ones the widgets compute at `272f7d0`; caps
+roles are mono 9 (Forge's caption). Sites with literal sizes are not here:
+they are Phase 7's.
 
-| Role | What it is | Forge at `272f7d0` |
-|------|------------|-------------|
-| `Label` | Field labels (`FieldLabel`, file field) | mono caps 9, 0.14em |
-| `Section` | Panel captions, section headers | mono caps 9, 0.16em |
-| `Badge` | Badge text | mono caps 9, 0.08em |
-| `BadgeCompact` | Compact badges (case kept) | per survey |
-| `Property` | Inspector property labels | mono caps 9, 0.10em |
-| `Axis` | Chart axis and tick labels | mono 9 |
-| `Meta` | Shortcuts, counts, metadata, readouts | mono 10 |
-| `Code` | Code popups, timecodes, Markdown code | mono 10.5 |
-| `Hint` | Small secondary sans text | sans 10 |
-| `Dense` | Dense row text, filter chips | sans 10.5 |
-| `Row` | Panel rows, legends, tooltip text | sans 11 |
-| `MenuItem` | Menu and context-menu items | sans 11.5 |
-| `ListItem` | List and sheet item labels | sans 11.5 |
-| `ListItemMono` | `ListRow::mono` labels | mono 11.5 |
-| `Body` | Running text, inputs, the font-stack root | sans 12 |
-| `Button` | Button labels | sans 12 |
-| `Control` | Checkbox, radio, toggle and setting labels | sans 12 |
-| `Tab` | `Tabs` labels | sans 9.6 |
-| `DocTab` | `DocTabs` labels | sans 10.8 |
-| `SpanTab` | `SpanTabs` labels | sans 11.5 |
-| `Cell` | Table cells | sans 9 |
-| `ColumnHeader` | Table column headers | sans 8.4 |
-| `Title` | Panel and dialog titles | display→sans 15 |
-| `Heading` | App section headings | display→sans 15 |
-| `Display` | App screen titles | display→sans 24 |
-| `Value` | App prominent values: a stat, a name | sans 12 |
-| `Numeric` | Clocks, counters, quantities | sans 12, `Figures::Tabular` |
+| Role | What it is | Forge at `272f7d0` | Callers |
+|------|------------|--------------------|---------|
+| `Label` | Field labels, caps captions over a block | mono caps, 0.14em | `FieldLabel` (label and its value readout: Forge sets both in the label style), status detail title, file dialog groups, state title, preview keys and Name, popover title (its `TITLE_TRACKING` goes), designer headings, Markdown table header |
+| `Section` | Panel captions, section headers | mono caps, 0.16em | panel caption, dock stack section, property group title, designer "Theme preview" |
+| `Badge` | Badge text | mono caps, 0.08em | `Badge`, placeholder caption chip (their tracking constants go) |
+| `BadgeCompact` | Compact badges | mono 9, 0.02em, case kept | `Badge::compact` |
+| `Property` | Inspector property labels | mono caps, 0.10em | property row label, file field label |
+| `ListHeader` | Column headers over a list | mono caps, 0.12em | file dialog column headers |
+| `Flag` | Short capital flags | mono caps, no tracking | chart and scatter empty captions, scatter flag tag, chart "RUNNING", code diagnostic severity |
+| `Axis` | Ticks and small mono marks beside data | mono 9 | chart axis and x labels, bar values, legend tags, markers, reference labels, dock stack count, inspector path, property row unit, property group summary, status detail spark, file field meta, timeline ruler, completion kind tag |
+| `Playhead` | The timeline playhead's time | mono 9 semibold | timeline playhead badge |
+| `Meta` | Shortcuts, counts, metadata, readouts | mono 10 | tooltip shortcut and values, chart y ticks, list and group list meta and subtitles, panel aside, status zones, well chip, meter, scrubber tip, video speed, file dialog captions, footer and notes, code status bar, completion detail, timeline readouts |
+| `Detail` | Technical detail under a dialog's message | mono 10, leading 1.5 | alert dialog detail |
+| `Code` | Technical text at reading size | mono 10.5 | property row value, file field name, video time, group list header name (mono), completion label, designer token rows, Markdown code |
+| `Editor` | A code editor's text | mono 12 | `crates/code` editor |
+| `Hint` | Small secondary sans | sans 10 | choice card description, group list notice, video error reason, file dialog crumb separator |
+| `Help` | How-to text in empty states | sans 10.5, leading 1.5 | empty state hints, inspector hints (their `HINT_LINE` goes) |
+| `Note` | A dialog's explanatory note | sans 10.5, leading 1.45 | prompt dialog note |
+| `Dense` | Dense row text, filter chips | sans 10.5 | filter chip label, group list header name (sans), file field Mixed and placeholder |
+| `Row` | Panel rows, legends, tooltip text | sans 11 | chart legends and tooltips, choice card label, drop zone, drag ghost, inspector tab, sheet footer meta, waffle names, timeline track labels and empty message, list view empty, popover ×, file dialog crumbs, code diagnostic message, designer body |
+| `Message` | A toast's message | sans 11, leading 1.45 | toast body |
+| `MenuItem` | Menu items | sans 11.5 | (menubar and context menu are literal: Phase 7) |
+| `ListItem` | List, tree and file labels | sans 11.5 | list view, tree, drag list and file dialog row labels |
+| `ListItemMono` | List labels in mono | mono 11.5 | `ListRow::mono` |
+| `Lead` | Headline of a small surface | sans 11.5 | toast lead, empty state title, inspector subject and empty title |
+| `Description` | A sheet's description | sans 11.5, leading 1.55 | sheet description |
+| `MediaTitle` | A title over media | sans 11.5 medium | video title, video error headline |
+| `Subhead` | A sheet's title | sans 12.5 semibold | sheet title |
+| `Body` | Running text, inputs, font-stack root | sans 12 | text input, banner (title in accent, message), breadcrumb, panel labels, drag handle, `UiContext` font stack, Markdown body |
+| `Button` | Button labels | sans 12 | button, menu screen buttons |
+| `Control` | Checkbox, radio, toggle, dropdown and setting labels | sans 12 | checkbox, radio, toggle, dropdown trigger and items, settings labels |
+| `Picker` | Combo box text | sans 10.8 | combo box trigger and options |
+| `FieldCell` | Vector field cells | sans 10.2 | vector field |
+| `Chip` | Tag input chips | sans 10.2 | tag input (its × is sized from the role) |
+| `Keycap` | Keycap labels | sans 10.2 | `keycap`, `UiContext` keycap |
+| `Readout` | A control's value readout | sans 9.6 | slider and gradient ramp readouts |
+| `TileLabel` | Labels under grid tiles | sans 9.6 | asset grid (the cell height follows the role) |
+| `ProgressLabel` | A labeled progress bar's label | sans 9 | `ProgressBar` labeled |
+| `Status` | Status bar text | sans 10.2 | status bar |
+| `Pager` | Breadcrumb pager text | sans 10.2 | breadcrumb pager |
+| `TipTitle` | `TooltipLayer` titles | sans 10.2 | tooltip layer |
+| `TipBody` | `TooltipLayer` text | sans 9, lines 12px apart | tooltip layer (leading `(size + 3) / size`) |
+| `Tab` | `Tabs` labels | sans 9.6 | tabs |
+| `DocTab` | Document tab labels | sans 10.8 | doc tabs |
+| `PanelTab` | Dock panel tab labels | sans 10.2 | dock panel |
+| `SpanTab` | `SpanTabs` labels | sans 11.5 | span tabs |
+| `Cell` | Table cells | sans 9 | table |
+| `ColumnHeader` | Table column headers | sans 8.4 | table |
+| `FrameTitle` | Window and group title bars | sans 12 | window title, group title |
+| `Title` | Panel titles | display→sans 15 | `panel::title`, `title_at` |
+| `DialogTitle` | Dialog titles in a header bar | sans 15 bold | file dialog header |
+| `Heading` | Section headings | display→sans 15 | settings section title; an app's headings |
+| `Display` | App screen titles | display→sans 24 | (app) |
+| `Value` | App prominent values: a stat, a name | sans 12 | (app) |
+| `Numeric` | Clocks, counters, quantities | sans 12, `Figures::Tabular` | (app) |
 
 "display→sans" means family `Display`, which in Forge and Overlay falls
 back to sans. So the built-ins look unchanged, and setting `display_font`
-visibly changes titles and headings. `Heading`, `Display`, `Value` and
-`Numeric` have no gameui caller. They are app roles that games use for their own screens.
+visibly changes titles and headings. `Display`, `Value` and `Numeric` have
+no gameui caller. They are app roles that games use for their own screens.
+`DialogTitle` stays sans: the file dialog header is a chrome bar, not a
+heading.
 
 `Tracking::Brand` has no caller today and is not carried over.
+
+**Emphasis composes over a role.** A widget that marks a *state* or a
+piece of *content* raises the weight or sets italic on the role's block,
+as Markdown's `**strong**` and `*em*` do: the selected file and Places
+row, the last breadcrumb, a timeline group's track label (semibold), a
+completion's matched prefix, and the waffle's italic asides. A role's own
+look (the sheet title's semibold, the playhead's) is in the role, never
+set at the site. This keeps the role count to kinds of text, not their
+states.
+
+**Geometry derived from a role.** Row heights, badge heights and cell
+sizes computed from a text size (list rows `size + 10`, combo items
+`max(19, size + 7)`, vector field cells `max(20, size + 7)`, checkbox and
+radio `max(20, size)`, the asset grid's label band `size + 8`, the text
+input's line `size × 1.25`, `UiContext` tab, breadcrumb, keycap and radio
+group heights) read the role's size or line height, never `FontSize`.
+
+**Fixes the migration makes** (permitted differences from `272f7d0`, each
+checked in the gallery in Phase 4):
+
+- **Measured in the face drawn.** These sites measure with
+  `measure_text(…, None)`, the default font, and draw in `theme.font`:
+  asset grid 130, keycap (`badge.rs` 24), banner 149, breadcrumb 61, 95,
+  114–120, 258, 287, combo box 250, context menu 638, 641, 787, doc tabs
+  113, panel 189, popover 123, 191, 297, progress bar 238, radio 169,
+  status bar 90, status zones 369, table 381, 385, 429, 433, tabs 197, tag
+  input 252, tooltip 525, 528, 536, 549, vector field 158, `UiContext`
+  3293. Forge and Overlay draw the bundled Plex, the default font, so they
+  do not change; another theme's font now measures right.
+- **Chart "RUNNING".** `running_width` measures at Meta and draws at
+  Caption; it reserves the width of what is drawn (`Flag`).
+- **Settings section title.** Drawn at the title size, room reserved at
+  `FontSize`; the room becomes the `Heading` role's line height, so the
+  rows below move down.
+- **`UiContext` keycap.** Reserved at `FontSize` in the default font while
+  `keycap` draws `FontSize × 0.85`; both use `Keycap`.
+
+Not fixed here, being literal-size sites (Phase 7): the menu shortcut set
+in sans in the context menu and mono in the menubar; the timeline and
+viewport overlays measuring at normal weight what they draw bold.
+
+**Sizes derived from geometry** stay derived, as `role_block_sized` with
+the role's face (see "Computed sizes"): `ProgressBar` labeled
+(`rect.height × 0.7`), `StatusIcon` (`size × 0.55`, bold), `Thumb`'s
+monogram (`size × 0.46`, semibold, -0.02em, mono), the window's × without
+Phosphor (`key.height × 0.55`), `IconKey` (12, 11 or 10 by face height,
+medium) and the file glyph's extension (`size × 0.17`, mono caps, 0.04em,
+bold). Each names the role whose face it uses; its size, weight and
+tracking stay the widget's.
+
+**Other crates.** `crates/code` (editor `Editor`, status `Meta`, marks
+`Flag` and `Row`, popup `Code`, `Meta`, `Axis`), the designer (Phase 3)
+and Markdown (Phase 2d) are listed above with their roles.
 
 Overlay's column is its current sizes (body 15, title 18, scale
 11/12/13/14/14) run through the same factors.
@@ -468,6 +553,11 @@ migration finds it, naming the site and the bug:
 - **Spectral as a test-only font** (Bart, 2026-11-20). OFL, in
   `tests/fonts/`, excluded from the package. Tests use it for a face
   unlike Plex and for figure features Plex lacks.
+- **Emphasis composes over a role** (0d, my call; Bart may overturn). A
+  state or content mark (selected, current, a matched prefix, an aside)
+  raises the weight or sets italic on the role's block, as Markdown does.
+  The alternative, a role per state, would have added about six roles
+  that differ only in weight and would leave Markdown as the exception.
 - **Literal-size text is a later phase** (Bart, 2026-11-20). Phases 1–2
   migrate the theme-derived sites with pixel parity. The literal-size
   sites move in Phase 7, onto a consolidated role set, with each visual

@@ -165,9 +165,14 @@ macro_rules! text_roles {
         /// draws; the theme's [`Typography`] says how each role looks (see
         /// [`StyleResolver::role_block`](crate::StyleResolver::role_block)).
         ///
-        /// The chrome roles are the ones gameui's widgets draw. `Heading`,
-        /// `Display`, `Value` and `Numeric` have no gameui caller: they are
-        /// for an app's own screens, so its text follows the theme too.
+        /// The chrome roles are the ones gameui's widgets draw. `Display`,
+        /// `Value` and `Numeric` have no gameui caller (and `Heading` only
+        /// the settings form): they are for an app's own screens, so its
+        /// text follows the theme too.
+        ///
+        /// Where two widgets show the same kind of text at different sizes,
+        /// each has its own role, so the built-in themes keep their look and a
+        /// theme can still style them apart.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum TextRole {
             $($(#[$attr])* $variant,)*
@@ -196,49 +201,109 @@ macro_rules! text_roles {
 }
 
 text_roles! {
-    /// Field labels: mono capitals above an input.
+    /// Field labels and the caps captions over a block (a status detail, a
+    /// popover, the file dialog's groups): mono capitals.
     Label("label"),
     /// Panel captions and section headers.
     Section("section"),
     /// Badge text.
     Badge("badge"),
+    /// Compact badges: case kept, barely tracked.
+    BadgeCompact("badge_compact"),
     /// Inspector property labels.
     Property("property"),
-    /// Chart axis and tick labels.
+    /// Column headers over a list (the file dialog's).
+    ListHeader("list_header"),
+    /// Short capital flags: an empty chart's caption, a point's flag, a
+    /// diagnostic's severity.
+    Flag("flag"),
+    /// Axis ticks and the small mono marks beside data: units, counts,
+    /// paths, kind tags.
     Axis("axis"),
+    /// The time on a timeline's playhead.
+    Playhead("playhead"),
     /// Shortcuts, counts, metadata and readouts.
     Meta("meta"),
+    /// Technical detail under a dialog's message (an error's text).
+    Detail("detail"),
     /// Code, timecodes and other technical text set at reading size.
     Code("code"),
-    /// Small secondary text.
+    /// A code editor's text.
+    Editor("editor"),
+    /// Small secondary text: a choice's description, a notice.
     Hint("hint"),
+    /// How-to text in an empty state or an empty inspector.
+    Help("help"),
+    /// A dialog's explanatory note (the prompt dialog's).
+    Note("note"),
     /// Dense row text and filter chips.
     Dense("dense"),
     /// Panel rows, legends and tooltip text.
     Row("row"),
+    /// A toast's message.
+    Message("message"),
     /// Menu and context-menu items.
     MenuItem("menu_item"),
-    /// List and sheet item labels.
+    /// List, tree and file labels.
     ListItem("list_item"),
+    /// List labels set in mono (paths, ids).
+    ListItemMono("list_item_mono"),
+    /// The headline of a small surface: a toast, an empty state, the
+    /// inspector's subject.
+    Lead("lead"),
+    /// A sheet's description.
+    Description("description"),
+    /// A title over media: a video's, its error headline.
+    MediaTitle("media_title"),
+    /// A sheet's title.
+    Subhead("subhead"),
     /// Running text and text inputs; the root of the font stack.
     Body("body"),
     /// Button labels.
     Button("button"),
-    /// Checkbox, radio, toggle and setting labels.
+    /// Checkbox, radio, toggle, dropdown and setting labels.
     Control("control"),
+    /// Combo box text, closed and open.
+    Picker("picker"),
+    /// Vector field cells.
+    FieldCell("field_cell"),
+    /// Tag input chips.
+    Chip("chip"),
+    /// Keycap labels.
+    Keycap("keycap"),
+    /// A slider's or gradient ramp's value readout.
+    Readout("readout"),
+    /// Labels under grid tiles (the asset grid's).
+    TileLabel("tile_label"),
+    /// A labeled progress bar's label.
+    ProgressLabel("progress_label"),
+    /// Status bar text.
+    Status("status"),
+    /// Breadcrumb pager text.
+    Pager("pager"),
+    /// [`TooltipLayer`](crate::TooltipLayer) titles.
+    TipTitle("tip_title"),
+    /// [`TooltipLayer`](crate::TooltipLayer) text.
+    TipBody("tip_body"),
     /// [`Tabs`](crate::Tabs) labels.
     Tab("tab"),
     /// Document tab labels ([`draw_doc_tabs`](crate::draw_doc_tabs)).
     DocTab("doc_tab"),
+    /// Dock panel tab labels.
+    PanelTab("panel_tab"),
     /// [`SpanTabs`](crate::SpanTabs) labels.
     SpanTab("span_tab"),
     /// Table cells.
     Cell("cell"),
     /// Table column headers.
     ColumnHeader("column_header"),
-    /// Panel, window and dialog titles.
+    /// Window and group title bars.
+    FrameTitle("frame_title"),
+    /// Panel titles.
     Title("title"),
-    /// An app's section headings.
+    /// Dialog titles in a header bar (the file dialog's).
+    DialogTitle("dialog_title"),
+    /// Section headings (a settings form's, and an app's own).
     Heading("heading"),
     /// An app's screen titles.
     Display("display"),
@@ -333,6 +398,8 @@ pub(crate) struct TypeScale {
     pub property_tracking: f32,
     pub label_tracking: f32,
     pub section_tracking: f32,
+    pub list_header_tracking: f32,
+    pub badge_compact_tracking: f32,
 }
 
 impl TypeScale {
@@ -349,6 +416,8 @@ impl TypeScale {
         property_tracking: 0.1,
         label_tracking: 0.14,
         section_tracking: 0.16,
+        list_header_tracking: 0.12,
+        badge_compact_tracking: 0.02,
     };
 
     /// The style of `role` on this scale. Every role is listed, so a new one
@@ -360,24 +429,50 @@ impl TypeScale {
                 .with_tracking(tracking)
                 .with_caps(true)
         };
+        // The leading each prose role's widget has always set.
+        let prose = |style: TextStyle, leading: f32| style.with_line_height(leading);
         match role {
             Label => caps(self.label_tracking),
             Section => caps(self.section_tracking),
             Badge => caps(self.badge_tracking),
+            BadgeCompact => {
+                TextStyle::mono(self.caption).with_tracking(self.badge_compact_tracking)
+            }
             Property => caps(self.property_tracking),
+            ListHeader => caps(self.list_header_tracking),
+            Flag => caps(0.0),
             Axis => TextStyle::mono(self.caption),
+            Playhead => TextStyle::mono(self.caption).with_weight(Weight::SEMIBOLD),
             Meta => TextStyle::mono(self.meta),
+            Detail => prose(TextStyle::mono(self.meta), 1.5),
             Code => TextStyle::mono(self.dense),
+            Editor => TextStyle::mono(self.body),
             Hint => TextStyle::sans(self.meta),
+            Help => prose(TextStyle::sans(self.dense), 1.5),
+            Note => prose(TextStyle::sans(self.dense), 1.45),
             Dense => TextStyle::sans(self.dense),
             Row => TextStyle::sans(self.row),
-            MenuItem | ListItem | SpanTab => TextStyle::sans(self.menu),
-            Body | Button | Control => TextStyle::sans(self.body),
-            Tab => TextStyle::sans(self.body * 0.8),
-            DocTab => TextStyle::sans(self.body * 0.9),
-            Cell => TextStyle::sans(self.body * 0.75),
+            Message => prose(TextStyle::sans(self.row), 1.45),
+            MenuItem | ListItem | SpanTab | Lead => TextStyle::sans(self.menu),
+            ListItemMono => TextStyle::mono(self.menu),
+            Description => prose(TextStyle::sans(self.menu), 1.55),
+            MediaTitle => TextStyle::sans(self.menu).with_weight(Weight::MEDIUM),
+            Subhead => TextStyle::sans(self.menu + 1.0).with_weight(Weight::SEMIBOLD),
+            Body | Button | Control | FrameTitle => TextStyle::sans(self.body),
+            Picker | DocTab => TextStyle::sans(self.body * 0.9),
+            FieldCell | Chip | Keycap | Status | Pager | TipTitle | PanelTab => {
+                TextStyle::sans(self.body * 0.85)
+            }
+            Readout | TileLabel | Tab => TextStyle::sans(self.body * 0.8),
+            ProgressLabel | Cell => TextStyle::sans(self.body * 0.75),
+            // The tooltip layer's lines are 3px apart, whatever the size.
+            TipBody => {
+                let size = self.body * 0.75;
+                prose(TextStyle::sans(size), (size + 3.0) / size)
+            }
             ColumnHeader => TextStyle::sans(self.body * 0.7),
             Title | Heading => TextStyle::display(self.title),
+            DialogTitle => TextStyle::sans(self.title).with_weight(Weight::BOLD),
             Display => TextStyle::display(self.body * 2.0),
             Value => TextStyle::sans(self.body),
             Numeric => TextStyle::sans(self.body).with_figures(Figures::Tabular),
@@ -586,6 +681,19 @@ mod tests {
         assert_eq!(t[TextRole::Title].family, FontFamily::Display);
         assert_eq!(t[TextRole::Numeric].figures, Figures::Tabular);
         assert_eq!(t[TextRole::Body].figures, Figures::Default);
+        // Roles carrying a widget's own leading, weight or tracking.
+        assert_eq!(t[TextRole::Help].line_height_px(), 10.5 * 1.5);
+        assert_eq!(t[TextRole::Description].line_height_px(), 11.5 * 1.55);
+        assert!((t[TextRole::TipBody].line_height_px() - 12.0).abs() < 1e-4);
+        assert_eq!(t[TextRole::Subhead].size, 12.5);
+        assert_eq!(t[TextRole::Subhead].weight, Weight::SEMIBOLD);
+        assert_eq!(t[TextRole::DialogTitle].family, FontFamily::Sans);
+        assert_eq!(t[TextRole::DialogTitle].weight, Weight::BOLD);
+        assert!(!t[TextRole::BadgeCompact].caps);
+        assert!(t[TextRole::Flag].caps);
+        assert_eq!(t[TextRole::Flag].tracking, 0.0);
+        assert_eq!(t[TextRole::ListHeader].letter_spacing(), 9.0 * 0.12);
+        assert_eq!(t[TextRole::Keycap].size, 12.0 * 0.85);
     }
 
     #[test]

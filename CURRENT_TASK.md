@@ -8,11 +8,11 @@ The plan, Bart's decisions and the checklist are in
 - Done: the doc (`308f569`, Codex-reviewed; Antigravity waived by Bart),
   phase 0a roles and the theme's role table (`c2b6bff`), phase 0b figures
   (`654a0b8`, breaking: `TextBlock::figures`), phase 0c block-aware
-  centring (`vcentered_block_y` and friends). Spectral (OFL) is a test-only
+  centring (`vcentered_block_y` and friends), phase 0d the per-site role
+  table (53 roles). Spectral (OFL) is a test-only
   font in `crates/core/tests/fonts/`.
-- Next: 0d the per-site role table. An Explore survey
-  of every text site, used for 0d, was saved in the citybuilder session's
-  scratchpad. Rerun it if that file is gone.
+- Next: Phase 1, the chrome scale moves to roles (the doc's role table
+  lists each role's callers).
 - Literal-size sites (about 100) are Phase 7 (Bart), not Phases 1–2.
 - `crates/core/target/` (untracked criterion output from 2026-11-09) is not
   ours; it was left alone.
