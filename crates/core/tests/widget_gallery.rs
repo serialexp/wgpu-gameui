@@ -4,17 +4,20 @@
 //! ```
 //! cargo test -p wgpu-gameui --test widget_gallery -- --ignored --nocapture
 //! ```
-//! Writes one focused image per section under `test_output/widget_gallery/`,
-//! one image per labeled component preview under
-//! `test_output/widget_gallery/components/`, and
-//! `test_output/widget_gallery/index.html` to browse them all.
+//! Renders the gallery once per built-in theme, Overlay and Forge. Each
+//! theme's images go under `test_output/widget_gallery/<theme>/`: one per
+//! section (`<category>/<Component>.png`) and one per labeled cell
+//! (`<category>/<Component>/<label>.png`). `test_output/widget_gallery/index.html`
+//! browses them all, with a switch between the themes (or both side by side;
+//! the T key flips).
 //!
-//! To render it in a theme preset instead of Forge, name the preset file:
+//! To render a theme preset, name the preset file:
 //! ```
 //! GAMEUI_PRESET=presets/aldermoor-hearth.toml \
 //!     cargo test --features preset --test widget_gallery -- --ignored --nocapture
 //! ```
-//! That writes to `test_output/widget_gallery-<file stem>/` instead.
+//! That renders the preset and Forge, the template it re-skins, into
+//! `test_output/widget_gallery-<file stem>/` instead.
 //!
 //! Layout is driven by [`Flow`] — a left-to-right, wrapping grid of labeled
 //! cells. Each preview reserves a cell (which draws its label) and gets back a
@@ -512,7 +515,7 @@ fn transform_gizmo_section(
     {
         let r = flow.cell(list, label, 300.0, 200.0);
         let camera = gallery_camera(eye, r);
-        camera_stage(list, r, &camera);
+        camera_stage(list, r, &camera, theme);
         let view = GizmoView::Camera { pivot, camera };
         let mut frames = vec![InputState::default()];
         if drag_x {
@@ -604,7 +607,7 @@ fn gallery_camera(eye: [f32; 3], viewport: Rect) -> GizmoCamera {
 
 /// A dark stage with the ground's unit grid (y = 0) projected through
 /// `camera`; the X and Z lines through the origin in their axis tints.
-fn camera_stage(list: &mut DrawList, r: Rect, camera: &GizmoCamera) {
+fn camera_stage(list: &mut DrawList, r: Rect, camera: &GizmoCamera, theme: &Theme) {
     list.paint_quad_background(
         r,
         wgpu_gameui::Background::LinearGradient {
@@ -615,7 +618,6 @@ fn camera_stage(list: &mut DrawList, r: Rect, camera: &GizmoCamera) {
         wgpu_gameui::CornerRadii::uniform(2.0),
     );
     list.push_clip(r);
-    let theme = Theme::default();
     let on = |w: [f32; 3]| camera.project(w).map(|[x, y, _]| [x, y]);
     for i in -5..=5 {
         let k = i as f32;
@@ -1540,7 +1542,7 @@ impl Category {
         Category::Engine,
     ];
 
-    /// The category's name: its directory under
+    /// The category's name: its directory under each theme's directory in
     /// `test_output/widget_gallery/`, and (for the component categories)
     /// Forge's folder name.
     fn name(self) -> &'static str {
@@ -2250,17 +2252,47 @@ fn crop_with_margin(pages: &[GalleryPage], rect: Rect, margin: u32) -> image::Rg
         .to_image()
 }
 
-/// The theme the gallery renders in: Forge, or the theme preset in the TOML
-/// file `GAMEUI_PRESET` names (which needs `--features preset`).
-fn gallery_theme() -> Theme {
-    match std::env::var_os("GAMEUI_PRESET") {
-        None => Theme::default(),
-        Some(path) => load_preset(std::path::Path::new(&path)),
-    }
+/// One theme the gallery renders in.
+struct GalleryTheme {
+    /// Its directory under the output directory, and its key on the index
+    /// page: lowercase ASCII.
+    dir: &'static str,
+    /// Its name as the index page shows it.
+    label: String,
+    theme: Theme,
 }
 
+/// The themes the gallery renders in, the first being the one the index
+/// page opens on: Overlay (the default) and Forge, or the theme preset in the
+/// TOML file `GAMEUI_PRESET` names (which needs `--features preset`) and
+/// Forge, the template every preset re-skins.
+fn gallery_themes() -> Vec<GalleryTheme> {
+    let forge = GalleryTheme {
+        dir: "forge",
+        label: "Forge".to_owned(),
+        theme: Theme::forge(),
+    };
+    let first = match std::env::var_os("GAMEUI_PRESET") {
+        None => GalleryTheme {
+            dir: "overlay",
+            label: "Overlay".to_owned(),
+            theme: Theme::overlay(),
+        },
+        Some(path) => {
+            let (label, theme) = load_preset(std::path::Path::new(&path));
+            GalleryTheme {
+                dir: "preset",
+                label,
+                theme,
+            }
+        }
+    };
+    vec![first, forge]
+}
+
+/// The preset in the TOML file at `path`: its name and its theme.
 #[cfg(feature = "preset")]
-fn load_preset(path: &std::path::Path) -> Theme {
+fn load_preset(path: &std::path::Path) -> (String, Theme) {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("read GAMEUI_PRESET {}: {e}", path.display()));
     let preset = wgpu_gameui::ThemePreset::from_toml(&text)
@@ -2270,20 +2302,21 @@ fn load_preset(path: &std::path::Path) -> Theme {
         preset.name,
         path.display()
     );
-    preset.resolve()
+    let theme = preset.resolve();
+    (preset.name, theme)
 }
 
 #[cfg(not(feature = "preset"))]
-fn load_preset(path: &std::path::Path) -> Theme {
+fn load_preset(path: &std::path::Path) -> (String, Theme) {
     panic!(
         "GAMEUI_PRESET={} needs the preset feature: add `--features preset`",
         path.display()
     )
 }
 
-/// Where under `test_output/` the gallery writes: `widget_gallery` for Forge,
-/// `widget_gallery-<file stem>` for a preset, so rendering a preset never
-/// replaces the Forge images.
+/// Where under `test_output/` the gallery writes: `widget_gallery` for the
+/// built-in themes, `widget_gallery-<file stem>` for a preset, so rendering a
+/// preset never replaces their images.
 fn gallery_output_name() -> String {
     match std::env::var_os("GAMEUI_PRESET") {
         None => "widget_gallery".to_owned(),
@@ -2295,20 +2328,16 @@ fn gallery_output_name() -> String {
     }
 }
 
-/// Cut the rendered pages into one image per section
+/// Cut one theme's rendered pages into one image per section
 /// (`<group>/<Component>.png`) and one per labeled cell
-/// (`<group>/<Component>/<label>.png`), and write `index.html` to browse
-/// them by group, with Forge's missing components listed.
-fn save_gallery_images(pages: &[GalleryPage], sections: &[GallerySection], cells: &[GalleryCell]) {
-    let output_dir = &format!("test_output/{}", gallery_output_name());
-    // Start from an empty directory so a renamed or removed section or cell
-    // never leaves a stale PNG behind.
-    match std::fs::remove_dir_all(output_dir) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => panic!("wipe {output_dir}: {err}"),
-    }
-
+/// (`<group>/<Component>/<label>.png`) under `output_dir`, and return what
+/// was saved for the index page.
+fn save_gallery_images(
+    output_dir: &str,
+    pages: &[GalleryPage],
+    sections: &[GallerySection],
+    cells: &[GalleryCell],
+) -> Vec<IndexEntry> {
     let mut seen = std::collections::HashSet::with_capacity(sections.len());
     let mut entries = Vec::with_capacity(sections.len());
     for section in sections {
@@ -2333,7 +2362,9 @@ fn save_gallery_images(pages: &[GalleryPage], sections: &[GallerySection], cells
             .save(format!("{output_dir}/{file}"))
             .expect("save gallery section PNG");
         entries.push(IndexEntry {
-            section,
+            category: section.category,
+            component,
+            subtitle: section.subtitle,
             file,
             size: section_img.dimensions(),
             cells: Vec::new(),
@@ -2353,24 +2384,18 @@ fn save_gallery_images(pages: &[GalleryPage], sections: &[GallerySection], cells
         } else {
             format!("{}-{}", cell.file_stem, *count)
         };
-        let file = format!(
-            "{}/{}/{stem}.png",
-            entry.section.category.name(),
-            entry.section.component
-        );
+        let file = format!("{}/{}/{stem}.png", entry.category.name(), entry.component);
         let cell_img = crop_with_margin(pages, cell.rect, CELL_MARGIN);
         cell_img
             .save(format!("{output_dir}/{file}"))
             .expect("save gallery cell PNG");
         entry.cells.push(IndexCell {
-            label: &cell.label,
+            label: cell.label.clone(),
             file,
             size: cell_img.dimensions(),
         });
     }
 
-    let index = format!("{output_dir}/index.html");
-    std::fs::write(&index, gallery_index_html(&entries)).expect("write gallery index");
     let covered = FORGE_COMPONENTS
         .iter()
         .flat_map(|(category, names)| names.iter().map(move |name| (*category, *name)))
@@ -2378,30 +2403,79 @@ fn save_gallery_images(pages: &[GalleryPage], sections: &[GallerySection], cells
         .count();
     let forge_total: usize = FORGE_COMPONENTS.iter().map(|(_, names)| names.len()).sum();
     eprintln!(
-        "wrote {} section and {} cell images ({covered} of {forge_total} Forge components), \
-         browse them at {index}",
+        "wrote {} section and {} cell images to {output_dir} \
+         ({covered} of {forge_total} Forge components)",
         sections.len(),
         cells.len()
     );
+    entries
 }
 
-/// One section on the gallery index page, with its images.
-struct IndexEntry<'a> {
-    section: &'a GallerySection,
-    /// Section image path, relative to the index page.
+/// One theme's images on the gallery index page.
+struct ThemeImages {
+    /// [`GalleryTheme::dir`]: the images' directory, relative to the page.
+    dir: &'static str,
+    label: String,
+    entries: Vec<IndexEntry>,
+}
+
+impl ThemeImages {
+    /// This theme's image of the section `component` in `category`.
+    fn entry(&self, category: Category, component: &str) -> Option<&IndexEntry> {
+        self.entries
+            .iter()
+            .find(|e| e.category == category && e.component == component)
+    }
+}
+
+/// One section on the gallery index page, with its images in one theme.
+struct IndexEntry {
+    category: Category,
+    component: &'static str,
+    subtitle: &'static str,
+    /// Section image path, relative to its theme's directory.
     file: String,
     /// Section image size in pixels.
     size: (u32, u32),
-    cells: Vec<IndexCell<'a>>,
+    cells: Vec<IndexCell>,
 }
 
-/// One cell image on the gallery index page.
-struct IndexCell<'a> {
-    label: &'a str,
-    /// Path relative to the index page.
+/// One cell image on the gallery index page, in one theme.
+struct IndexCell {
+    label: String,
+    /// Path relative to its theme's directory; the same in every theme.
     file: String,
     /// Image size in pixels.
     size: (u32, u32),
+}
+
+/// Write one image in every theme into `out`: a figure per theme, each
+/// hidden unless its theme is the one shown (or all are, side by side).
+/// `image` finds a theme's file and size; a theme that didn't draw it gets a
+/// note instead.
+fn theme_figures<'t>(
+    out: &mut String,
+    themes: &'t [ThemeImages],
+    alt: &str,
+    image: impl Fn(&'t ThemeImages) -> Option<(&'t str, (u32, u32))>,
+) {
+    use std::fmt::Write as _;
+    out.push_str(r#"<div class="themes">"#);
+    for theme in themes {
+        let (dir, label) = (theme.dir, html_escape(&theme.label));
+        match image(theme) {
+            Some((file, (w, h))) => writeln!(
+                out,
+                r#"<figure class="t t-{dir}"><img src="{dir}/{file}" loading="lazy" style="--w:{w};--h:{h}" alt="{alt} · {label}"><figcaption class="theme-name">{label}</figcaption></figure>"#
+            ),
+            None => writeln!(
+                out,
+                r#"<figure class="t t-{dir}"><p class="absent">Not drawn in {label}</p></figure>"#
+            ),
+        }
+        .unwrap();
+    }
+    out.push_str("</div>\n");
 }
 
 /// Escape text for HTML element content and quoted attribute values.
@@ -2421,30 +2495,30 @@ fn html_escape(text: &str) -> String {
 
 /// A self-contained page for browsing the gallery. On the left, a
 /// filterable list of the groups and their components, with Forge's missing
-/// ones greyed out; on the right, each component's section image with its
-/// cell images (folded), at a chosen pixel zoom.
-fn gallery_index_html(entries: &[IndexEntry]) -> String {
+/// ones greyed out, and the theme to show; on the right, each component's
+/// section image with its cell images (folded), at a chosen pixel zoom. The
+/// first theme's sections make the list.
+fn gallery_index_html(themes: &[ThemeImages]) -> String {
     use std::fmt::Write as _;
 
+    let entries = &themes[0].entries;
     let mut nav = String::new();
     let mut body = String::new();
     let mut missing_total = Vec::new();
     for category in Category::ALL {
         let g = category.name();
         let forge = forge_components(category);
-        let mut in_group: Vec<&IndexEntry> = entries
-            .iter()
-            .filter(|e| e.section.category == category)
-            .collect();
+        let mut in_group: Vec<&IndexEntry> =
+            entries.iter().filter(|e| e.category == category).collect();
         // Forge's components in Forge's order, then gameui's own by name.
         in_group.sort_by_key(|e| {
-            let forge_index = forge.iter().position(|name| *name == e.section.component);
-            (forge_index.unwrap_or(usize::MAX), e.section.component)
+            let forge_index = forge.iter().position(|name| *name == e.component);
+            (forge_index.unwrap_or(usize::MAX), e.component)
         });
         let missing: Vec<&str> = forge
             .iter()
             .copied()
-            .filter(|name| !in_group.iter().any(|e| e.section.component == *name))
+            .filter(|name| !in_group.iter().any(|e| e.component == *name))
             .collect();
         if in_group.is_empty() && missing.is_empty() {
             continue;
@@ -2463,8 +2537,7 @@ fn gallery_index_html(entries: &[IndexEntry]) -> String {
         .unwrap();
         writeln!(body, r#"<div class="group" id="{g}"><h2>{g}</h2>"#).unwrap();
         for entry in &in_group {
-            let section = entry.section;
-            let c = section.component;
+            let c = entry.component;
             let id = format!("{g}-{c}");
             let own = !forge.is_empty() && !forge.contains(&c);
             let tag = if own {
@@ -2474,22 +2547,24 @@ fn gallery_index_html(entries: &[IndexEntry]) -> String {
             };
             writeln!(nav, r##"<li><a href="#{id}">{c}</a>{tag}</li>"##).unwrap();
 
-            let mut search = format!("{g} {c} {}", section.subtitle);
+            let mut search = format!("{g} {c} {}", entry.subtitle);
             for cell in &entry.cells {
                 search.push(' ');
-                search.push_str(cell.label);
+                search.push_str(&cell.label);
             }
             let search = html_escape(&search);
-            let subtitle = html_escape(section.subtitle);
-            let file = &entry.file;
-            let (w, h) = entry.size;
+            let subtitle = html_escape(entry.subtitle);
             writeln!(
                 body,
                 r##"<section id="{id}" data-search="{search}">
-<h3><a href="#{id}">{c}</a> <span class="subtitle">{subtitle}</span>{tag}</h3>
-<img src="{file}" style="--w:{w};--h:{h}" alt="{c}">"##
+<h3><a href="#{id}">{c}</a> <span class="subtitle">{subtitle}</span>{tag}</h3>"##
             )
             .unwrap();
+            theme_figures(&mut body, themes, c, |theme| {
+                theme
+                    .entry(entry.category, c)
+                    .map(|e| (e.file.as_str(), e.size))
+            });
             if !entry.cells.is_empty() {
                 writeln!(
                     body,
@@ -2498,14 +2573,14 @@ fn gallery_index_html(entries: &[IndexEntry]) -> String {
                 )
                 .unwrap();
                 for cell in &entry.cells {
-                    let label = html_escape(cell.label);
-                    let file = &cell.file;
-                    let (w, h) = cell.size;
-                    writeln!(
-                        body,
-                        r#"<figure><img src="{file}" style="--w:{w};--h:{h}" alt="{label}"><figcaption>{label}</figcaption></figure>"#
-                    )
-                    .unwrap();
+                    let label = html_escape(&cell.label);
+                    body.push_str("<figure>");
+                    theme_figures(&mut body, themes, &label, |theme| {
+                        let cells = &theme.entry(entry.category, c)?.cells;
+                        let same = cells.iter().find(|other| other.file == cell.file)?;
+                        Some((same.file.as_str(), same.size))
+                    });
+                    writeln!(body, "<figcaption>{label}</figcaption></figure>").unwrap();
                 }
                 body.push_str("</div></details>\n");
             }
@@ -2536,6 +2611,32 @@ fn gallery_index_html(entries: &[IndexEntry]) -> String {
     let summary = format!(
         r#"<p class="summary">Forge coverage: <b>{covered} of {forge_total}</b> components. Missing: {missing_list}</p>"#
     );
+
+    // One theme shows at a time, or all of them side by side.
+    let mut theme_options = String::new();
+    let mut theme_css = String::new();
+    for theme in themes {
+        let (dir, label) = (theme.dir, html_escape(&theme.label));
+        writeln!(
+            theme_options,
+            r#"<option value="{dir}">Theme: {label}</option>"#
+        )
+        .unwrap();
+        writeln!(
+            theme_css,
+            r#"body[data-theme="{dir}"] .t:not(.t-{dir}) {{ display: none; }}"#
+        )
+        .unwrap();
+    }
+    if themes.len() > 1 {
+        theme_options.push_str(r#"<option value="all">Themes side by side</option>"#);
+    }
+    let theme_dirs = themes
+        .iter()
+        .map(|theme| format!("\"{}\"", theme.dir))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let first_dir = themes[0].dir;
 
     format!(
         r##"<!doctype html>
@@ -2584,11 +2685,18 @@ summary {{ cursor: pointer; color: #9ab; }}
 figure {{ margin: 0; }}
 figcaption {{ color: #8a96a3; font-size: 12px; margin-top: 4px; }}
 .hidden {{ display: none; }}
-</style>
+.themes {{ display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }}
+.themes > figure {{ margin: 0; }}
+.theme-name {{ display: none; color: #8a96a3; font-size: 11px; margin-top: 2px; }}
+body[data-theme="all"] .theme-name {{ display: block; }}
+p.absent {{ margin: 0; color: #6a737b; font-style: italic; }}
+{theme_css}</style>
 </head>
-<body>
+<body data-theme="{first_dir}">
 <nav>
 <input id="filter" type="search" placeholder="Filter components" autofocus>
+<select id="theme" title="T flips between the themes">
+{theme_options}</select>
 <select id="zoom">
 <option value="1">Zoom 1×</option><option value="2">Zoom 2×</option>
 <option value="3">Zoom 3×</option><option value="4">Zoom 4×</option>
@@ -2619,6 +2727,27 @@ filter.addEventListener("input", () => {{
 }});
 document.getElementById("zoom").addEventListener("change", (event) => {{
   document.documentElement.style.setProperty("--zoom", event.target.value);
+}});
+// The theme shown, remembered across reloads where the browser lets us. T
+// (outside the filter box) flips to the next theme.
+const themes = [{theme_dirs}];
+const themeSelect = document.getElementById("theme");
+function showTheme(theme) {{
+  document.body.dataset.theme = theme;
+  themeSelect.value = theme;
+  try {{ localStorage.setItem("gallery-theme", theme); }} catch {{}}
+}}
+try {{
+  const saved = localStorage.getItem("gallery-theme");
+  if (saved && [...themeSelect.options].some((o) => o.value === saved)) showTheme(saved);
+}} catch {{}}
+themeSelect.addEventListener("change", () => showTheme(themeSelect.value));
+document.addEventListener("keydown", (event) => {{
+  if (event.key !== "t" && event.key !== "T") return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.target.matches("input, select, textarea")) return;
+  const at = themes.indexOf(document.body.dataset.theme);
+  showTheme(themes[(at + 1) % themes.length]);
 }});
 // Clicking an image shows it big on this page (never a new tab). It is
 // scaled to fit the window: whole-number steps when it fits at 1× or more so
@@ -2678,6 +2807,40 @@ fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) 
 #[test]
 #[ignore = "needs a GPU adapter; writes PNGs and an index page for manual inspection"]
 fn render_widget_gallery() {
+    let output_dir = format!("test_output/{}", gallery_output_name());
+    // Start from an empty directory so a renamed or removed section or cell
+    // never leaves a stale PNG behind.
+    match std::fs::remove_dir_all(&output_dir) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => panic!("wipe {output_dir}: {err}"),
+    }
+    let themes: Vec<ThemeImages> = gallery_themes()
+        .into_iter()
+        .map(|GalleryTheme { dir, label, theme }| {
+            eprintln!("rendering the gallery in {label}");
+            let theme_dir = format!("{output_dir}/{dir}");
+            let (pages, sections, cells) = render_gallery(theme, &theme_dir);
+            let entries = save_gallery_images(&theme_dir, &pages, &sections, &cells);
+            ThemeImages {
+                dir,
+                label,
+                entries,
+            }
+        })
+        .collect();
+    let index = format!("{output_dir}/index.html");
+    std::fs::write(&index, gallery_index_html(&themes)).expect("write gallery index");
+    eprintln!("browse the gallery at {index}");
+}
+
+/// Draw the whole gallery in `theme` and render it in pages, writing its
+/// layout report as `<theme_dir>.debug.{txt,json}`. Returns the pages and
+/// where on them each section and cell is.
+fn render_gallery(
+    theme: Theme,
+    theme_dir: &str,
+) -> (Vec<GalleryPage>, Vec<GallerySection>, Vec<GalleryCell>) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
@@ -2764,7 +2927,6 @@ fn render_widget_gallery() {
     // (Slider needs no assets — it renders procedurally from the theme.)
 
     let mut layers = LayerStack::new();
-    let theme = gallery_theme();
     let mut input = InputState::default();
     let mut gallery_sections;
     let mut gallery_cells;
@@ -7978,14 +8140,13 @@ fn render_widget_gallery() {
     {
         let screen = Rect::new(0.0, 0.0, W as f32, h as f32);
         let report = DebugReport::measured_layers(&mut layers, screen);
-        std::fs::create_dir_all("test_output").unwrap();
-        let name = gallery_output_name();
-        std::fs::write(format!("test_output/{name}.debug.txt"), report.to_text())
+        std::fs::create_dir_all(theme_dir).expect("create the theme's gallery directory");
+        std::fs::write(format!("{theme_dir}.debug.txt"), report.to_text())
             .expect("write debug report");
-        std::fs::write(format!("test_output/{name}.debug.json"), report.to_json())
+        std::fs::write(format!("{theme_dir}.debug.json"), report.to_json())
             .expect("write debug json");
         eprintln!(
-            "wrote test_output/{name}.debug.txt — {} nodes, {} problems ({} inferred names)",
+            "wrote {theme_dir}.debug.txt — {} nodes, {} problems ({} inferred names)",
             report.nodes.len(),
             report.problems.len(),
             report.inferred_count()
@@ -8088,7 +8249,6 @@ fn render_widget_gallery() {
         .into_iter()
         .map(|(top, bottom)| render_gallery_page(&mut ui, &scene, top, bottom))
         .collect();
-    save_gallery_images(&pages, &gallery_sections, &gallery_cells);
 
     // Sanity: at least some pixels are not the theme clear color.
     let [cr, cg, cb, _] = wgpu_gameui::color::to_rgba8(theme.background);
@@ -8103,6 +8263,7 @@ fn render_widget_gallery() {
         drew,
         "no widget pixels rendered — pipeline produced an empty frame"
     );
+    (pages, gallery_sections, gallery_cells)
 }
 
 /// Forge's chart cards' seeded generator (Park–Miller), so the gallery draws

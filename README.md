@@ -166,10 +166,11 @@ category (forms, keys, layout, data, feedback, …, plus `foundations` and
 
 ```
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes crates/core/test_output/widget_gallery/<category>/<Component>.png (one per component)
-#      + crates/core/test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
-#      + crates/core/test_output/widget_gallery/index.html (browse them all, see Forge coverage)
-#      + crates/core/test_output/widget_gallery.debug.{txt,json} (the layout dump)
+# renders in both built-in themes; for each <theme> (overlay, forge) writes
+#        crates/core/test_output/widget_gallery/<theme>/<category>/<Component>.png (one per component)
+#      + crates/core/test_output/widget_gallery/<theme>/<category>/<Component>/*.png (one per labeled preview)
+#      + crates/core/test_output/widget_gallery/<theme>.debug.{txt,json} (the layout dump)
+#    and crates/core/test_output/widget_gallery/index.html (browse them all, switch themes, see Forge coverage)
 ```
 
 ---
@@ -578,10 +579,11 @@ cargo test --lib
 
 # Widget gallery (headless GPU render → per-component PNGs, an index page, and a layout dump)
 DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
-# writes crates/core/test_output/widget_gallery/<category>/<Component>.png (one per component)
-#      + crates/core/test_output/widget_gallery/<category>/<Component>/*.png (one per labeled preview)
-#      + crates/core/test_output/widget_gallery/index.html (browse them all, see Forge coverage)
-#      + crates/core/test_output/widget_gallery.debug.{txt,json} (the layout dump)
+# renders in both built-in themes; for each <theme> (overlay, forge) writes
+#        crates/core/test_output/widget_gallery/<theme>/<category>/<Component>.png (one per component)
+#      + crates/core/test_output/widget_gallery/<theme>/<category>/<Component>/*.png (one per labeled preview)
+#      + crates/core/test_output/widget_gallery/<theme>.debug.{txt,json} (the layout dump)
+#    and crates/core/test_output/widget_gallery/index.html (browse them all, switch themes, see Forge coverage)
 
 # Benchmarks (CPU-only groups need no GPU; render groups do)
 DISPLAY=:0 cargo bench --bench ui_stress

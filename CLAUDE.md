@@ -53,12 +53,14 @@ A widget isn't done until **all** of these are true — treat it as the checklis
    ```
    DISPLAY=:0 cargo test --test widget_gallery -- --ignored --nocapture
    ```
-   Writes one PNG per section to
-   `crates/core/test_output/widget_gallery/<category>/<Component>.png`, one per labeled
-   cell to `crates/core/test_output/widget_gallery/<category>/<Component>/`, and
-   `crates/core/test_output/widget_gallery/index.html` to browse them (filter, zoom, and
-   which Forge components are still missing). Open your section's PNG and
-   look at it. Rendering has already caught real bugs
+   It renders in both built-in themes, Overlay and Forge. For each `<theme>`
+   (`overlay`, `forge`) it writes one PNG per section to
+   `crates/core/test_output/widget_gallery/<theme>/<category>/<Component>.png`, one per labeled
+   cell to `crates/core/test_output/widget_gallery/<theme>/<category>/<Component>/`, and
+   `crates/core/test_output/widget_gallery/index.html` browses them (filter, zoom, a
+   switch between the themes or both side by side — `T` flips — and which
+   Forge components are still missing). Open your section's PNG in both
+   themes and look at it. Rendering has already caught real bugs
    (e.g. a too-large default padding that shrank an icon to a speck) that the
    unit tests passed straight through — so don't skip the eyeball pass.
 4. **TODO.md.** Move the item to `TODO_DONE.md`, checked off, with a note of
@@ -70,8 +72,7 @@ A widget isn't done until **all** of these are true — treat it as the checklis
 glass with one accent per title (`Theme::overlay_with_accent`), for games.
 `Theme::forge()` is the Forge tool chrome, the template presets re-skin; tests
 that assert Forge's values or Forge-sized geometry build it explicitly. The
-gallery renders in Overlay; to see Forge, render it with an empty preset
-(`format = 1` and a `name`) through `GAMEUI_PRESET`.
+gallery renders in both.
 
 ## Theme presets and the designer
 
@@ -92,7 +93,9 @@ designer's own chrome stays Forge; only the preview and swatches use the
 preset.
 
 Render the gallery in a preset with
-`GAMEUI_PRESET=<file> cargo test --features preset --test widget_gallery -- --ignored`.
+`GAMEUI_PRESET=<file> cargo test --features preset --test widget_gallery -- --ignored`;
+it renders the preset and Forge, the template it re-skins, into
+`test_output/widget_gallery-<file stem>/`, under `preset/` and `forge/`.
 A colour a widget hard-codes instead of reading from the theme shows up there
 unchanged — that is a bug to fix by moving it into `Theme`.
 
