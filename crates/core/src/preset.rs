@@ -1,4 +1,4 @@
-//! Theme presets: a handful of seeds that re-skin the default (Forge) theme,
+//! Theme presets: a handful of seeds that re-skin the Forge theme,
 //! plus per-token overrides. This is what the theme designer edits and
 //! exports, and what an app loads to look like something other than Forge.
 //!

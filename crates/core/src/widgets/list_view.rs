@@ -646,7 +646,7 @@ mod tests {
         input: &mut InputState,
     ) -> (DrawList, ListViewOutput) {
         crate::map_keyboard(input);
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let out = view.draw(
             RECT,
@@ -681,7 +681,7 @@ mod tests {
             &mut ListState::new(),
             &mut at(-1.0, -1.0),
         );
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         assert_eq!(view.row_height(&s), 34.0);
 
@@ -716,7 +716,7 @@ mod tests {
         );
         let label = text(&list, "agent-ui").clone();
         let meta = text(&list, "12").clone();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let sans = list.font_vmetrics(theme.font.as_ref()).baseline_ratio;
         let mono = list.font_vmetrics(theme.mono_font.as_ref()).baseline_ratio;
         let label_baseline = label.y + label.font_size * sans;
@@ -735,7 +735,7 @@ mod tests {
             &mut ListState::new(),
             &mut at(-1.0, -1.0),
         );
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let label = text(&list, "my-agent-ui");
         assert_eq!(
             *label.style_ranges,
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn a_focused_selection_wears_on_accent_ink_and_underlines_the_match() {
         let rows = [ListRow::new("my-agent-ui")];
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let view = ListView::new().highlight("agent").focused(true);
         let (list, _) = frame(
             view,
@@ -788,7 +788,7 @@ mod tests {
             ListRow::new("gone-project").meta("missing").disabled(true),
             ListRow::new("agent-ui"),
         ];
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut state = ListState::new();
         let view = ListView::new().highlight("project");
@@ -944,7 +944,7 @@ mod tests {
     }
 
     fn row_centre(i: usize) -> f32 {
-        let h = ListView::new().row_height(&StyleResolver::new(&Theme::default()));
+        let h = ListView::new().row_height(&StyleResolver::new(&Theme::forge()));
         RECT.y + h * (i as f32 + 0.5)
     }
 

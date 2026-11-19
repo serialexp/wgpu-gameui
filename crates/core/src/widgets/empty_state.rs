@@ -315,7 +315,7 @@ mod tests {
     /// Draw `es` into `rect` with `input`; returns the list, the click and the
     /// layout the draw used.
     fn draw(es: &EmptyState, rect: Rect, input: &InputState) -> (DrawList, bool, Layout) {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, input, 800.0, 600.0);
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn the_box_is_the_deep_well_with_a_hard_edge_and_an_inset_shadow() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let (list, _, _) = draw(&EmptyState::new(), RECT, &away());
         assert!(
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn the_parts_use_the_design_sizes_and_inks() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let (list, _, _) = draw(&full(), RECT, &away());
         let text = |content: &str| {
@@ -406,7 +406,7 @@ mod tests {
     fn the_action_is_an_accent_key() {
         let (list, _, l) = draw(&full(), RECT, &away());
         // The same key drawn on its own: its faces must all be in the list.
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut alone = DrawList::new();
         let mut focus = FocusState::new();
         let input = away();
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn the_action_key_fits_its_label_with_the_design_padding() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let (mut list, _, l) = draw(&full(), RECT, &away());
         let label_w = list.measure_block(&s.text_block("New session", 0.0, 0.0)).0;
@@ -511,7 +511,7 @@ mod tests {
     #[cfg(feature = "phosphor-icons")]
     #[test]
     fn an_icon_glyph_is_a_20px_icon_in_the_empty_ink() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let es = EmptyState::new()
             .icon(PhosphorIcon::MagnifyingGlass)

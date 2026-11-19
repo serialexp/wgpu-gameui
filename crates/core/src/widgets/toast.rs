@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn a_body_makes_the_toast_taller_and_long_text_wraps() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let styles = StyleResolver::new(&theme);
         let height = |toast: Toast| {
             let mut s = ToastStack::new();

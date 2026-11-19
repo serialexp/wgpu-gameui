@@ -700,7 +700,7 @@ mod tests {
         capture: &mut DragCapture,
         input: &InputState,
     ) -> DockStackOutput {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, input, 800.0, 600.0);
@@ -708,7 +708,7 @@ mod tests {
     }
 
     fn layout(sections: &[DockSection], state: &DockStackState) -> Vec<DockSectionOutput> {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         DockStack::new(sections).layout(RECT, state, &StyleResolver::new(&theme))
     }
 
@@ -895,7 +895,7 @@ mod tests {
     #[test]
     fn the_first_header_has_no_top_rule() {
         let sections = [DockSection::new("A"), DockSection::new("B")];
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let rule = theme.chrome.dock_section.top_rule.color;
         let mut state = DockStackState::default();
         let mut capture = DragCapture::new();

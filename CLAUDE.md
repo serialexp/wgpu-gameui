@@ -64,6 +64,15 @@ A widget isn't done until **all** of these are true — treat it as the checklis
 4. **TODO.md.** Move the item to `TODO_DONE.md`, checked off, with a note of
    the resulting API.
 
+## Built-in themes
+
+`Theme::default()` is **Overlay** (`src/theme/overlay.rs`): neutral smoked
+glass with one accent per title (`Theme::overlay_with_accent`), for games.
+`Theme::forge()` is the Forge tool chrome, the template presets re-skin; tests
+that assert Forge's values or Forge-sized geometry build it explicitly. The
+gallery renders in Overlay; to see Forge, render it with an empty preset
+(`format = 1` and a `name`) through `GAMEUI_PRESET`.
+
 ## Theme presets and the designer
 
 A `ThemePreset` (`src/preset.rs`) is a few seeds that re-skin Forge plus

@@ -166,7 +166,7 @@ fn max_depth_truncates_without_panicking_and_counts_attempts() {
 
 #[test]
 fn strip_paints_the_handoff_gradient_highlights_edge_and_shadow() {
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let input = InputState::default();
     let mut state = MenuBarState::new();
     let mut list = DrawList::new();
@@ -197,7 +197,7 @@ fn strip_paints_the_handoff_gradient_highlights_edge_and_shadow() {
 
 #[test]
 fn strip_uses_typed_menu_bar_overlay() {
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let mut chrome = theme.chrome.menu_bar;
     let override_color = [0.7, 0.2, 0.1, 1.0];
     chrome.surface.background = Background::Solid(override_color);
@@ -233,7 +233,7 @@ fn bar_frame(
     focus: &mut FocusState,
 ) -> MenuBarOutput {
     state.begin_frame(input);
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let mut list = DrawList::new();
     let mut scene = InteractionScene::new();
     let mut ctx =
@@ -266,7 +266,7 @@ impl Rig {
         Self {
             state: MenuBarState::new(),
             scene: InteractionScene::new(),
-            theme: Theme::default(),
+            theme: Theme::forge(),
             input: InputState::default(),
             focus: FocusState::new(),
             layers: LayerStack::new(),
@@ -1077,7 +1077,7 @@ fn a_tall_column_scrolls_to_keep_the_highlight_visible() {
         MenuItem::new("Ten"),
     ];
     const SHORT: &[Menu<'static>] = &[Menu::new("Many").with_items(MANY)];
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let mut state = MenuBarState::new();
     let mut input = InputState::default();
     let mut focus = FocusState::new();
@@ -1245,7 +1245,7 @@ fn right_on_a_deep_leaf_switches_top_level_menu_and_collapses_to_root() {
     assert!(state.set_open_path(DEEP_MENUS, &[0, 0]));
     assert_eq!(state.open_levels(), 3);
     state.right = true;
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let input = InputState::default();
     let mut focus = FocusState::new();
     let mut list = DrawList::new();
@@ -1704,7 +1704,7 @@ fn scroll_and_highlight_reset_when_a_menu_opens() {
     let mut list = DrawList::new();
     let mut scene = InteractionScene::new();
     let input = InputState::default();
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let mut ctx =
         DrawContext::new(&mut list, &mut focus, &theme, &input, W, H).with_interactions(&mut scene);
     bar().draw(strip(), &mut state, &mut ctx);
@@ -1719,7 +1719,7 @@ fn scroll_and_highlight_reset_when_a_menu_opens() {
 #[test]
 fn the_bar_measures_as_one_row_tall() {
     use crate::{MeasureConstraints, MeasureContext, StyleResolver};
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let styles = StyleResolver::new(&theme);
     let mut text = crate::TextMeasurer::default();
     let constraints = MeasureConstraints::UNBOUNDED;
@@ -1742,7 +1742,7 @@ fn the_bar_measures_as_one_row_tall() {
 
 #[test]
 fn open_title_is_a_plain_accent_plate() {
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let input = InputState::default();
     let mut state = MenuBarState::new();
     state.open_menu_at(MENUS, 0);
@@ -1863,7 +1863,7 @@ fn the_window_does_not_drag_while_a_menu_is_open() {
 
 #[test]
 fn a_leading_inset_widens_the_measured_bar() {
-    let theme = Theme::default();
+    let theme = Theme::forge();
     let mut measurer = crate::TextMeasurer::new();
     let mut measure = |inset: f32| {
         let mut cx = crate::MeasureContext::new(

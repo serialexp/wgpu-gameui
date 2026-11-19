@@ -673,7 +673,7 @@ mod tests {
         input: &InputState,
         body: impl FnOnce(&mut PropertyStack, &mut DrawContext),
     ) -> (InspectorOutput, DrawList, Rect) {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let (out, rect) = {
@@ -697,7 +697,7 @@ mod tests {
     /// The footer keys' centres for an inspector at `rect`: Apply, Revert,
     /// Delete.
     fn footer_keys(rect: Rect, insp: &Inspector) -> [[f32; 2]; 3] {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = styles(&theme);
         let mut list = DrawList::new();
         let key_h = s.scalar(StyleKey::ButtonHeight);
@@ -743,7 +743,7 @@ mod tests {
         assert!(!has(&list, "LIVE"));
         // The name well fades as a whole.
         let dash = list.texts.iter().find(|t| t.content == "—").unwrap();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let ink = styles(&theme).ink(Ink::Disabled);
         let alpha = crate::color::text_color([0.0, 0.0, 0.0, ink[3] * MULTI_FADE]).a();
         assert!((i32::from(dash.color.a()) - i32::from(alpha)).abs() <= 1);
@@ -806,7 +806,7 @@ mod tests {
 
     #[test]
     fn height_follows_the_measured_content_up_to_the_max() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = styles(&theme);
         let mut list = DrawList::new();
         let insp = Inspector::new(BARE).max_body_height(100.0);
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn the_header_keys_pin_and_close() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = styles(&theme);
         let [w, h] = IconKey::glyph("×", IconKey::HEADER)
             .tone(Tone::Ghost)
@@ -945,7 +945,7 @@ mod tests {
 
     #[test]
     fn the_keys_join_the_tab_ring_around_the_body() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let insp = Inspector::new(SINGLE).dirty(true).focusable(10);
         let mut state = InspectorState::new();
         let mut focus = FocusState::new();

@@ -2,7 +2,7 @@
 
 Status: phase 1 in progress
 Owner: Bart
-Last updated: 2026-10-05
+Last updated: 2026-11-20
 
 ## Why
 
@@ -60,7 +60,7 @@ Each family has a `ColorSeed { hue, chroma, lightness }`:
 - `lightness` — an offset on OKLCH L (0 = Forge).
 
 Alpha is kept. When a family's seed equals its Forge identity the colour is
-returned untouched, so default seeds reproduce `Theme::default()` exactly
+returned untouched, so default seeds reproduce `Theme::forge()` exactly
 (tested), not merely within rounding.
 
 The transform runs over every keyed colour (`StyleKey`, including the ink
@@ -127,6 +127,9 @@ on every edit.
 6. "Three primary colours" instead of one accent.
 7. `ChromeTheme` overrides by dotted path.
 8. The full gallery as a designer preview page.
+9. Presets always start from `Theme::forge()`. Since 2026-11-20 the default
+   theme is Overlay (`Theme::overlay`), which is hand-written rather than
+   seeded, so a preset can't yet start from it or reproduce it.
 
 ## Phases
 

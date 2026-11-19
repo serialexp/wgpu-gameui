@@ -203,7 +203,7 @@ mod tests {
     use crate::{DrawList, StyleOverlay, StyleValue, Theme};
 
     fn style() -> StyleResolver<'static> {
-        let theme: &'static Theme = Box::leak(Box::new(Theme::default()));
+        let theme: &'static Theme = Box::leak(Box::new(Theme::forge()));
         StyleResolver::new(theme)
     }
 
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn overlay_recolors_the_accent_bar() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut overlay = StyleOverlay::new();
         let custom = [0.10, 0.20, 0.30, 1.0];
         overlay.set(StyleKey::Success, StyleValue::Color(custom));

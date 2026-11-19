@@ -706,7 +706,7 @@ mod tests {
         assert_eq!(rig.designer.preset.override_of(StyleKey::Accent), Some(red));
         rig.frame();
         assert_eq!(rig.designer.preview_theme.accent, [1.0, 0.0, 0.0, 1.0]);
-        assert_eq!(rig.designer.ui_theme.accent, Theme::default().accent);
+        assert_eq!(rig.designer.ui_theme.accent, Theme::forge().accent);
     }
 
     /// A scratch directory of this test run's own, emptied first.

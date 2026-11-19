@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn clicking_a_tab_reports_its_index() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let ts = tabs();
         let rect = Rect::new(0.0, 0.0, 200.0, 150.0);
         let mut state = DockPanelState::new(200.0);
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn a_dirty_tab_has_a_dot_after_its_label_and_room_for_it() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = crate::StyleResolver::new(&theme);
         let dirty = s.color(StyleKey::AccentDirty);
         let rect = Rect::new(0.0, 0.0, 300.0, 150.0);
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn close_button_reports_click() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let ts = tabs();
         let rect = Rect::new(0.0, 0.0, 200.0, 150.0);
         let mut state = DockPanelState::new(200.0);
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn body_rect_is_below_header() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let ts = tabs();
         let rect = Rect::new(10.0, 20.0, 180.0, 130.0);
         let mut state = DockPanelState::new(180.0);
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn empty_tabs_still_draw_background() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let tabs: Vec<DockTab<'_>> = vec![];
         let rect = Rect::new(0.0, 0.0, 200.0, 150.0);
         let mut state = DockPanelState::new(200.0);
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn active_sidebar_tab_matches_the_reference_chip_material() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let ts = tabs();
         let mut state = DockPanelState::new(200.0);
         let input = InputState::default();
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn typed_overlay_reaches_dock_body_header_hover_and_active_inset() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut chrome = theme.chrome.dock;
         chrome.body.background = Background::Solid([0.11, 0.12, 0.13, 1.0]);
         chrome.header.background = Background::Solid([0.21, 0.22, 0.23, 1.0]);
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn consumed_input_suppresses_tab_click() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let ts = tabs();
         let rect = Rect::new(0.0, 0.0, 200.0, 150.0);
         let mut state = DockPanelState::new(200.0);

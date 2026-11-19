@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn breadcrumb_reports_click_on_a_non_final_segment() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let segs = ["World", "Region", "Forest"];
         let mut focus = FocusState::new();
         // Measure where "Region" actually starts using the widget's own metric.

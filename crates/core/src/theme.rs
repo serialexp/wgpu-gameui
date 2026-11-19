@@ -5,6 +5,8 @@ use crate::color::{hex, oklch, rgba8};
 use crate::style::{CustomStyles, StyleKey, StyleValue};
 use crate::text::{FontHandle, TextBlock};
 
+mod overlay;
+
 /// UI theme with colors and styling.
 #[derive(Clone)]
 pub struct Theme {
@@ -305,9 +307,9 @@ pub struct Theme {
 }
 
 impl Default for Theme {
-    /// [`Theme::forge`].
+    /// [`Theme::overlay`].
     fn default() -> Self {
-        Self::forge()
+        Self::overlay()
     }
 }
 
@@ -522,8 +524,8 @@ mod tests {
     }
 
     #[test]
-    fn default_typography_leaves_room_for_application_content() {
-        let theme = Theme::default();
+    fn forge_typography_leaves_room_for_application_content() {
+        let theme = Theme::forge();
         // The Forge design uses 12px body text; 15px title still scales
         // visibly above it without doubling row heights.
         assert_eq!(theme.font_size, 12.0);
@@ -532,8 +534,8 @@ mod tests {
     }
 
     #[test]
-    fn default_css_palette_is_stored_as_plain_srgb() {
-        let theme = Theme::default();
+    fn forge_css_palette_is_stored_as_plain_srgb() {
+        let theme = Theme::forge();
         // Stored exactly as the design's CSS writes them — no gamma decode.
         assert_eq!(
             theme.background,
@@ -550,9 +552,9 @@ mod tests {
     }
 
     #[test]
-    fn default_palette_uses_the_forge_tokens() {
+    fn forge_palette_uses_the_forge_tokens() {
         use crate::color::oklch;
-        let t = Theme::default();
+        let t = Theme::forge();
         let accent = oklch(0.74, 0.11, 200.0, 1.0);
         assert_eq!(crate::color::to_rgba8(accent), [0x3e, 0xbf, 0xc6, 0xff]);
         assert_eq!(t.accent, accent);
@@ -573,8 +575,8 @@ mod tests {
     }
 
     #[test]
-    fn default_menu_metrics_match_the_forge_handoff() {
-        let theme = Theme::default();
+    fn forge_menu_metrics_match_the_forge_handoff() {
+        let theme = Theme::forge();
         assert_eq!(theme.menu_bar_height, 26.0);
         assert_eq!(theme.menu_row_height, 22.0);
         assert_eq!(theme.menu_item_min_width, 218.0);
@@ -612,7 +614,7 @@ mod tests {
     #[test]
     fn forge_roles_use_the_design_values() {
         use crate::{Ink, TextSize, Tracking};
-        let t = Theme::default();
+        let t = Theme::forge();
         let ink = |role| t.get(StyleKey::Ink(role)).unwrap().as_color().unwrap();
         assert_eq!(ink(Ink::Max), t.text_highlight, "--ink-max");
         assert_eq!(ink(Ink::Glyph), hex(0x9aa2aa));

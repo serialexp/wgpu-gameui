@@ -1415,7 +1415,7 @@ mod tests {
     #[test]
     fn latched_tool_face_uses_the_forge_latch_tokens() {
         use crate::color::oklch;
-        let toolbar = Theme::default().chrome.toolbar;
+        let toolbar = Theme::forge().chrome.toolbar;
         assert_eq!(
             toolbar.tool_latched.background,
             Background::LinearGradient {
@@ -1464,7 +1464,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
@@ -1489,7 +1489,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         state.active_tool = Some(2);
         let mut capture = DragCapture::new();
@@ -1518,7 +1518,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let input = crate::InputState::default();
@@ -1551,7 +1551,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let input = crate::InputState::default();
@@ -1590,7 +1590,7 @@ mod tests {
         })];
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
@@ -1612,7 +1612,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
@@ -1633,7 +1633,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Top);
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 300.0, 28.0);
@@ -1662,7 +1662,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let rect = Rect::new(0.0, 0.0, 28.0, 200.0);
@@ -1685,7 +1685,7 @@ mod tests {
     fn grip_only_snaps_after_drag_threshold_is_crossed() {
         let items = sample_items();
         let toolbar = Toolbar::new(&items);
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         state.dock_area = Rect::new(0.0, 0.0, 800.0, 600.0);
         let mut capture = DragCapture::new();
@@ -1785,7 +1785,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Top);
         let mut capture = DragCapture::new();
         let input = crate::InputState::default();
@@ -1821,7 +1821,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         state.active_tool = Some(1);
         let mut capture = DragCapture::new();
@@ -1877,7 +1877,7 @@ mod tests {
         let toolbar = Toolbar::new(&items);
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Top);
         let mut capture = DragCapture::new();
         let input = crate::InputState::default();
@@ -1907,7 +1907,7 @@ mod tests {
         let items = sample_items();
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let input = crate::InputState::default();
@@ -1936,7 +1936,7 @@ mod tests {
         )];
         let mut list = DrawList::new();
         let mut focus = FocusState::default();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();
         let mut input = crate::InputState::default();
@@ -1960,7 +1960,7 @@ mod tests {
 
     #[test]
     fn rail_shadow_uses_authored_elevation_in_each_dock_direction() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         for (edge, expected) in [
             (ToolbarEdge::Left, [2.0, 0.0]),
             (ToolbarEdge::Right, [-2.0, 0.0]),
@@ -1992,7 +1992,7 @@ mod tests {
 
     #[test]
     fn typed_overlay_reaches_toolbar_rail_tools_and_popup() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut chrome = theme.chrome.toolbar;
         chrome.rail_colors = [[0.11, 0.12, 0.13, 1.0], [0.21, 0.22, 0.23, 1.0]];
         chrome.tool_idle.background = Background::Solid([0.31, 0.32, 0.33, 1.0]);
@@ -2076,7 +2076,7 @@ mod tests {
         capture: &mut DragCapture,
         input: &crate::InputState,
     ) -> Option<Tip> {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut focus = FocusState::default();
         let mut base = DrawList::new();
         let (rect, _) = docked(state.edge);
@@ -2240,7 +2240,7 @@ mod tests {
     #[test]
     fn dock_popup_selects_edge_through_popup_layer() {
         let items = sample_items();
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let styles = StyleResolver::new(&theme);
         let mut state = ToolbarState::new(ToolbarEdge::Left);
         let mut capture = DragCapture::new();

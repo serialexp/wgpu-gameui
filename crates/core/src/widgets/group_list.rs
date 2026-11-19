@@ -1123,7 +1123,7 @@ mod tests {
         input: &mut InputState,
     ) -> (DrawList, GroupListOutput) {
         crate::map_keyboard(input);
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let layout = layout(rows);
         let out = view.draw(
@@ -1252,7 +1252,7 @@ mod tests {
         ] {
             assert!(has_text(&list, t), "missing {t:?}");
         }
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         assert_eq!(text(&list, "agent-ui").font, theme.mono_font);
         assert_eq!(
@@ -1282,7 +1282,7 @@ mod tests {
             &mut GroupListState::new(),
             &mut at(-1.0, -1.0),
         );
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let amber = text_color(theme.warn_soft_ink);
         let notice = text(&list, "Question · Which database?");
         assert_eq!(notice.color, amber, "amber even on the selected row");
@@ -1445,7 +1445,7 @@ mod tests {
             &mut state,
             &mut at(-1.0, -1.0),
         );
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         assert_eq!(text(&list, "agent-ui").color, text_color(s.ink(Ink::Title)));
         assert_eq!(state.cursor(), None);
@@ -1551,7 +1551,7 @@ mod tests {
             .collect();
         let layout = layout(&rows);
         let built = Cell::new(0usize);
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         GroupList::new().draw(
             RECT,
