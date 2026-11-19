@@ -1,6 +1,7 @@
 //! Faces the unit tests load that gameui doesn't bundle: Spectral, a serif
-//! with proportional figures and a tabular (`tnum`) alternate, so tests can
-//! tell a role's face and figures apart from the bundled Plex. Kept in
+//! whose own figures are tabular, with `tnum` and `pnum` features (Plex has
+//! neither), so tests can tell a role's face and figures apart from the
+//! bundled Plex. Kept in
 //! `tests/fonts/` (SIL Open Font License, `tests/fonts/spectral/OFL.txt`) and
 //! not packaged.
 

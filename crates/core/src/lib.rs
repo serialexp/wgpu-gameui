@@ -67,6 +67,7 @@ mod syntax;
 mod syntax_theme;
 mod text;
 mod text_carets;
+mod text_centring;
 mod text_select;
 mod text_units;
 

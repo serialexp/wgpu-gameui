@@ -1,6 +1,6 @@
 # Typography roles — Design
 
-Status: partial — phases 0a and 0b landed, 0c onward outstanding
+Status: partial — phases 0a–0c landed, 0d onward outstanding
 Owner: Bart
 Last updated: 2026-11-20
 
@@ -30,12 +30,20 @@ inside them is checked.
       the planned `tabular: bool`, see "Figures". Tests in
       `src/text_figures_tests.rs`, set in Spectral (test-only asset in
       `tests/fonts/spectral/`, OFL, not packaged; `src/test_fonts.rs`).
+- [x] **Phase 0c — style-aware centring.** `block_vmetrics`,
+      `vcentered_block_y` and `x_centered_block_y` (on `DrawList` and
+      `TextMeasurer`, `src/text_centring.rs`) read the metrics of the
+      block's font, weight and style, move the baselines into the block's
+      own line box (`FontVMetrics::in_line_box`), and pick the band from
+      the block's content, which a caps role has already upper-cased.
+      Tests check the ink centre against the span for bold, italic,
+      Spectral and a 1.8 line box. The font-and-size forms
+      (`font_vmetrics`, `vcentered_text_y`, `x_centered_text_y`) stay for
+      the sites not yet on roles, documented as regular face in the
+      default line box.
 
 ### Outstanding
 
-- [ ] **Phase 0c — style-aware centring.** `vcentered_text_y` /
-      `x_centered_text_y` / `font_vmetrics` take the block's weight and
-      style and centre the displayed (cased) content.
 - [ ] **Phase 0d — the per-site role table.** The survey of every
       theme-derived text site (chrome scale and body text) mapped to a role,
       recorded under "Roles" below, before Phase 1 starts. A site that fits
@@ -83,7 +91,9 @@ inside them is checked.
       file dialog, close glyphs, count bubbles. They move onto a
       consolidated role set, each visual change reviewed in the gallery
       rather than held to pixel parity (Bart, 2026-11-20). Until then they
-      keep their literals.
+      keep their literals. When the last site moves, the font-and-size
+      centring forms (`font_vmetrics`, `vcentered_text_y`,
+      `x_centered_text_y`) are deleted in favour of the block forms.
 - [ ] **Defer — per-role typography in presets and the designer.** Presets
       serialize every role's style and the designer edits it. Out of scope
       (Bart, 2026-11-20).
@@ -279,6 +289,11 @@ reads metrics for the block's actual weight and style, and picks its band
 (x-height or cap-height) from the *displayed* content. Caps are applied
 first, so a caps role centres on the cap-height band. Inputs keep their
 content-independent centring.
+
+Building it (0c) showed the line height matters as well: cosmic-text
+centres a line's glyphs in its box, so a role with a taller line box
+moves the baseline down by half the extra. The block forms take the
+block's own line height; the font-and-size forms assume the default 1.25.
 
 `StyleOverlay` gains per-role overrides: a short `Vec<(TextRole,
 TextStyle)>` with a linear scan, like its keyed entries. A subtree can

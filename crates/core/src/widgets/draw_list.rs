@@ -1211,9 +1211,10 @@ impl DrawList {
     }
 
     /// Per-font vertical metrics for optical (cap-height) centring, for the given
-    /// font at Normal weight/style (the only combination widget labels centre).
-    /// Cached per font. Exposed mainly so debug tooling can draw the band; most
-    /// callers want [`Self::vcentered_text_y`].
+    /// font at Normal weight/style in the default line box. Cached per font.
+    /// Exposed mainly so debug tooling can draw the band; most callers want
+    /// [`Self::vcentered_text_y`]. For a block set in another weight, style or
+    /// line height use [`Self::block_vmetrics`].
     pub fn font_vmetrics(&mut self, font: Option<&FontHandle>) -> FontVMetrics {
         self.text_measurer.vmetrics(
             font,
@@ -1235,6 +1236,10 @@ impl DrawList {
     /// centre (see [`FontVMetrics::visual_center_ratio`](crate::FontVMetrics::visual_center_ratio)) — so text reads as
     /// centred across scripts and case. Pass the same `font` the block renders
     /// with. Degrades to em-box centring when the metrics are unavailable.
+    ///
+    /// This form assumes the regular face in the default line box. A block in
+    /// a role (bold, italic, its own line height, caps) centres with
+    /// [`Self::vcentered_block_y`].
     pub fn vcentered_text_y(
         &mut self,
         top: f32,
@@ -1252,10 +1257,33 @@ impl DrawList {
     /// [`vcentered_text_y`](Self::vcentered_text_y), every label in a column
     /// of rows (and a mono meta beside it, measured with its own font) lands
     /// on the same baseline, so capitals and digits don't hop. Pass the same
-    /// `font` the block renders with.
+    /// `font` the block renders with. Regular face, default line box; a styled
+    /// block uses [`Self::x_centered_block_y`].
     pub fn x_centered_text_y(&mut self, cy: f32, font_size: f32, font: Option<&FontHandle>) -> f32 {
         let m = self.font_vmetrics(font);
         cy - font_size * m.baseline_ratio + font_size * m.x_ratio * 0.5
+    }
+
+    /// The vertical metrics of the face `block` is set in (font, weight and
+    /// style), with the baselines in its own line box. See
+    /// [`TextMeasurer::block_vmetrics`].
+    pub fn block_vmetrics(&mut self, block: &TextBlock) -> FontVMetrics {
+        self.text_measurer.block_vmetrics(block)
+    }
+
+    /// The top `y` that optically centres the one-line `block` over
+    /// `[top, top + height]`, in the face it is set in and on the band of the
+    /// content it displays (so a caps role centres on the cap band). See
+    /// [`TextMeasurer::vcentered_block_y`].
+    pub fn vcentered_block_y(&mut self, block: &TextBlock, top: f32, height: f32) -> f32 {
+        self.text_measurer.vcentered_block_y(block, top, height)
+    }
+
+    /// The top `y` that puts the one-line `block`'s x-height band on `cy`
+    /// whatever its letters, in the face it is set in. See
+    /// [`TextMeasurer::x_centered_block_y`].
+    pub fn x_centered_block_y(&mut self, block: &TextBlock, cy: f32) -> f32 {
+        self.text_measurer.x_centered_block_y(block, cy)
     }
 
     /// Where the underlines of `runs` (byte ranges of `block`'s content, each
