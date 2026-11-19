@@ -412,10 +412,10 @@ impl NumberInput {
             // Text that still reads as the value is the value. Focusing a
             // field (Tab through it) whose value isn't exact at its
             // `decimals` must not round it to what the field shows.
-            if ti.value != self.display_value(value) {
-                if let Some(parsed) = self.parse_value(&ti.value) {
-                    value = self.clamp(parsed);
-                }
+            if ti.value != self.display_value(value)
+                && let Some(parsed) = self.parse_value(&ti.value)
+            {
+                value = self.clamp(parsed);
             }
             // Enter canonicalises the displayed text from the (clamped) value.
             if enter_pressed {
