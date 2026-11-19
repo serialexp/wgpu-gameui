@@ -125,14 +125,16 @@ pub struct Designer {
 impl Designer {
     /// A designer editing the preset at `path`, or a fresh one.
     pub fn new(path: Option<PathBuf>) -> Self {
-        let template = Theme::default();
+        // Presets are seeds over Forge, and the designer's own chrome is
+        // Forge whatever the library's default theme is.
+        let template = Theme::forge();
         let mut designer = Self {
             preset: ThemePreset::new("Untitled"),
             saved: ThemePreset::new("Untitled"),
             path: None,
             resolved: ThemePreset::new("Untitled"),
-            preview_theme: Theme::default(),
-            ui_theme: Theme::default(),
+            preview_theme: Theme::forge(),
+            ui_theme: Theme::forge(),
             menu: MenuBarState::new(),
             scene: InteractionScene::new(),
             focus: FocusState::new(),

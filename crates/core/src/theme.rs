@@ -305,7 +305,17 @@ pub struct Theme {
 }
 
 impl Default for Theme {
+    /// [`Theme::forge`].
     fn default() -> Self {
+        Self::forge()
+    }
+}
+
+impl Theme {
+    /// Forge: the tool-chrome design language. Opaque blue-grey surfaces, a
+    /// fixed teal accent (OKLCH hue 200) kept for state, and a dense 9–12 px
+    /// type and 22–26 px hit scale for editors and inspectors.
+    pub fn forge() -> Self {
         // Sizing values the menu metrics are derived from. Naming them keeps the
         // derivation visible instead of duplicating literals: a theme that
         // retunes `padding`/`font_size` for DPI gets proportional menu rows.
@@ -489,7 +499,7 @@ impl Default for Theme {
             tracking: [0.08, 0.1, 0.14, 0.16, 0.18],
             list_row_height: 22.0,
 
-            chrome: ChromeTheme::default(),
+            chrome: ChromeTheme::forge(),
             font: None,
             #[cfg(feature = "bundled-font")]
             mono_font: Some(FontHandle(crate::text::BUNDLED_MONO_FAMILY.to_string())),

@@ -631,7 +631,16 @@ fn inset_edge(rect: Rect, edge: Edge, amount: f32) -> Rect {
 }
 
 impl Default for ChromeTheme {
+    /// [`ChromeTheme::forge`].
     fn default() -> Self {
+        Self::forge()
+    }
+}
+
+impl ChromeTheme {
+    /// Forge's component chrome: the values [`Theme::forge`](crate::Theme::forge)
+    /// carries.
+    pub fn forge() -> Self {
         use crate::color::{oklch, rgb8};
 
         let gradient = |top, bottom| Background::LinearGradient {

@@ -3,7 +3,7 @@
 //! exports, and what an app loads to look like something other than Forge.
 //!
 //! [`ThemePreset::resolve`] builds a [`Theme`]: it starts from
-//! `Theme::default()`, lets [`ThemeSeeds::apply`] move every colour and size,
+//! [`Theme::forge`], lets [`ThemeSeeds::apply`] move every colour and size,
 //! then writes the overrides. With the `preset` feature a preset also reads
 //! from and writes to TOML ([`ThemePreset::from_toml`],
 //! [`ThemePreset::to_toml`]).
@@ -20,7 +20,7 @@
 //! A family's [`ColorSeed`] rotates the hue by `seed.hue - forge_hue`,
 //! multiplies the chroma and offsets the lightness, keeping alpha. A seed
 //! equal to [`ColorSeed::forge`] leaves its colours untouched, so the default
-//! seeds give exactly `Theme::default()`.
+//! seeds give exactly [`Theme::forge`].
 //!
 //! The design and its open gaps: `docs/design/theme-designer.md`.
 
@@ -132,7 +132,7 @@ impl ColorFamily {
     }
 
     /// The family of a colour key's value in `template` (normally
-    /// `Theme::default()`); `None` for scalar and custom keys and for
+    /// [`Theme::forge`]); `None` for scalar and custom keys and for
     /// achromatic colours.
     pub fn of_key(key: StyleKey, template: &Theme) -> Option<ColorFamily> {
         let color = template.get(key)?.as_color()?;
@@ -286,7 +286,7 @@ impl ThemeSeeds {
         }
     }
 
-    /// Re-skin `theme`, which should hold Forge's values (`Theme::default()`):
+    /// Re-skin `theme`, which should hold Forge's values ([`Theme::forge`]):
     /// every colour moves by its family's seed, the sizes by the scales, and
     /// the fonts are replaced if named. Custom style values are left alone.
     pub fn apply(&self, theme: &mut Theme) {
@@ -388,7 +388,7 @@ impl ThemePreset {
 
     /// Build the theme: Forge, re-skinned by the seeds, then the overrides.
     pub fn resolve(&self) -> Theme {
-        let mut theme = Theme::default();
+        let mut theme = Theme::forge();
         self.seeds.apply(&mut theme);
         for &(key, value) in &self.overrides {
             theme.set(key, value);
@@ -706,12 +706,12 @@ mod tests {
 
     #[test]
     fn forge_seeds_resolve_to_the_default_theme_exactly() {
-        assert_same_theme(&ThemePreset::forge().resolve(), &Theme::default());
+        assert_same_theme(&ThemePreset::forge().resolve(), &Theme::forge());
     }
 
     #[test]
     fn forge_colours_fall_into_their_families() {
-        let t = Theme::default();
+        let t = Theme::forge();
         let family = |key| ColorFamily::of_key(key, &t);
         use ColorFamily::*;
         for (key, want) in [
@@ -751,7 +751,7 @@ mod tests {
         let mut preset = ThemePreset::forge();
         preset.seeds.accent.hue = 140.0;
         let theme = preset.resolve();
-        let forge = Theme::default();
+        let forge = Theme::forge();
         let [l, c, h] = lch(&theme, StyleKey::Accent);
         let [l0, c0, _] = lch(&forge, StyleKey::Accent);
         assert!((h - 140.0).abs() < 0.5, "hue {h}");
@@ -780,7 +780,7 @@ mod tests {
         let mut preset = ThemePreset::forge();
         preset.seeds.surface.lightness = 0.05;
         let theme = preset.resolve();
-        let forge = Theme::default();
+        let forge = Theme::forge();
         let panel = lch(&theme, StyleKey::Panel)[0];
         assert!((panel - (lch(&forge, StyleKey::Panel)[0] + 0.05)).abs() < 1e-3);
         assert_eq!(theme.panel[3], forge.panel[3], "alpha is kept");
@@ -807,7 +807,7 @@ mod tests {
         preset.seeds.text_scale = 1.25;
         preset.seeds.radius_scale = 3.0;
         let theme = preset.resolve();
-        let forge = Theme::default();
+        let forge = Theme::forge();
         assert_eq!(theme.button_height, 39.0);
         assert_eq!(theme.list_row_height, 33.0);
         // 5 × 1.5 = 7.5 rounds to a whole pixel.
@@ -829,7 +829,7 @@ mod tests {
         preset.seeds.sans_font = Some("Alegreya Sans".into());
         let theme = preset.resolve();
         assert_eq!(theme.font, Some(FontHandle("Alegreya Sans".into())));
-        assert_eq!(theme.mono_font, Theme::default().mono_font);
+        assert_eq!(theme.mono_font, Theme::forge().mono_font);
     }
 
     #[test]
@@ -845,7 +845,7 @@ mod tests {
         assert_eq!(theme.padding, 7.0);
         assert!(preset.clear_override(StyleKey::Padding));
         assert!(!preset.clear_override(StyleKey::Padding));
-        assert_eq!(preset.resolve().padding, Theme::default().padding);
+        assert_eq!(preset.resolve().padding, Theme::forge().padding);
     }
 
     #[test]

@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn every_key_is_listed_once() {
-        let template = Theme::default();
+        let template = Theme::forge();
         let rows = token_rows(&template);
         assert_eq!(rows.len(), StyleKey::builtin().count());
         assert!(rows.contains(&(TokenGroup::Family(ColorFamily::Accent), StyleKey::Accent)));

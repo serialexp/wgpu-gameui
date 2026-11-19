@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn every_family_has_swatches() {
-        let panel = SeedsPanel::new(&Theme::default());
+        let panel = SeedsPanel::new(&Theme::forge());
         for (family, keys) in ColorFamily::ALL.iter().zip(&panel.swatches) {
             assert!(!keys.is_empty(), "{} has no swatches", family.name());
             assert!(keys.len() <= MAX_SWATCHES);
