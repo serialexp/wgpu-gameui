@@ -409,8 +409,13 @@ impl NumberInput {
                     }
                 }
             }
-            if let Some(parsed) = self.parse_value(&ti.value) {
-                value = self.clamp(parsed);
+            // Text that still reads as the value is the value. Focusing a
+            // field (Tab through it) whose value isn't exact at its
+            // `decimals` must not round it to what the field shows.
+            if ti.value != self.display_value(value) {
+                if let Some(parsed) = self.parse_value(&ti.value) {
+                    value = self.clamp(parsed);
+                }
             }
             // Enter canonicalises the displayed text from the (clamped) value.
             if enter_pressed {
@@ -623,6 +628,32 @@ mod tests {
             assert_eq!(out.value, 7.0, "{partial:?} leaves the value untouched");
             assert_eq!(ti.value, partial, "{partial:?} stays editable");
         }
+    }
+
+    #[test]
+    fn focusing_an_inexact_value_keeps_it() {
+        let ni = NumberInput::new().with_range(0.0, 90.0).with_decimals(1);
+        let mut ti = TextInput::new(0.0, 0.0, 96.0, 24.0);
+        let mut focus = FocusState::new();
+        let input = InputState::default();
+        // Unfocused, the field shows the value rounded to one decimal.
+        draw_number(&ni, 29.983, 0, &mut ti, rect(), &mut focus, &input);
+        assert_eq!(ti.value, "30.0");
+        // Focused and untouched, that text is not read back as 30.
+        focus.focus(0);
+        let out = draw_number(&ni, 29.983, 0, &mut ti, rect(), &mut focus, &input);
+        assert_eq!(out.value, 29.983);
+        assert!(!out.changed, "Tab through a field doesn't round its value");
+        let mut enter = InputState::default();
+        enter.enter_pressed = true;
+        let out = draw_number(&ni, 29.983, 0, &mut ti, rect(), &mut focus, &enter);
+        assert!(!out.changed, "nor does Enter on it");
+        // Typed, it is.
+        ti.value = "30".to_string();
+        ti.cursor_pos = 2;
+        let out = draw_number(&ni, 29.983, 0, &mut ti, rect(), &mut focus, &input);
+        assert_eq!(out.value, 30.0);
+        assert!(out.changed);
     }
 
     #[test]
