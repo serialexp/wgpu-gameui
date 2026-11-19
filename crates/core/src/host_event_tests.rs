@@ -166,10 +166,27 @@ fn the_shortcut_key_edits_instead_of_typing() {
         ('C', |i| i.key_copy),
         ('x', |i| i.key_cut),
         ('v', |i| i.key_paste),
+        ('z', |i| i.key_undo),
     ] {
         input.apply(&press(Key::Char(c), Some(&c.to_string())));
         assert!(flag(&input), "{c}");
     }
+    assert_eq!(input.text_input, "");
+}
+
+#[test]
+fn the_shortcut_key_with_shift_and_z_redoes_and_y_does_off_macos() {
+    let mut input = InputState::default();
+    input.apply(&HostEvent::Modifiers(HeldModifiers {
+        shift: true,
+        ..primary()
+    }));
+    input.apply(&press(Key::Char('Z'), Some("Z")));
+    assert!(input.key_redo && !input.key_undo);
+    input.end_frame();
+    input.apply(&HostEvent::Modifiers(primary()));
+    input.apply(&press(Key::Char('y'), Some("y")));
+    assert_eq!(input.key_redo, !cfg!(target_os = "macos"));
     assert_eq!(input.text_input, "");
 }
 

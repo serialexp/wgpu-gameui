@@ -70,7 +70,7 @@ fn random_frame(
         shift_pressed: rng.chance(30),
         ..Default::default()
     };
-    let what = match rng.below(22) {
+    let what = match rng.below(24) {
         0 => {
             input.text_input = random_text(rng);
             "typed"
@@ -147,6 +147,14 @@ fn random_frame(
         19 => {
             input.preedit.clear();
             "composed"
+        }
+        20 => {
+            input.key_undo = true;
+            "undo"
+        }
+        21 => {
+            input.key_redo = true;
+            "redo"
         }
         _ => "idle",
     };

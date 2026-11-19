@@ -19,6 +19,7 @@ use crate::{SyntaxHighlighting, TextStyleRange};
 use tree_sitter_highlight::Highlighter;
 
 use super::field_paragraphs::{FieldParagraphs, FieldText, Shown};
+use super::text_history::{Caret, Edit, EditKind, TextHistory};
 use super::{DrawContext, DrawList, FocusId};
 
 /// Write over `text`'s bytes in place, then empty it, so a secret it held
@@ -277,6 +278,10 @@ pub struct TextInput {
     clipboard_get: Option<ClipboardGet>,
     /// Clipboard setter — writes text to the clipboard.
     clipboard_set: Option<ClipboardSet>,
+    /// The edits Undo and Redo walk. A masked field keeps none, so what it
+    /// holds is not copied there; text set from outside
+    /// ([`set_value`](Self::set_value), [`clear`](Self::clear)) forgets them.
+    history: TextHistory,
     /// Optional language and palette for multiline source highlighting.
     #[cfg(feature = "syntax-highlighting")]
     syntax: Option<SyntaxHighlighting>,
@@ -324,6 +329,7 @@ impl Default for TextInput {
             insets: None,
             clipboard_get: None,
             clipboard_set: None,
+            history: TextHistory::default(),
             #[cfg(feature = "syntax-highlighting")]
             syntax: None,
             #[cfg(feature = "syntax-highlighting")]
@@ -362,13 +368,16 @@ impl TextInput {
     pub fn with_value(mut self, value: impl Into<String>) -> Self {
         self.value = value.into();
         self.cursor_pos = self.value.len();
+        self.history.forget();
         self
     }
 
     /// Replace the text from outside the editor, preserving the caret's byte
     /// offset where possible and snapping it backward to a UTF-8 boundary.
-    /// Selection and drag/navigation state belong to the old text and are reset.
+    /// Selection and drag/navigation state belong to the old text and are
+    /// reset, and so is the undo history: it describes the old text.
     pub fn set_value(&mut self, value: &str) {
+        self.history.forget();
         self.value.clear();
         self.value.push_str(value);
         self.cursor_pos = floor_char_boundary(&self.value, self.cursor_pos);
@@ -611,15 +620,60 @@ impl TextInput {
         self.drag_unit = None;
     }
 
+    /// Where the caret stands and what is selected, as the history keeps it.
+    fn caret(&self) -> Caret {
+        Caret {
+            cursor: self.cursor_pos,
+            selection: self.selection_start,
+        }
+    }
+
+    /// Replace `range` of the text with `text`, leaving the caret after it,
+    /// and note it in the history as a `kind` of edit. Every edit the field
+    /// makes comes through here, so every one can be undone.
+    fn splice(&mut self, range: std::ops::Range<usize>, text: &str, kind: EditKind) {
+        let before = self.caret();
+        let removed = self
+            .mask
+            .is_none()
+            .then(|| self.value[range.clone()].to_owned());
+        self.forget_drag();
+        self.value.replace_range(range.clone(), text);
+        self.cursor_pos = range.start + text.len();
+        self.selection_start = None;
+        if let Some(removed) = removed {
+            self.history.record(Edit {
+                start: range.start,
+                removed: &removed,
+                inserted: text,
+                before,
+                after: self.caret(),
+                kind,
+            });
+        }
+    }
+
+    /// Put `text` in place of the selection, or at the caret when nothing is
+    /// selected.
+    fn replace_selection(&mut self, text: &str, kind: EditKind) {
+        let (start, end) = self
+            .selection_range()
+            .unwrap_or((self.cursor_pos, self.cursor_pos));
+        self.splice(start..end, text, kind);
+    }
+
     /// Delete the current selection, if any, and return the deleted text.
     /// Returns `None` if there was no selection.
     pub fn delete_selection(&mut self) -> Option<String> {
-        let range = self.selection_range()?;
-        let deleted = self.value[range.0..range.1].to_string();
-        self.forget_drag();
-        self.value.replace_range(range.0..range.1, "");
-        self.cursor_pos = range.0;
-        self.selection_start = None;
+        self.delete_selection_as(EditKind::Deleting)
+    }
+
+    /// [`delete_selection`](Self::delete_selection), noted in the history as
+    /// a `kind` of edit.
+    fn delete_selection_as(&mut self, kind: EditKind) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        let deleted = self.value[start..end].to_string();
+        self.splice(start..end, "", kind);
         Some(deleted)
     }
 
@@ -631,11 +685,8 @@ impl TextInput {
             let prev = self.value[..self.cursor_pos]
                 .char_indices()
                 .last()
-                .map(|(i, c)| (i, c.len_utf8()))
-                .unwrap_or((0, 0));
-            self.forget_drag();
-            self.value.replace_range(prev.0..self.cursor_pos, "");
-            self.cursor_pos = prev.0;
+                .map_or(0, |(i, _)| i);
+            self.splice(prev..self.cursor_pos, "", EditKind::Deleting);
         }
     }
 
@@ -644,15 +695,38 @@ impl TextInput {
         if self.selection_start.is_some() {
             self.delete_selection();
         } else if self.cursor_pos < self.value.len() {
-            let next = self.value[self.cursor_pos..]
-                .char_indices()
+            let end = self.value[self.cursor_pos..]
+                .chars()
                 .next()
-                .map(|(i, c)| (self.cursor_pos + i, c.len_utf8()))
-                .unwrap_or((self.cursor_pos, 0));
-            self.forget_drag();
-            self.value
-                .replace_range(self.cursor_pos..next.0 + next.1, "");
+                .map_or(self.cursor_pos, |c| self.cursor_pos + c.len_utf8());
+            self.splice(self.cursor_pos..end, "", EditKind::Deleting);
         }
+    }
+
+    /// Take back the last edit: a run of typing or deleting, or one other
+    /// edit. The caret and selection go back to where they were before it.
+    /// `false` when there was nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        let caret = self.history.undo(&mut self.value);
+        caret.inspect(|&caret| self.put_caret(caret)).is_some()
+    }
+
+    /// Make again the last edit [`undo`](Self::undo) took back. `false` when
+    /// there was nothing to redo.
+    pub fn redo(&mut self) -> bool {
+        let caret = self.history.redo(&mut self.value);
+        caret.inspect(|&caret| self.put_caret(caret)).is_some()
+    }
+
+    /// Put the caret and selection back as an undo or redo says.
+    fn put_caret(&mut self, caret: Caret) {
+        self.forget_drag();
+        self.cursor_pos = floor_char_boundary(&self.value, caret.cursor);
+        self.selection_start = caret
+            .selection
+            .map(|start| floor_char_boundary(&self.value, start));
+        self.desired_caret_x = None;
+        self.caret_at = None;
     }
 
     /// Move the caret one stop `dir` across the screen from the stop it is
@@ -723,8 +797,12 @@ impl TextInput {
         }
     }
 
-    /// Empty the field, back to its first line and column.
+    /// Empty the field, back to its first line and column. Like
+    /// [`set_value`](Self::set_value), this replaces the text from outside the
+    /// editor, so the undo history is forgotten; the clear-field key empties
+    /// it as an edit that can be undone.
     pub fn clear(&mut self) {
+        self.history.forget();
         self.forget_drag();
         self.value.clear();
         self.cursor_pos = 0;
@@ -740,6 +818,7 @@ impl TextInput {
     /// ([`UiState::forget_text_input`](crate::UiState::forget_text_input)).
     pub(crate) fn wipe(&mut self) {
         overwrite(&mut self.value);
+        self.history.wipe();
         self.paragraphs.wipe();
         #[cfg(feature = "syntax-highlighting")]
         overwrite(&mut self.syntax_cached_value);
@@ -756,7 +835,7 @@ impl TextInput {
         let text = self.selected_text().map(|s| s.to_string());
         if let (Some(text), Some(set)) = (&text, &self.clipboard_set) {
             (set.borrow_mut())(text.clone());
-            self.delete_selection();
+            self.delete_selection_as(EditKind::Other);
         }
     }
 
@@ -782,14 +861,7 @@ impl TextInput {
         if clip.is_empty() {
             return;
         }
-        // Delete any active selection first.
-        if self.selection_start.is_some() {
-            self.delete_selection();
-        }
-        self.forget_drag();
-        self.value.insert_str(self.cursor_pos, &clip);
-        self.cursor_pos += clip.len();
-        self.selection_start = None;
+        self.replace_selection(&clip, EditKind::Other);
     }
 
     // ---- Input processing ----
@@ -870,21 +942,32 @@ impl TextInput {
             self.paste();
             return;
         }
+        if input.key_undo || (ctrl_letter == Some('z') && !input.shift_pressed) {
+            self.undo();
+            return;
+        }
+        let redo_letter =
+            ctrl_letter == Some('z') || (ctrl_letter == Some('y') && !cfg!(target_os = "macos"));
+        if input.key_redo || redo_letter {
+            self.redo();
+            return;
+        }
         if input.key_clear {
-            self.clear();
+            // An edit, unlike `clear`: the text can be had back.
+            if !self.value.is_empty() {
+                self.splice(0..self.value.len(), "", EditKind::Other);
+            }
+            self.desired_caret_x = None;
+            self.scroll_offset = 0.0;
+            self.scroll_anchor = (0, 0.0);
+            self.horizontal_scroll_offset = 0.0;
             return;
         }
 
         // Enter — insert a newline in multiline mode. (Single-line fields leave
         // `enter_pressed` for the caller to read as a submit signal.)
         if input.enter_pressed && multiline {
-            if self.selection_start.is_some() {
-                self.delete_selection();
-            }
-            self.forget_drag();
-            self.value.insert(self.cursor_pos, '\n');
-            self.cursor_pos += 1;
-            self.selection_start = None;
+            self.replace_selection("\n", EditKind::Other);
             self.desired_caret_x = None;
             return;
         }
@@ -1033,14 +1116,8 @@ impl TextInput {
         // Text insertion.
         if !input.text_input.is_empty() {
             self.desired_caret_x = None;
-            // If there's a selection, delete it first.
-            if self.selection_start.is_some() {
-                self.delete_selection();
-            }
-            self.forget_drag();
-            self.value.insert_str(self.cursor_pos, &input.text_input);
-            self.cursor_pos += input.text_input.len();
-            self.selection_start = None;
+            // Typed over a selection, the text takes its place.
+            self.replace_selection(&input.text_input, EditKind::Typing);
         }
     }
 
@@ -2457,6 +2534,127 @@ mod tests {
         assert_eq!(ti.cursor_pos, 0);
         assert_eq!(ti.selection_range(), None);
         assert_eq!((ti.scroll_offset, ti.horizontal_scroll_offset), (0.0, 0.0));
+    }
+
+    /// Handle one frame of keys that set `flag` and type `typed`.
+    fn keys(ti: &mut TextInput, typed: &str, flag: fn(&mut InputState)) {
+        let mut input = InputState {
+            text_input: typed.to_owned(),
+            ..Default::default()
+        };
+        flag(&mut input);
+        ti.process_keyboard(&input);
+    }
+
+    fn type_chars(ti: &mut TextInput, typed: &str) {
+        for character in typed.chars() {
+            keys(ti, &character.to_string(), |_| {});
+        }
+    }
+
+    fn undo(ti: &mut TextInput) {
+        keys(ti, "", |input| input.key_undo = true);
+    }
+
+    fn redo(ti: &mut TextInput) {
+        keys(ti, "", |input| input.key_redo = true);
+    }
+
+    #[test]
+    fn undo_takes_back_a_run_of_typing_and_redo_makes_it_again() {
+        let mut ti = make_input("say ");
+        type_chars(&mut ti, "hello");
+        assert_eq!(ti.value, "say hello");
+        undo(&mut ti);
+        assert_eq!((ti.value.as_str(), ti.cursor_pos), ("say ", 4));
+        undo(&mut ti);
+        assert_eq!(ti.value, "say ", "nothing before the run to undo");
+        redo(&mut ti);
+        assert_eq!((ti.value.as_str(), ti.cursor_pos), ("say hello", 9));
+    }
+
+    #[test]
+    fn every_kind_of_edit_can_be_undone() {
+        let mut ti = make_input("one");
+        ti.multiline = true;
+        let clipboard = Rc::new(RefCell::new(String::from(" two")));
+        let get = clipboard.clone();
+        ti.set_clipboard_get(move || get.borrow().clone());
+        let set = clipboard.clone();
+        ti.set_clipboard_set(move |text| *set.borrow_mut() = text);
+        keys(&mut ti, "", |input| input.key_paste = true);
+        keys(&mut ti, "", |input| input.enter_pressed = true);
+        type_chars(&mut ti, "xyz");
+        keys(&mut ti, "", |input| input.backspace_pressed = true);
+        ti.selection_start = Some(0);
+        ti.cursor_pos = 3;
+        keys(&mut ti, "", |input| input.key_cut = true);
+        assert_eq!(ti.value, " two\nxy");
+        keys(&mut ti, "", |input| input.key_clear = true);
+        assert_eq!(ti.value, "");
+        for expected in [
+            " two\nxy",
+            "one two\nxy",
+            "one two\nxyz",
+            "one two\n",
+            "one two",
+            "one",
+        ] {
+            undo(&mut ti);
+            assert_eq!(ti.value, expected);
+        }
+        undo(&mut ti);
+        assert_eq!(ti.value, "one");
+    }
+
+    #[test]
+    fn undoing_a_deleted_selection_selects_it_again() {
+        let mut ti = make_input("hello world");
+        ti.selection_start = Some(5);
+        ti.cursor_pos = 11;
+        type_chars(&mut ti, "!");
+        assert_eq!(ti.value, "hello!");
+        undo(&mut ti);
+        assert_eq!(ti.value, "hello world");
+        assert_eq!(ti.selection_range(), Some((5, 11)));
+    }
+
+    #[test]
+    fn the_shortcut_letters_undo_and_redo_where_a_host_sets_no_flag() {
+        let mut ti = make_input("");
+        type_chars(&mut ti, "ab");
+        let ctrl = |letter: &str, shift: bool| InputState {
+            ctrl_pressed: true,
+            shift_pressed: shift,
+            text_input: letter.to_owned(),
+            ..Default::default()
+        };
+        ti.process_keyboard(&ctrl("z", false));
+        assert_eq!(ti.value, "");
+        ti.process_keyboard(&ctrl("Z", true));
+        assert_eq!(ti.value, "ab");
+    }
+
+    #[test]
+    fn text_set_from_outside_forgets_the_history() {
+        let mut ti = make_input("");
+        type_chars(&mut ti, "typed");
+        ti.set_value("another draft");
+        undo(&mut ti);
+        assert_eq!(ti.value, "another draft");
+        type_chars(&mut ti, "!");
+        ti.clear();
+        undo(&mut ti);
+        assert_eq!(ti.value, "");
+    }
+
+    #[test]
+    fn a_masked_field_keeps_no_history() {
+        let mut ti = make_input("").password();
+        type_chars(&mut ti, "secret");
+        assert_eq!(ti.history.steps(), (0, 0));
+        undo(&mut ti);
+        assert_eq!(ti.value, "secret");
     }
 
     #[test]

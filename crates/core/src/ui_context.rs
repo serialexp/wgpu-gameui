@@ -5721,6 +5721,49 @@ mod tests {
         assert!(buffer.contains('c'));
     }
 
+    /// The retained field outlives the frames that hand it the caller's
+    /// buffer, so its history does: what was typed into a textarea a frame
+    /// at a time comes back off with one undo.
+    #[test]
+    fn a_textarea_undoes_what_was_typed_over_several_frames() {
+        let theme = Theme::default();
+        let mut state = UiState::new();
+        let mut buffer = String::from("draft");
+        let frame = |state: &mut UiState, buffer: &mut String, mut input: InputState| {
+            state.begin_frame(&mut input, &theme, 0.0, &crate::KeyboardNav);
+            {
+                let mut list = DrawList::new();
+                let mut ui = UiContext::interactive(&mut list, &input, state, &theme);
+                ui.text_area(1, buffer, "", Some(150.0), 3);
+            }
+            state.end_frame(&[]);
+        };
+        frame(&mut state, &mut buffer, click_at(5.0, 5.0));
+        for typed in ["!", "!"] {
+            let input = InputState {
+                text_input: typed.into(),
+                ..Default::default()
+            };
+            frame(&mut state, &mut buffer, input);
+        }
+        // Where the click put the caret is the field's business: both
+        // characters went in, together.
+        let typed = buffer.clone();
+        assert_eq!(typed.matches("!!").count(), 1, "{typed}");
+        let undo = InputState {
+            key_undo: true,
+            ..Default::default()
+        };
+        frame(&mut state, &mut buffer, undo);
+        assert_eq!(buffer, "draft");
+        let redo = InputState {
+            key_redo: true,
+            ..Default::default()
+        };
+        frame(&mut state, &mut buffer, redo);
+        assert_eq!(buffer, typed);
+    }
+
     #[cfg(feature = "phosphor-icons")]
     #[test]
     fn search_field_edits_the_buffer_and_its_clear_key_empties_it() {

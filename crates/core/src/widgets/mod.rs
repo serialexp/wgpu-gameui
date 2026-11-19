@@ -91,6 +91,7 @@ mod stroke;
 mod table;
 mod tabs;
 mod tag_input;
+mod text_history;
 mod text_input;
 #[cfg(feature = "phosphor-icons")]
 mod thumb;

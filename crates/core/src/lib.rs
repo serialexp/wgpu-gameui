@@ -328,6 +328,11 @@ pub struct InputState {
     pub key_copy: bool,
     /// Platform paste shortcut (Ctrl+V, or Cmd+V on macOS) was pressed.
     pub key_paste: bool,
+    /// Platform undo shortcut (Ctrl+Z, or Cmd+Z on macOS) was pressed.
+    pub key_undo: bool,
+    /// Platform redo shortcut (Ctrl+Shift+Z or Ctrl+Y, or Cmd+Shift+Z on
+    /// macOS) was pressed.
+    pub key_redo: bool,
     /// The host's clear-field shortcut was pressed: a focused text input
     /// empties entirely. No platform has a standard key for this; a host might
     /// bind Ctrl+U, which erases the line in a terminal.
@@ -433,6 +438,8 @@ impl Default for InputState {
             key_cut: false,
             key_copy: false,
             key_paste: false,
+            key_undo: false,
+            key_redo: false,
             key_clear: false,
             key_tab: false,
             key_escape: false,
@@ -496,6 +503,8 @@ impl InputState {
         self.key_cut = false;
         self.key_copy = false;
         self.key_paste = false;
+        self.key_undo = false;
+        self.key_redo = false;
         self.key_clear = false;
         self.key_tab = false;
         self.key_escape = false;

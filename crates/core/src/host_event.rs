@@ -255,6 +255,10 @@ impl InputState {
                     'c' => Some(&mut self.key_copy),
                     'x' => Some(&mut self.key_cut),
                     'v' => Some(&mut self.key_paste),
+                    'z' if self.shift_pressed => Some(&mut self.key_redo),
+                    'z' => Some(&mut self.key_undo),
+                    // Cmd+Y is not redo on macOS.
+                    'y' if !cfg!(target_os = "macos") => Some(&mut self.key_redo),
                     _ => None,
                 },
                 _ => None,
