@@ -1,6 +1,6 @@
 # Typography roles — Design
 
-Status: partial — phase 0a landed, 0b onward outstanding
+Status: partial — phases 0a and 0b landed, 0c onward outstanding
 Owner: Bart
 Last updated: 2026-11-20
 
@@ -22,20 +22,24 @@ inside them is checked.
       plan: `style_block` / `style_width` for a style no role holds, and a
       `Value` app role (a prominent stat or name, which Slab sets in its
       display face).
+- [x] **Phase 0b — figures.** `TextBlock::figures` / `TextStyle::figures`
+      (`Figures::{Default, Tabular, Proportional}`, `tnum` / `pnum`)
+      threaded through shaping, the layout and prepared-text keys, the
+      selection snapshot, frame-diff placement and `MeasureContext`'s
+      natural width (now laid out from the block's own spec). Changed from
+      the planned `tabular: bool`, see "Figures". Tests in
+      `src/text_figures_tests.rs`, set in Spectral (test-only asset in
+      `tests/fonts/spectral/`, OFL, not packaged; `src/test_fonts.rs`).
 
 ### Outstanding
 
-- [ ] **Phase 0b — tabular figures.** `TextBlock::tabular` threaded through
-      shaping, every layout and prepared-text cache key, the selection
-      snapshot (`text_select.rs`), frame-diff placement classification and
-      natural-width measurement (`measure.rs`).
 - [ ] **Phase 0c — style-aware centring.** `vcentered_text_y` /
       `x_centered_text_y` / `font_vmetrics` take the block's weight and
       style and centre the displayed (cased) content.
-- [ ] **Phase 0d — the per-site role table.** The survey of every text site
-      (chrome scale and body text) mapped to a role, recorded under
-      "Roles" below, before Phase 1 starts. A site that fits no role gets a
-      new one.
+- [ ] **Phase 0d — the per-site role table.** The survey of every
+      theme-derived text site (chrome scale and body text) mapped to a role,
+      recorded under "Roles" below, before Phase 1 starts. A site that fits
+      no role gets a new one. Literal-size sites are Phase 7's.
 - [ ] **Phase 1 — the chrome scale moves to roles.** Every `sans_block`,
       `mono_block`, `caption_block`, `sans_width`, `mono_width`,
       `text_size(TextSize::…)` and `Tracking::…` user (51 files) names a role.
@@ -49,7 +53,7 @@ inside them is checked.
       `Theme::font_size_title`, both keys and those methods are deleted.
 - [ ] **Phase 2b — editable text.** `FieldText` and its `MeasuredFor`
       cache carry the resolved `TextStyle` (family, size, weight, italic,
-      tracking, tabular, line height); carets, selection and scroll use it.
+      tracking, figures, line height); carets, selection and scroll use it.
 - [ ] **Phase 2c — the font stack.** `UiContext`'s root font-stack entry
       comes from the `Body` role; `MeasureContext::text_block` becomes
       role-based and a push overrides only what it sets.
@@ -72,6 +76,14 @@ inside them is checked.
       change. Citybuilder's client moves to roles (in its own repo).
       agent-ui and mesh-forge, which use gameui by path, get a heads-up in
       `CURRENT_TASK.md`.
+- [ ] **Phase 7 — literal-size text moves to roles.** About 100 sites in
+      some 15 widgets set sizes (and some tracking) as literals that ignore
+      the theme: viewport overlays, view and transform gizmos, `Hud`, the
+      timeline, the menubar and context menu (11.5px), toolbar popups, the
+      file dialog, close glyphs, count bubbles. They move onto a
+      consolidated role set, each visual change reviewed in the gallery
+      rather than held to pixel parity (Bart, 2026-11-20). Until then they
+      keep their literals.
 - [ ] **Defer — per-role typography in presets and the designer.** Presets
       serialize every role's style and the designer edits it. Out of scope
       (Bart, 2026-11-20).
@@ -119,13 +131,14 @@ a **role**, and the theme maps each role to a complete text style.
   tracking, case, figures or leading.
 - A third font family, *display*, beside sans and mono. It falls back to
   sans when a theme names none.
-- Tabular figures as a role property, through OpenType `tnum`.
+- Figures (tabular, proportional or the font's own) as a role property,
+  through OpenType `tnum` / `pnum`.
 - Forge and Overlay look as they do at `272f7d0`, apart from the listed
   bug fixes (Phase 4 is the proof).
 - Measuring, centring, carets and selection always use the role's real
   face, so they are right in any theme.
-- Role lookup is an array index. The non-tabular path adds no allocation,
-  and neither does any cache hit.
+- Role lookup is an array index. Text with the font's own figures adds no
+  allocation, and neither does any cache hit.
 
 ## Non-goals (v1)
 
@@ -158,7 +171,7 @@ pub struct TextStyle {
     pub italic: bool,
     pub tracking: f32,      // em; letter spacing = tracking × final size
     pub caps: bool,         // drawn upper-cased (see "Caps")
-    pub tabular: bool,      // OpenType `tnum`
+    pub figures: Figures,   // Default / Tabular (`tnum`) / Proportional (`pnum`)
 }
 
 /// What a piece of text is. Widgets name one; the theme decides its look.
@@ -212,7 +225,7 @@ records it here, with each role's callers, before Phase 1 starts.
 | `Heading` | App section headings | display→sans 15 |
 | `Display` | App screen titles | display→sans 24 |
 | `Value` | App prominent values: a stat, a name | sans 12 |
-| `Numeric` | Clocks, counters, quantities | sans 12, tabular |
+| `Numeric` | Clocks, counters, quantities | sans 12, `Figures::Tabular` |
 
 "display→sans" means family `Display`, which in Forge and Overlay falls
 back to sans. So the built-ins look unchanged, and setting `display_font`
@@ -292,12 +305,22 @@ the source text therefore have to be remapped:
 Tests cover a ligature and a German `ß` (which upper-cases to `SS`) in a
 highlighted list row and in a selection.
 
-### Tabular figures
+### Figures
 
-`TextBlock` gains `tabular: bool`. When it is set, shaping passes
-cosmic-text `FontFeatures` with `tnum` (`Attrs::font_features`, as in the
-patched cosmic-text revision this repo pins). The flag joins everything
-that already keys or compares weight and style:
+`TextBlock` gains `figures: Figures`: `Default` (the font's own),
+`Tabular` or `Proportional`. For the last two, shaping passes cosmic-text
+`FontFeatures` with `tnum` or `pnum` (`Attrs::font_features`, as in the
+patched cosmic-text revision this repo pins).
+
+The plan was a `tabular: bool`. Building it showed that both IBM Plex and
+Spectral (Slab's serif) set tabular figures by default, while Fira Sans
+sets proportional ones. A flag can ask for tabular figures but cannot ask
+a tabular-by-default font for proportional ones, which running text in
+Spectral wants, so it became the three-way choice. A font without the
+feature asked for keeps its own figures; Plex has neither feature.
+
+The field joins everything that already keys or compares weight and
+style:
 
 - the layout cache and the prepared-text key;
 - the `DrawnBlock` snapshot and the `LayoutSpec` it rebuilds
@@ -307,10 +330,10 @@ that already keys or compares weight and style:
 - natural-width measurement in `MeasureContext`, so overflow checks and
   constrained layout agree.
 
-`FontFeatures` holds a `Vec`. An empty one does not allocate, so the
-proportional path costs nothing. A tabular shaping *miss* allocates one
-small vector, beside the allocations shaping already makes. Cache hits
-allocate nothing. A test changes only the flag and checks that
+`FontFeatures` holds a `Vec`. An empty one does not allocate, so text with
+the font's own figures costs nothing. A shaping *miss* for the other two
+allocates one small vector, beside the allocations shaping already makes.
+Cache hits allocate nothing. Tests change only the figures and check that
 measurement, prepared reuse, selection and frame reuse all see the change.
 
 ### Editable text
@@ -372,7 +395,7 @@ The work per text block is unchanged except for one array read and a
 Each phase is one or more commits. Each one builds warning-free and passes
 `cargo test --lib`, clippy and the doc build (gameui `CLAUDE.md`).
 
-0. **Foundations.** The role table (0a), tabular figures (0b), centring
+0. **Foundations.** The role table (0a), figures (0b), centring
    (0c), and the full per-site table recorded here (0d). Tests:
    - every role resolves;
    - an overlay override wins;
@@ -426,6 +449,14 @@ migration finds it, naming the site and the bug:
   independently styleable.
 - **Editable text ignores caps.** Carets and selection keep source
   offsets, and a field shows what was typed.
+- **Figures are three-way, not a flag** (building 0b; see "Figures").
+- **Spectral as a test-only font** (Bart, 2026-11-20). OFL, in
+  `tests/fonts/`, excluded from the package. Tests use it for a face
+  unlike Plex and for figure features Plex lacks.
+- **Literal-size text is a later phase** (Bart, 2026-11-20). Phases 1–2
+  migrate the theme-derived sites with pixel parity. The literal-size
+  sites move in Phase 7, onto a consolidated role set, with each visual
+  change reviewed.
 
 ## Questions only building can answer
 

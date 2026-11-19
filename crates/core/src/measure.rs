@@ -309,16 +309,16 @@ impl<'a> MeasureContext<'a> {
     ) -> MeasuredText {
         let constraints = constraints.normalized();
         block.wrap = self.wrap;
-        let natural = self.text.measure_styled_with_letter_spacing(
-            &block.content,
-            block.font_size,
-            None,
-            block.font.as_ref(),
-            block.weight,
-            block.style,
-            WrapMode::None,
-            block.letter_spacing,
-        );
+        // Unwrapped, but otherwise as the block is shaped (its face, weight,
+        // style, spacing, figures and face ranges), so overflow is judged on
+        // the text that is drawn.
+        let natural = {
+            let spec = crate::shaping::LayoutSpec {
+                wrap: WrapMode::None,
+                ..crate::shaping::LayoutSpec::of_block(&block).natural()
+            };
+            self.text.measure_spec(&block.content, &spec)
+        };
         let constrained_width = constraints.max_width;
         block.max_width = constrained_width.unwrap_or(f32::MAX / 4.0);
         let measured = self.text.measure_block(&block);

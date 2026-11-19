@@ -3364,6 +3364,33 @@ pub struct FaceRange {
     pub style: Style,
 }
 
+/// How a block's digits are spaced, through the OpenType figure features.
+/// Fonts differ in which they use by default (IBM Plex and Spectral set
+/// tabular figures, Fira Sans proportional ones), and a font without the
+/// feature asked for draws its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Figures {
+    /// The font's own figures.
+    #[default]
+    Default,
+    /// Every digit takes one advance (`tnum`), so a changing number keeps
+    /// its width: clocks, counters, columns of figures.
+    Tabular,
+    /// Each digit takes its own advance (`pnum`), as running text reads best.
+    Proportional,
+}
+
+impl Figures {
+    /// The OpenType feature that asks for these figures, if any.
+    pub(crate) fn feature(self) -> Option<&'static [u8; 4]> {
+        match self {
+            Figures::Default => None,
+            Figures::Tabular => Some(b"tnum"),
+            Figures::Proportional => Some(b"pnum"),
+        }
+    }
+}
+
 /// A run of text within a [`TextBlock`] with optional per-span colour and
 /// underline overrides.
 ///
@@ -3641,6 +3668,8 @@ pub struct TextBlock {
     /// Font style selector (default [`Style::Normal`]). [`Style::Italic`] /
     /// [`Style::Oblique`] pick the matching face from the family when present.
     pub style: Style,
+    /// How digits are spaced (default [`Figures::Default`], the font's own).
+    pub figures: Figures,
     /// Inline text spans for per-run colour and underline overrides. When
     /// non-empty, `content` is derived from the concatenation of span texts at
     /// draw time and need not be set by the caller. All spans must share the
@@ -3704,6 +3733,7 @@ impl TextBlock {
             ellipsize: false,
             weight: Weight::NORMAL,
             style: Style::Normal,
+            figures: Figures::Default,
             spans: Vec::new(),
             style_ranges: no_style_ranges(),
             style_range_tint: [1.0; 4],
@@ -3910,6 +3940,12 @@ impl TextBlock {
         self
     }
 
+    /// Space the digits as `figures` asks (see [`Figures`]).
+    pub fn with_figures(mut self, figures: Figures) -> Self {
+        self.figures = figures;
+        self
+    }
+
     /// Replace the block's text with the given inline spans. The display
     /// `content` is derived automatically as the concatenation of all span
     /// texts at draw time. See [`TextSpan`] for the V1 constraint (all spans
@@ -3975,6 +4011,10 @@ impl TextBlock {
 #[cfg(test)]
 #[path = "text_lookup_tests.rs"]
 mod lookup_tests;
+
+#[cfg(test)]
+#[path = "text_figures_tests.rs"]
+mod figures_tests;
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use cosmic_text::Weight;
 
 use crate::shaping::LayoutSpec;
-use crate::text::{FontHandle, TextBlock, TextContent};
+use crate::text::{Figures, FontHandle, TextBlock, TextContent};
 use crate::{DrawList, Ink, StyleOverlay, StyleResolver};
 
 /// Which of a theme's three fonts a [`TextStyle`] is set in.
@@ -55,15 +55,15 @@ pub struct TextStyle {
     pub tracking: f32,
     /// Drawn upper-cased. Editable text ignores it and shows what was typed.
     pub caps: bool,
-    /// Digits share one advance (OpenType `tnum`), so changing numbers
-    /// don't shift: clocks, counters, columns of figures.
-    pub tabular: bool,
+    /// How digits are spaced: [`Figures::Tabular`] for clocks, counters
+    /// and columns of figures, so changing numbers don't shift.
+    pub figures: Figures,
 }
 
 impl TextStyle {
     /// Regular, upright text in `family` at `size`, with the default line
     /// height (1.25 × the size, as [`TextBlock::with_size`] sets), no tracking,
-    /// mixed case and proportional figures.
+    /// mixed case and the font's own figures.
     pub const fn new(family: FontFamily, size: f32) -> Self {
         Self {
             family,
@@ -73,7 +73,7 @@ impl TextStyle {
             italic: false,
             tracking: 0.0,
             caps: false,
-            tabular: false,
+            figures: Figures::Default,
         }
     }
 
@@ -128,9 +128,9 @@ impl TextStyle {
         self
     }
 
-    /// With tabular (or proportional) figures.
-    pub const fn with_tabular(mut self, tabular: bool) -> Self {
-        self.tabular = tabular;
+    /// With digits spaced as `figures` asks.
+    pub const fn with_figures(mut self, figures: Figures) -> Self {
+        self.figures = figures;
         self
     }
 
@@ -380,7 +380,7 @@ impl TypeScale {
             Title | Heading => TextStyle::display(self.title),
             Display => TextStyle::display(self.body * 2.0),
             Value => TextStyle::sans(self.body),
-            Numeric => TextStyle::sans(self.body).with_tabular(true),
+            Numeric => TextStyle::sans(self.body).with_figures(Figures::Tabular),
         }
     }
 }
@@ -494,6 +494,7 @@ impl<'a> StyleResolver<'a> {
         block.letter_spacing = style.letter_spacing();
         block.weight = style.weight;
         block.style = style.font_style();
+        block.figures = style.figures;
         block
     }
 
@@ -517,6 +518,7 @@ impl<'a> StyleResolver<'a> {
             font: self.family_font(style.family),
             weight: style.weight,
             style: style.font_style(),
+            figures: style.figures,
             ..LayoutSpec::plain(style.size, None)
         };
         list.text_measurer_mut().measure_spec(&text, &spec).0
@@ -582,8 +584,8 @@ mod tests {
         assert!(label.caps);
         assert_eq!(label.letter_spacing(), 9.0 * 0.14);
         assert_eq!(t[TextRole::Title].family, FontFamily::Display);
-        assert!(t[TextRole::Numeric].tabular);
-        assert!(!t[TextRole::Body].tabular);
+        assert_eq!(t[TextRole::Numeric].figures, Figures::Tabular);
+        assert_eq!(t[TextRole::Body].figures, Figures::Default);
     }
 
     #[test]
@@ -662,7 +664,8 @@ mod tests {
             .with_italic(true)
             .with_tracking(0.2)
             .with_caps(true)
-            .with_line_height(1.5);
+            .with_line_height(1.5)
+            .with_figures(Figures::Proportional);
         theme.typography.set(TextRole::Button, style);
         let s = StyleResolver::new(&theme);
         let block = s.role_block("Save all", 3.0, 4.0, TextRole::Button, Ink::Max);
@@ -673,6 +676,7 @@ mod tests {
         assert_eq!(block.letter_spacing, 2.0);
         assert_eq!(block.weight, Weight::BOLD);
         assert_eq!(block.style, cosmic_text::Style::Italic);
+        assert_eq!(block.figures, Figures::Proportional);
         assert_eq!(block.font, theme.font);
         let sized = s.role_block_sized("x", 0.0, 0.0, TextRole::Button, Ink::Max, 20.0);
         assert_eq!(sized.font_size, 20.0);
@@ -708,6 +712,29 @@ mod tests {
         // The default sans would measure it differently.
         let sans = list.measure_text(&text.to_uppercase(), 13.0, None).0;
         assert!((sans - measured).abs() > 0.5, "{sans} vs {measured}");
+    }
+
+    #[test]
+    fn style_width_measures_the_styles_figures() {
+        let fs = crate::shared_font_system();
+        let mut theme = crate::Theme::forge();
+        theme.font = Some(crate::test_fonts::spectral(&fs));
+        let s = StyleResolver::new(&theme);
+        let mut list = DrawList::with_font_system(fs);
+        let style = TextStyle::sans(20.0);
+        let width =
+            |list: &mut DrawList, figures| s.style_width(list, "1111", style.with_figures(figures));
+        let proportional = width(&mut list, Figures::Proportional);
+        let tabular = width(&mut list, Figures::Tabular);
+        assert!(tabular - proportional > 1.0, "{proportional} vs {tabular}");
+        let block = s.style_block(
+            "1111",
+            0.0,
+            0.0,
+            style.with_figures(Figures::Proportional),
+            Ink::Max,
+        );
+        assert!((list.measure_block(&block).0 - proportional).abs() < 0.01);
     }
 
     #[test]

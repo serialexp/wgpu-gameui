@@ -107,6 +107,7 @@ struct DrawnBlock {
     font: Option<FontHandle>,
     weight: cosmic_text::Weight,
     style: cosmic_text::Style,
+    figures: crate::Figures,
     faces: Arc<Vec<FaceRange>>,
     wrap: WrapMode,
     align: TextAlign,
@@ -131,6 +132,7 @@ impl DrawnBlock {
             font: block.font.clone(),
             weight: block.weight,
             style: block.style,
+            figures: block.figures,
             faces: block.face_ranges.clone(),
             wrap: block.wrap,
             align: block.align,
@@ -154,6 +156,7 @@ impl DrawnBlock {
         self.letter_spacing = block.letter_spacing;
         self.weight = block.weight;
         self.style = block.style;
+        self.figures = block.figures;
         self.faces.clone_from(&block.face_ranges);
         self.wrap = block.wrap;
         self.align = block.align;
@@ -173,6 +176,7 @@ impl DrawnBlock {
             font: self.font.as_ref(),
             weight: self.weight,
             style: self.style,
+            figures: self.figures,
             faces: &self.faces,
             wrap: self.wrap,
             align: self.align,
@@ -772,6 +776,20 @@ mod tests {
 
     fn key(order: u64) -> TextKey {
         TextKey::new(SCOPE, order)
+    }
+
+    #[test]
+    fn the_drawn_copy_lays_out_with_the_blocks_figures() {
+        let plain = TextBlock::new("1100", 0.0, 0.0);
+        let tabular = plain.clone().with_figures(crate::Figures::Tabular);
+        let mut drawn = DrawnBlock::of(&plain);
+        assert_eq!(drawn.spec().figures, crate::Figures::Default);
+        drawn.update(&tabular);
+        assert_eq!(drawn.spec().figures, crate::Figures::Tabular);
+        assert_eq!(
+            DrawnBlock::of(&tabular).spec().figures,
+            crate::Figures::Tabular
+        );
     }
 
     /// Two paragraphs of `SCOPE` at y 10 and 40 (the first two lines long), a

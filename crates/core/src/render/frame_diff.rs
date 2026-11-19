@@ -870,6 +870,7 @@ pub(crate) fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
         ellipsize,
         weight,
         style,
+        figures,
         spans,
         style_ranges,
         style_range_tint,
@@ -946,6 +947,7 @@ pub(crate) fn text_change(a: &TextBlock, b: &TextBlock) -> Change {
         && *ellipsize == b.ellipsize
         && *weight == b.weight
         && *style == b.style
+        && *figures == b.figures
         && spans_same
         && ranges_same
         && faces_same

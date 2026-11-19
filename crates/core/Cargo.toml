@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 readme = "../../README.md"
 # Rendered test and gallery output; never part of the package.
-exclude = ["test_output"]
+exclude = ["test_output", "tests/fonts"]
 
 [dependencies]
 wgpu = "24"

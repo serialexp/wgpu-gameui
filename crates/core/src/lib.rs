@@ -79,11 +79,11 @@ pub use syntax::SyntaxConfigurationError;
 pub use syntax::{HighlightConfiguration, SyntaxHighlighting};
 pub use syntax_theme::SyntaxTheme;
 pub use text::{
-    CaretPos, FaceRange, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect, TextAlign,
-    TextBlock, TextContent, TextDirection, TextGlow, TextMeasurer, TextOutline, TextRenderer,
-    TextShadow, TextSpan, TextStyleRange, Underline, VisualCaret, VisualGlyph, WrapMode,
-    bundled_mono_font, byte_at_point, byte_on_adjacent_line, byte_under_point, caret_for_byte,
-    load_font_bytes, load_font_file, register_bundled_fonts, resolve_range_color,
+    CaretPos, FaceRange, Figures, FontHandle, FontSystemHandle, FontVMetrics, GlyphSnap, SelRect,
+    TextAlign, TextBlock, TextContent, TextDirection, TextGlow, TextMeasurer, TextOutline,
+    TextRenderer, TextShadow, TextSpan, TextStyleRange, Underline, VisualCaret, VisualGlyph,
+    WrapMode, bundled_mono_font, byte_at_point, byte_on_adjacent_line, byte_under_point,
+    caret_for_byte, load_font_bytes, load_font_file, register_bundled_fonts, resolve_range_color,
     resolve_span_color, selection_rects, shaping_passes, shared_font_system, vcentered_line_y,
     visual_caret_neighbor, visual_caret_pos,
 };
@@ -122,6 +122,8 @@ pub mod render;
 mod sense;
 mod shadow;
 mod style;
+#[cfg(test)]
+mod test_fonts;
 mod theme;
 mod typography;
 mod ui_context;

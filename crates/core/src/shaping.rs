@@ -322,6 +322,8 @@ pub(crate) struct LayoutSpec<'a> {
     pub font: Option<&'a FontHandle>,
     pub weight: Weight,
     pub style: Style,
+    /// How digits are spaced ([`TextBlock::figures`]).
+    pub figures: crate::Figures,
     /// Byte ranges in other faces ([`TextBlock::face_ranges`]).
     pub faces: &'a [FaceRange],
     pub wrap: WrapMode,
@@ -347,6 +349,7 @@ impl<'a> LayoutSpec<'a> {
             font: block.font.as_ref(),
             weight: block.weight,
             style: block.style,
+            figures: block.figures,
             faces: &block.face_ranges,
             wrap: block.wrap,
             align: block.align,
@@ -368,6 +371,7 @@ impl<'a> LayoutSpec<'a> {
             font: None,
             weight: Weight::NORMAL,
             style: Style::Normal,
+            figures: crate::Figures::Default,
             faces: &[],
             wrap: WrapMode::default(),
             align: TextAlign::default(),
@@ -409,6 +413,7 @@ impl<'a> LayoutSpec<'a> {
             family: family_hash(self.font),
             weight: self.weight.0,
             style: style_disc(self.style),
+            figures: self.figures,
             faces: faces_hash(self.shaped_faces()),
             wrap: self.wrap,
             align: self.align,
@@ -438,6 +443,7 @@ struct LayoutKey {
     family: u64,
     weight: u16,
     style: u8,
+    figures: crate::Figures,
     /// A hash of the face ranges; `0` for none.
     faces: u64,
     wrap: WrapMode,
@@ -1144,11 +1150,21 @@ impl<'c> ShapedText<'c> {
 
 /// The attributes every line of a text is shaped with under `spec`.
 fn shaping_attrs<'a>(spec: &LayoutSpec<'a>) -> Attrs<'a> {
-    Attrs::new()
+    let attrs = Attrs::new()
         .family(spec.family())
         .weight(spec.weight)
         .style(spec.style)
-        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size))
+        .letter_spacing(letter_spacing_em(spec.letter_spacing, spec.font_size));
+    match spec.figures.feature() {
+        // Only text that asks for figures pays for the feature list; an
+        // empty one doesn't allocate.
+        Some(tag) => {
+            let mut features = cosmic_text::FontFeatures::new();
+            features.enable(cosmic_text::FeatureTag::new(tag));
+            attrs.font_features(features)
+        }
+        None => attrs,
+    }
 }
 
 /// Set the layout half of `spec` on `buffer`: the line height, the width
