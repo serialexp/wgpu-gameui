@@ -83,11 +83,10 @@ pub use model::{
 pub use placement::{place_popup, place_submenu};
 pub use state::{MAX_MENU_DEPTH, MenuBarState, MenuDrawEnv, MenuLayers};
 
-use crate::color::rgb8;
 use crate::layout::{Constraint, Rect};
 use crate::text::{TextBlock, WrapMode};
 use crate::{
-    CornerRadii, DrawContext, MeasureConstraints, MeasureContext, Measurement, StyleKey,
+    CornerRadii, DrawContext, Ink, MeasureConstraints, MeasureContext, Measurement, StyleKey,
     StyleResolver, SurfacePainter,
 };
 
@@ -365,11 +364,12 @@ impl<'a> MenuBar<'a> {
 
         // Pass 3: paint the strip's owning chrome, then labels. Label fills are
         // limited to hovered, highlighted, and open states.
-        // Forge MenuBar: an open title is a plain accent plate (no inset
+        // Forge MenuBar: an open title is a plain selection plate (no inset
         // edges, unlike a highlighted sheet row); hover is a white wash.
-        let accent = styles.color(StyleKey::Accent);
+        let selection = styles.color(StyleKey::Selection);
+        let on_selection = styles.color(StyleKey::OnSelection);
         let hover = [1.0, 1.0, 1.0, 0.09];
-        let text = rgb8([0xd5, 0xdc, 0xe2]);
+        let text = styles.ink(Ink::Title);
         let dim = styles.color(StyleKey::TextDim);
         let font_size = MENU_TITLE_FONT_SIZE;
         let font = theme.font.clone();
@@ -406,7 +406,7 @@ impl<'a> MenuBar<'a> {
 
                     let open = open_menu == Some(index);
                     let plate = if open {
-                        Some(accent)
+                        Some(selection)
                     } else if (armed && highlighted == Some(index)) || hovered == Some(index) {
                         Some(hover)
                     } else {
@@ -424,7 +424,7 @@ impl<'a> MenuBar<'a> {
                     let label_color = if !menu.is_enabled() {
                         dim
                     } else if open {
-                        rgb8([4, 20, 24])
+                        on_selection
                     } else {
                         text
                     };

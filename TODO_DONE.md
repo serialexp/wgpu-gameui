@@ -7,6 +7,18 @@ then the dated batches in the order they were written.
 
 ---
 
+## Overlay, the default theme (2026-11-20)
+
+- [x] **P1 — Selection plate token.** Selected and highlighted rows filled
+      with the solid `accent`. **Done 2026-11-20.** `Theme::selection` /
+      `Theme::on_selection` (`StyleKey::Selection`, `StyleKey::OnSelection`)
+      and `Ink::OnSelectionSecond` (was `Ink::OnAccentSecond`). Forge keeps
+      the accent plate; Overlay selects with the accent wash under its
+      brightest ink. `List`/`ListView`/`Tree`, the file dialog, dropdown,
+      combo box, context menu, menu bar and sheet, the code-completion popup
+      and text selection all read them. Test:
+      `a_selected_row_is_the_wash_and_its_inks_read_on_it`.
+
 ## Retained-mode performance (comparison and Fable review, 2026-11-11)
 
 - [x] **P1 — reuse prepared text for unchanged blocks (renderer).**

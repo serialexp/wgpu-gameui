@@ -171,17 +171,17 @@ pub(crate) fn paint(
     for ((index, item), row) in shown.zip(&popup.rows) {
         let chosen = index == open.chosen;
         if chosen {
-            list.rounded_rect(*row, ROW_RADIUS, styles.color(StyleKey::Accent));
+            list.rounded_rect(*row, ROW_RADIUS, styles.color(StyleKey::Selection));
         }
         let ink = |role: Ink| styles.ink(role);
-        let on_accent = styles.color(StyleKey::OnAccent);
+        let on_selection = styles.color(StyleKey::OnSelection);
         // One baseline for the row's three sizes, in its middle.
         let baseline =
             row.y + ((ROW_HEIGHT + dense) / 2.0 - dense * (1.0 - baseline_ratio)).round();
         let at = |size: TextSize| baseline - styles.text_size(size) * baseline_ratio;
 
         let tag_ink = if chosen {
-            ink(Ink::OnAccentSecond)
+            ink(Ink::OnSelectionSecond)
         } else {
             item.kind.ink(syntax)
         };
@@ -195,8 +195,8 @@ pub(crate) fn paint(
         let label_x = row.x + ROW_PAD + TAG_WIDTH + GAP;
         let typed = typed_len(&item.label, &open.prefix);
         let (head, tail) = item.label.split_at(typed);
-        let head_ink = if chosen { on_accent } else { ink(Ink::Max) };
-        let tail_ink = if chosen { on_accent } else { ink(Ink::Menu) };
+        let head_ink = if chosen { on_selection } else { ink(Ink::Max) };
+        let tail_ink = if chosen { on_selection } else { ink(Ink::Menu) };
         let head = styles
             .mono_block(head, 0.0, 0.0, TextSize::Dense, Ink::Max)
             .with_color_f32(head_ink)
@@ -212,7 +212,7 @@ pub(crate) fn paint(
 
         if let Some(detail) = &item.detail {
             let detail_ink = if chosen {
-                ink(Ink::OnAccentSecond)
+                ink(Ink::OnSelectionSecond)
             } else {
                 ink(Ink::Caption)
             };

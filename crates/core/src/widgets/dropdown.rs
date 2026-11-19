@@ -301,13 +301,15 @@ impl DropdownState {
             }
         }
 
-        let selected_text = style.color(StyleKey::Background);
+        let selected_text = style.color(StyleKey::OnSelection);
         let item_text = style.color(StyleKey::Text);
         let pad = style.scalar(StyleKey::Padding);
         let font_size = style.scalar(StyleKey::FontSize);
         let font = style.theme().font.clone();
-        let accent = style.color(StyleKey::Accent);
-        let hover = style.color(StyleKey::ButtonHover);
+        let selection = style.color(StyleKey::Selection);
+        // A row under the pointer or the arrow keys is a list row's hover,
+        // kept well below the selection so the two never read alike.
+        let hover = style.color(StyleKey::RowHover);
         let chrome = style.dropdown();
         let shadow_margin = chrome.shadow.blur * 1.5;
 
@@ -354,7 +356,7 @@ impl DropdownState {
                     let is_selected = i == geom.selected;
                     let is_highlighted = self.highlighted == i;
                     if is_selected {
-                        l.quad(list_rect.x, iy, list_rect.width, geom.item_h, accent);
+                        l.quad(list_rect.x, iy, list_rect.width, geom.item_h, selection);
                     } else if is_highlighted {
                         // Keyboard highlight: a brighter/stronger hover.
                         l.quad(list_rect.x, iy, list_rect.width, geom.item_h, hover);

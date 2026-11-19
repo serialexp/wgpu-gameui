@@ -2591,7 +2591,7 @@ fn list_row(
     );
     let text_x = cell.x + CELL_PAD + glyph_width(14.0) + 7.0;
     let ink = if on {
-        s.color(StyleKey::OnAccent)
+        s.color(StyleKey::OnSelection)
     } else if selected {
         s.ink(Ink::Max)
     } else {
@@ -2616,7 +2616,7 @@ fn list_row(
     }
     list.text(name);
     let dim = if on {
-        s.ink(Ink::OnAccentSecond)
+        s.ink(Ink::OnSelectionSecond)
     } else {
         s.ink(Ink::Caption)
     };
@@ -2705,7 +2705,7 @@ fn grid_cell(
         on,
     );
     let ink = if on {
-        s.color(StyleKey::OnAccent)
+        s.color(StyleKey::OnSelection)
     } else {
         s.ink(Ink::Row)
     };

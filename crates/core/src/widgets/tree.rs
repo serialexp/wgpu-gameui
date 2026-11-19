@@ -582,7 +582,7 @@ impl<'a> TreeNode<'a> {
     }
 
     /// Override the label colour (sRGB-encoded RGBA). When unset the label uses
-    /// [`Ink::Title`] (or [`StyleKey::OnAccent`] when selected). When set,
+    /// [`Ink::Title`] (or [`StyleKey::OnSelection`] when selected). When set,
     /// this colour is used in every state but disabled — the caller is
     /// responsible for picking something readable on a selected row. Lets an
     /// outliner colour-code rows by kind (group / object / section).
@@ -663,7 +663,7 @@ impl<'a> TreeNode<'a> {
         let show_hover = row_hovered && !(off && self.leaf);
         let selected = !off && state.is_selected(id);
         let focused = state.focus_id.is_none_or(|f| ctx.focus.is_focused(f));
-        let on_accent = selected && focused;
+        let on_selection = selected && focused;
 
         // ---- layout -------------------------------------------------------
         // A flex row: inset, indent, caret, leading icons, glyph, label, and
@@ -717,22 +717,22 @@ impl<'a> TreeNode<'a> {
             s.ink(Ink::Disabled)
         } else if let Some(color) = self.label_color {
             color
-        } else if on_accent {
-            s.color(StyleKey::OnAccent)
+        } else if on_selection {
+            s.color(StyleKey::OnSelection)
         } else if selected {
             s.ink(Ink::Max)
         } else {
             s.ink(Ink::Title)
         };
-        let caret_color = if on_accent {
-            s.ink(Ink::OnAccentSecond)
+        let caret_color = if on_selection {
+            s.ink(Ink::OnSelectionSecond)
         } else {
             s.ink(Ink::Caption)
         };
         let glyph_color = if off {
             s.ink(Ink::DisabledGlyph)
-        } else if on_accent {
-            s.color(StyleKey::OnAccent)
+        } else if on_selection {
+            s.color(StyleKey::OnSelection)
         } else {
             s.ink(Ink::Muted)
         };
@@ -777,7 +777,7 @@ impl<'a> TreeNode<'a> {
             }
             let side = thumb.side();
             thumb
-                .selected(on_accent)
+                .selected(on_selection)
                 .draw(glyph_x, cy - side * 0.5, list, &s);
             if off {
                 list.pop_tint();
@@ -1312,27 +1312,27 @@ mod tests {
     }
 
     #[test]
-    fn a_selected_row_is_the_accent_bar_with_on_accent_ink() {
+    fn a_selected_row_is_the_selection_plate_with_its_ink() {
         let s_ = styles();
         let mut s = TreeState::new();
         s.select(1);
         let (list, _) = draw_node(&TreeNode::new("b"), 1, row(), &mut s, &idle());
-        let fill = s_.color(StyleKey::Accent);
-        assert!(has_fill(&list, fill), "accent bar");
+        let fill = s_.color(StyleKey::Selection);
+        assert!(has_fill(&list, fill), "selection plate");
         assert_eq!(
             list.texts[0].color,
-            text_color(s_.color(StyleKey::OnAccent))
+            text_color(s_.color(StyleKey::OnSelection))
         );
         assert!(
             list.vertices
                 .iter()
-                .any(|v| v.color == s_.ink(Ink::OnAccentSecond)),
-            "the caret dims on the accent"
+                .any(|v| v.color == s_.ink(Ink::OnSelectionSecond)),
+            "the caret dims on the selection"
         );
     }
 
     #[test]
-    fn an_unfocused_tree_holds_its_selection_without_the_accent() {
+    fn an_unfocused_tree_holds_its_selection_without_the_plate() {
         let s_ = styles();
         let mut state = TreeState::new();
         state.set_focus_id(77);
@@ -1343,9 +1343,9 @@ mod tests {
         let input = idle();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &th, &input, 800.0, 600.0);
         TreeNode::leaf("a").draw(1, row(), &mut state, &mut ctx);
-        let accent = s_.color(StyleKey::Accent);
+        let plate = s_.color(StyleKey::Selection);
         let held = s_.color(StyleKey::RowHeld);
-        assert!(!has_fill(&list, accent));
+        assert!(!has_fill(&list, plate));
         assert!(has_fill(&list, held));
         assert_eq!(list.texts[0].color, text_color(s_.ink(Ink::Max)));
     }
@@ -1378,8 +1378,8 @@ mod tests {
         // A stale selection on a node that became disabled isn't painted.
         s.select(1);
         let (list, _) = draw_node(&node, 1, row(), &mut s, &idle());
-        let accent = styles().color(StyleKey::Accent);
-        assert!(!has_fill(&list, accent));
+        let plate = styles().color(StyleKey::Selection);
+        assert!(!has_fill(&list, plate));
     }
 
     #[test]
@@ -1414,7 +1414,7 @@ mod tests {
 
     #[cfg(feature = "phosphor-icons")]
     #[test]
-    fn the_glyph_is_muted_on_accent_when_selected_and_dim_when_disabled() {
+    fn the_glyph_wears_the_selection_ink_when_selected_and_dims_when_disabled() {
         use crate::render::PhosphorIcon;
         let s_ = styles();
         let glyph_tint = |node: TreeNode, selected: bool| {
@@ -1428,7 +1428,7 @@ mod tests {
         };
         let folder = TreeNode::leaf("src").with_glyph(TreeIcon::Phosphor(PhosphorIcon::Folder));
         assert_eq!(glyph_tint(folder, false), s_.ink(Ink::Muted));
-        assert_eq!(glyph_tint(folder, true), s_.color(StyleKey::OnAccent));
+        assert_eq!(glyph_tint(folder, true), s_.color(StyleKey::OnSelection));
         assert_eq!(
             glyph_tint(folder.with_disabled(true), true),
             s_.ink(Ink::DisabledGlyph)

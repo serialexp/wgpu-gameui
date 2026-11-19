@@ -257,6 +257,12 @@ style_keys! {
     AccentFaceBottomPressed("accent_face_bottom_pressed", Color),
     /// Text/icon color on accent faces.
     OnAccent("on_accent", Color),
+    /// Fill of a selected or highlighted row: the focused list's selection,
+    /// an open menu title, the menu or dropdown row under the cursor.
+    Selection("selection", Color),
+    /// Text and glyphs on a [`StyleKey::Selection`] row. Secondary text there
+    /// is [`Ink::OnSelectionSecond`].
+    OnSelection("on_selection", Color),
     /// Danger-face gradient top, idle (destructive controls).
     DangerFaceTop("danger_face_top", Color),
     /// Danger-face gradient top, hovered.
@@ -478,9 +484,9 @@ pub enum Ink {
     Brand,
     /// Page body text (`--ink-primary`).
     Primary,
-    /// Secondary text on an accent row (`--ink-on-accent-2`). The primary
-    /// on-accent ink is [`StyleKey::OnAccent`].
-    OnAccentSecond,
+    /// Secondary text on a selected row (Forge `--ink-on-accent-2`). The
+    /// primary ink there is [`StyleKey::OnSelection`].
+    OnSelectionSecond,
 }
 
 impl Ink {
@@ -514,7 +520,7 @@ impl Ink {
         Ink::Empty,
         Ink::Brand,
         Ink::Primary,
-        Ink::OnAccentSecond,
+        Ink::OnSelectionSecond,
     ];
 
     /// The role's key name in a preset file (see [`StyleKey::name`]).
@@ -546,7 +552,7 @@ impl Ink {
             Ink::Empty => "ink.empty",
             Ink::Brand => "ink.brand",
             Ink::Primary => "ink.primary",
-            Ink::OnAccentSecond => "ink.on_accent_second",
+            Ink::OnSelectionSecond => "ink.on_selection_second",
         }
     }
 }

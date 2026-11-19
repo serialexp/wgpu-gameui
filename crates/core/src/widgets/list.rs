@@ -652,7 +652,7 @@ const SELECT_EDGES_FOCUSED: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 0.28], [0.0, 0.0, 0
 /// The same lines on the held selection of an unfocused list.
 const SELECT_EDGES_HELD: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 0.08], [0.0, 0.0, 0.0, 0.3]];
 
-/// Paint a selected row: the accent bar while its list or tree has focus,
+/// Paint a selected row: the selection plate while its list or tree has focus,
 /// the held wash otherwise, each with its top and bottom edge lines. Shared
 /// by [`List`] and [`TreeNode`](super::TreeNode).
 pub(crate) fn paint_selected_row(
@@ -662,7 +662,7 @@ pub(crate) fn paint_selected_row(
     focused: bool,
 ) {
     let (fill, [top, bottom]) = if focused {
-        (style.color(StyleKey::Accent), SELECT_EDGES_FOCUSED)
+        (style.color(StyleKey::Selection), SELECT_EDGES_FOCUSED)
     } else {
         (style.color(StyleKey::RowHeld), SELECT_EDGES_HELD)
     };
@@ -1974,9 +1974,9 @@ mod tests {
     }
 
     #[test]
-    fn selection_is_accent_with_focus_and_held_without() {
+    fn selection_is_the_plate_with_focus_and_held_without() {
         let th = theme();
-        assert_eq!(selected_fill(true), th.accent);
+        assert_eq!(selected_fill(true), th.selection);
         assert_eq!(selected_fill(false), th.row_held);
     }
 

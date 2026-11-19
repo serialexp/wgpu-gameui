@@ -24,11 +24,6 @@ still open.
   filter chip, status zones, slider and scrubber knobs, badges, status icon,
   progress sweep, asset grid plate, view gizmo. Under Overlay they show as
   teal chips and bluish text. Move each into `Theme`/`ChromeTheme`.
-- [ ] **P1 — Selection plate token.** Every selected or highlighted row
-  (dropdown, combo box, context menu, menu sheet, `List`, `Tree`, file
-  dialog) fills with the solid `accent`. Overlay's design selects with the
-  accent wash and max ink (`.fo-row.is-selected`). Add a selection fill and
-  ink to `Theme` and route the row widgets through them.
 - [ ] **P2 — Backdrop blur behind Overlay glass.** The design blurs what is
   behind its glass (16px); the theme only sets the translucent fill.
 - [ ] **P2 — Carved and lifted text.** The design's `--carve` and `--lift`

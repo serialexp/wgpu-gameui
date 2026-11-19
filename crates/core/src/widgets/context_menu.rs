@@ -1,12 +1,11 @@
 //! Cursor-anchored context menus using the shared [`MenuItem`](crate::MenuItem)
 //! model and menu-sheet visual language.
 
-use crate::color::rgb8;
 use crate::layout::Rect;
 use crate::text::TextBlock;
 use crate::{
-    CornerRadii, Edge, EdgeWidths, FocusState, InputState, LayerStack, StyleKey, StyleResolver,
-    SurfacePainter,
+    CornerRadii, Edge, EdgeWidths, FocusState, Ink, InputState, LayerStack, StyleKey,
+    StyleResolver, SurfacePainter,
 };
 
 use super::DrawList;
@@ -738,7 +737,7 @@ fn paint_items(
             chrome.paint_highlighted_row(
                 list,
                 Rect::new(row_x, y, row_w, row_h),
-                styles.color(StyleKey::Accent),
+                styles.color(StyleKey::Selection),
             );
         }
         if item.is_checked() {
@@ -746,21 +745,20 @@ fn paint_items(
                 (row_x + ROW_PADDING + CHECK_WIDTH * 0.5, y + row_h * 0.5),
                 2.0,
                 if selected {
-                    rgb8([4, 20, 24])
+                    styles.color(StyleKey::OnSelection)
                 } else {
                     styles.color(StyleKey::AccentTick)
                 },
             );
         }
         let color = if !item.is_enabled() {
-            (0x5d, 0x65, 0x6c)
+            styles.ink(Ink::Disabled)
         } else if selected {
-            (4, 20, 24)
+            styles.color(StyleKey::OnSelection)
         } else if item.is_danger() {
-            let [r, g, b, _] = crate::color::to_rgba8(styles.color(StyleKey::DangerText));
-            (r, g, b)
+            styles.color(StyleKey::DangerText)
         } else {
-            (0xdb, 0xe1, 0xe7)
+            styles.ink(Ink::Menu)
         };
         let text_y = list.vcentered_text_y(
             y,
@@ -775,7 +773,7 @@ fn paint_items(
             text_y,
         )
         .with_size(FONT_SIZE)
-        .with_color(color.0, color.1, color.2)
+        .with_color_f32(color)
         .with_font_opt(styles.theme().font.clone());
         // The highlighted row drops the carve (Forge MenuSheet).
         list.text(if selected {
@@ -788,10 +786,9 @@ fn paint_items(
         if !hint.is_empty() {
             let width = list.measure_text(&hint, HINT_FONT_SIZE, None).0;
             let hint_color = if selected {
-                // Forge `--ink-on-accent-2`.
-                (0x29, 0x4d, 0x55)
+                styles.ink(Ink::OnSelectionSecond)
             } else {
-                (0x78, 0x81, 0x8a)
+                styles.ink(Ink::Shortcut)
             };
             let hint_block = TextBlock::new(
                 hint.clone(),
@@ -799,7 +796,7 @@ fn paint_items(
                 y + (row_h - HINT_FONT_SIZE) * 0.5,
             )
             .with_size(HINT_FONT_SIZE)
-            .with_color(hint_color.0, hint_color.1, hint_color.2)
+            .with_color_f32(hint_color)
             .with_font_opt(styles.theme().font.clone());
             list.text(if selected {
                 hint_block
@@ -815,10 +812,9 @@ fn paint_items(
                 (cx - 2.0, cy + 4.0),
                 (cx + 3.0, cy),
                 if selected {
-                    rgb8([4, 20, 24])
+                    styles.color(StyleKey::OnSelection)
                 } else {
-                    // Forge `--ink-shortcut`.
-                    rgb8([0x78, 0x81, 0x8a])
+                    styles.ink(Ink::Shortcut)
                 },
             );
         }
@@ -865,6 +861,7 @@ fn sheet_padding_box(rect: Rect, widths: EdgeWidths) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::text_color;
     use crate::{NavInput, Theme};
 
     const ITEMS: &[MenuItem<'static>] = &[
@@ -1313,16 +1310,17 @@ mod tests {
         paint_items(&mut list, rect, menu.items, menu.platform, &styles, Some(0));
 
         assert!(
-            list.chrome_instances().any(|quad| quad.bg == theme.accent),
-            "accent row plate"
+            list.chrome_instances()
+                .any(|quad| quad.bg == theme.selection),
+            "selection row plate"
         );
         let edges: Vec<[f32; 4]> = list.shadow_instances().skip(2).map(|s| s.color).collect();
         for inset in theme.chrome.menu_sheet.row_highlight_insets {
             assert!(edges.contains(&inset.color), "{inset:?} painted");
         }
-        // Tick: ink-on-accent on the highlighted row, accent-tick elsewhere.
+        // Tick: the selection ink on the highlighted row, accent-tick elsewhere.
         let dots: Vec<[f32; 4]> = list.circle_instances.iter().map(|c| c.color).collect();
-        assert!(dots.contains(&rgb8([4, 20, 24])), "{dots:?}");
+        assert!(dots.contains(&theme.on_selection), "{dots:?}");
         assert!(dots.contains(&theme.accent_tick), "{dots:?}");
 
         let snap = list.texts.iter().find(|t| t.content == "Snap").unwrap();
@@ -1330,7 +1328,7 @@ mod tests {
         let grid = list.texts.iter().find(|t| t.content == "Grid").unwrap();
         assert!(grid.shadow.is_some(), "idle rows keep the carve");
         let hint = list.texts.iter().find(|t| t.content == "S").unwrap();
-        assert_eq!(hint.color.as_rgba(), [0x29, 0x4d, 0x55, 0xff]);
+        assert_eq!(hint.color, text_color(styles.ink(Ink::OnSelectionSecond)));
     }
 
     #[test]
@@ -1389,10 +1387,16 @@ mod tests {
             ink(&list, "Close Session"),
             crate::color::to_rgba8(theme.danger_text)
         );
-        assert_eq!(ink(&list, "Rename…"), [0xdb, 0xe1, 0xe7, 0xff]);
+        assert_eq!(
+            ink(&list, "Rename…"),
+            crate::color::to_rgba8(styles.ink(Ink::Menu))
+        );
         let mut list = DrawList::new();
         paint_items(&mut list, rect, menu.items, menu.platform, &styles, Some(1));
-        assert_eq!(ink(&list, "Close Session"), [4, 20, 24, 0xff]);
+        assert_eq!(
+            ink(&list, "Close Session"),
+            crate::color::to_rgba8(theme.on_selection)
+        );
     }
 
     #[test]

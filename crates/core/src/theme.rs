@@ -197,6 +197,11 @@ pub struct Theme {
     pub accent_face_bottom_pressed: [f32; 4],
     /// Text/icon color drawn on top of accent faces.
     pub on_accent: [f32; 4],
+    /// Fill of a selected or highlighted row (focused list selection, open
+    /// menu title, menu and dropdown rows under the cursor).
+    pub selection: [f32; 4],
+    /// Text and glyphs on a [`Theme::selection`] row.
+    pub on_selection: [f32; 4],
     /// Danger-face gradient top (idle) — destructive actions.
     pub danger_face_top: [f32; 4],
     /// Danger-face gradient top (hovered).
@@ -431,6 +436,9 @@ impl Theme {
             accent_face_bottom_hover: oklch(0.72, 0.12, 200.0, 1.0),
             accent_face_bottom_pressed: oklch(0.6, 0.11, 200.0, 1.0),
             on_accent: hex(0x04171d),
+            // Forge selects with the solid accent plate.
+            selection: oklch(0.74, 0.11, 200.0, 1.0),
+            on_selection: hex(0x04171d),
             danger_face_top: oklch(0.57, 0.17, 25.0, 1.0),
             danger_face_top_hover: oklch(0.62, 0.18, 25.0, 1.0),
             danger_face_top_pressed: oklch(0.5, 0.14, 25.0, 1.0),
@@ -472,7 +480,7 @@ impl Theme {
                 hex(0x3f474e), // Empty
                 hex(0x6f7982), // Brand
                 hex(0xe6e9ec), // Primary
-                hex(0x294d55), // OnAccentSecond
+                hex(0x294d55), // OnSelectionSecond
             ],
             accent_match: oklch(0.84, 0.09, 200.0, 1.0),
             row_zebra: [1.0, 1.0, 1.0, 0.016],
@@ -558,6 +566,8 @@ mod tests {
         let accent = oklch(0.74, 0.11, 200.0, 1.0);
         assert_eq!(crate::color::to_rgba8(accent), [0x3e, 0xbf, 0xc6, 0xff]);
         assert_eq!(t.accent, accent);
+        assert_eq!(t.selection, accent, "Forge selects with the accent plate");
+        assert_eq!(t.on_selection, t.on_accent);
         assert_eq!(t.accent_tick, oklch(0.8, 0.1, 200.0, 1.0));
         assert_eq!(t.accent_face_top_hover, oklch(0.86, 0.1, 200.0, 1.0));
         assert_eq!(t.danger_face_top_pressed, oklch(0.5, 0.14, 25.0, 1.0));
@@ -620,7 +630,7 @@ mod tests {
         assert_eq!(ink(Ink::Glyph), hex(0x9aa2aa));
         assert_eq!(ink(Ink::Caption), hex(0x6a737b));
         assert_eq!(ink(Ink::Empty), hex(0x3f474e));
-        assert_eq!(ink(Ink::OnAccentSecond), hex(0x294d55));
+        assert_eq!(ink(Ink::OnSelectionSecond), hex(0x294d55));
         assert_eq!(t.accent_match, oklch(0.84, 0.09, 200.0, 1.0));
         assert_eq!(t.row_zebra, [1.0, 1.0, 1.0, 0.016]);
         let size = |s| t.get(StyleKey::TextSize(s)).unwrap().as_scalar().unwrap();
@@ -751,6 +761,8 @@ impl Theme {
             AccentFaceBottomHover => StyleValue::Color(self.accent_face_bottom_hover),
             AccentFaceBottomPressed => StyleValue::Color(self.accent_face_bottom_pressed),
             OnAccent => StyleValue::Color(self.on_accent),
+            Selection => StyleValue::Color(self.selection),
+            OnSelection => StyleValue::Color(self.on_selection),
             DangerFaceTop => StyleValue::Color(self.danger_face_top),
             DangerFaceTopHover => StyleValue::Color(self.danger_face_top_hover),
             DangerFaceTopPressed => StyleValue::Color(self.danger_face_top_pressed),
@@ -878,6 +890,8 @@ impl Theme {
             (AccentFaceBottomHover, StyleValue::Color(c)) => self.accent_face_bottom_hover = c,
             (AccentFaceBottomPressed, StyleValue::Color(c)) => self.accent_face_bottom_pressed = c,
             (OnAccent, StyleValue::Color(c)) => self.on_accent = c,
+            (Selection, StyleValue::Color(c)) => self.selection = c,
+            (OnSelection, StyleValue::Color(c)) => self.on_selection = c,
             (DangerFaceTop, StyleValue::Color(c)) => self.danger_face_top = c,
             (DangerFaceTopHover, StyleValue::Color(c)) => self.danger_face_top_hover = c,
             (DangerFaceTopPressed, StyleValue::Color(c)) => self.danger_face_top_pressed = c,

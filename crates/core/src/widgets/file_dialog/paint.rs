@@ -35,7 +35,7 @@ pub(super) fn folder_glyph(
     size: f32,
     on: bool,
 ) {
-    let on_ink = s.ink(Ink::OnAccentSecond);
+    let on_ink = s.ink(Ink::OnSelectionSecond);
     let w = glyph_width(size);
     let h = (size * 0.78).round();
     let tab_h = (size * 0.2).round().max(2.0);
@@ -112,7 +112,7 @@ pub(super) fn file_glyph(
     if size >= 28.0 && !ext.is_empty() {
         let text_size = (size * 0.17).round().max(8.0);
         let ink = if on {
-            s.color(crate::StyleKey::OnAccent)
+            s.color(crate::StyleKey::OnSelection)
         } else {
             s.ink(Ink::Glyph)
         };

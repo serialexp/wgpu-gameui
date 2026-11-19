@@ -1621,7 +1621,7 @@ impl TextInput {
                             y + line_top,
                             (x2 - x1).max(1.0),
                             line_height,
-                            s.color(StyleKey::Accent),
+                            s.color(StyleKey::Selection),
                         );
                     }
                 }
@@ -1683,7 +1683,7 @@ impl TextInput {
                     sl_band_top,
                     r.w.max(1.0),
                     sl_band_h,
-                    s.color(StyleKey::Accent),
+                    s.color(StyleKey::Selection),
                 );
             }
         }
@@ -2843,12 +2843,11 @@ mod tests {
         focus.begin_frame(&fake_input());
         draw_input(&mut ti, 0, &mut focus, &mut list, &theme, &fake_input());
 
-        // The selection fill is the only accent-`bg` chrome quad (the focused
-        // frame outline carries accent in `border`, never `bg`).
+        // The selection fill is the only selection-`bg` chrome quad.
         let sel = list
             .chrome_instances()
-            .find(|c| c.bg == theme.accent)
-            .expect("a focused selection draws an accent-filled quad");
+            .find(|c| c.bg == theme.selection)
+            .expect("a focused selection draws a selection-filled quad");
         let box_centre = ti.y + ti.height / 2.0;
         let band_centre = sel.rect[1] + sel.rect[3] / 2.0;
         assert!(

@@ -264,7 +264,7 @@ impl<'a> Thumb<'a> {
             Face::Glyph(glyph) => {
                 let side = (self.size * 0.72).round();
                 let tint = if self.selected {
-                    s.ink(Ink::OnAccentSecond)
+                    s.ink(Ink::OnSelectionSecond)
                 } else {
                     s.ink(Ink::Muted)
                 };

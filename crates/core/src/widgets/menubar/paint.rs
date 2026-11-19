@@ -6,15 +6,17 @@
 //! because the bar-level keyboard transitions need the menus and their label
 //! rects. This module owns everything that happens *inside* the popup layers.
 
-use crate::color::rgb8;
 use crate::layout::Rect;
-use crate::{CornerRadii, DrawContext, Edge, LayerStack, Stroke, StyleKey, SurfacePainter};
+use crate::{CornerRadii, DrawContext, Edge, Ink, LayerStack, Stroke, StyleKey, SurfacePainter};
 
 use super::model::{ActivatedItem, Menu, MenuBarId, MenuItem, column_blocker_id, row_path_id};
 use super::state::{MenuBarState, MenuDrawEnv, MenuLayers, activation_id_for_path};
 
-/// Check-mark stroke width, as a fraction of the row height.
+/// Check-mark stroke width, as a fraction of the check's box height.
 const CHECK_STROKE: f32 = 0.10;
+/// The check's box is this many gutter widths tall at most (Forge's 10 x 22
+/// px), centred in a taller row, so the mark keeps its shape.
+const CHECK_ASPECT: f32 = 2.2;
 /// Half-extent of the submenu chevron, as a fraction of the row height. Matches
 /// the gutter reserved by the geometry pass.
 const CHEVRON: f32 = 0.18;
@@ -234,16 +236,14 @@ pub(super) fn draw_columns<'a>(
             painter.paint_pre_content();
             let list = painter.draw_list();
             // Text and geometry colours are both plain sRGB (see `crate::color`).
-            let disabled_text = (0x5d, 0x65, 0x6c);
-            let text = (0xdb, 0xe1, 0xe7);
-            let danger_text = {
-                let [r, g, b, _] = crate::color::to_rgba8(s.color(StyleKey::DangerText));
-                (r, g, b)
-            };
-            let selected_bg = s.color(StyleKey::Accent);
+            let disabled_text = s.ink(Ink::Disabled);
+            let text = s.ink(Ink::Menu);
+            let danger_text = s.color(StyleKey::DangerText);
+            let selected_bg = s.color(StyleKey::Selection);
+            let on_selection = s.color(StyleKey::OnSelection);
             let tick = s.color(StyleKey::AccentTick);
-            // Forge `--ink-shortcut`: shortcut hints and submenu arrows.
-            let shortcut_ink = rgb8([0x78, 0x81, 0x8a]);
+            // Shortcut hints and submenu arrows.
+            let shortcut_ink = s.ink(Ink::Shortcut);
             let check_w = column.check_w;
 
             // Only row content is clipped to the sheet padding box. The sheet and
@@ -292,13 +292,14 @@ pub(super) fn draw_columns<'a>(
                     );
                 }
                 if row.checked {
-                    let stroke = (row_h * CHECK_STROKE).max(1.0);
-                    let (x, w, h) = (row_x + 8.0, check_w, row_h);
-                    let color = if highlighted { rgb8([4, 20, 24]) } else { tick };
+                    let h = row_h.min(check_w * CHECK_ASPECT);
+                    let stroke = (h * CHECK_STROKE).max(1.0);
+                    let (x, w, top) = (row_x + 8.0, check_w, y + (row_h - h) * 0.5);
+                    let color = if highlighted { on_selection } else { tick };
                     let check = [
-                        [x + w * 0.16, y + h * 0.52],
-                        [x + w * 0.40, y + h * 0.76],
-                        [x + w * 0.84, y + h * 0.22],
+                        [x + w * 0.16, top + h * 0.52],
+                        [x + w * 0.40, top + h * 0.76],
+                        [x + w * 0.84, top + h * 0.22],
                     ];
                     list.stroke_polyline(&check, &Stroke::new(stroke), color);
                 }
@@ -311,17 +312,17 @@ pub(super) fn draw_columns<'a>(
                         (cx - half * 0.5, cy + half),
                         (cx + half * 0.7, cy),
                         if highlighted {
-                            rgb8([4, 20, 24])
+                            on_selection
                         } else {
                             shortcut_ink
                         },
                     );
                 }
 
-                let (r, g, b) = if row.disabled {
+                let label_ink = if row.disabled {
                     disabled_text
                 } else if highlighted {
-                    (4, 20, 24)
+                    on_selection
                 } else if row.danger {
                     danger_text
                 } else {
@@ -335,7 +336,7 @@ pub(super) fn draw_columns<'a>(
                         // the viewport): truncate rather than overflow.
                         block = block.with_max_width(label_avail).with_ellipsis();
                     }
-                    let block = block.with_color(r, g, b);
+                    let block = block.with_color_f32(label_ink);
                     list.text(if highlighted {
                         block
                     } else {
@@ -345,15 +346,14 @@ pub(super) fn draw_columns<'a>(
                 if let Some(measured) = row.hint.take() {
                     let ty = y + row_h * 0.5 - measured.metrics.visual_center;
                     let x = hint_right - measured.metrics.size[0];
-                    let (r, g, b) = if row.disabled {
-                        (0x46, 0x4e, 0x55)
+                    let hint_ink = if row.disabled {
+                        s.ink(Ink::DisabledKey)
                     } else if highlighted {
-                        // Forge `--ink-on-accent-2`.
-                        (0x29, 0x4d, 0x55)
+                        s.ink(Ink::OnSelectionSecond)
                     } else {
-                        (0x78, 0x81, 0x8a)
+                        shortcut_ink
                     };
-                    let block = measured.into_block_at(x, ty).with_color(r, g, b);
+                    let block = measured.into_block_at(x, ty).with_color_f32(hint_ink);
                     list.text(if highlighted {
                         block
                     } else {

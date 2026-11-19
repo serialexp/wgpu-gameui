@@ -198,14 +198,16 @@ pub fn draw_list(
         let hovered = row.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
         let is_selected = selected == Some(i);
 
-        if is_selected || hovered {
-            let mut c = s.color(StyleKey::Accent);
-            c[3] = if is_selected { 1.0 } else { 0.2 };
+        if is_selected {
+            let c = s.color(StyleKey::Selection);
+            list.quad(row.x, row.y, row.width, row.height, c);
+        } else if hovered {
+            let c = s.color(StyleKey::RowHover);
             list.quad(row.x, row.y, row.width, row.height, c);
         }
 
         let fg = if is_selected {
-            s.color(StyleKey::OnAccent)
+            s.color(StyleKey::OnSelection)
         } else {
             s.color(StyleKey::Text)
         };
@@ -235,9 +237,9 @@ pub fn draw_list(
                     (
                         mid,
                         if is_selected {
-                            s.color(StyleKey::OnAccent)
+                            s.color(StyleKey::OnSelection)
                         } else {
-                            s.color(StyleKey::Accent)
+                            s.color(StyleKey::AccentMatch)
                         },
                     ),
                     (post, fg),

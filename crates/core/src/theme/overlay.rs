@@ -196,7 +196,7 @@ impl Theme {
             Ink::Glyph | Ink::Tab | Ink::Muted | Ink::Brand => INK_MUTED,
             Ink::TipHint | Ink::Shortcut | Ink::Label | Ink::Caption | Ink::Dim => INK_CAPTION,
             Ink::Disabled | Ink::DisabledGlyph | Ink::DisabledKey | Ink::Empty => INK_DISABLED,
-            Ink::OnAccentSecond => mix_oklab(accent.ink, accent.base, 0.35),
+            Ink::OnSelectionSecond => INK_2,
         });
 
         // The accent.
@@ -210,6 +210,10 @@ impl Theme {
         t.accent_face_top_pressed = accent.bottom;
         t.accent_face_bottom_pressed = accent.bottom;
         t.on_accent = accent.ink;
+        // A selected row is the accent wash under the brightest ink
+        // (`.fo-row.is-selected`), not a solid plate.
+        t.selection = accent.wash;
+        t.on_selection = INK_MAX;
         // A latched key is a pressed key ringed and inked in the accent.
         t.latch_face_top = white(0.07);
         t.latch_face_bottom = white(0.03);
@@ -517,9 +521,7 @@ mod tests {
                 continue;
             }
             // Keys the overlay inks in the accent on purpose.
-            if t.get(key).unwrap().as_color() == Some(t.accent)
-                || key == StyleKey::Ink(Ink::OnAccentSecond)
-            {
+            if t.get(key).unwrap().as_color() == Some(t.accent) {
                 continue;
             }
             neutrals += 1;
@@ -573,6 +575,31 @@ mod tests {
             .unwrap();
         let ratio = contrast(caption, ground);
         assert!(ratio >= 4.5, "{ratio:.2}:1");
+    }
+
+    #[test]
+    fn a_selected_row_is_the_wash_and_its_inks_read_on_it() {
+        for accent in [
+            Theme::OVERLAY_ACCENT,
+            hex(0xf0b955),
+            hex(0x66cfe0),
+            hex(0xb8a2ff),
+        ] {
+            let t = Theme::overlay_with_accent(accent);
+            assert_eq!(t.selection, with_alpha(accent, 0.15));
+            // The worst ground: the wash on the most transparent glass, over
+            // a white sky.
+            let ground = over(t.selection, over(t.panel, white(1.0)));
+            let second = t
+                .get(StyleKey::Ink(Ink::OnSelectionSecond))
+                .unwrap()
+                .as_color()
+                .unwrap();
+            for ink in [t.on_selection, second] {
+                let ratio = contrast(ink, ground);
+                assert!(ratio >= 4.5, "{accent:?}: {ratio:.2}:1");
+            }
+        }
     }
 
     #[test]

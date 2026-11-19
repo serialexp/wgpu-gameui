@@ -457,11 +457,11 @@ impl<'a> ListView<'a> {
         pointer_x: f32,
     ) {
         let off = item.disabled;
-        let on_accent = item.selected && item.focused;
+        let on_selection = item.selected && item.focused;
         let label_ink = if off {
             s.ink(Ink::Disabled)
-        } else if on_accent {
-            s.color(StyleKey::OnAccent)
+        } else if on_selection {
+            s.color(StyleKey::OnSelection)
         } else if item.selected {
             s.ink(Ink::Max)
         } else {
@@ -469,8 +469,8 @@ impl<'a> ListView<'a> {
         };
         let dim_ink = if off {
             s.ink(Ink::DisabledGlyph)
-        } else if on_accent {
-            s.ink(Ink::OnAccentSecond)
+        } else if on_selection {
+            s.ink(Ink::OnSelectionSecond)
         } else {
             s.ink(Ink::Caption)
         };
@@ -490,8 +490,8 @@ impl<'a> ListView<'a> {
         if let Some(glyph) = row.glyph {
             let tint = if off {
                 s.ink(Ink::DisabledGlyph)
-            } else if on_accent {
-                s.ink(Ink::OnAccentSecond)
+            } else if on_selection {
+                s.ink(Ink::OnSelectionSecond)
             } else {
                 s.ink(Ink::Muted)
             };
@@ -503,12 +503,11 @@ impl<'a> ListView<'a> {
         }
         if let Some(name) = row.thumb {
             let side = if self.two_line { THUMB_TWO_LINE } else { THUMB };
-            Thumb::new().name(name).size(side).selected(on_accent).draw(
-                left,
-                cell.y + (cell.height - side) * 0.5,
-                list,
-                s,
-            );
+            Thumb::new()
+                .name(name)
+                .size(side)
+                .selected(on_selection)
+                .draw(left, cell.y + (cell.height - side) * 0.5, list, s);
             left += side + GAP;
         }
 
@@ -518,8 +517,8 @@ impl<'a> ListView<'a> {
             let hot = item.hovered && pointer_x >= key.x && pointer_x < key.right();
             let tint = if off {
                 s.ink(Ink::DisabledGlyph)
-            } else if on_accent {
-                s.color(StyleKey::OnAccent)
+            } else if on_selection {
+                s.color(StyleKey::OnSelection)
             } else if hot {
                 s.ink(Ink::Value)
             } else {
@@ -556,11 +555,11 @@ impl<'a> ListView<'a> {
             .with_font_opt(label_font)
             .with_max_width(max_w)
             .with_ellipsis();
-        if !on_accent {
+        if !on_selection {
             label = label.with_shadow(0, 0, 0, 128, 0.0, -1.0, 0.0);
         }
         if !off && let Some(range) = Self::match_range(row.label, self.highlight) {
-            let style = if on_accent {
+            let style = if on_selection {
                 TextStyleRange {
                     range,
                     color: None,
@@ -748,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_focused_selection_wears_on_accent_ink_and_underlines_the_match() {
+    fn a_focused_selection_wears_the_selection_ink_and_underlines_the_match() {
         let rows = [ListRow::new("my-agent-ui")];
         let theme = Theme::forge();
         let view = ListView::new().highlight("agent").focused(true);
@@ -760,8 +759,8 @@ mod tests {
             &mut at(-1.0, -1.0),
         );
         let label = text(&list, "my-agent-ui");
-        assert_eq!(label.color, text_color(theme.on_accent));
-        assert!(label.shadow.is_none(), "no carve on the accent");
+        assert_eq!(label.color, text_color(theme.on_selection));
+        assert!(label.shadow.is_none(), "no carve on the selection");
         assert_eq!(label.style_ranges[0].color, None);
         assert_eq!(label.style_ranges[0].underline, Underline::Inherit);
 

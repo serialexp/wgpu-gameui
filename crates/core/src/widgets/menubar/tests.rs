@@ -998,7 +998,7 @@ fn open_sheet_uses_compact_separators_handoff_text_and_two_outer_shadows() {
 }
 
 #[test]
-fn selected_row_uses_dark_ink_without_a_text_shadow() {
+fn selected_row_uses_the_selection_ink_without_a_text_shadow() {
     let mut rig = Rig::new();
     rig.state.open_menu_at(MENUS, 0);
     rig.settle();
@@ -1012,8 +1012,14 @@ fn selected_row_uses_dark_ink_without_a_text_shadow() {
         .find(|block| block.content == "Open…")
         .expect("selected label");
     assert_eq!(open.font_size, 11.5);
-    assert_eq!(open.color.as_rgba(), [4, 20, 24, 0xff]);
-    assert!(open.shadow.is_none(), "selected dark ink is not carved");
+    assert_eq!(
+        open.color.as_rgba(),
+        crate::color::to_rgba8(rig.theme.on_selection)
+    );
+    assert!(
+        open.shadow.is_none(),
+        "the selected row's ink is not carved"
+    );
 }
 
 #[test]
@@ -1033,7 +1039,11 @@ fn a_danger_row_uses_the_danger_ink_until_highlighted() {
     assert_eq!(ink(&rig), crate::color::to_rgba8(rig.theme.danger_text));
     rig.state.set_highlighted_item(MENUS, Some(2));
     rig.step();
-    assert_eq!(ink(&rig), [4, 20, 24, 0xff], "the accent row's ink wins");
+    assert_eq!(
+        ink(&rig),
+        crate::color::to_rgba8(rig.theme.on_selection),
+        "the selected row's ink wins"
+    );
 }
 
 #[test]
