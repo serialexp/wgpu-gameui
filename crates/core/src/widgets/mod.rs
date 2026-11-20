@@ -20,7 +20,6 @@ mod combo_box;
 mod confirm_dialog;
 mod context_menu;
 mod count_bubble;
-mod key_prompt;
 mod curve_editor;
 mod doc_tabs;
 mod dock_panel;
@@ -52,6 +51,7 @@ mod icon;
 mod icon_key;
 mod image;
 mod inspector;
+mod key_prompt;
 mod line_chart;
 mod list;
 #[cfg(feature = "phosphor-icons")]
@@ -140,7 +140,6 @@ pub use confirm_dialog::{
 };
 pub use context_menu::{ContextMenu, ContextMenuState, place_context_menu};
 pub use count_bubble::{COUNT_BUBBLE_HEIGHT, CountBubble};
-pub use key_prompt::KeyPrompt;
 pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
 pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
@@ -194,9 +193,9 @@ pub use icon::Icon;
 pub use icon_key::IconKey;
 pub use image::{Image, ImageAlign, ImageFit};
 pub use inspector::{
-    INSPECTOR_MAX_BODY_HEIGHT, Inspector, InspectorOutput, InspectorSelection,
-    InspectorState,
+    INSPECTOR_MAX_BODY_HEIGHT, Inspector, InspectorOutput, InspectorSelection, InspectorState,
 };
+pub use key_prompt::KeyPrompt;
 pub use line_chart::{
     LineChart, LineChartOutput, LineMarker, LineMarkerTooltip, LineSeries, LineTooltip,
 };
@@ -228,10 +227,7 @@ pub use meter::{
 };
 pub use modal::{MODAL_BACKDROP_BLUR, MODAL_WIDTH, Modal, ModalOutput, ModalState};
 pub use number_input::{NumberInput, NumberOutput};
-pub use panel::{
-    Panel, label, label_at, label_centered_at, title,
-    title_at,
-};
+pub use panel::{Panel, label, label_at, label_centered_at, title, title_at};
 pub use placeholder::Placeholder;
 pub use popover::{
     POPOVER_CONTENT_TOP, POPOVER_PAD, POPOVER_TITLE_H, Popover, PopoverFrame, PopoverOutput,
@@ -246,9 +242,7 @@ pub use prompt_dialog::{PROMPT_DIALOG_WIDTH, PromptDialog, PromptDialogState, Pr
 pub use property_group::{
     PROPERTY_GROUP_HEADER_HEIGHT, PROPERTY_ROW_GAP, PropertyGroup, PropertyStack,
 };
-pub use property_row::{
-    PROPERTY_ROW_HEIGHT, PropertyRow, PropertyRowOutput, PropertyScrub,
-};
+pub use property_row::{PROPERTY_ROW_HEIGHT, PropertyRow, PropertyRowOutput, PropertyScrub};
 pub use radio::RadioGroup;
 pub use row_heights::{Row, RowHeights, RowId, Ticket};
 pub use scroll_view::{ScrollBegin, ScrollSmoothing, ScrollState, ScrollView};

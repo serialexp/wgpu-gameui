@@ -590,7 +590,9 @@ mod tests {
         let row = Rect::new(0.0, 0.0, 300.0, 21.0);
         let slot = PropertyRow::new("Rough").draw_slot(row, &mut ctx);
         assert_eq!(slot.x, 96.0 + LABEL_GAP);
-        let slot = PropertyRow::new("X").label_width(11.0).draw_slot(row, &mut ctx);
+        let slot = PropertyRow::new("X")
+            .label_width(11.0)
+            .draw_slot(row, &mut ctx);
         assert_eq!(slot.x, 11.0 + LABEL_GAP);
     }
 

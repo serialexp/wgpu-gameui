@@ -805,7 +805,10 @@ impl<'a> List<'a> {
         let reserve = if self.overlay_bar {
             0.0
         } else {
-            ScrollView::new(rect).vertical_only().themed(style).reserve()
+            ScrollView::new(rect)
+                .vertical_only()
+                .themed(style)
+                .reserve()
         };
         (rect.width - reserve).floor().max(1.0)
     }

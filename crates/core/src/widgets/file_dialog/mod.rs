@@ -15,8 +15,8 @@ use crate::{InputState, PhosphorIcon, SpriteId};
 use super::list::{List, ListState};
 use super::material::Tone;
 use super::{
-    Button, Checkbox, DrawContext, FilterChip, FocusId, Icon, IconKey,
-    ModalState, SearchField, TextInput,
+    Button, Checkbox, DrawContext, FilterChip, FocusId, Icon, IconKey, ModalState, SearchField,
+    TextInput,
 };
 
 pub use model::{Clock, FileDialogMode, SortBy, format_date, format_size};

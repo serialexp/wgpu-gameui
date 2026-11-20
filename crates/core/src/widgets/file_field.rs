@@ -319,10 +319,7 @@ mod tests {
         let y = WELL_H * 0.5;
         let header = 17.0; // Forge's KeyHeaderSize
         let half = header * 0.5;
-        (
-            [right - half, y],
-            [right - header - KEY_GAP - half, y],
-        )
+        ([right - half, y], [right - header - KEY_GAP - half, y])
     }
 
     #[test]
@@ -407,10 +404,7 @@ mod tests {
         let field = FileField::new("Albedo").file(Some(BRICK));
         let (_, list) = frame(&field, &at(-5.0, -5.0));
         let meta = list.texts.iter().find(|t| t.content == BRICK.meta).unwrap();
-        assert_eq!(
-            meta.x,
-            Theme::forge().inspector_label_width + LABEL_GAP
-        );
+        assert_eq!(meta.x, Theme::forge().inspector_label_width + LABEL_GAP);
         assert_eq!(meta.y, WELL_H + META_GAP);
     }
 

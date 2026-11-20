@@ -1025,7 +1025,11 @@ mod tests {
             let style = StyleResolver::new(theme);
             VIEW.width - ScrollView::new(VIEW).themed(&style).reserve()
         };
-        assert_eq!(gutter(&Theme::forge()), 87.0, "Forge keeps its 13 px gutter");
+        assert_eq!(
+            gutter(&Theme::forge()),
+            87.0,
+            "Forge keeps its 13 px gutter"
+        );
         assert_eq!(gutter(&Theme::overlay()), 86.0, "Overlay's is 14 px");
         // An overlay bar keeps its own thumb width whatever the theme says.
         let theme = Theme::overlay();
@@ -1034,7 +1038,10 @@ mod tests {
         assert_eq!(view.reserve(), 0.0);
         let mut state = ScrollState::default();
         state.content_size = [100.0, 400.0];
-        assert_eq!(view.v_thumb(&state, 100.0).width, ScrollView::OVERLAY_THICKNESS);
+        assert_eq!(
+            view.v_thumb(&state, 100.0).width,
+            ScrollView::OVERLAY_THICKNESS
+        );
     }
 
     #[test]

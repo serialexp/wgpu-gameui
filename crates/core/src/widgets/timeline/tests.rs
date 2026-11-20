@@ -441,7 +441,10 @@ fn transport_keys_are_spaced_by_the_themes_key_gap() {
         let y = rig.layout().strip.y + STRIP_PAD[0] + KEY * 0.5;
         rig.click((x, y));
         let hi = rig.state.bounds(120)[1];
-        assert_eq!(rig.state.frame, hi, "gap {gap}: the click lands on the last key");
+        assert_eq!(
+            rig.state.frame, hi,
+            "gap {gap}: the click lands on the last key"
+        );
     }
 }
 

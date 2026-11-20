@@ -63,8 +63,8 @@ use wgpu_gameui::{
     Waffle, WaffleCategory, WaffleFill,
 };
 use wgpu_gameui::{
-    DragItem, DragList, DragListState, Inspector, InspectorSelection,
-    InspectorState, PropertyGroup, PropertyRow, PropertyScrub,
+    DragItem, DragList, DragListState, Inspector, InspectorSelection, InspectorState,
+    PropertyGroup, PropertyRow, PropertyScrub,
 };
 #[cfg(feature = "syntax-lua")]
 use wgpu_gameui::{SyntaxHighlighting, SyntaxTheme};

@@ -790,12 +790,10 @@ mod tests {
         assert_eq!(surface.bg[3], alpha);
         // The elevation's main drop is one of the surface's shadow layers (the
         // rim layers follow it), tinted with the fade like the rest.
-        assert!(
-            (0..list.shadow_instance_count()).any(|n| {
-                (list.shadow_instance(n).unwrap().color[3] - chrome.shadow.color[3] * alpha).abs()
-                    < 1e-6
-            })
-        );
+        assert!((0..list.shadow_instance_count()).any(|n| {
+            (list.shadow_instance(n).unwrap().color[3] - chrome.shadow.color[3] * alpha).abs()
+                < 1e-6
+        }));
     }
 
     #[test]

@@ -392,13 +392,7 @@ mod tests {
             let mut focus = FocusState::new();
             let input = release_at(500.0, 500.0);
             let mut ctx = DrawContext::new(&mut list, &mut focus, theme, &input, 800.0, 600.0);
-            Slider::new(0.0, 100.0).draw(
-                50.0,
-                1,
-                &mut DragCapture::new(),
-                rect(),
-                &mut ctx,
-            );
+            Slider::new(0.0, 100.0).draw(50.0, 1, &mut DragCapture::new(), rect(), &mut ctx);
             list.chrome_instance(0).unwrap().rect[3]
         };
         assert_eq!(thickness(&Theme::forge()), 5.0);

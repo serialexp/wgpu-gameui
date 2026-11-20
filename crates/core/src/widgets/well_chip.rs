@@ -245,7 +245,8 @@ mod tests {
         };
         assert!((width(&Theme::forge()) - (text + 2.0 * 7.0)).abs() < 0.01);
         let overlay = Theme::overlay();
-        let ov_text = StyleResolver::new(&overlay).mono_width(&mut DrawList::new(), "opus", TextSize::Meta);
+        let ov_text =
+            StyleResolver::new(&overlay).mono_width(&mut DrawList::new(), "opus", TextSize::Meta);
         assert!((width(&overlay) - (ov_text + 2.0 * 12.0)).abs() < 0.01);
     }
 

@@ -210,12 +210,7 @@ impl ContextMenuState {
                 } else {
                     self.row_h
                 };
-                let row = Rect::new(
-                    rect.x + pad,
-                    top,
-                    rect.width - pad * 2.0,
-                    height,
-                );
+                let row = Rect::new(rect.x + pad, top, rect.width - pad * 2.0, height);
                 if row.contains(x, y) {
                     return item.disabled_reason().map(|reason| (reason, row));
                 }
@@ -412,12 +407,7 @@ impl ContextMenuState {
                 } else {
                     row_h
                 };
-                let row = Rect::new(
-                    draw_rect.x + pad,
-                    y,
-                    draw_rect.width - pad * 2.0,
-                    height,
-                );
+                let row = Rect::new(draw_rect.x + pad, y, draw_rect.width - pad * 2.0, height);
                 if item.is_enabled()
                     && row.contains(layer_input.mouse_x, layer_input.mouse_y)
                     && layer_input.mouse_clicked
@@ -538,12 +528,7 @@ fn reconcile_context_pointer(
             } else {
                 row_h
             };
-            let row = Rect::new(
-                rect.x + pad,
-                y,
-                rect.width - pad * 2.0,
-                height,
-            );
+            let row = Rect::new(rect.x + pad, y, rect.width - pad * 2.0, height);
             if item.is_enabled() && row.contains(point.0, point.1) {
                 hovered = Some((level, item_index, item.is_submenu()));
                 break;

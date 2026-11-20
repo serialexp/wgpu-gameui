@@ -2029,7 +2029,10 @@ mod tests {
 
         assert!(ti.horizontal_scroll_offset > 0.0);
         let text = list.texts.last().expect("a text block was drawn");
-        assert!(text.x < theme.well_pad_x, "the text starts left of the field");
+        assert!(
+            text.x < theme.well_pad_x,
+            "the text starts left of the field"
+        );
         // The text is clipped to the field's inner box, not to a box that
         // starts where the scrolled text starts: the end of the value, which
         // the field scrolled into view, must not be clipped away.
@@ -2048,7 +2051,10 @@ mod tests {
             let input = InputState::default();
             draw_input(&mut ti, 1, &mut focus, &mut list, &theme, &input);
             let text = list.texts.last().expect("a text block was drawn");
-            assert_eq!(text.x, pad_x, "text starts at the well's horizontal padding");
+            assert_eq!(
+                text.x, pad_x,
+                "text starts at the well's horizontal padding"
+            );
             let clip = text.clip.expect("the text is clipped");
             assert_eq!(clip.width, 200.0 - pad_x * 2.0);
         }

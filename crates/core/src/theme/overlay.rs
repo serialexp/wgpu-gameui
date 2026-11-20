@@ -716,9 +716,15 @@ mod tests {
         assert_eq!(t.accent_grip, mix_oklab(bone, white(1.0), 0.10));
         assert_eq!(t.accent_glyph, mix_oklab(bone, black(1.0), 0.08));
         assert_eq!(t.accent_face_top_hover, mix_oklab(bone, white(1.0), 0.26));
-        assert_eq!(t.accent_face_bottom_hover, mix_oklab(bone, black(1.0), 0.10));
+        assert_eq!(
+            t.accent_face_bottom_hover,
+            mix_oklab(bone, black(1.0), 0.10)
+        );
         assert_eq!(t.accent_face_top_pressed, mix_oklab(bone, black(1.0), 0.18));
-        assert_eq!(t.accent_face_bottom_pressed, mix_oklab(bone, black(1.0), 0.26));
+        assert_eq!(
+            t.accent_face_bottom_pressed,
+            mix_oklab(bone, black(1.0), 0.26)
+        );
     }
 
     #[test]

@@ -400,7 +400,8 @@ impl<'a> DockStack<'a> {
         // so the returned rects already match the new state.
         let mut toggled = None;
         if input.mouse_clicked && !input.mouse_consumed && state.grab.is_none() {
-            let key_w = IconKey::new(PhosphorIcon::Plus, IconKey::header_size(&s)).outer_size(&s)[0];
+            let key_w =
+                IconKey::new(PhosphorIcon::Plus, IconKey::header_size(&s)).outer_size(&s)[0];
             toggled = placed.iter().enumerate().find_map(|(i, p)| {
                 let over_header = p.header.contains(input.mouse_x, input.mouse_y);
                 let over_keys = keys_rect(p.header, self.sections[i].actions.len(), key_w)

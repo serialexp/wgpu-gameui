@@ -553,7 +553,11 @@ mod tests {
                 &mut state,
                 &mut ctx(&mut list, &mut focus, theme, &input),
             );
-            list.texts.iter().find(|t| t.content == ts[0].label).unwrap().x
+            list.texts
+                .iter()
+                .find(|t| t.content == ts[0].label)
+                .unwrap()
+                .x
         };
         // header pad 4 + tab padding + 1 px border.
         assert_eq!(label_x(&Theme::forge()), 4.0 + 7.0 + 1.0);
