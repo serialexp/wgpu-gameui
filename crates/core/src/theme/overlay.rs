@@ -429,22 +429,39 @@ fn overlay_chrome(chrome: &mut ChromeTheme, accent: &Accent) {
     };
     // `--shadow-panel` and `--shadow-sheet`: the rim is the border, the lit
     // top edge a line; each keeps its largest drop.
+    // The remaining layers are the softer second drop and the 1 px inner
+    // rim (`inset 0 0 0 1px`).
+    let ring = |alpha: f32| BoxShadow {
+        offset: [0.0, 0.0],
+        blur: 0.0,
+        spread: 1.0,
+        color: white(alpha),
+        inset: true,
+    };
     let panel = FloatingSurfaceChrome {
         surface: glass(GLASS),
         shadow: shadow(14.0, 36.0, black(0.4), false),
+        rim: [shadow(2.0, 6.0, black(0.3), false), ring(0.045)],
         lines: [top_light(0.12), none],
     };
     let sheet = FloatingSurfaceChrome {
         surface: sheet_glass,
         shadow: shadow(24.0, 60.0, black(0.55), false),
+        rim: [shadow(4.0, 12.0, black(0.35), false), ring(0.05)],
         lines: [top_light(0.14), none],
     };
-    chrome.dropdown = sheet;
+    // `--surface-dropdown` and `--surface-tooltip`: near-opaque, not the
+    // sheet's gradient.
+    let near_opaque = glass(rgba8([24, 24, 27], 0.97));
+    chrome.dropdown = FloatingSurfaceChrome {
+        surface: near_opaque,
+        ..sheet
+    };
     chrome.popover = sheet;
     chrome.toast = sheet;
     chrome.hud = panel;
     chrome.tooltip = FloatingSurfaceChrome {
-        surface: glass(rgba8([24, 24, 27], 0.97)),
+        surface: near_opaque,
         ..sheet
     };
     chrome.menu_sheet.surface = sheet_glass;
@@ -667,14 +684,60 @@ mod tests {
     }
 
     #[test]
+    fn panels_carry_the_designs_three_shadow_layers_and_forge_one() {
+        let overlay = Theme::overlay().chrome;
+        assert_eq!(overlay.hud.shadows().as_slice().len(), 3);
+        assert_eq!(overlay.tooltip.shadows().as_slice().len(), 3);
+        assert!(overlay.hud.shadows().as_slice()[2].inset);
+        assert_eq!(Theme::forge().chrome.hud.shadows().as_slice().len(), 1);
+    }
+
+    #[test]
+    fn the_ink_ladder_keeps_the_designs_three_disabled_steps() {
+        let t = Theme::overlay();
+        let ink = |role| t.get(StyleKey::Ink(role)).unwrap().as_color().unwrap();
+        assert_eq!(ink(Ink::Disabled), hex(0x6e6e6a));
+        assert_eq!(ink(Ink::DisabledGlyph), hex(0x5e5e5b));
+        assert_eq!(ink(Ink::DisabledKey), hex(0x52524f));
+        assert_eq!(ink(Ink::Empty), hex(0x4a4a47));
+        assert_eq!(ink(Ink::Cell), hex(0xcbcbc7));
+        assert_eq!(ink(Ink::Brand), hex(0x9e9e99));
+    }
+
+    #[test]
+    fn accent_tints_mix_as_the_design_declares() {
+        // `--accent-tick` white 12%, `--accent-match` 20%, `--accent-grip`
+        // 10%, `--accent-glyph` black 8%, key hover white 26% / black 10%,
+        // key pressed black 18% / 26%.
+        let t = Theme::overlay();
+        let bone = t.accent;
+        assert_eq!(t.accent_tick, mix_oklab(bone, white(1.0), 0.12));
+        assert_eq!(t.accent_match, mix_oklab(bone, white(1.0), 0.20));
+        assert_eq!(t.accent_grip, mix_oklab(bone, white(1.0), 0.10));
+        assert_eq!(t.accent_glyph, mix_oklab(bone, black(1.0), 0.08));
+        assert_eq!(t.accent_face_top_hover, mix_oklab(bone, white(1.0), 0.26));
+        assert_eq!(t.accent_face_bottom_hover, mix_oklab(bone, black(1.0), 0.10));
+        assert_eq!(t.accent_face_top_pressed, mix_oklab(bone, black(1.0), 0.18));
+        assert_eq!(t.accent_face_bottom_pressed, mix_oklab(bone, black(1.0), 0.26));
+    }
+
+    #[test]
     fn floating_surfaces_are_glass_with_panel_corners() {
         let chrome = Theme::overlay().chrome;
-        for surface in [chrome.dropdown, chrome.popover, chrome.toast, chrome.hud] {
+        for surface in [chrome.popover, chrome.toast, chrome.hud] {
             assert_eq!(surface.surface.corner_radii, CornerRadii::uniform(6.0));
             assert!(matches!(
                 surface.surface.background,
                 Background::Solid(c) | Background::LinearGradient { end: c, .. } if c == GLASS
             ));
+        }
+        // The dropdown and the tooltip are the design's near-opaque surface.
+        for surface in [chrome.dropdown, chrome.tooltip] {
+            assert_eq!(surface.surface.corner_radii, CornerRadii::uniform(6.0));
+            assert_eq!(
+                surface.surface.background,
+                Background::Solid(rgba8([24, 24, 27], 0.97))
+            );
         }
         // Forge's machined 1 px corners became 3 px.
         assert_eq!(

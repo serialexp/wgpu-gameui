@@ -339,6 +339,7 @@ pub(crate) fn paint_tooltip(
     content: impl FnOnce(&mut DrawList, Rect),
 ) {
     let chrome = s.tooltip();
+    let shadows = chrome.shadows();
     let border = chrome.surface.border_widths;
     let padding_box = rect.inset(border.left);
     let mut surface = SurfacePainter::new(
@@ -347,7 +348,7 @@ pub(crate) fn paint_tooltip(
         padding_box,
         chrome.surface.corner_radii,
         chrome.surface,
-        std::slice::from_ref(&chrome.shadow),
+        shadows.as_slice(),
         &chrome.lines,
     );
     surface.paint_pre_content();

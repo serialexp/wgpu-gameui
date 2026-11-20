@@ -214,6 +214,7 @@ impl<'a> TooltipHint<'a> {
         let layout = self.measure(list, style, anchor, viewport);
         let rect = layout.rect;
         let chrome = style.tooltip();
+        let shadows = chrome.shadows();
         let shadow_margin = chrome.shadow.blur * 1.5;
         list.push_debug_scope_rect(
             "Tooltip hint",
@@ -231,7 +232,7 @@ impl<'a> TooltipHint<'a> {
             padding_box,
             chrome.surface.corner_radii,
             chrome.surface,
-            std::slice::from_ref(&chrome.shadow),
+            shadows.as_slice(),
             &chrome.lines,
         );
         surface.paint_pre_content();
@@ -578,6 +579,7 @@ fn draw_tooltip_body(
     // once covers them and skips their "not visible" early returns entirely —
     // an unhovered tooltip has no allocation to declare.
     let chrome = style.tooltip();
+    let shadows = chrome.shadows();
     let shadow_margin = chrome.shadow.blur * 1.5;
     list.push_debug_scope_rect(
         "Tooltip",
@@ -597,7 +599,7 @@ fn draw_tooltip_body(
         padding_box,
         chrome.surface.corner_radii,
         chrome.surface,
-        std::slice::from_ref(&chrome.shadow),
+        shadows.as_slice(),
         &chrome.lines,
     );
     surface.paint_pre_content();
@@ -768,8 +770,14 @@ mod tests {
             list.chrome_instances()
                 .any(|i| i.bg == [0.2, 0.3, 0.4, 1.0])
         );
-        assert_eq!(list.shadow_instance_count(), 1);
-        assert_eq!(list.shadow_instance(0).unwrap().color, chrome.shadow.color);
+        assert_eq!(
+            list.shadow_instance_count(),
+            chrome.shadows().as_slice().len()
+        );
+        assert!(
+            (0..list.shadow_instance_count())
+                .any(|n| list.shadow_instance(n).unwrap().color == chrome.shadow.color)
+        );
     }
 
     // --- Anchored hint ---------------------------------------------------
@@ -875,8 +883,11 @@ mod tests {
         assert_eq!(label.x, rect.x + border + 7.0);
         assert!(shortcut.x > label.x + 7.0);
         assert!(shortcut.x < rect.right() - 7.0);
-        // One tooltip surface with its single authored elevation.
-        assert_eq!(list.shadow_instance_count(), 1);
+        // One tooltip surface with its authored elevation.
+        assert_eq!(
+            list.shadow_instance_count(),
+            theme.chrome.tooltip.shadows().as_slice().len()
+        );
     }
 
     #[test]

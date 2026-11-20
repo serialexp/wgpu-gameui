@@ -46,6 +46,7 @@ const SHEET_MIN_WIDTH: f32 = 140.0;
 /// For anything floating over a 3D scene.
 pub fn hud_glass(list: &mut DrawList, s: &StyleResolver, rect: Rect) {
     let chrome = s.hud();
+    let shadows = chrome.shadows();
     let border = chrome.surface.border_widths.left;
     let mut painter = SurfacePainter::new(
         list,
@@ -53,7 +54,7 @@ pub fn hud_glass(list: &mut DrawList, s: &StyleResolver, rect: Rect) {
         rect.inset(border),
         chrome.surface.corner_radii,
         chrome.surface,
-        std::slice::from_ref(&chrome.shadow),
+        shadows.as_slice(),
         &chrome.lines,
     );
     painter.paint_pre_content();

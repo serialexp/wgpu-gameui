@@ -464,6 +464,7 @@ impl ToastStack {
     /// Draw one toast; whether its close key was clicked.
     fn draw_one(&self, a: &Active, rect: Rect, ctx: &mut DrawContext, s: &StyleResolver) -> bool {
         let chrome = s.toast();
+        let shadows = chrome.shadows();
         // Scoped per toast rather than per stack: the stack has no
         // allocation of its own, each toast does. The declared area takes in
         // the drop shadow.
@@ -482,7 +483,7 @@ impl ToastStack {
             padding_box,
             chrome.surface.corner_radii,
             chrome.surface,
-            std::slice::from_ref(&chrome.shadow),
+            shadows.as_slice(),
             &chrome.lines,
         );
         surface.paint_pre_content();
@@ -639,7 +640,12 @@ mod tests {
         }
         let (list, _) = draw(&mut s, &away());
         assert_eq!(s.len(), 3, "all three stay queued");
-        assert_eq!(list.shadow_instance_count(), 2, "two toasts drawn");
+        let layers = Theme::default().chrome.toast.shadows().as_slice().len();
+        assert_eq!(
+            list.shadow_instance_count(),
+            2 * layers,
+            "two toasts drawn, each with its shadow layers"
+        );
     }
 
     #[test]
@@ -782,9 +788,13 @@ mod tests {
         stack.draw(SCREEN, &mut ctx);
         let surface = list.chrome_instances().find(|i| i.bg[0] == 0.2).unwrap();
         assert_eq!(surface.bg[3], alpha);
+        // The elevation's main drop is one of the surface's shadow layers (the
+        // rim layers follow it), tinted with the fade like the rest.
         assert!(
-            (list.shadow_instance(0).unwrap().color[3] - chrome.shadow.color[3] * alpha).abs()
-                < 1e-6
+            (0..list.shadow_instance_count()).any(|n| {
+                (list.shadow_instance(n).unwrap().color[3] - chrome.shadow.color[3] * alpha).abs()
+                    < 1e-6
+            })
         );
     }
 

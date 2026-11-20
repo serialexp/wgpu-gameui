@@ -410,9 +410,44 @@ pub struct FloatingSurfaceChrome {
     pub surface: QuadStyle,
     /// Authored elevation.
     pub shadow: BoxShadow,
+    /// Further layers of the elevation, painted after `shadow` (a softer
+    /// second drop, the glass's inner rim). Unused slots are
+    /// [`BoxShadow::NONE`] and are not painted.
+    pub rim: [BoxShadow; 2],
     /// Structural edge lines (e.g. a top inset highlight). Up to two;
     /// unused slots have zero-alpha color and are effectively no-ops.
     pub lines: [StructuralLine; 2],
+}
+
+/// The shadows a [`FloatingSurfaceChrome`] paints, in order, without the
+/// unused slots. Built on the stack.
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowStack {
+    items: [BoxShadow; 3],
+    len: usize,
+}
+
+impl ShadowStack {
+    /// The shadows to paint.
+    pub fn as_slice(&self) -> &[BoxShadow] {
+        &self.items[..self.len]
+    }
+}
+
+impl FloatingSurfaceChrome {
+    /// `shadow` then each used `rim` layer.
+    pub fn shadows(&self) -> ShadowStack {
+        let mut items = [BoxShadow::NONE; 3];
+        items[0] = self.shadow;
+        let mut len = 1;
+        for layer in self.rim {
+            if layer.color[3] > 0.0 {
+                items[len] = layer;
+                len += 1;
+            }
+        }
+        ShadowStack { items, len }
+    }
 }
 
 /// Dialog-sheet chrome: the raised surface of a [`Sheet`](crate::Sheet) and
@@ -698,6 +733,7 @@ impl ChromeTheme {
         let floating = |surface, y, blur, alpha| FloatingSurfaceChrome {
             surface,
             shadow: shadow(y, blur, [0.0, 0.0, 0.0, alpha], false),
+            rim: [BoxShadow::NONE; 2],
             lines: no_lines,
         };
         let panel = bordered(
@@ -992,6 +1028,7 @@ impl ChromeTheme {
                     [0.0, 0.0, 0.0, 0.7],
                 ),
                 shadow: shadow(6.0, 18.0, [0.0, 0.0, 0.0, 0.6], false),
+                rim: [BoxShadow::NONE; 2],
                 lines: [line(Edge::Top, 1.0, [1.0, 1.0, 1.0, 0.11]), no_lines[1]],
             },
             toast: floating(
@@ -1015,6 +1052,7 @@ impl ChromeTheme {
                     )
                 },
                 shadow: shadow(4.0, 14.0, [0.0, 0.0, 0.0, 0.45], false),
+                rim: [BoxShadow::NONE; 2],
                 lines: [line(Edge::Top, 1.0, [1.0, 1.0, 1.0, 0.09]), no_lines[1]],
             },
             sheet: SheetChrome {
@@ -1435,10 +1473,12 @@ impl Visit for FloatingSurfaceChrome {
         let FloatingSurfaceChrome {
             surface,
             shadow,
+            rim,
             lines,
         } = self;
         surface.visit(v);
         shadow.visit(v);
+        rim.visit(v);
         lines.visit(v);
     }
 }

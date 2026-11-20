@@ -75,6 +75,15 @@ impl Default for BoxShadow {
 }
 
 impl BoxShadow {
+    /// A shadow that paints nothing (zero alpha), for unused slots.
+    pub const NONE: BoxShadow = BoxShadow {
+        offset: [0.0; 2],
+        blur: 0.0,
+        spread: 0.0,
+        color: [0.0; 4],
+        inset: false,
+    };
+
     /// The area this shadow paints when cast by `element` (untransformed):
     /// an outset shadow is `element` moved by its offset, grown by its spread
     /// and by its blur's visible reach (3σ, which is `1.5 × blur`). An inset
