@@ -15,7 +15,9 @@
 //! # }
 //! ```
 
+use crate::chrome::Background;
 use crate::layout::Rect;
+use crate::shadow::CornerRadii;
 use crate::{StyleKey, StyleResolver};
 
 use super::{DrawList, Panel};
@@ -84,12 +86,12 @@ impl<'a> Group<'a> {
         let inner_x = rect.x + border;
         let inner_w = (rect.width - 2.0 * border).max(0.0);
         if inner_w > 0.0 && header_h > border {
-            list.quad(
-                inner_x,
-                rect.y + border,
-                inner_w,
-                header_h - border,
-                [1.0, 1.0, 1.0, 0.05],
+            // Its top corners follow the card's rounded ones.
+            let r = (style.scalar(StyleKey::PanelRadius) - border).max(0.0);
+            list.paint_quad_background(
+                Rect::new(inner_x, rect.y + border, inner_w, header_h - border),
+                Background::Solid([1.0, 1.0, 1.0, 0.05]),
+                CornerRadii::new(r, r, 0.0, 0.0),
             );
             list.quad(
                 inner_x,

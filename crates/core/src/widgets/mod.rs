@@ -227,7 +227,7 @@ pub use meter::{
 pub use modal::{MODAL_BACKDROP_BLUR, MODAL_WIDTH, Modal, ModalOutput, ModalState};
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{
-    PANEL_GAP, PANEL_PADDING, PANEL_RADIUS, Panel, label, label_at, label_centered_at, title,
+    PANEL_GAP, PANEL_PADDING, Panel, label, label_at, label_centered_at, title,
     title_at,
 };
 pub use placeholder::Placeholder;

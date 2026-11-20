@@ -88,6 +88,9 @@ pub struct Theme {
     pub spacing: f32,
     /// Default corner radius for rounded rects, in pixels.
     pub border_radius: f32,
+    /// Corner radius of a panel card ([`Panel`](crate::Panel),
+    /// [`Group`](crate::Group)), in pixels.
+    pub panel_radius: f32,
     /// Default border stroke width, in pixels.
     pub border_width: f32,
     /// Default body text size, in pixels.
@@ -412,6 +415,7 @@ impl Theme {
             padding,
             spacing,
             border_radius: 1.0,
+            panel_radius: 2.0,
             border_width: 1.0,
             font_size,
             font_size_title: 15.0,
@@ -815,6 +819,7 @@ impl Theme {
             Padding => StyleValue::Scalar(self.padding),
             Spacing => StyleValue::Scalar(self.spacing),
             BorderRadius => StyleValue::Scalar(self.border_radius),
+            PanelRadius => StyleValue::Scalar(self.panel_radius),
             BorderWidth => StyleValue::Scalar(self.border_width),
             FontSize => StyleValue::Scalar(self.font_size),
             FontSizeTitle => StyleValue::Scalar(self.font_size_title),
@@ -949,6 +954,7 @@ impl Theme {
             (Padding, StyleValue::Scalar(s)) => self.padding = s,
             (Spacing, StyleValue::Scalar(s)) => self.spacing = s,
             (BorderRadius, StyleValue::Scalar(s)) => self.border_radius = s,
+            (PanelRadius, StyleValue::Scalar(s)) => self.panel_radius = s,
             (BorderWidth, StyleValue::Scalar(s)) => self.border_width = s,
             (FontSize, StyleValue::Scalar(s)) => self.font_size = s,
             (FontSizeTitle, StyleValue::Scalar(s)) => self.font_size_title = s,

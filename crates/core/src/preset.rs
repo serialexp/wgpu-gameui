@@ -321,6 +321,7 @@ impl ThemeSeeds {
         if self.radius_scale != 1.0 {
             let k = self.radius_scale.max(0.0);
             theme.border_radius *= k;
+            theme.panel_radius *= k;
             theme.chrome.map_corner_radii(|radii| {
                 *radii = CornerRadii::new(
                     radii.top_left * k,

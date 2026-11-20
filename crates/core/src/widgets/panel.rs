@@ -7,8 +7,6 @@ use crate::{StyleKey, StyleResolver};
 
 use super::DrawList;
 
-/// Corner radius of a panel (`--radius-panel`).
-pub const PANEL_RADIUS: f32 = 2.0;
 /// Default space between the edge and the content (`--pad-panel`).
 pub const PANEL_PADDING: f32 = 14.0;
 /// Default space between the caption row and the content
@@ -132,7 +130,7 @@ impl<'a> Panel<'a> {
         let border = s.scalar(StyleKey::BorderWidth).max(1.0);
         list.chrome_rect(
             rect,
-            PANEL_RADIUS,
+            s.scalar(StyleKey::PanelRadius),
             border,
             s.color(StyleKey::Panel),
             s.color(StyleKey::PanelBorder),
@@ -142,7 +140,11 @@ impl<'a> Panel<'a> {
         // doesn't leave a box behind that later content appears to sit in.
         let inner = rect.inset(border);
         if inner.width > 0.0 && inner.height > 0.0 {
-            list.quad(inner.x, inner.y, inner.width, 1.0, HI_CARD);
+            // Start where the rounded corner is 1 px down, so a big radius
+            // doesn't leave the line standing outside the card's curve.
+            let r = s.scalar(StyleKey::PanelRadius);
+            let run = (r - (2.0 * r - 1.0).max(0.0).sqrt()).clamp(0.0, inner.width * 0.5);
+            list.quad(inner.x + run, inner.y, inner.width - 2.0 * run, 1.0, HI_CARD);
         }
         if let Some((_, title, aside)) = self.caption(rect, list, s) {
             // The caption gives way to the aside rather than running under it.

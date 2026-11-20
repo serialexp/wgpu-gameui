@@ -296,6 +296,7 @@ impl Theme {
         t.padding = 8.0;
         t.spacing = 8.0;
         t.border_radius = RADIUS;
+        t.panel_radius = RADIUS_PANEL;
         t.font_size = 15.0;
         t.font_size_title = 18.0;
         t.text_sizes = [11.0, 12.0, 13.0, 14.0, 14.0];
@@ -523,6 +524,7 @@ mod tests {
         assert_eq!(t.list_row_height, 34.0);
         assert_eq!(t.button_height, 36.0);
         assert_eq!(t.border_radius, 3.0);
+        assert_eq!(t.panel_radius, 6.0);
         assert_eq!(t.accent_ring, with_alpha(hex(0xede6d8), 0.36));
     }
 

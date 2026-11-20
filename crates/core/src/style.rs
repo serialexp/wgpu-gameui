@@ -193,6 +193,10 @@ style_keys! {
     Spacing("spacing", Scalar),
     /// Default corner radius, in pixels.
     BorderRadius("border_radius", Scalar),
+    /// Corner radius of a panel — a [`Panel`](crate::Panel) or
+    /// [`Group`](crate::Group) card — in pixels. Forge's is a 2 px break;
+    /// Overlay's panels are 6 px glass.
+    PanelRadius("panel_radius", Scalar),
     /// Default border stroke width, in pixels.
     BorderWidth("border_width", Scalar),
     /// Default body text size, in pixels.
