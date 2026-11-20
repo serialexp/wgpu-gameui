@@ -13,15 +13,15 @@ use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 
 use super::DrawList;
 
-/// Height of a span tab strip (`--h-doc-tab`).
-pub const SPAN_TABS_HEIGHT: f32 = 27.0;
 /// Space inside the strip's left and right edges, and between tabs.
 const STRIP_PAD: f32 = 3.0;
 const TAB_GAP: f32 = 1.0;
 /// How far the active tab sits lower (and the others higher).
 const STEP: f32 = 2.0;
-/// Space inside a tab, and between its parts.
-const TAB_PAD: f32 = 8.0;
+/// What the label's side padding is short of the theme's
+/// [`StyleKey::TabPadX`] (Forge's 10 px token draws 8 px here).
+const TAB_PAD_INSET: f32 = 2.0;
+/// Space between a tab's parts.
 const PART_GAP: f32 = 6.0;
 /// The glyph's size.
 const GLYPH_SIZE: f32 = 10.0;
@@ -104,6 +104,12 @@ impl<'a> SpanTabs<'a> {
     /// A strip of `tabs`.
     pub fn new(tabs: &'a [SpanTab<'a>]) -> Self {
         Self { tabs }
+    }
+
+    /// Height of a span tab strip: the theme's [`StyleKey::DocTabHeight`]
+    /// (`--h-doc-tab`).
+    pub fn height(s: &StyleResolver) -> f32 {
+        s.scalar(StyleKey::DocTabHeight)
     }
 
     /// The rect of tab `i` in a strip filling `rect`, before its step.
@@ -212,10 +218,11 @@ fn draw_parts(list: &mut DrawList, s: &StyleResolver, tab: &SpanTab, r: Rect, on
     };
     let dot = tab.dirty && !on;
     let dot_w = if dot { DOT + PART_GAP } else { 0.0 };
-    let room = (r.width - TAB_PAD * 2.0 - glyph_w - count_w - dot_w).max(0.0);
+    let tab_pad = s.scalar(StyleKey::TabPadX) - TAB_PAD_INSET;
+    let room = (r.width - tab_pad * 2.0 - glyph_w - count_w - dot_w).max(0.0);
     let label_w = s.sans_width(list, tab.label, TextSize::Menu).min(room);
     let total = glyph_w + label_w + count_w + dot_w;
-    let mut x = r.x + ((r.width - total) * 0.5).max(TAB_PAD);
+    let mut x = r.x + ((r.width - total) * 0.5).max(tab_pad);
     let cy = r.y + r.height * 0.5;
     if !tab.glyph.is_empty() {
         list.text(
@@ -301,11 +308,11 @@ mod tests {
 
     #[test]
     fn tabs_share_the_width_and_the_active_one_sits_lower() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let tabs = tabs();
         let strip = SpanTabs::new(&tabs);
-        let rect = Rect::new(0.0, 0.0, 403.0, SPAN_TABS_HEIGHT);
+        let rect = Rect::new(0.0, 0.0, 403.0, 27.0);
         let a = strip.slot(rect, 0);
         let d = strip.slot(rect, 3);
         assert_eq!(a.x, STRIP_PAD);
@@ -328,12 +335,37 @@ mod tests {
     }
 
     #[test]
+    fn the_height_and_label_padding_follow_the_theme() {
+        let forge = Theme::forge();
+        let overlay = Theme::overlay();
+        assert_eq!(SpanTabs::height(&StyleResolver::new(&forge)), 27.0);
+        assert_eq!(SpanTabs::height(&StyleResolver::new(&overlay)), 40.0);
+
+        // A strip too narrow to centre the label pins it at the tab padding.
+        let one = [SpanTab::new("Chat")];
+        let label_x = |theme: &Theme| {
+            let s = StyleResolver::new(theme);
+            let mut list = DrawList::new();
+            SpanTabs::new(&one).draw(
+                Rect::new(0.0, 0.0, 30.0, 27.0),
+                0,
+                &mut list,
+                &s,
+                &InputState::default(),
+            );
+            list.texts.iter().find(|t| t.content == "Chat").unwrap().x
+        };
+        assert_eq!(label_x(&forge), STRIP_PAD + 8.0);
+        assert_eq!(label_x(&overlay), STRIP_PAD + 12.0);
+    }
+
+    #[test]
     fn a_click_picks_an_enabled_other_tab() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let tabs = tabs();
         let strip = SpanTabs::new(&tabs);
-        let rect = Rect::new(0.0, 0.0, 400.0, SPAN_TABS_HEIGHT);
+        let rect = Rect::new(0.0, 0.0, 400.0, 27.0);
         let centre = |i: usize| {
             let slot = strip.slot(rect, i);
             (slot.x + slot.width * 0.5, 10.0)

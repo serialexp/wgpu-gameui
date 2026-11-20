@@ -33,9 +33,10 @@ const CARVE_ALPHA: u8 = 128;
 /// Icon key — a square key holding one Phosphor icon or text glyph (Forge
 /// `IconKey`).
 ///
-/// The design uses three sizes: [`IconKey::TOOLBAR`] (24), [`IconKey::STATUS`]
-/// (18, status-bar toggles) and [`IconKey::HEADER`] (17, dock and section
-/// headers, inline keys). The size is the face; the key's rect is one
+/// The design uses three sizes: [`IconKey::TOOLBAR`] (24), the theme's
+/// [`IconKey::status_size`] ([`StyleKey::KeyStatusSize`]: 18 in Forge, status-bar
+/// toggles) and its [`IconKey::header_size`] ([`StyleKey::KeyHeaderSize`]: 17
+/// in Forge, dock and section headers, inline keys). The size is the face; the key's rect is one
 /// [`StyleKey::Travel`] taller, because the face rests on its plinth and drops
 /// by `travel` while pressed or [`held`](IconKey::held) — the icon rides down
 /// with it.
@@ -48,8 +49,9 @@ const CARVE_ALPHA: u8 = 128;
 ///
 /// # Example
 /// ```ignore
-/// let [w, h] = IconKey::new(PhosphorIcon::Plus, IconKey::HEADER).outer_size(&styles);
-/// if IconKey::new(PhosphorIcon::Plus, IconKey::HEADER)
+/// let header = IconKey::header_size(&styles);
+/// let [w, h] = IconKey::new(PhosphorIcon::Plus, header).outer_size(&styles);
+/// if IconKey::new(PhosphorIcon::Plus, header)
 ///     .tone(Tone::Ghost)
 ///     .draw(Rect::new(x, y, w, h), &mut ctx)
 ///     .clicked
@@ -73,10 +75,21 @@ pub struct IconKey {
 impl IconKey {
     /// Toolbar key face size.
     pub const TOOLBAR: f32 = 24.0;
-    /// Status-bar toggle face size.
-    pub const STATUS: f32 = 18.0;
-    /// Dock / section header and inline key face size.
-    pub const HEADER: f32 = 17.0;
+    /// Where the glyph and icon sizing steps from the header band to the
+    /// status band (Forge's status key face).
+    const STATUS_STEP: f32 = 18.0;
+
+    /// The status-bar toggle face size, from the theme
+    /// ([`StyleKey::KeyStatusSize`]).
+    pub fn status_size(s: &StyleResolver) -> f32 {
+        s.scalar(StyleKey::KeyStatusSize)
+    }
+
+    /// The dock / section header and inline key face size, from the theme
+    /// ([`StyleKey::KeyHeaderSize`]).
+    pub fn header_size(s: &StyleResolver) -> f32 {
+        s.scalar(StyleKey::KeyHeaderSize)
+    }
 
     /// A default-tone key showing `icon` on a `size` px square face.
     #[cfg(feature = "phosphor-icons")]
@@ -188,7 +201,7 @@ impl IconKey {
     fn icon_box(face: f32) -> f32 {
         if face >= Self::TOOLBAR {
             face * 11.0 / 24.0
-        } else if face >= Self::STATUS {
+        } else if face >= Self::STATUS_STEP {
             10.0
         } else {
             face * 9.0 / 17.0
@@ -200,7 +213,7 @@ impl IconKey {
     fn glyph_size(face: f32) -> f32 {
         if face >= Self::TOOLBAR {
             12.0
-        } else if face >= Self::STATUS {
+        } else if face >= Self::STATUS_STEP {
             11.0
         } else {
             10.0
@@ -288,7 +301,7 @@ mod tests {
     /// Draw `key` at the origin in its outer size under `input`; returns the
     /// list and the response.
     fn draw(key: IconKey, input: &InputState) -> (DrawList, crate::Response) {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, input, 800.0, 600.0);
@@ -303,15 +316,35 @@ mod tests {
 
     #[test]
     fn outer_size_is_the_face_plus_travel() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let travel = theme.get(StyleKey::Travel).unwrap().as_scalar().unwrap();
-        for size in [IconKey::HEADER, IconKey::STATUS, IconKey::TOOLBAR] {
+        for size in [
+            IconKey::header_size(&s),
+            IconKey::status_size(&s),
+            IconKey::TOOLBAR,
+        ] {
             assert_eq!(
                 IconKey::glyph("+", size).outer_size(&s),
                 [size, size + travel]
             );
         }
+    }
+
+    #[test]
+    fn the_header_and_status_sizes_follow_the_theme() {
+        let forge = Theme::forge();
+        let f = StyleResolver::new(&forge);
+        assert_eq!(IconKey::header_size(&f), 17.0);
+        assert_eq!(IconKey::status_size(&f), 18.0);
+        let overlay = Theme::overlay();
+        let o = StyleResolver::new(&overlay);
+        assert_eq!(IconKey::header_size(&o), 28.0);
+        assert_eq!(IconKey::status_size(&o), 28.0);
+        assert_eq!(
+            IconKey::glyph("+", IconKey::header_size(&o)).outer_size(&o)[0],
+            28.0
+        );
     }
 
     #[test]
@@ -360,7 +393,7 @@ mod tests {
     #[cfg(feature = "phosphor-icons")]
     #[test]
     fn the_icon_drops_with_the_face_when_pressed_or_held() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let travel = theme.get(StyleKey::Travel).unwrap().as_scalar().unwrap();
         let key = IconKey::new(PhosphorIcon::Plus, 17.0);
         let rest = draw(key, &away()).0.icons_msdf[0].local.y;
@@ -376,7 +409,7 @@ mod tests {
     #[test]
     fn travel_and_radius_overrides_reach_the_key() {
         let key = IconKey::new(PhosphorIcon::X, 16.0).travel(1.0).radius(8.0);
-        let theme = Theme::default();
+        let theme = Theme::forge();
         assert_eq!(key.outer_size(&StyleResolver::new(&theme)), [16.0, 17.0]);
         let rest = draw(key, &away()).0.icons_msdf[0].local.y;
         let pressed = draw(key, &input_at(8.0, 8.0, true, false)).0.icons_msdf[0]
@@ -396,7 +429,7 @@ mod tests {
     #[cfg(feature = "phosphor-icons")]
     #[test]
     fn icon_ink_follows_the_tone_and_state() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let tint = |key: IconKey, input: &InputState| draw(key, input).0.icons_msdf[0].tint;
         let hover = input_at(8.0, 8.0, false, false);
@@ -425,7 +458,7 @@ mod tests {
 
     #[test]
     fn a_glyph_key_centres_its_glyph_at_the_design_size_and_ink() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         for (size, font) in [(15.0, 10.0), (17.0, 10.0), (18.0, 11.0), (24.0, 12.0)] {
             let key = IconKey::glyph("■", size).tone(Tone::Ghost);

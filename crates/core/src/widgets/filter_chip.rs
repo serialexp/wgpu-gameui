@@ -7,8 +7,6 @@ use crate::text::{TextBlock, vcentered_line_y};
 
 use super::{DrawContext, DrawList, FocusId, Pressable, material};
 
-/// The pill's height (`--h-filter-chip`).
-pub const FILTER_CHIP_HEIGHT: f32 = 18.0;
 /// Room left and right of the label (`padding: 2px 9px 3px`).
 const PAD_X: f32 = 9.0;
 /// Between the label and its count.
@@ -77,6 +75,12 @@ impl<'a> FilterChip<'a> {
         self
     }
 
+    /// The pill's height: the theme's [`StyleKey::ChipHeight`]
+    /// (`--h-filter-chip`).
+    pub fn height(s: &StyleResolver) -> f32 {
+        s.scalar(StyleKey::ChipHeight)
+    }
+
     fn count_text(&self) -> Option<String> {
         self.count.map(|n| n.to_string())
     }
@@ -94,10 +98,10 @@ impl<'a> FilterChip<'a> {
     }
 
     /// The pill drawn in `rect`: at its left, centred vertically, as wide as
-    /// [`width`](Self::width) and [`FILTER_CHIP_HEIGHT`] tall (both clamped
+    /// [`width`](Self::width) and [`height`](Self::height) tall (both clamped
     /// to `rect`).
     pub fn pill(&self, rect: Rect, list: &mut DrawList, s: &StyleResolver) -> Rect {
-        let h = FILTER_CHIP_HEIGHT.min(rect.height);
+        let h = Self::height(s).min(rect.height);
         let w = self.width(list, s).min(rect.width);
         Rect::new(rect.x, (rect.y + (rect.height - h) * 0.5).round(), w, h)
     }
@@ -184,7 +188,7 @@ mod tests {
     use crate::{FocusState, InputState, Theme};
 
     fn draw(rect: Rect, chip: &FilterChip, input: &InputState) -> (bool, DrawList) {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut focus = FocusState::new();
         let mut list = DrawList::new();
         let clicked = {
@@ -214,7 +218,7 @@ mod tests {
 
     #[test]
     fn a_click_asks_to_flip_either_way() {
-        let rect = Rect::new(10.0, 10.0, 60.0, FILTER_CHIP_HEIGHT);
+        let rect = Rect::new(10.0, 10.0, 60.0, 18.0);
         let click = click_at(14.0, 14.0);
         assert!(draw(rect, &FilterChip::new(".lvl").count(3), &click).0);
         assert!(draw(rect, &FilterChip::new(".lvl").on(true), &click).0);
@@ -231,15 +235,30 @@ mod tests {
 
     #[test]
     fn the_pill_sits_left_and_centred_at_its_own_width() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         let chip = FilterChip::new("all sessions");
         let pill = chip.pill(Rect::new(10.0, 0.0, 200.0, 28.0), &mut list, &s);
         assert_eq!(pill.x, 10.0);
         assert_eq!(pill.y, 5.0);
-        assert_eq!(pill.height, FILTER_CHIP_HEIGHT);
+        assert_eq!(pill.height, 18.0);
         assert_eq!(pill.width, chip.width(&mut list, &s));
+    }
+
+    #[test]
+    fn the_height_follows_the_theme() {
+        let forge = Theme::forge();
+        let overlay = Theme::overlay();
+        assert_eq!(FilterChip::height(&StyleResolver::new(&forge)), 18.0);
+        assert_eq!(FilterChip::height(&StyleResolver::new(&overlay)), 24.0);
+        let mut list = DrawList::new();
+        let pill = FilterChip::new("info").pill(
+            Rect::new(0.0, 0.0, 200.0, 40.0),
+            &mut list,
+            &StyleResolver::new(&overlay),
+        );
+        assert_eq!(pill.height, 24.0);
     }
 
     #[test]
@@ -258,7 +277,7 @@ mod tests {
         let (_, off) = draw(rect, &FilterChip::new("info"), &away());
         assert_eq!(
             on.chrome_instance(0).unwrap().bg,
-            Theme::default().accent_held_top
+            Theme::forge().accent_held_top
         );
         assert_ne!(
             on.chrome_instance(0).unwrap().bg,
@@ -268,7 +287,7 @@ mod tests {
 
     #[test]
     fn the_count_widens_the_chip() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         let bare = FilterChip::new(".png").width(&mut list, &s);

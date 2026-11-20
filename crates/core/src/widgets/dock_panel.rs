@@ -258,10 +258,12 @@ impl<'a> DockPanel<'a> {
         }
 
         // --- Tab buttons ---
-        // The design sizes each tab chip to its label with 7px horizontal
-        // padding, not to equal shares of the header width.
+        // The design sizes each tab chip to its label with the theme's
+        // horizontal padding (7px in Forge), not to equal shares of the header width.
         if !self.tabs.is_empty() {
-            let tab_pad_h = 7.0;
+            // Forge's 10 px tab token draws 7 px of label padding here (the
+            // rest is the chip's border and inner gap).
+            let tab_pad_h = s.scalar(StyleKey::TabPadX) - 3.0;
             let tab_gap = 2.0;
             let header_pad = 4.0; // left padding inside the header
 
@@ -536,6 +538,26 @@ mod tests {
         assert!((out.body.height - (rect.height - tab_h)).abs() < 0.01);
         assert!((out.body.x - rect.x).abs() < 0.01);
         assert!((out.body.width - rect.width).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_label_padding_follows_the_theme() {
+        let ts = tabs();
+        let label_x = |theme: &Theme| {
+            let mut state = DockPanelState::new(200.0);
+            let input = InputState::default();
+            let mut list = DrawList::new();
+            let mut focus = FocusState::new();
+            DockPanel::new(DockSide::Left, &ts).draw(
+                Rect::new(0.0, 0.0, 200.0, 150.0),
+                &mut state,
+                &mut ctx(&mut list, &mut focus, theme, &input),
+            );
+            list.texts.iter().find(|t| t.content == ts[0].label).unwrap().x
+        };
+        // header pad 4 + tab padding + 1 px border.
+        assert_eq!(label_x(&Theme::forge()), 4.0 + 7.0 + 1.0);
+        assert_eq!(label_x(&Theme::overlay()), 4.0 + 11.0 + 1.0);
     }
 
     #[test]

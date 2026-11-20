@@ -13,7 +13,6 @@ use super::menubar::{
     AccelPlatform, ActivatedItem, MAX_MENU_DEPTH, MenuItem, SubmenuSide, place_submenu,
 };
 
-const SHEET_PADDING: f32 = 3.0;
 const ROW_PADDING: f32 = 8.0;
 const CHECK_WIDTH: f32 = 10.0;
 const CHEVRON_WIDTH: f32 = 8.0;
@@ -78,6 +77,8 @@ pub struct ContextMenuState {
     depth_truncations: usize,
     /// The row height the open columns were last laid out with.
     row_h: f32,
+    /// The sheet padding (the theme's `SheetPadding`) they were laid out with.
+    sheet_pad: f32,
     up: bool,
     down: bool,
     left: bool,
@@ -201,7 +202,8 @@ impl ContextMenuState {
             if !rect.contains(x, y) {
                 continue;
             }
-            let mut top = rect.y + SHEET_PADDING;
+            let pad = self.sheet_pad;
+            let mut top = rect.y + pad;
             for item in items {
                 let height = if item.is_separator() {
                     SEPARATOR_HEIGHT
@@ -209,9 +211,9 @@ impl ContextMenuState {
                     self.row_h
                 };
                 let row = Rect::new(
-                    rect.x + SHEET_PADDING,
+                    rect.x + pad,
                     top,
-                    rect.width - SHEET_PADDING * 2.0,
+                    rect.width - pad * 2.0,
                     height,
                 );
                 if row.contains(x, y) {
@@ -336,6 +338,8 @@ impl ContextMenuState {
         // placed too before a click can be judged to be outside them all.
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
         self.row_h = row_h;
+        let pad = styles.scalar(StyleKey::SheetPadding).max(0.0);
+        self.sheet_pad = pad;
         layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
 
         if (self.cancel && self.open_path.is_empty())
@@ -389,7 +393,7 @@ impl ContextMenuState {
         layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
         let keyboard_handled =
             self.up || self.down || self.left || self.right || self.confirm || self.cancel;
-        if !keyboard_handled && reconcile_context_pointer(self, menu, &layer_input, row_h) {
+        if !keyboard_handled && reconcile_context_pointer(self, menu, &layer_input, row_h, pad) {
             layout_context_chain(self, layers, index, menu, styles, viewport, row_h);
         }
 
@@ -401,7 +405,7 @@ impl ContextMenuState {
                 draw_items = draw_items[parent].children();
             }
             let draw_rect = self.rects[draw_level];
-            let mut y = draw_rect.y + SHEET_PADDING;
+            let mut y = draw_rect.y + pad;
             for (item_index, item) in draw_items.iter().enumerate() {
                 let height = if item.is_separator() {
                     SEPARATOR_HEIGHT
@@ -409,9 +413,9 @@ impl ContextMenuState {
                     row_h
                 };
                 let row = Rect::new(
-                    draw_rect.x + SHEET_PADDING,
+                    draw_rect.x + pad,
                     y,
-                    draw_rect.width - SHEET_PADDING * 2.0,
+                    draw_rect.width - pad * 2.0,
                     height,
                 );
                 if item.is_enabled()
@@ -478,11 +482,12 @@ fn layout_context_chain(
     row_h: f32,
 ) {
     state.rects.truncate(1);
+    let pad = styles.scalar(StyleKey::SheetPadding).max(0.0);
     let mut items = menu.items;
     for level in 1..=state.open_path.len() {
         let parent_index = state.open_path[level - 1];
         let parent_rect = state.rects[level - 1];
-        let mut y = parent_rect.y + SHEET_PADDING;
+        let mut y = parent_rect.y + pad;
         for item in items.iter().take(parent_index) {
             y += if item.is_separator() {
                 SEPARATOR_HEIGHT
@@ -513,6 +518,7 @@ fn reconcile_context_pointer(
     menu: &ContextMenu<'_>,
     input: &InputState,
     row_h: f32,
+    pad: f32,
 ) -> bool {
     let point = (input.mouse_x, input.mouse_y);
     let mut items = menu.items;
@@ -525,7 +531,7 @@ fn reconcile_context_pointer(
         if !rect.contains(point.0, point.1) {
             continue;
         }
-        let mut y = rect.y + SHEET_PADDING;
+        let mut y = rect.y + pad;
         for (item_index, item) in items.iter().enumerate() {
             let height = if item.is_separator() {
                 SEPARATOR_HEIGHT
@@ -533,9 +539,9 @@ fn reconcile_context_pointer(
                 row_h
             };
             let row = Rect::new(
-                rect.x + SHEET_PADDING,
+                rect.x + pad,
                 y,
-                rect.width - SHEET_PADDING * 2.0,
+                rect.width - pad * 2.0,
                 height,
             );
             if item.is_enabled() && row.contains(point.0, point.1) {
@@ -629,7 +635,8 @@ fn measure_items(
     let mut label_width: f32 = 0.0;
     let mut hint_width: f32 = 0.0;
     let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
-    let mut height = SHEET_PADDING * 2.0;
+    let pad = styles.scalar(StyleKey::SheetPadding).max(0.0);
+    let mut height = pad * 2.0;
     for item in items {
         if item.is_separator() {
             height += SEPARATOR_HEIGHT;
@@ -642,7 +649,7 @@ fn measure_items(
         height += row_h;
     }
     let gap = if hint_width > 0.0 { 7.0 } else { 0.0 };
-    let width = (SHEET_PADDING * 2.0
+    let width = (pad * 2.0
         + ROW_PADDING * 2.0
         + CHECK_WIDTH
         + 7.0
@@ -700,9 +707,10 @@ fn paint_items(
     painter.paint_pre_content();
     let list = painter.draw_list();
     let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
-    let row_x = rect.x + SHEET_PADDING;
-    let row_w = rect.width - SHEET_PADDING * 2.0;
-    let mut y = rect.y + SHEET_PADDING;
+    let pad = styles.scalar(StyleKey::SheetPadding).max(0.0);
+    let row_x = rect.x + pad;
+    let row_w = rect.width - pad * 2.0;
+    let mut y = rect.y + pad;
     let mut hint = String::new();
     for (index, item) in items.iter().enumerate() {
         if item.is_separator() {
@@ -894,6 +902,20 @@ mod tests {
             &mut focus,
             viewport,
         );
+    }
+
+    #[test]
+    fn the_sheet_padding_follows_the_theme() {
+        let menu = ContextMenu::new(ITEMS);
+        for (theme, pad) in [(Theme::forge(), 3.0), (Theme::overlay(), 4.0)] {
+            assert_eq!(theme.sheet_padding, pad);
+            let mut state = ContextMenuState::new();
+            state.open_at(20.0, 20.0);
+            context_frame(&mut state, &menu, &theme, InputState::default(), 0.0);
+            let rect = state.rect().unwrap();
+            let expected = 2.0 * pad + 3.0 * theme.menu_row_height + SEPARATOR_HEIGHT;
+            assert_eq!(rect.height, expected);
+        }
     }
 
     #[test]
@@ -1102,7 +1124,7 @@ mod tests {
         let child = state.rects[1];
         let input = InputState {
             mouse_x: child.x + child.width / 2.0,
-            mouse_y: child.y + SHEET_PADDING + theme.menu_row_height / 2.0,
+            mouse_y: child.y + theme.sheet_padding + theme.menu_row_height / 2.0,
             mouse_clicked: true,
             mouse_down: true,
             ..Default::default()
@@ -1424,12 +1446,12 @@ mod tests {
             .unwrap()
             .as_scalar()
             .unwrap();
-        let row_y = |i: f32| rect.y + SHEET_PADDING + row_h * (i + 0.5);
+        let row_y = |i: f32| rect.y + theme.sheet_padding + row_h * (i + 0.5);
         let (reason, row) = state
             .hovered_reason(&menu, rect.x + 30.0, row_y(0.0))
             .expect("the disabled row's reason");
         assert_eq!(reason, "not available yet");
-        assert_eq!(row.y, rect.y + SHEET_PADDING);
+        assert_eq!(row.y, rect.y + theme.sheet_padding);
         assert_eq!(state.hovered_reason(&menu, rect.x + 30.0, row_y(1.0)), None);
         assert_eq!(state.hovered_reason(&menu, rect.x + 30.0, row_y(2.0)), None);
         assert_eq!(state.hovered_reason(&menu, rect.x - 5.0, row_y(0.0)), None);

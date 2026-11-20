@@ -1304,6 +1304,19 @@ fn the_press_that_opens_a_menu_does_not_select_a_row() {
 // -------------------------------------------------------- pointer integration
 
 #[test]
+fn the_sheet_padding_follows_the_theme() {
+    for (theme, pad) in [(Theme::forge(), 3.0), (Theme::overlay(), 4.0)] {
+        let mut rig = Rig::new();
+        rig.theme = theme;
+        rig.state.open_menu_at(MENUS, 0);
+        rig.settle();
+        let column = &rig.state.columns[0];
+        assert_eq!(column.sheet_padding, pad);
+        assert_eq!(column.rect.height, column.content_h + 2.0 * pad);
+    }
+}
+
+#[test]
 fn row_hover_opens_and_paints_a_menubar_submenu_immediately() {
     let mut rig = Rig::new();
     rig.state.open_menu_at(MENUS, 0);

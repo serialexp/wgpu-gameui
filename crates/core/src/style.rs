@@ -322,6 +322,54 @@ style_keys! {
     DockSplitterWidth("dock_splitter_width", Scalar),
     /// Height of a movable [`Window`](crate::Window)'s title strip, in pixels.
     WindowTitleHeight("window_title_height", Scalar),
+    /// Height of the status bar strip, in pixels (`--h-statusbar`).
+    StatusBarHeight("status_bar_height", Scalar),
+    /// Height of a document tab, in pixels (`--h-doc-tab`).
+    DocTabHeight("doc_tab_height", Scalar),
+    /// Width of a [`Toggle`](crate::Toggle) switch, in pixels (`--switch-w`).
+    SwitchWidth("switch_width", Scalar),
+    /// Height of a [`Toggle`](crate::Toggle) switch, in pixels (`--switch-h`); its knob is 4 px smaller.
+    SwitchHeight("switch_height", Scalar),
+    /// Height of a [`FilterChip`](crate::FilterChip) pill, in pixels (`--h-chip`).
+    ChipHeight("chip_height", Scalar),
+    /// Side of a dock-header or inline ghost key, in pixels (`--key-header`).
+    KeyHeaderSize("key_header_size", Scalar),
+    /// Side of a status-bar toggle key, in pixels (`--key-status`).
+    KeyStatusSize("key_status_size", Scalar),
+    /// Thickness of a slider or scrubber track, in pixels (`--slider-track`).
+    SliderTrack("slider_track", Scalar),
+    /// Width of a scrollbar gutter, in pixels (`--scrollbar`).
+    ScrollbarWidth("scrollbar_width", Scalar),
+    /// Inner padding of a [`Panel`](crate::Panel), in pixels (`--pad-panel`).
+    PanelPadding("panel_padding", Scalar),
+    /// Gap between the sections of a panel, in pixels (`--gap-section`).
+    SectionGap("section_gap", Scalar),
+    /// Padding inside a menu or popup sheet, in pixels (`--pad-sheet`).
+    SheetPadding("sheet_padding", Scalar),
+    /// Width of the inspector column, in pixels (`--inspector-w`).
+    InspectorWidth("inspector_width", Scalar),
+    /// Width of a property row's label column, in pixels (`--inspector-label`).
+    InspectorLabelWidth("inspector_label_width", Scalar),
+    /// Space left and right of a tab's label, in pixels (`--tab-pad-x`).
+    TabPadX("tab_pad_x", Scalar),
+    /// Gap between neighbouring keys, in pixels (`--gap-keys`).
+    KeyGap("key_gap", Scalar),
+    /// Gap between neighbouring fields, in pixels (`--gap-fields`).
+    FieldGap("field_gap", Scalar),
+    /// Gap between neighbouring chips, in pixels (`--gap-chips`).
+    ChipGap("chip_gap", Scalar),
+    /// Gap between the cells of a grid, in pixels (`--gap-grid`).
+    GridGap("grid_gap", Scalar),
+    /// Horizontal padding inside a well, in pixels (`--pad-well`).
+    WellPadX("well_pad_x", Scalar),
+    /// Vertical padding inside a well, in pixels (`--pad-well`).
+    WellPadY("well_pad_y", Scalar),
+    /// Horizontal padding inside a key, in pixels (`--pad-key`).
+    KeyPadX("key_pad_x", Scalar),
+    /// Vertical padding inside a key, in pixels (`--pad-key`).
+    KeyPadY("key_pad_y", Scalar),
+    /// Corner radius of a pill (chips, tags, count bubble, switch), in pixels (`--radius-pill`). Drawers clamp it to half the shorter side.
+    PillRadius("pill_radius", Scalar),
     // --- Forge roles (colors) ---
     /// Search-match highlight on a dark surface (Forge `--accent-match`).
     AccentMatch("accent_match", Color),

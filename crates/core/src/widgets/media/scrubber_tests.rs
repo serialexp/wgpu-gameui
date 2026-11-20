@@ -185,6 +185,23 @@ fn the_played_fill_reaches_the_value_over_the_buffered_layer() {
 }
 
 #[test]
+fn the_track_and_knob_follow_the_themes_slider_track() {
+    // (well height, knob diameter) of a drawn scrubber under `theme`.
+    let sizes = |theme: &Theme| {
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let input = away();
+        let mut ctx = DrawContext::new(&mut list, &mut focus, theme, &input, 800.0, 600.0);
+        Scrubber::new(10.0).draw(5.0, 7, &mut DragCapture::new(), RECT, &mut ctx);
+        let knob = fills(&list, theme.knob_top);
+        assert_eq!(knob.len(), 1);
+        (list.chrome_instance(0).unwrap().rect[3], knob[0][3])
+    };
+    assert_eq!(sizes(&Theme::forge()), (5.0, 10.0));
+    assert_eq!(sizes(&Theme::overlay()), (8.0, 13.0));
+}
+
+#[test]
 fn the_knob_shows_unless_asked_not_to() {
     let mut capture = DragCapture::new();
     let mut focus = FocusState::new();

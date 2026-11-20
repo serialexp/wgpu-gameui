@@ -225,7 +225,9 @@ fn x_rect(chip: Rect) -> Rect {
 /// One tag: a raised pill with its text and a ×. Returns whether the
 /// pointer is on the ×.
 fn draw_chip(tag: &str, chip: Rect, list: &mut DrawList, s: &StyleResolver, on_x: bool) -> bool {
-    let radius = chip.height * 0.5;
+    let radius = s
+        .scalar(StyleKey::PillRadius)
+        .min(chip.height.min(chip.width) * 0.5);
     let base = s.color(StyleKey::Button);
     let top = material::sheen_over(base, s.color(StyleKey::FaceTop));
     let bottom = material::sheen_over(base, s.color(StyleKey::FaceBottom));

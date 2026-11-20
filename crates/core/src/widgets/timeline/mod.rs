@@ -33,8 +33,6 @@ const INDENT: f32 = 12.0;
 const KEY: f32 = 19.0;
 /// Width of the play key.
 const PLAY_W: f32 = 26.0;
-/// Gap between transport keys.
-const KEY_GAP: f32 = 3.0;
 /// Transport strip padding: top, right, bottom, left.
 const STRIP_PAD: [f32; 4] = [4.0, 6.0, 4.0, 8.0];
 /// Horizontal padding of a transport text key.
@@ -1232,10 +1230,12 @@ impl Timeline {
         let y = strip.y + STRIP_PAD[0];
         let h = KEY + travel;
         let [lo, hi] = state.bounds(self.length);
+        // Gap between transport keys: the theme's `--gap-keys`.
+        let key_gap = s.scalar(StyleKey::KeyGap);
         let mut x = strip.x + STRIP_PAD[3];
         let key = |x: &mut f32, w: f32| {
             let r = Rect::new(*x, y, w, h);
-            *x += w + KEY_GAP;
+            *x += w + key_gap;
             r
         };
         let first = key(&mut x, KEY);
@@ -1270,7 +1270,7 @@ impl Timeline {
         let rkey = |x: &mut f32, w: f32| {
             *x -= w;
             let r = Rect::new(*x, y, w, h);
-            *x -= KEY_GAP;
+            *x -= key_gap;
             r
         };
         let fit_w = text_key_width(ctx.draw_list, &s, "Fit");
@@ -1302,7 +1302,7 @@ impl Timeline {
         }
 
         // Frame field and readouts.
-        x += 8.0 - KEY_GAP;
+        x += 8.0 - key_gap;
         let field = Rect::new(x, y, FIELD_W, KEY);
         let number = NumberInput::new()
             .with_range(0.0, self.length as f64)

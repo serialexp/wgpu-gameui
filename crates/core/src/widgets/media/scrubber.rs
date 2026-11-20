@@ -13,10 +13,9 @@ use super::super::material::draw_inset_shadow;
 use super::super::{DragCapture, DragId, DrawContext, DrawList, FocusId};
 use super::format_time;
 
-/// `--slider-track`.
-const TRACK: f32 = 5.0;
-/// The knob's diameter: `calc(var(--slider-track) + 5px)`.
-const KNOB: f32 = TRACK + 5.0;
+/// How much wider than the track (`--slider-track`) the knob is:
+/// `calc(var(--slider-track) + 5px)`.
+const KNOB_OVER_TRACK: f32 = 5.0;
 /// The well: `rgba(0,0,0,0.55)`.
 const WELL: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 /// The buffered layer: `rgba(255,255,255,0.2)`.
@@ -288,21 +287,26 @@ impl<'a> Scrubber<'a> {
         pointer: Option<f32>,
         dragging: bool,
     ) -> Option<Rect> {
+        let thickness = s.scalar(StyleKey::SliderTrack);
+        let knob_d = thickness + KNOB_OVER_TRACK;
         let track = Rect::new(
             rect.x,
-            (rect.y + (rect.height - TRACK) * 0.5).round(),
+            (rect.y + (rect.height - thickness) * 0.5).round(),
             rect.width,
-            TRACK,
+            thickness,
         );
-        list.chrome_rect(track, 3.0, 1.0, WELL, s.color(StyleKey::InputBorder));
+        // 3 on Forge's 5px rail; a thicker rail rounds fully.
+        let radius = 3.0_f32.max(thickness * 0.5);
+        list.chrome_rect(track, radius, 1.0, WELL, s.color(StyleKey::InputBorder));
         draw_inset_shadow(list, s, track, s.scalar(StyleKey::InnerShadowDepth), 1.0);
         let inner = track.inset(1.0);
+        let layer_radius = 2.0_f32.max(radius - 1.0);
         let layer = |list: &mut DrawList, upto: f32, color: [f32; 4]| {
             let width = inner.width * self.fraction(upto);
             if width > 0.0 {
                 list.chrome_rect(
                     Rect::new(inner.x, inner.y, width, inner.height),
-                    2.0,
+                    layer_radius,
                     0.0,
                     color,
                     [0.0; 4],
@@ -327,7 +331,7 @@ impl<'a> Scrubber<'a> {
             };
             list.chrome_rect_gradient(
                 Rect::new(inner.x, inner.y, width, inner.height),
-                2.0,
+                layer_radius,
                 0.0,
                 s.color(top),
                 s.color(bottom),
@@ -337,17 +341,22 @@ impl<'a> Scrubber<'a> {
         if !(self.knob && self.enabled) {
             return None;
         }
-        let center = (inner.x + width, track.y + TRACK * 0.5);
-        let knob = Rect::new(center.0 - KNOB * 0.5, center.1 - KNOB * 0.5, KNOB, KNOB);
+        let center = (inner.x + width, track.y + thickness * 0.5);
+        let knob = Rect::new(
+            center.0 - knob_d * 0.5,
+            center.1 - knob_d * 0.5,
+            knob_d,
+            knob_d,
+        );
         // The knob's face; a dragged knob turns it over, lit from below.
         let (lit, shaded) = (s.color(StyleKey::KnobTop), s.color(StyleKey::KnobBottom));
         let (top, bottom) = if dragging {
-            list.circle(center, KNOB * 0.5 + 2.0, s.color(StyleKey::AccentRing));
+            list.circle(center, knob_d * 0.5 + 2.0, s.color(StyleKey::AccentRing));
             (shaded, lit)
         } else {
             (lit, shaded)
         };
-        list.chrome_rect_gradient(knob, KNOB * 0.5, 1.0, top, bottom, KNOB_EDGE);
+        list.chrome_rect_gradient(knob, knob_d * 0.5, 1.0, top, bottom, KNOB_EDGE);
         Some(knob)
     }
 }

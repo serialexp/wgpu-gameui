@@ -189,7 +189,7 @@ impl ColorSeed {
 
 /// Sizes [`ThemeSeeds::density`] scales: paddings, gaps, control and row
 /// heights, toolbar and dock metrics.
-const DENSITY_KEYS: [StyleKey; 14] = [
+const DENSITY_KEYS: [StyleKey; 37] = [
     StyleKey::Padding,
     StyleKey::Spacing,
     StyleKey::ButtonHeight,
@@ -204,6 +204,29 @@ const DENSITY_KEYS: [StyleKey; 14] = [
     StyleKey::DockSplitterWidth,
     StyleKey::WindowTitleHeight,
     StyleKey::ListRowHeight,
+    StyleKey::StatusBarHeight,
+    StyleKey::DocTabHeight,
+    StyleKey::SwitchWidth,
+    StyleKey::SwitchHeight,
+    StyleKey::ChipHeight,
+    StyleKey::KeyHeaderSize,
+    StyleKey::KeyStatusSize,
+    StyleKey::SliderTrack,
+    StyleKey::ScrollbarWidth,
+    StyleKey::PanelPadding,
+    StyleKey::SectionGap,
+    StyleKey::SheetPadding,
+    StyleKey::InspectorWidth,
+    StyleKey::InspectorLabelWidth,
+    StyleKey::TabPadX,
+    StyleKey::KeyGap,
+    StyleKey::FieldGap,
+    StyleKey::ChipGap,
+    StyleKey::GridGap,
+    StyleKey::WellPadX,
+    StyleKey::WellPadY,
+    StyleKey::KeyPadX,
+    StyleKey::KeyPadY,
 ];
 
 /// The few values a preset derives the whole theme from.
@@ -322,6 +345,7 @@ impl ThemeSeeds {
             let k = self.radius_scale.max(0.0);
             theme.border_radius *= k;
             theme.panel_radius *= k;
+            theme.pill_radius *= k;
             theme.chrome.map_corner_radii(|radii| {
                 *radii = CornerRadii::new(
                     radii.top_left * k,

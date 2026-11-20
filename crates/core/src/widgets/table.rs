@@ -222,7 +222,7 @@ impl<'a> Table<'a> {
 
         // `begin` eases the drawn offset toward the target and clamps it, so
         // culling and hit-testing read the offset after it, not before.
-        let view = ScrollView::new(content_rect).vertical_only();
+        let view = ScrollView::new(content_rect).vertical_only().themed(style);
         let begun = view.begin(scroll, list, input);
         let scroll_y = scroll.offset[1];
         {

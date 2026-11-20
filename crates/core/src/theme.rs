@@ -130,6 +130,54 @@ pub struct Theme {
     pub dock_splitter_width: f32,
     /// Height of a movable window's title strip, in pixels.
     pub window_title_height: f32,
+    /// Height of the status bar strip, in pixels (`--h-statusbar`).
+    pub status_bar_height: f32,
+    /// Height of a document tab, in pixels (`--h-doc-tab`).
+    pub doc_tab_height: f32,
+    /// Width of a [`Toggle`](crate::Toggle) switch, in pixels (`--switch-w`).
+    pub switch_width: f32,
+    /// Height of a [`Toggle`](crate::Toggle) switch, in pixels (`--switch-h`); its knob is 4 px smaller.
+    pub switch_height: f32,
+    /// Height of a [`FilterChip`](crate::FilterChip) pill, in pixels (`--h-chip`).
+    pub chip_height: f32,
+    /// Side of a dock-header or inline ghost key, in pixels (`--key-header`).
+    pub key_header_size: f32,
+    /// Side of a status-bar toggle key, in pixels (`--key-status`).
+    pub key_status_size: f32,
+    /// Thickness of a slider or scrubber track, in pixels (`--slider-track`).
+    pub slider_track: f32,
+    /// Width of a scrollbar gutter, in pixels (`--scrollbar`).
+    pub scrollbar_width: f32,
+    /// Inner padding of a [`Panel`](crate::Panel), in pixels (`--pad-panel`).
+    pub panel_padding: f32,
+    /// Gap between the sections of a panel, in pixels (`--gap-section`).
+    pub section_gap: f32,
+    /// Padding inside a menu or popup sheet, in pixels (`--pad-sheet`).
+    pub sheet_padding: f32,
+    /// Width of the inspector column, in pixels (`--inspector-w`).
+    pub inspector_width: f32,
+    /// Width of a property row's label column, in pixels (`--inspector-label`).
+    pub inspector_label_width: f32,
+    /// Space left and right of a tab's label, in pixels (`--tab-pad-x`).
+    pub tab_pad_x: f32,
+    /// Gap between neighbouring keys, in pixels (`--gap-keys`).
+    pub key_gap: f32,
+    /// Gap between neighbouring fields, in pixels (`--gap-fields`).
+    pub field_gap: f32,
+    /// Gap between neighbouring chips, in pixels (`--gap-chips`).
+    pub chip_gap: f32,
+    /// Gap between the cells of a grid, in pixels (`--gap-grid`).
+    pub grid_gap: f32,
+    /// Horizontal padding inside a well, in pixels (`--pad-well`).
+    pub well_pad_x: f32,
+    /// Vertical padding inside a well, in pixels (`--pad-well`).
+    pub well_pad_y: f32,
+    /// Horizontal padding inside a key, in pixels (`--pad-key`).
+    pub key_pad_x: f32,
+    /// Vertical padding inside a key, in pixels (`--pad-key`).
+    pub key_pad_y: f32,
+    /// Corner radius of a pill (chips, tags, count bubble, switch), in pixels (`--radius-pill`). Drawers clamp it to half the shorter side.
+    pub pill_radius: f32,
 
     /// Hover/press transition duration in seconds. The default `0.0` switches
     /// colors instantly, as the Forge design does; a positive value opts into
@@ -434,6 +482,30 @@ impl Theme {
             dock_tab_height: 24.0,
             dock_splitter_width: 6.0,
             window_title_height: 24.0,
+            status_bar_height: 26.0,
+            doc_tab_height: 27.0,
+            switch_width: 28.0,
+            switch_height: 15.0,
+            chip_height: 18.0,
+            key_header_size: 17.0,
+            key_status_size: 18.0,
+            slider_track: 5.0,
+            scrollbar_width: 13.0,
+            panel_padding: 14.0,
+            section_gap: 11.0,
+            sheet_padding: 3.0,
+            inspector_width: 272.0,
+            inspector_label_width: 52.0,
+            tab_pad_x: 10.0,
+            key_gap: 3.0,
+            field_gap: 6.0,
+            chip_gap: 5.0,
+            grid_gap: 18.0,
+            well_pad_x: 7.0,
+            well_pad_y: 5.0,
+            key_pad_x: 10.0,
+            key_pad_y: 6.0,
+            pill_radius: 9.0,
             // Forge: state changes are instant (smooth scrolling is the one
             // motion, and it does not read this).
             animation_duration: 0.0,
@@ -836,6 +908,30 @@ impl Theme {
             DockTabHeight => StyleValue::Scalar(self.dock_tab_height),
             DockSplitterWidth => StyleValue::Scalar(self.dock_splitter_width),
             WindowTitleHeight => StyleValue::Scalar(self.window_title_height),
+            StatusBarHeight => StyleValue::Scalar(self.status_bar_height),
+            DocTabHeight => StyleValue::Scalar(self.doc_tab_height),
+            SwitchWidth => StyleValue::Scalar(self.switch_width),
+            SwitchHeight => StyleValue::Scalar(self.switch_height),
+            ChipHeight => StyleValue::Scalar(self.chip_height),
+            KeyHeaderSize => StyleValue::Scalar(self.key_header_size),
+            KeyStatusSize => StyleValue::Scalar(self.key_status_size),
+            SliderTrack => StyleValue::Scalar(self.slider_track),
+            ScrollbarWidth => StyleValue::Scalar(self.scrollbar_width),
+            PanelPadding => StyleValue::Scalar(self.panel_padding),
+            SectionGap => StyleValue::Scalar(self.section_gap),
+            SheetPadding => StyleValue::Scalar(self.sheet_padding),
+            InspectorWidth => StyleValue::Scalar(self.inspector_width),
+            InspectorLabelWidth => StyleValue::Scalar(self.inspector_label_width),
+            TabPadX => StyleValue::Scalar(self.tab_pad_x),
+            KeyGap => StyleValue::Scalar(self.key_gap),
+            FieldGap => StyleValue::Scalar(self.field_gap),
+            ChipGap => StyleValue::Scalar(self.chip_gap),
+            GridGap => StyleValue::Scalar(self.grid_gap),
+            WellPadX => StyleValue::Scalar(self.well_pad_x),
+            WellPadY => StyleValue::Scalar(self.well_pad_y),
+            KeyPadX => StyleValue::Scalar(self.key_pad_x),
+            KeyPadY => StyleValue::Scalar(self.key_pad_y),
+            PillRadius => StyleValue::Scalar(self.pill_radius),
             Travel => StyleValue::Scalar(self.travel),
             InnerShadowDepth => StyleValue::Scalar(self.inner_shadow_depth),
             // Forge roles
@@ -971,6 +1067,30 @@ impl Theme {
             (DockTabHeight, StyleValue::Scalar(s)) => self.dock_tab_height = s,
             (DockSplitterWidth, StyleValue::Scalar(s)) => self.dock_splitter_width = s,
             (WindowTitleHeight, StyleValue::Scalar(s)) => self.window_title_height = s,
+            (StatusBarHeight, StyleValue::Scalar(s)) => self.status_bar_height = s,
+            (DocTabHeight, StyleValue::Scalar(s)) => self.doc_tab_height = s,
+            (SwitchWidth, StyleValue::Scalar(s)) => self.switch_width = s,
+            (SwitchHeight, StyleValue::Scalar(s)) => self.switch_height = s,
+            (ChipHeight, StyleValue::Scalar(s)) => self.chip_height = s,
+            (KeyHeaderSize, StyleValue::Scalar(s)) => self.key_header_size = s,
+            (KeyStatusSize, StyleValue::Scalar(s)) => self.key_status_size = s,
+            (SliderTrack, StyleValue::Scalar(s)) => self.slider_track = s,
+            (ScrollbarWidth, StyleValue::Scalar(s)) => self.scrollbar_width = s,
+            (PanelPadding, StyleValue::Scalar(s)) => self.panel_padding = s,
+            (SectionGap, StyleValue::Scalar(s)) => self.section_gap = s,
+            (SheetPadding, StyleValue::Scalar(s)) => self.sheet_padding = s,
+            (InspectorWidth, StyleValue::Scalar(s)) => self.inspector_width = s,
+            (InspectorLabelWidth, StyleValue::Scalar(s)) => self.inspector_label_width = s,
+            (TabPadX, StyleValue::Scalar(s)) => self.tab_pad_x = s,
+            (KeyGap, StyleValue::Scalar(s)) => self.key_gap = s,
+            (FieldGap, StyleValue::Scalar(s)) => self.field_gap = s,
+            (ChipGap, StyleValue::Scalar(s)) => self.chip_gap = s,
+            (GridGap, StyleValue::Scalar(s)) => self.grid_gap = s,
+            (WellPadX, StyleValue::Scalar(s)) => self.well_pad_x = s,
+            (WellPadY, StyleValue::Scalar(s)) => self.well_pad_y = s,
+            (KeyPadX, StyleValue::Scalar(s)) => self.key_pad_x = s,
+            (KeyPadY, StyleValue::Scalar(s)) => self.key_pad_y = s,
+            (PillRadius, StyleValue::Scalar(s)) => self.pill_radius = s,
             (Travel, StyleValue::Scalar(s)) => self.travel = s,
             (InnerShadowDepth, StyleValue::Scalar(s)) => self.inner_shadow_depth = s,
             (Ink(role), StyleValue::Color(c)) => self.ink[role as usize] = c,

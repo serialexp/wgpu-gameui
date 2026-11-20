@@ -1,6 +1,6 @@
 //! Toggle switch — the design's slide switch (Gallery III "toggle").
 //!
-//! A 28×15 pill: sunken dark trough when off, solid accent face when on, with
+//! A pill (28×15 in Forge, sized by `SwitchWidth`/`SwitchHeight`): sunken dark trough when off, solid accent face when on, with
 //! a light circular knob sliding between the ends. Click (or Space/Enter when
 //! focused) flips it.
 
@@ -10,11 +10,6 @@ use crate::text::TextBlock;
 
 use super::material::draw_inset_shadow;
 use super::{DrawContext, DrawList, FocusId};
-
-/// Width of the switch pill, in pixels.
-const SWITCH_W: f32 = 28.0;
-/// Height of the switch pill, in pixels.
-const SWITCH_H: f32 = 15.0;
 
 /// A toggle switch widget. Persistent state (`on`) is caller-owned.
 #[derive(Clone)]
@@ -54,12 +49,16 @@ impl Toggle {
 
     /// Natural size: the switch, plus the label when set.
     pub fn intrinsic_size(&self, list: &mut DrawList, s: &StyleResolver) -> (f32, f32) {
-        let mut w = SWITCH_W;
+        let mut w = s.scalar(StyleKey::SwitchWidth);
         if let Some(label) = &self.label {
             let block = s.text_block(label, 0.0, 0.0);
             w += 6.0 + list.measure_block(&block).0;
         }
-        (w, SWITCH_H.max(s.scalar(StyleKey::FontSize)))
+        (
+            w,
+            s.scalar(StyleKey::SwitchHeight)
+                .max(s.scalar(StyleKey::FontSize)),
+        )
     }
 
     /// Draw the switch; returns the new state.
@@ -70,11 +69,12 @@ impl Toggle {
         );
         let input = ctx.input;
         let s = ctx.styles();
+        let switch_h = s.scalar(StyleKey::SwitchHeight);
         let switch_rect = Rect::new(
             rect.x,
             rect.y,
-            SWITCH_W.min(rect.width),
-            SWITCH_H.min(rect.height),
+            s.scalar(StyleKey::SwitchWidth).min(rect.width),
+            switch_h.min(rect.height),
         );
 
         // Hit test the whole allocation (switch + label row).
@@ -85,7 +85,10 @@ impl Toggle {
         let clicked = hovered && input.mouse_clicked;
 
         let list = &mut *ctx.draw_list;
-        let radius = SWITCH_H * 0.5;
+        // A pill: the theme's radius, never more than half the shorter side.
+        let radius = s
+            .scalar(StyleKey::PillRadius)
+            .min(switch_rect.width.min(switch_rect.height) * 0.5);
         if on {
             let face = s.color(StyleKey::AccentFaceBottom);
             list.chrome_rect(switch_rect, radius, 1.0, face, [0.0, 0.0, 0.0, 0.65]);
@@ -97,9 +100,9 @@ impl Toggle {
         // the toggle's depth cue regardless of state.
         draw_inset_shadow(list, &s, switch_rect, 3.0, 1.0);
 
-        // Knob: 11×11 disc at the active end with the knob's vertical
-        // gradient, a 1px black border, and an inset highlight + drop shadow.
-        let knob_d = SWITCH_H - 4.0; // 11px knob in a 15px track
+        // Knob: a disc (height - 4: 11px in Forge's 15px track) at the active
+        // end with the knob's vertical gradient and a 1px black border.
+        let knob_d = switch_h - 4.0;
         let margin = 2.0;
         let knob_x = if on {
             switch_rect.x + switch_rect.width - knob_d - margin
@@ -187,6 +190,28 @@ mod tests {
             mouse_clicked: true,
             ..Default::default()
         }
+    }
+
+    /// The first chrome instance's (width, height, radius) for a drawn switch.
+    fn trough(theme: &Theme) -> (f32, f32, f32) {
+        let input = InputState::default();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        Toggle::new().draw(
+            true,
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            &mut ctx(&mut list, &mut focus, theme, &input),
+        );
+        let c = list.chrome_instance(0).unwrap();
+        (c.rect[2], c.rect[3], c.radii[0])
+    }
+
+    #[test]
+    fn switch_size_and_pill_radius_come_from_the_theme() {
+        assert_eq!(trough(&Theme::forge()), (28.0, 15.0, 7.5));
+        let (w, h, r) = trough(&Theme::overlay());
+        assert_eq!((w, h), (46.0, 26.0));
+        assert_eq!(r, 13.0, "fully round: clamped to half the height");
     }
 
     #[test]

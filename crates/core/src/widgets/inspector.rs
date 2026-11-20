@@ -12,8 +12,6 @@ use super::{
     PropertyStack, ScrollState, ScrollView,
 };
 
-/// The panel's width (`--inspector-w`).
-pub const INSPECTOR_WIDTH: f32 = 272.0;
 /// The tallest the body's content gets before it scrolls (Forge
 /// `maxBodyHeight`). The body's padding comes on top.
 pub const INSPECTOR_MAX_BODY_HEIGHT: f32 = 452.0;
@@ -124,8 +122,10 @@ pub struct InspectorOutput {
 /// ```ignore
 /// let inspector = Inspector::new(InspectorSelection::Single { name: "Crate_01", path: Some("World / Props") })
 ///     .dirty(edited);
-/// let h = inspector.height(INSPECTOR_WIDTH, &state, ctx.draw_list, &ctx.styles());
-/// let out = inspector.draw_with(Rect::new(x, y, INSPECTOR_WIDTH, h), &mut state, &mut ctx, |body, ctx| {
+/// let s = ctx.styles();
+/// let w = s.scalar(StyleKey::InspectorWidth); // the theme's panel width
+/// let h = inspector.height(w, &state, ctx.draw_list, &s);
+/// let out = inspector.draw_with(Rect::new(x, y, w, h), &mut state, &mut ctx, |body, ctx| {
 ///     PropertyGroup::new("Transform").draw_in(body, &mut open, ctx, |rows, ctx| { /* rows */ });
 /// });
 /// ```
@@ -446,7 +446,7 @@ impl<'a> Inspector<'a> {
         });
 
         // Pin and close, at the right.
-        let key = |glyph| IconKey::glyph(glyph, IconKey::HEADER).tone(Tone::Ghost);
+        let key = |glyph| IconKey::glyph(glyph, IconKey::header_size(&s)).tone(Tone::Ghost);
         let [key_w, key_h] = key("×").outer_size(&s);
         let key_y = header.y + ((row_h - key_h) * 0.5).round();
         let close_x = header.right() - HEADER_PAD - key_w;
@@ -643,6 +643,20 @@ mod tests {
     };
     /// The surface's border.
     const B: f32 = 1.0;
+    /// Forge's `InspectorWidth`, the width every test frame is drawn at.
+    const INSPECTOR_WIDTH: f32 = 272.0;
+
+    #[test]
+    fn the_theme_sets_the_recommended_width() {
+        assert_eq!(
+            StyleResolver::new(&Theme::forge()).scalar(StyleKey::InspectorWidth),
+            INSPECTOR_WIDTH
+        );
+        assert_eq!(
+            StyleResolver::new(&Theme::overlay()).scalar(StyleKey::InspectorWidth),
+            340.0
+        );
+    }
 
     fn at(x: f32, y: f32) -> InputState {
         InputState {
@@ -664,7 +678,7 @@ mod tests {
         at(-50.0, -50.0)
     }
 
-    /// Draw `insp` at the origin, [`INSPECTOR_WIDTH`] wide and as tall as
+    /// Draw `insp` at the origin, `INSPECTOR_WIDTH` wide and as tall as
     /// its [`height`](Inspector::height). Returns the output, the list and
     /// the rect.
     fn frame(
@@ -855,7 +869,7 @@ mod tests {
     fn the_header_keys_pin_and_close() {
         let theme = Theme::forge();
         let s = styles(&theme);
-        let [w, h] = IconKey::glyph("×", IconKey::HEADER)
+        let [w, h] = IconKey::glyph("×", IconKey::header_size(&s))
             .tone(Tone::Ghost)
             .outer_size(&s);
         let close = [INSPECTOR_WIDTH - B - HEADER_PAD - w * 0.5, B + h * 0.5];

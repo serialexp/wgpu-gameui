@@ -1,4 +1,5 @@
-//! Status bar — the design's 26px bottom strip (Menu Bar sheet).
+//! Status bar — the design's bottom strip (Menu Bar sheet), one
+//! [`StyleKey::StatusBarHeight`] tall.
 //!
 //! Hairline-separated zones: the first zone stretches, later zones size to
 //! their content and read as hairline-divided cells. Callers compose text,
@@ -7,12 +8,15 @@
 
 use crate::chrome::Edge;
 use crate::layout::Rect;
-use crate::style::StyleKey;
+use crate::style::{StyleKey, StyleResolver};
 
 use super::DrawContext;
 
-/// Height of one status strip, in pixels (the design's 26px bar).
-pub const STATUS_BAR_HEIGHT: f32 = 26.0;
+/// Height of one status strip, in pixels: the theme's
+/// [`StyleKey::StatusBarHeight`] (26 in Forge, 36 in Overlay).
+pub fn status_bar_height(s: &StyleResolver) -> f32 {
+    s.scalar(StyleKey::StatusBarHeight)
+}
 
 /// One cell of the status bar.
 pub struct StatusCell<'a> {
@@ -158,14 +162,22 @@ mod tests {
     use crate::{Background, DrawList, FocusState, InputState, StyleOverlay, Theme};
 
     #[test]
+    fn the_height_follows_the_theme() {
+        let forge = Theme::forge();
+        let overlay = Theme::overlay();
+        assert_eq!(status_bar_height(&StyleResolver::new(&forge)), 26.0);
+        assert_eq!(status_bar_height(&StyleResolver::new(&overlay)), 36.0);
+    }
+
+    #[test]
     fn first_cell_stretches_and_dividers_land_between_cells() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let input = InputState::default();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
         draw(
-            Rect::new(0.0, 0.0, 300.0, STATUS_BAR_HEIGHT),
+            Rect::new(0.0, 0.0, 300.0, 26.0),
             &[
                 StatusCell::text("Ready"),
                 StatusCell::text("118 fps"),
@@ -198,7 +210,7 @@ mod tests {
 
     #[test]
     fn typed_overlay_reaches_status_surface_lines_and_dividers() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut chrome = theme.chrome.status_bar;
         chrome.surface.background = Background::Solid([0.12, 0.23, 0.34, 1.0]);
         chrome.lines[0].style.color = [0.21, 0.32, 0.43, 1.0];
@@ -212,7 +224,7 @@ mod tests {
             .with_style(&overlay);
 
         draw(
-            Rect::new(0.0, 0.0, 200.0, STATUS_BAR_HEIGHT),
+            Rect::new(0.0, 0.0, 200.0, 26.0),
             &[StatusCell::text("Ready"), StatusCell::text("60 fps")],
             &mut ctx,
         );
@@ -236,13 +248,13 @@ mod tests {
 
     #[test]
     fn highlight_cells_resolve_bright_text() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let input = InputState::default();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
         draw(
-            Rect::new(0.0, 0.0, 200.0, STATUS_BAR_HEIGHT),
+            Rect::new(0.0, 0.0, 200.0, 26.0),
             &[StatusCell::text("err").highlight()],
             &mut ctx,
         );

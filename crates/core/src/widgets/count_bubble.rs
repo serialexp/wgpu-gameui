@@ -3,7 +3,7 @@
 use crate::color::{HUE_DANGER, oklch, rgb8};
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
-use crate::style::StyleResolver;
+use crate::style::{StyleKey, StyleResolver};
 use crate::text::TextBlock;
 
 use super::DrawList;
@@ -73,7 +73,9 @@ impl CountBubble {
         let mut block = self.block(s);
         let (text_w, _) = list.measure_block(&block);
         let r = Rect::new(x, y, Self::width_for(text_w), COUNT_BUBBLE_HEIGHT);
-        let radius = r.height * 0.5;
+        let radius = s
+            .scalar(StyleKey::PillRadius)
+            .min(r.height.min(r.width) * 0.5);
         list.box_shadow_outset(
             r,
             CornerRadii::uniform(radius),
@@ -125,6 +127,18 @@ mod tests {
         assert_eq!((r.x, r.y, r.height), (10.0, 20.0, COUNT_BUBBLE_HEIGHT));
         assert!(r.width >= COUNT_BUBBLE_HEIGHT && r.width <= COUNT_BUBBLE_HEIGHT + 1.0);
         assert_eq!(r.width, r.width.round());
+    }
+
+    #[test]
+    fn the_pill_radius_comes_from_the_theme() {
+        let radius = |theme: &Theme| {
+            let s = StyleResolver::new(theme);
+            let mut list = DrawList::new();
+            CountBubble::new(3).draw(&mut list, &s, 0.0, 0.0);
+            list.chrome_instance(0).unwrap().radii[0]
+        };
+        assert_eq!(radius(&Theme::forge()), COUNT_BUBBLE_HEIGHT * 0.5);
+        assert_eq!(radius(&Theme::overlay()), COUNT_BUBBLE_HEIGHT * 0.5);
     }
 
     #[test]

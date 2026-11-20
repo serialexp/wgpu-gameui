@@ -801,11 +801,11 @@ impl<'a> List<'a> {
     /// The width rows are measured and drawn at in `rect`: what is left
     /// beside a docked scrollbar, in whole pixels (see
     /// [`draw_measured`](Self::draw_measured)).
-    pub fn measure_width(&self, rect: Rect) -> f32 {
+    pub fn measure_width(&self, rect: Rect, style: &StyleResolver) -> f32 {
         let reserve = if self.overlay_bar {
             0.0
         } else {
-            ScrollView::new(rect).vertical_only().reserve()
+            ScrollView::new(rect).vertical_only().themed(style).reserve()
         };
         (rect.width - reserve).floor().max(1.0)
     }
@@ -934,14 +934,14 @@ impl<'a> List<'a> {
         let view_h = rect.height;
         // `begin` eases the drawn offset toward the target and clamps it, so
         // culling and hit-testing must read the offset after it, not before.
-        let mut view = ScrollView::new(rect).vertical_only();
+        let mut view = ScrollView::new(rect).vertical_only().themed(style);
         if self.overlay_bar {
             view = view.overlay();
         }
         if let Some(speed) = self.wheel_speed {
             view = view.with_wheel_speed(speed);
         }
-        let measure_w = self.measure_width(rect);
+        let measure_w = self.measure_width(rect, style);
 
         // A new width keeps the reader's place as the same share of the row
         // at the top: its pixels into it no longer mean the same text.

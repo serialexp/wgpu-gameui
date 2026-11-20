@@ -389,7 +389,8 @@ impl ScrollState {
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollView {
     viewport: Rect,
-    /// Width of the scrollbar (track + thumb), in pixels.
+    /// Width of a docked scrollbar (track + thumb), in pixels; an overlay
+    /// bar's thumb is always [`OVERLAY_THICKNESS`](Self::OVERLAY_THICKNESS).
     bar_thickness: f32,
     /// Minimum thumb extent so a tiny content/viewport ratio still produces a
     /// grabbable target.
@@ -439,7 +440,8 @@ impl ScrollView {
     pub fn new(viewport: Rect) -> Self {
         Self {
             viewport,
-            // The docked 4a scrollbar is a 13px control: two 13px stepper
+            // The docked 4a scrollbar is a 13px control (Forge's
+            // `ScrollbarWidth`; see [`themed`](Self::themed)): two stepper
             // keys bookend a sunken track and a face-plate scrubber.
             bar_thickness: 13.0,
             min_thumb: Self::MIN_THUMB,
@@ -454,7 +456,14 @@ impl ScrollView {
     /// keeps the whole viewport, and only a thin thumb is drawn.
     pub fn overlay(mut self) -> Self {
         self.overlay = true;
-        self.bar_thickness = Self::OVERLAY_THICKNESS;
+        self
+    }
+
+    /// Take a docked bar's width from the theme's `ScrollbarWidth`, so the
+    /// gutter [`reserve`](Self::reserve)d, the step keys and the thumb all
+    /// follow the active theme. An overlay bar is unaffected.
+    pub fn themed(mut self, style: &StyleResolver) -> Self {
+        self.bar_thickness = style.scalar(StyleKey::ScrollbarWidth);
         self
     }
 
@@ -484,7 +493,7 @@ impl ScrollView {
     /// bar: the design's docked thumb sits 2 px inside its gutter.
     fn thumb_across(&self) -> (f32, f32) {
         if self.overlay {
-            (self.bar_thickness, Self::OVERLAY_INSET)
+            (Self::OVERLAY_THICKNESS, Self::OVERLAY_INSET)
         } else {
             ((self.bar_thickness - 4.0).max(1.0), 2.0)
         }
@@ -522,7 +531,7 @@ impl ScrollView {
         )
     }
 
-    /// Set the scrollbar thickness in pixels.
+    /// Set a docked scrollbar's thickness in pixels.
     pub fn with_bar_thickness(mut self, t: f32) -> Self {
         self.bar_thickness = t;
         self
@@ -1008,6 +1017,24 @@ mod tests {
 
         let (inner, _) = tall_frame(ScrollView::new(VIEW), &mut state, input_at(-1.0, -1.0));
         assert_eq!(inner.width, 87.0, "a docked bar keeps its 13 px gutter");
+    }
+
+    #[test]
+    fn a_themed_docked_gutter_follows_scrollbar_width() {
+        let gutter = |theme: &Theme| {
+            let style = StyleResolver::new(theme);
+            VIEW.width - ScrollView::new(VIEW).themed(&style).reserve()
+        };
+        assert_eq!(gutter(&Theme::forge()), 87.0, "Forge keeps its 13 px gutter");
+        assert_eq!(gutter(&Theme::overlay()), 86.0, "Overlay's is 14 px");
+        // An overlay bar keeps its own thumb width whatever the theme says.
+        let theme = Theme::overlay();
+        let style = StyleResolver::new(&theme);
+        let view = ScrollView::new(VIEW).overlay().themed(&style);
+        assert_eq!(view.reserve(), 0.0);
+        let mut state = ScrollState::default();
+        state.content_size = [100.0, 400.0];
+        assert_eq!(view.v_thumb(&state, 100.0).width, ScrollView::OVERLAY_THICKNESS);
     }
 
     #[test]

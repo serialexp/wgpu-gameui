@@ -400,7 +400,7 @@ impl<'a> DockStack<'a> {
         // so the returned rects already match the new state.
         let mut toggled = None;
         if input.mouse_clicked && !input.mouse_consumed && state.grab.is_none() {
-            let key_w = IconKey::new(PhosphorIcon::Plus, IconKey::HEADER).outer_size(&s)[0];
+            let key_w = IconKey::new(PhosphorIcon::Plus, IconKey::header_size(&s)).outer_size(&s)[0];
             toggled = placed.iter().enumerate().find_map(|(i, p)| {
                 let over_header = p.header.contains(input.mouse_x, input.mouse_y);
                 let over_keys = keys_rect(p.header, self.sections[i].actions.len(), key_w)
@@ -488,7 +488,7 @@ impl<'a> DockStack<'a> {
         let first = i == 0;
 
         let hovered = header.contains(input.mouse_x, input.mouse_y) && !input.mouse_consumed;
-        let key = |icon| IconKey::new(icon, IconKey::HEADER).tone(Tone::Ghost);
+        let key = |icon| IconKey::new(icon, IconKey::header_size(&s)).tone(Tone::Ghost);
         let [key_w, key_h] = key(PhosphorIcon::Plus).outer_size(&s);
         let keys = keys_rect(header, section.actions.len(), key_w);
         if hovered && !keys.is_some_and(|k| k.contains(input.mouse_x, input.mouse_y)) {
@@ -588,7 +588,7 @@ impl<'a> DockStack<'a> {
             for (k, &icon) in section.actions.iter().enumerate() {
                 let r = Rect::new(
                     keys.x + k as f32 * (key_w + ACTION_GAP),
-                    (cy - IconKey::HEADER * 0.5).round(),
+                    (cy - IconKey::header_size(&s) * 0.5).round(),
                     key_w,
                     key_h,
                 );

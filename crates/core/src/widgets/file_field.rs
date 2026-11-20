@@ -6,7 +6,7 @@ use crate::text::vcentered_line_y;
 
 use super::material::{self, Tone};
 use super::property_row::LABEL_GAP;
-use super::{DrawContext, DrawList, FocusId, IconKey, PROPERTY_LABEL_WIDTH, glyphs};
+use super::{DrawContext, DrawList, FocusId, IconKey, glyphs};
 
 /// The well's height.
 const WELL_H: f32 = 23.0;
@@ -66,7 +66,7 @@ pub struct FileField<'a> {
     mixed: bool,
     mixed_count: Option<usize>,
     accept: &'a str,
-    label_width: f32,
+    label_width: Option<f32>,
     focus: Option<FocusId>,
 }
 
@@ -79,7 +79,7 @@ impl<'a> FileField<'a> {
             mixed: false,
             mixed_count: None,
             accept: DEFAULT_ACCEPT,
-            label_width: PROPERTY_LABEL_WIDTH,
+            label_width: None,
             focus: None,
         }
     }
@@ -115,10 +115,11 @@ impl<'a> FileField<'a> {
         self
     }
 
-    /// The label column's width (default [`PROPERTY_LABEL_WIDTH`]).
+    /// The label column's width (default the theme's
+    /// [`StyleKey::InspectorLabelWidth`]).
     #[must_use]
     pub fn label_width(mut self, width: f32) -> Self {
-        self.label_width = width;
+        self.label_width = Some(width);
         self
     }
 
@@ -148,7 +149,11 @@ impl<'a> FileField<'a> {
         let mut out = FileFieldOutput::default();
         ctx.push_debug_scope_rect(super::scope_name("FileField", self.label), rect);
 
-        let label_w = self.label_width.min(rect.width).max(0.0);
+        let label_w = self
+            .label_width
+            .unwrap_or_else(|| s.scalar(StyleKey::InspectorLabelWidth))
+            .min(rect.width)
+            .max(0.0);
         let well_x = rect.x + label_w + LABEL_GAP;
         let well = Rect::new(well_x, rect.y, (rect.right() - well_x).max(0.0), WELL_H);
         let caption = s.text_size(TextSize::Caption);
@@ -166,7 +171,7 @@ impl<'a> FileField<'a> {
 
         let inner = material::draw_row_well(ctx.draw_list, &s, well, false);
         let key = |glyph| {
-            IconKey::glyph(glyph, IconKey::HEADER)
+            IconKey::glyph(glyph, IconKey::header_size(&s))
                 .tone(Tone::Ghost)
                 .travel(1.0)
         };
@@ -293,7 +298,7 @@ mod tests {
     }
 
     fn frame(field: &FileField, input: &InputState) -> (FileFieldOutput, DrawList) {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let out = {
@@ -312,10 +317,11 @@ mod tests {
     fn keys() -> ([f32; 2], [f32; 2]) {
         let right = rect().right() - 1.0 - PAD_RIGHT;
         let y = WELL_H * 0.5;
-        let half = IconKey::HEADER * 0.5;
+        let header = 17.0; // Forge's KeyHeaderSize
+        let half = header * 0.5;
         (
             [right - half, y],
-            [right - IconKey::HEADER - KEY_GAP - half, y],
+            [right - header - KEY_GAP - half, y],
         )
     }
 
@@ -401,13 +407,16 @@ mod tests {
         let field = FileField::new("Albedo").file(Some(BRICK));
         let (_, list) = frame(&field, &at(-5.0, -5.0));
         let meta = list.texts.iter().find(|t| t.content == BRICK.meta).unwrap();
-        assert_eq!(meta.x, PROPERTY_LABEL_WIDTH + LABEL_GAP);
+        assert_eq!(
+            meta.x,
+            Theme::forge().inspector_label_width + LABEL_GAP
+        );
         assert_eq!(meta.y, WELL_H + META_GAP);
     }
 
     #[test]
     fn clearing_keeps_the_height() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         let h = FileField::height(&mut list, &s);
@@ -421,7 +430,7 @@ mod tests {
 
     #[test]
     fn keys_join_the_tab_ring_in_reading_order() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut focus = FocusState::new();
         let tab = InputState {
             nav: crate::NavInput {

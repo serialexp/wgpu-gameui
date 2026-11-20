@@ -16,8 +16,6 @@ use super::meter::{INLINE_METER_HEIGHT, MeterFill, inline_meter};
 
 /// Height of a [`WellChip`].
 pub const WELL_CHIP_HEIGHT: f32 = 20.0;
-/// Space inside the chip's left and right edges.
-const PAD: f32 = 7.0;
 /// Space between parts.
 const GAP: f32 = 6.0;
 /// `--well` and `--well-border`.
@@ -88,7 +86,7 @@ impl<'a> WellChip<'a> {
             .map(|p| Self::part_width(list, s, p))
             .sum();
         let gaps = GAP * self.parts.len().saturating_sub(1) as f32;
-        parts + gaps + PAD * 2.0
+        parts + gaps + s.scalar(StyleKey::WellPadX) * 2.0
     }
 
     /// Draw the chip with its top-left corner at `(x, y)`.
@@ -125,7 +123,8 @@ impl<'a> WellChip<'a> {
         let ink = if hovered { Ink::Max } else { Ink::Second };
         let size = s.text_size(TextSize::Meta);
         let cy = rect.y + rect.height * 0.5;
-        let mut px = rect.x + PAD;
+        // Space inside the chip's left and right edges: the theme's `--pad-well`.
+        let mut px = rect.x + s.scalar(StyleKey::WellPadX);
         for part in self.parts {
             let w = Self::part_width(list, s, part);
             match *part {
@@ -162,7 +161,7 @@ mod tests {
 
     #[test]
     fn a_chip_lays_its_parts_out_and_reports_clicks() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let parts = [
             WellChipPart::Meter(30.0, MeterFill::neutral(0.07, &s)),
@@ -179,7 +178,7 @@ mod tests {
         let five = list
             .measure_block(&s.mono_block("5h", 0.0, 0.0, TextSize::Meta, Ink::Max))
             .0;
-        assert!((w - (30.0 + seven + five + 2.0 * GAP + 2.0 * PAD)).abs() < 0.01);
+        assert!((w - (30.0 + seven + five + 2.0 * GAP + 2.0 * 7.0)).abs() < 0.01);
 
         let click = InputState {
             mouse_x: 20.0,
@@ -191,7 +190,7 @@ mod tests {
         assert_eq!(out.rect, Rect::new(10.0, 5.0, w, WELL_CHIP_HEIGHT));
         assert!(out.hovered && out.clicked);
         let seven_text = list.texts.iter().find(|t| t.content == "7%").unwrap();
-        assert_eq!(seven_text.x, 10.0 + PAD + 30.0 + GAP);
+        assert_eq!(seven_text.x, 10.0 + 7.0 + 30.0 + GAP);
         assert_eq!(
             seven_text.color,
             crate::color::text_color(s.ink(Ink::Max)),
@@ -203,7 +202,7 @@ mod tests {
 
     #[test]
     fn a_tinted_part_keeps_its_colour_when_hovered() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let amber = [0.9, 0.7, 0.3, 1.0];
         let parts = [
@@ -219,7 +218,7 @@ mod tests {
         };
         let main = measure(&mut list, "main");
         let changes = measure(&mut list, "±3");
-        assert!((w - (main + changes + GAP + 2.0 * PAD)).abs() < 0.01);
+        assert!((w - (main + changes + GAP + 2.0 * 7.0)).abs() < 0.01);
         let hover = InputState {
             mouse_x: 5.0,
             mouse_y: 5.0,
@@ -230,6 +229,24 @@ mod tests {
         assert_eq!(tinted.color, crate::color::text_color(amber));
         let plain = list.texts.iter().find(|t| t.content == "main").unwrap();
         assert_eq!(plain.color, crate::color::text_color(s.ink(Ink::Max)));
+    }
+
+    #[test]
+    fn the_side_padding_is_the_themes_well_padding() {
+        let parts = [WellChipPart::Text("opus", None)];
+        let width = |theme: &Theme| {
+            let s = StyleResolver::new(theme);
+            WellChip::new(&parts).width(&mut DrawList::new(), &s)
+        };
+        let text = {
+            let theme = Theme::forge();
+            let s = StyleResolver::new(&theme);
+            s.mono_width(&mut DrawList::new(), "opus", TextSize::Meta)
+        };
+        assert!((width(&Theme::forge()) - (text + 2.0 * 7.0)).abs() < 0.01);
+        let overlay = Theme::overlay();
+        let ov_text = StyleResolver::new(&overlay).mono_width(&mut DrawList::new(), "opus", TextSize::Meta);
+        assert!((width(&overlay) - (ov_text + 2.0 * 12.0)).abs() < 0.01);
     }
 
     #[test]

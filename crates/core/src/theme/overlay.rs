@@ -40,6 +40,9 @@ const INK_2: [f32; 4] = hex(0xcbcbc7);
 const INK_MUTED: [f32; 4] = hex(0xb2b2ad);
 const INK_CAPTION: [f32; 4] = hex(0x9e9e99);
 const INK_DISABLED: [f32; 4] = hex(0x6e6e6a);
+const INK_DISABLED_GLYPH: [f32; 4] = hex(0x5e5e5b);
+const INK_DISABLED_KEY: [f32; 4] = hex(0x52524f);
+const INK_EMPTY: [f32; 4] = hex(0x4a4a47);
 
 /// The glass every panel is made of, at the design's default opacity.
 const GLASS_ALPHA: f32 = 0.86;
@@ -88,6 +91,16 @@ struct Accent {
     ring: [f32; 4],
     glow: [f32; 4],
     ink: [f32; 4],
+    /// `--accent-tick`, `--accent-match`, `--accent-grip`, `--accent-glyph`.
+    tick: [f32; 4],
+    matched: [f32; 4],
+    grip: [f32; 4],
+    glyph: [f32; 4],
+    /// `--accent-key-hover-*` and `--accent-key-pressed-*`.
+    hover_top: [f32; 4],
+    hover_bottom: [f32; 4],
+    pressed_top: [f32; 4],
+    pressed_bottom: [f32; 4],
 }
 
 impl Accent {
@@ -109,6 +122,14 @@ impl Accent {
             ring: with_alpha(base, 0.36),
             glow: with_alpha(base, 0.6),
             ink,
+            tick: mix_oklab(base, white(1.0), 0.12),
+            matched: mix_oklab(base, white(1.0), 0.20),
+            grip: mix_oklab(base, white(1.0), 0.10),
+            glyph: mix_oklab(base, black(1.0), 0.08),
+            hover_top: mix_oklab(base, white(1.0), 0.26),
+            hover_bottom: mix_oklab(base, black(1.0), 0.10),
+            pressed_top: mix_oklab(base, black(1.0), 0.18),
+            pressed_bottom: mix_oklab(base, black(1.0), 0.26),
         }
     }
 }
@@ -186,30 +207,27 @@ impl Theme {
         t.ink = Ink::ALL.map(|role| match role {
             Ink::White => white(1.0),
             Ink::Max | Ink::Value => INK_MAX,
-            Ink::Emph
-            | Ink::Menu
-            | Ink::Title
-            | Ink::Row
-            | Ink::Cell
-            | Ink::Chip
-            | Ink::Primary => INK,
-            Ink::Second | Ink::Icon | Ink::Body2 => INK_2,
-            Ink::Glyph | Ink::Tab | Ink::Muted | Ink::Brand => INK_MUTED,
-            Ink::TipHint | Ink::Shortcut | Ink::Label | Ink::Caption | Ink::Dim => INK_CAPTION,
-            Ink::Disabled | Ink::DisabledGlyph | Ink::DisabledKey | Ink::Empty => INK_DISABLED,
+            Ink::Emph | Ink::Menu | Ink::Title | Ink::Row | Ink::Primary => INK,
+            Ink::Second | Ink::Icon | Ink::Cell | Ink::Chip => INK_2,
+            Ink::Glyph | Ink::Tab | Ink::TipHint | Ink::Body2 | Ink::Muted => INK_MUTED,
+            Ink::Shortcut | Ink::Label | Ink::Caption | Ink::Dim | Ink::Brand => INK_CAPTION,
+            Ink::Disabled => INK_DISABLED,
+            Ink::DisabledGlyph => INK_DISABLED_GLYPH,
+            Ink::DisabledKey => INK_DISABLED_KEY,
+            Ink::Empty => INK_EMPTY,
             Ink::OnSelectionSecond => INK_2,
         });
 
         // The accent.
         t.accent = accent.base;
-        t.accent_tick = accent.base;
+        t.accent_tick = accent.tick;
         t.focus_ring = accent.base;
         t.accent_face_top = accent.top;
         t.accent_face_bottom = accent.bottom;
-        t.accent_face_top_hover = brightness(accent.top, 1.06);
-        t.accent_face_bottom_hover = brightness(accent.bottom, 1.06);
-        t.accent_face_top_pressed = accent.bottom;
-        t.accent_face_bottom_pressed = accent.bottom;
+        t.accent_face_top_hover = accent.hover_top;
+        t.accent_face_bottom_hover = accent.hover_bottom;
+        t.accent_face_top_pressed = accent.pressed_top;
+        t.accent_face_bottom_pressed = accent.pressed_bottom;
         t.on_accent = accent.ink;
         // A selected row is the accent wash under the brightest ink
         // (`.fo-row.is-selected`), not a solid plate.
@@ -230,10 +248,10 @@ impl Theme {
         t.latch_shade = black(0.45);
         t.latch_highlight = accent.ring;
         t.on_latch = accent.base;
-        t.accent_match = accent.top;
+        t.accent_match = accent.matched;
         t.accent_dirty = accent.base;
-        t.accent_grip = accent.base;
-        t.accent_glyph = accent.base;
+        t.accent_grip = accent.grip;
+        t.accent_glyph = accent.glyph;
         t.accent_ring = accent.ring;
         t.accent_glow = accent.glow;
 
@@ -289,7 +307,7 @@ impl Theme {
         t.row_hover = white(0.06);
         t.row_held = white(0.1);
         t.well_deep = black(0.42);
-        t.edge_hard = black(0.68);
+        t.edge_hard = black(0.6);
 
         // Geometry and type: `--h-row` 34, `--key` 36, `--h-field` 34;
         // caption 11, meta 12, row 14, body 15, title 18.
@@ -313,15 +331,39 @@ impl Theme {
         t.button_height = 36.0;
         t.input_height = 34.0;
         t.list_row_height = 34.0;
-        t.menu_bar_height = 36.0;
+        t.menu_bar_height = 40.0;
         t.menu_row_height = 34.0;
         t.menu_item_min_width = 260.0;
         t.menu_accel_gap = 12.0;
         t.toolbar_button_size = 36.0;
         t.toolbar_padding = 4.0;
-        t.dock_tab_height = 34.0;
+        t.dock_tab_height = 36.0;
         t.dock_splitter_width = 8.0;
         t.window_title_height = 42.0;
+        t.status_bar_height = 36.0;
+        t.doc_tab_height = 40.0;
+        t.switch_width = 46.0;
+        t.switch_height = 26.0;
+        t.chip_height = 24.0;
+        t.key_header_size = 28.0;
+        t.key_status_size = 28.0;
+        t.slider_track = 8.0;
+        t.scrollbar_width = 14.0;
+        t.panel_padding = 16.0;
+        t.section_gap = 16.0;
+        t.sheet_padding = 4.0;
+        t.inspector_width = 340.0;
+        t.inspector_label_width = 96.0;
+        t.tab_pad_x = 14.0;
+        t.key_gap = 6.0;
+        t.field_gap = 10.0;
+        t.chip_gap = 6.0;
+        t.grid_gap = 24.0;
+        t.well_pad_x = 12.0;
+        t.well_pad_y = 6.0;
+        t.key_pad_x = 16.0;
+        t.key_pad_y = 10.0;
+        t.pill_radius = 999.0;
 
         overlay_chrome(&mut t.chrome, &accent);
         t

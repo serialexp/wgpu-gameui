@@ -16,7 +16,7 @@
 use crate::InputState;
 use crate::layout::Rect;
 use crate::shadow::{BoxShadow, CornerRadii};
-use crate::style::{Ink, StyleResolver, TextSize};
+use crate::style::{Ink, StyleKey, StyleResolver, TextSize};
 
 use super::DrawList;
 use super::glyphs::up_triangle;
@@ -25,9 +25,8 @@ use super::status_dot::{Status, status_dot};
 
 /// Space inside the band's ends.
 const BAND_PAD: f32 = 6.0;
-/// A toggle key's side (`--key-status`), the space between toggles, and
-/// after the last one.
-const TOGGLE: f32 = 18.0;
+/// The space between toggles, and after the last one. A toggle key's side is
+/// the theme's [`StyleKey::KeyStatusSize`] (`--key-status`).
 const TOGGLE_GAP: f32 = 2.0;
 const TOGGLE_AFTER: f32 = 9.0;
 const TOGGLE_GLYPH: f32 = 11.0;
@@ -189,20 +188,27 @@ fn parts_width(list: &mut DrawList, s: &StyleResolver, zone: &StatusZone) -> f32
     parts + PART_GAP * zone.parts.len().saturating_sub(1) as f32 + marker
 }
 
+/// A toggle key's side, from the theme (`--key-status`).
+fn toggle_size(s: &StyleResolver) -> f32 {
+    s.scalar(StyleKey::KeyStatusSize)
+}
+
 /// A drop-up zone's key in its zone `r`, whose parts are inset by `pad`.
-fn drop_up_key(r: Rect, pad: f32) -> Rect {
+fn drop_up_key(s: &StyleResolver, r: Rect, pad: f32) -> Rect {
     let inset = pad - DROP_UP_INSET;
+    let side = toggle_size(s);
     Rect::new(
         r.x + inset,
-        r.y + (r.height - TOGGLE) * 0.5,
+        r.y + (r.height - side) * 0.5,
         r.width - 2.0 * inset,
-        TOGGLE,
+        side,
     )
 }
 
 /// Say where `zone`, drawn in `r`, opens its detail: always when it was
 /// clicked, else while it is open and nothing was clicked.
 fn note_drop_up(
+    s: &StyleResolver,
     out: &mut StatusBarOutput,
     zone: &StatusZone,
     r: Rect,
@@ -212,7 +218,7 @@ fn note_drop_up(
 ) {
     if zone.drop_up && (clicked || (zone.pressed && out.drop_up.is_none())) {
         out.drop_up = Some(ZoneAnchor {
-            rect: drop_up_key(r, pad),
+            rect: drop_up_key(s, r, pad),
             side,
         });
     }
@@ -239,12 +245,13 @@ impl<'a> ZonedStatusBar<'a> {
     }
 
     /// The rect of toggle `i` in a bar filling `rect`.
-    fn toggle_rect(rect: Rect, i: usize) -> Rect {
+    fn toggle_rect(s: &StyleResolver, rect: Rect, i: usize) -> Rect {
+        let side = toggle_size(s);
         Rect::new(
-            rect.x + BAND_PAD + i as f32 * (TOGGLE + TOGGLE_GAP),
-            rect.y + (rect.height - TOGGLE) * 0.5,
-            TOGGLE,
-            TOGGLE,
+            rect.x + BAND_PAD + i as f32 * (side + TOGGLE_GAP),
+            rect.y + (rect.height - side) * 0.5,
+            side,
+            side,
         )
     }
 
@@ -274,7 +281,7 @@ impl<'a> ZonedStatusBar<'a> {
 
         let mut x = rect.x + BAND_PAD;
         for (i, toggle) in self.toggles.iter().enumerate() {
-            let r = Self::toggle_rect(rect, i);
+            let r = Self::toggle_rect(s, rect, i);
             let hovered = over(r);
             if hovered && input.mouse_clicked {
                 out.toggled = Some(i);
@@ -309,7 +316,7 @@ impl<'a> ZonedStatusBar<'a> {
             if clicked {
                 out.left = Some(i);
             }
-            note_drop_up(&mut out, zone, r, LEFT_PAD, ZoneSide::Left, clicked);
+            note_drop_up(s, &mut out, zone, r, LEFT_PAD, ZoneSide::Left, clicked);
             x = r.right();
         }
 
@@ -325,7 +332,7 @@ impl<'a> ZonedStatusBar<'a> {
             if clicked {
                 out.right = Some(i);
             }
-            note_drop_up(&mut out, zone, r, RIGHT_PAD, ZoneSide::Right, clicked);
+            note_drop_up(s, &mut out, zone, r, RIGHT_PAD, ZoneSide::Right, clicked);
             x = r.right();
         }
         list.pop_debug_scope();
@@ -393,7 +400,7 @@ fn draw_zone(
 ) -> bool {
     let cy = r.y + r.height * 0.5;
     if zone.drop_up {
-        draw_drop_up_key(list, s, drop_up_key(r, pad), zone.pressed, hovered);
+        draw_drop_up_key(list, s, drop_up_key(s, r, pad), zone.pressed, hovered);
     } else if zone.pressed {
         let plate = Rect::new(
             r.x + pad - PRESSED_OUT,
@@ -526,8 +533,21 @@ mod tests {
     }
 
     #[test]
+    fn the_toggle_key_size_follows_the_theme() {
+        let forge = Theme::forge();
+        let overlay = Theme::overlay();
+        let rect = Rect::new(0.0, 0.0, 400.0, 36.0);
+        let f = ZonedStatusBar::toggle_rect(&StyleResolver::new(&forge), rect, 0);
+        assert_eq!((f.width, f.height), (18.0, 18.0));
+        let o = ZonedStatusBar::toggle_rect(&StyleResolver::new(&overlay), rect, 1);
+        assert_eq!((o.width, o.height), (28.0, 28.0));
+        assert_eq!(o.x, BAND_PAD + 28.0 + TOGGLE_GAP);
+        assert_eq!(o.y, 4.0);
+    }
+
+    #[test]
     fn toggles_zones_and_the_right_group_report_their_clicks() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let toggles = [
             StatusToggle {
@@ -551,14 +571,14 @@ mod tests {
         let rect = Rect::new(0.0, 100.0, 800.0, 26.0);
         let mut list = DrawList::new();
 
-        let t = ZonedStatusBar::toggle_rect(rect, 1);
+        let t = ZonedStatusBar::toggle_rect(&s, rect, 1);
         let out = bar.draw(rect, &mut list, &s, &click(t.x + 4.0, t.y + 4.0));
         assert_eq!(out.toggled, Some(1));
 
         // "1 bg" sits after the path zone.
         let path_w = mono_width(&mut list, &s, path_text(&path));
         let bg_x = BAND_PAD
-            + 2.0 * TOGGLE
+            + 2.0 * 18.0
             + TOGGLE_GAP
             + TOGGLE_AFTER
             + 2.0
@@ -591,7 +611,7 @@ mod tests {
 
     #[test]
     fn values_hold_their_width_and_left_text_gives_way_to_the_right() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let long = [StatusPart::Text(
             "/a/very/long/path/that/would/run/under/the/right/hand/group/of/zones",
@@ -631,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_drop_up_zone_says_where_its_key_is_when_clicked_and_while_open() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let conn = [
             StatusPart::Dot(Status::Running),
@@ -654,8 +674,8 @@ mod tests {
         let out = bar.draw(rect, &mut list, &s, &InputState::default());
         let anchor = out.drop_up.expect("open drop-up anchors");
         assert_eq!(anchor.side, ZoneSide::Right);
-        assert_eq!(anchor.rect.height, TOGGLE);
-        assert_eq!(anchor.rect.y, rect.y + (rect.height - TOGGLE) * 0.5);
+        assert_eq!(anchor.rect.height, 18.0);
+        assert_eq!(anchor.rect.y, rect.y + (rect.height - 18.0) * 0.5);
         let fps_w = mono_width(&mut list, &s, "59.9 fps") + 2.0 * RIGHT_PAD;
         assert!(anchor.rect.right() <= rect.right() - BAND_PAD - fps_w);
 
@@ -670,7 +690,7 @@ mod tests {
 
     #[test]
     fn a_drop_up_zone_makes_room_for_its_marker() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let conn = [StatusPart::Text("connected")];
         let mut list = DrawList::new();
@@ -681,7 +701,7 @@ mod tests {
 
     #[test]
     fn parts_are_spaced_by_the_width_they_draw_at() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let row = s.ink(Ink::Row);
         let last = [

@@ -169,7 +169,7 @@ pub use file_dialog::{
     Listing, SortBy, format_date, format_size,
 };
 pub use file_field::{FileField, FileFieldOutput, FileRef};
-pub use filter_chip::{FILTER_CHIP_HEIGHT, FilterChip};
+pub use filter_chip::FilterChip;
 pub use focus::{FocusId, FocusState};
 pub use gradient_ramp::{
     GradientStop, RampOutput, draw as draw_gradient_ramp, readout as gradient_ramp_readout,
@@ -192,7 +192,7 @@ pub use icon::Icon;
 pub use icon_key::IconKey;
 pub use image::{Image, ImageAlign, ImageFit};
 pub use inspector::{
-    INSPECTOR_MAX_BODY_HEIGHT, INSPECTOR_WIDTH, Inspector, InspectorOutput, InspectorSelection,
+    INSPECTOR_MAX_BODY_HEIGHT, Inspector, InspectorOutput, InspectorSelection,
     InspectorState,
 };
 pub use line_chart::{
@@ -227,7 +227,7 @@ pub use meter::{
 pub use modal::{MODAL_BACKDROP_BLUR, MODAL_WIDTH, Modal, ModalOutput, ModalState};
 pub use number_input::{NumberInput, NumberOutput};
 pub use panel::{
-    PANEL_GAP, PANEL_PADDING, Panel, label, label_at, label_centered_at, title,
+    Panel, label, label_at, label_centered_at, title,
     title_at,
 };
 pub use placeholder::Placeholder;
@@ -245,7 +245,7 @@ pub use property_group::{
     PROPERTY_GROUP_HEADER_HEIGHT, PROPERTY_ROW_GAP, PropertyGroup, PropertyStack,
 };
 pub use property_row::{
-    PROPERTY_LABEL_WIDTH, PROPERTY_ROW_HEIGHT, PropertyRow, PropertyRowOutput, PropertyScrub,
+    PROPERTY_ROW_HEIGHT, PropertyRow, PropertyRowOutput, PropertyScrub,
 };
 pub use radio::RadioGroup;
 pub use row_heights::{Row, RowHeights, RowId, Ticket};
@@ -259,9 +259,9 @@ pub use settings::{
 };
 pub use sheet::{SHEET_BLUR, SHEET_WIDTH, Sheet, SheetAction, SheetAlign, SheetOutput, SheetSlot};
 pub use slider::{Slider, SliderOutput};
-pub use span_tabs::{SPAN_TABS_HEIGHT, SpanTab, SpanTabs};
+pub use span_tabs::{SpanTab, SpanTabs};
 pub use splitter::{SplitAxis, Splitter, SplitterOutput};
-pub use status_bar::{STATUS_BAR_HEIGHT, StatusCell, draw as draw_status_bar};
+pub use status_bar::{StatusCell, draw as draw_status_bar, status_bar_height};
 pub use status_detail::{DetailRow, DetailSpark, DetailTone, STATUS_DETAIL_WIDTH, StatusDetail};
 pub use status_dot::{STATUS_DOT_SIZE, Status, status_dot};
 pub use status_icon::{STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, StatusIcon};

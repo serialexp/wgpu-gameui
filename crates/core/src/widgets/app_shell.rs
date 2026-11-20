@@ -224,7 +224,7 @@ impl AppShell {
         let menu_h = styles.scalar(StyleKey::MenuBarHeight);
         let dock_tab_h = styles.scalar(StyleKey::DockTabHeight);
         let splitter_w = styles.scalar(StyleKey::DockSplitterWidth);
-        let status_h = 26.0_f32; // STATUS_BAR_HEIGHT from status_bar.rs
+        let status_h = styles.scalar(StyleKey::StatusBarHeight);
 
         // --- Top: menu bar ---
         if self.menu_bar {
@@ -763,6 +763,26 @@ mod tests {
     }
 
     #[test]
+    fn the_status_bar_takes_the_themes_height() {
+        for (theme, h) in [(Theme::forge(), 26.0), (Theme::overlay(), 36.0)] {
+            let s = StyleResolver::new(&theme);
+            let screen = Rect::new(0.0, 0.0, 800.0, 600.0);
+            let layout = AppShell::new().with_status_bar().layout(
+                screen,
+                None,
+                None,
+                None,
+                #[cfg(feature = "phosphor-icons")]
+                None,
+                &s,
+            );
+            let status = layout.status_bar.unwrap();
+            assert_eq!(status.height, h);
+            assert_eq!(status.y, screen.height - h);
+        }
+    }
+
+    #[test]
     fn menu_bar_and_status_bar_heights() {
         let theme = Theme::default();
         let s = StyleResolver::new(&theme);
@@ -782,7 +802,7 @@ mod tests {
         assert!((menu.y - 0.0).abs() < 0.01);
 
         let status = layout.status_bar.unwrap();
-        assert!((status.height - 26.0).abs() < 0.01);
+        assert!((status.height - theme.status_bar_height).abs() < 0.01);
         assert!(
             ((status.y + status.height) - screen.height).abs() < 0.01,
             "status bar should be at the bottom"

@@ -9,8 +9,6 @@ use super::{DragCapture, DragId, DrawContext, DrawList, PressState, Pressable};
 
 /// A property row's height (`--h-panel-row`).
 pub const PROPERTY_ROW_HEIGHT: f32 = 21.0;
-/// The label column's default width (`--inspector-label`).
-pub const PROPERTY_LABEL_WIDTH: f32 = 52.0;
 /// Between the label column and the value column.
 pub(crate) const LABEL_GAP: f32 = 7.0;
 /// Padding either side of the number in its well.
@@ -78,7 +76,7 @@ pub struct PropertyRow<'a> {
     unit: Option<&'a str>,
     mixed: bool,
     editable: bool,
-    label_width: f32,
+    label_width: Option<f32>,
 }
 
 impl<'a> PropertyRow<'a> {
@@ -91,7 +89,7 @@ impl<'a> PropertyRow<'a> {
             unit: None,
             mixed: false,
             editable: true,
-            label_width: PROPERTY_LABEL_WIDTH,
+            label_width: None,
         }
     }
 
@@ -130,11 +128,12 @@ impl<'a> PropertyRow<'a> {
         self
     }
 
-    /// The label column's width (default [`PROPERTY_LABEL_WIDTH`]; Forge
-    /// narrows it to 11 for single-letter axis rows).
+    /// The label column's width (default: the theme's
+    /// `InspectorLabelWidth`; Forge narrows it to 11 for single-letter axis
+    /// rows).
     #[must_use]
     pub fn label_width(mut self, width: f32) -> Self {
-        self.label_width = width;
+        self.label_width = Some(width);
         self
     }
 
@@ -144,8 +143,12 @@ impl<'a> PropertyRow<'a> {
     }
 
     /// The label column and the value column of a row at `rect`.
-    fn columns(&self, rect: Rect) -> (Rect, Rect) {
-        let label_w = self.label_width.min(rect.width).max(0.0);
+    fn columns(&self, rect: Rect, s: &StyleResolver) -> (Rect, Rect) {
+        let label_w = self
+            .label_width
+            .unwrap_or_else(|| s.scalar(StyleKey::InspectorLabelWidth))
+            .min(rect.width)
+            .max(0.0);
         let label = Rect::new(rect.x, rect.y, label_w, rect.height);
         let value_x = rect.x + label_w + LABEL_GAP;
         let value = Rect::new(
@@ -179,8 +182,8 @@ impl<'a> PropertyRow<'a> {
     /// Draw the label in `rect`'s label column and return the value column,
     /// for a control other than a number (a slider, a checkbox, a dropdown).
     pub fn draw_slot(&self, rect: Rect, ctx: &mut DrawContext) -> Rect {
-        let (label, value) = self.columns(rect);
         let s = ctx.styles();
+        let (label, value) = self.columns(rect, &s);
         ctx.push_debug_scope_rect(super::scope_name("PropertyRow", self.label), rect);
         self.draw_label(ctx.draw_list, &s, label, false);
         ctx.pop_debug_scope();
@@ -201,7 +204,7 @@ impl<'a> PropertyRow<'a> {
     ) -> PropertyRowOutput {
         let s = ctx.styles();
         let input = ctx.input;
-        let (label, column) = self.columns(rect);
+        let (label, column) = self.columns(rect, &s);
         let mut out = PropertyRowOutput {
             value,
             ..PropertyRowOutput::default()
@@ -565,21 +568,35 @@ mod tests {
 
     #[test]
     fn a_slot_row_draws_the_label_and_returns_the_value_column() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let input = at(-5.0, -5.0);
         let mut ctx = DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0);
         let slot = PropertyRow::new("Rough").draw_slot(ROW, &mut ctx);
-        let x = PROPERTY_LABEL_WIDTH + LABEL_GAP;
+        let x = 52.0 + LABEL_GAP;
         assert_eq!(slot, Rect::new(x, 0.0, 200.0 - x, ROW.height));
         assert_eq!(list.texts.len(), 1);
         assert_eq!(list.texts[0].content, "ROUGH");
     }
 
     #[test]
+    fn the_label_column_width_follows_the_theme() {
+        let overlay = Theme::overlay();
+        let mut list = DrawList::new();
+        let mut focus = FocusState::new();
+        let input = at(-5.0, -5.0);
+        let mut ctx = DrawContext::new(&mut list, &mut focus, &overlay, &input, 800.0, 600.0);
+        let row = Rect::new(0.0, 0.0, 300.0, 21.0);
+        let slot = PropertyRow::new("Rough").draw_slot(row, &mut ctx);
+        assert_eq!(slot.x, 96.0 + LABEL_GAP);
+        let slot = PropertyRow::new("X").label_width(11.0).draw_slot(row, &mut ctx);
+        assert_eq!(slot.x, 11.0 + LABEL_GAP);
+    }
+
+    #[test]
     fn a_narrow_label_column_moves_the_well_left() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let mut list = DrawList::new();
         let mut focus = FocusState::new();
         let input = at(-5.0, -5.0);

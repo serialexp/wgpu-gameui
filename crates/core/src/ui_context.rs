@@ -22,7 +22,7 @@ use crate::widgets::DrawList;
 use crate::widgets::{
     AssetGrid, AssetGridOutput, Badge, Banner, Breadcrumb, Button, Checkbox, ColorPicker,
     ColorPickerOutput, ComboOutput, DragCapture, DragHandle, DragHandleOutput, DragId, DrawContext,
-    Dropdown, DropdownId, DropdownState, EmptyState, FILTER_CHIP_HEIGHT, FilterChip, FocusId,
+    Dropdown, DropdownId, DropdownState, EmptyState, FilterChip, FocusId,
     FocusState, GradientStop, Group, HitZone, HitZoneOutput, List, ListItem, ListOutput, ListState,
     NumberInput, Pager, PagerOutput, Panel, PressState, Pressable, ProgressBar, RadioGroup,
     RampOutput, ScrollBegin, ScrollState, ScrollView, Separator, Severity, Slider, Table,
@@ -1899,8 +1899,8 @@ impl<'a> UiContext<'a> {
             .clicked
     }
 
-    /// Draw an [`IconKey`] with a `size` px face ([`IconKey::HEADER`],
-    /// [`IconKey::STATUS`] or [`IconKey::TOOLBAR`]) in `tone`, and answer for
+    /// Draw an [`IconKey`] with a `size` px face ([`IconKey::header_size`],
+    /// [`IconKey::status_size`] or [`IconKey::TOOLBAR`]) in `tone`, and answer for
     /// it: `clicked` when it was clicked (or activated from the keyboard while
     /// focused), `hovered` while it has the pointer (for its tooltip). The key
     /// joins the Tab ring. Auto-advances by the key's height (the face plus
@@ -2847,7 +2847,7 @@ impl<'a> UiContext<'a> {
     /// ui.scroll_end();
     /// ```
     pub fn scroll_begin(&mut self, w: Option<f32>, h: f32) -> Rect {
-        let (input, _) = match self.interactive_refs() {
+        let (input, theme) = match self.interactive_refs() {
             Some(v) => v,
             None => {
                 let p = self.cursor();
@@ -2863,7 +2863,8 @@ impl<'a> UiContext<'a> {
         let world = self.place_rect(width, h);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (viewport, mut local_input) = self.localize(inv, world, input);
-        let sv = ScrollView::new(viewport);
+        let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
+        let sv = ScrollView::new(viewport).themed(&style);
         let begun = {
             let list = self.backend.list_mut();
             let state = match self.state.as_mut() {
@@ -2916,8 +2917,8 @@ impl<'a> UiContext<'a> {
                 return;
             }
         };
-        let sv = ScrollView::new(viewport);
         let style = StyleResolver::with_overlay_opt(theme, self.style_stack.last());
+        let sv = ScrollView::new(viewport).themed(&style);
         let inv = self.pending_scroll_inv.take().unwrap_or(Affine2::IDENTITY);
         let mut local_input = self.effective_input(input);
         let [mx, my] = inv.transform_point([local_input.mouse_x, local_input.mouse_y]);
@@ -3247,7 +3248,8 @@ impl<'a> UiContext<'a> {
             self.style_stack.last().expect("style stack is never empty"),
         );
         let width = chip.width(self.backend.list_mut(), &styles);
-        let world = self.place_rect(width, FILTER_CHIP_HEIGHT);
+        let chip_h = FilterChip::height(&styles);
+        let world = self.place_rect(width, chip_h);
         let inv = self.backend.list_mut().current_transform().inverse();
         let (local, local_input) = self.localize(inv, world, input);
         let fid = self
@@ -3276,7 +3278,7 @@ impl<'a> UiContext<'a> {
                 .with_animations(anim);
             chip.focusable(fid).draw(local, &mut ctx)
         };
-        self.advance(FILTER_CHIP_HEIGHT);
+        self.advance(chip_h);
         on != flipped
     }
 
@@ -5450,14 +5452,15 @@ mod tests {
         let theme = Theme::default();
         let travel = theme.get(StyleKey::Travel).unwrap().as_scalar().unwrap();
         let gap = theme.spacing;
+        let header = IconKey::header_size(&StyleResolver::new(&theme));
         let ((first, below, second), list) = after_a_frame(&theme, click_at(8.0, 8.0), |ui| {
-            let first = ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost);
+            let first = ui.icon_key(PhosphorIcon::Plus, header, Tone::Ghost);
             let below = ui.cursor()[1];
-            let second = ui.icon_key(PhosphorIcon::Plus, IconKey::HEADER, Tone::Ghost);
+            let second = ui.icon_key(PhosphorIcon::Plus, header, Tone::Ghost);
             (first, below, second)
         });
         assert!(first.clicked && first.hovered, "{first:?}");
-        assert_eq!(below, IconKey::HEADER + travel + gap);
+        assert_eq!(below, header + travel + gap);
         assert!(!second.clicked && !second.hovered, "{second:?}");
         assert_eq!(list.icons_msdf.len(), 2);
     }

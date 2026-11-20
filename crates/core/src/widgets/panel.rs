@@ -7,11 +7,6 @@ use crate::{StyleKey, StyleResolver};
 
 use super::DrawList;
 
-/// Default space between the edge and the content (`--pad-panel`).
-pub const PANEL_PADDING: f32 = 14.0;
-/// Default space between the caption row and the content
-/// (`--gap-section`).
-pub const PANEL_GAP: f32 = 11.0;
 /// The lit line along the top, inside the edge (`--hi-card`).
 const HI_CARD: [f32; 4] = [1.0, 1.0, 1.0, 0.055];
 
@@ -30,8 +25,8 @@ const HI_CARD: [f32; 4] = [1.0, 1.0, 1.0, 0.055];
 pub struct Panel<'a> {
     title: Option<&'a str>,
     aside: Option<&'a str>,
-    padding: f32,
-    gap: f32,
+    padding: Option<f32>,
+    gap: Option<f32>,
 }
 
 impl Default for Panel<'_> {
@@ -39,8 +34,8 @@ impl Default for Panel<'_> {
         Self {
             title: None,
             aside: None,
-            padding: PANEL_PADDING,
-            gap: PANEL_GAP,
+            padding: None,
+            gap: None,
         }
     }
 }
@@ -66,20 +61,33 @@ impl<'a> Panel<'a> {
         self
     }
 
-    /// Space between the edge and the content (default
-    /// [`PANEL_PADDING`]).
+    /// Space between the edge and the content (default: the theme's
+    /// `PanelPadding`).
     #[must_use]
     pub fn padding(mut self, padding: f32) -> Self {
-        self.padding = padding.max(0.0);
+        self.padding = Some(padding.max(0.0));
         self
     }
 
-    /// Space between the caption row and the content (default
-    /// [`PANEL_GAP`]).
+    /// Space between the caption row and the content (default: the theme's
+    /// `SectionGap`).
     #[must_use]
     pub fn gap(mut self, gap: f32) -> Self {
-        self.gap = gap.max(0.0);
+        self.gap = Some(gap.max(0.0));
         self
+    }
+
+    /// The edge padding: the override, else the theme's `PanelPadding`.
+    fn resolved_padding(&self, s: &StyleResolver) -> f32 {
+        self.padding
+            .unwrap_or_else(|| s.scalar(StyleKey::PanelPadding).max(0.0))
+    }
+
+    /// The caption-to-content gap: the override, else the theme's
+    /// `SectionGap`.
+    fn resolved_gap(&self, s: &StyleResolver) -> f32 {
+        self.gap
+            .unwrap_or_else(|| s.scalar(StyleKey::SectionGap).max(0.0))
     }
 
     /// The caption and aside blocks, positioned for `rect`.
@@ -90,7 +98,8 @@ impl<'a> Panel<'a> {
         s: &StyleResolver,
     ) -> Option<(f32, crate::text::TextBlock, Option<crate::text::TextBlock>)> {
         let title = self.title?;
-        let (x, y) = (rect.x + self.padding, rect.y + self.padding);
+        let padding = self.resolved_padding(s);
+        let (x, y) = (rect.x + padding, rect.y + padding);
         let mut title = s.caption_block(title, x, y, Tracking::Section, Ink::Caption);
         let title_h = list.measure_block(&title).1;
         let aside = self
@@ -101,7 +110,7 @@ impl<'a> Panel<'a> {
         // `align-items: center`: each sits on the row's middle.
         title.y = y + (row_h - title_h) * 0.5;
         let aside = aside.zip(aside_size).map(|(mut a, (w, h))| {
-            a.x = rect.right() - self.padding - w;
+            a.x = rect.right() - padding - w;
             a.y = y + (row_h - h) * 0.5;
             a
         });
@@ -110,14 +119,16 @@ impl<'a> Panel<'a> {
 
     /// The rect children go in, without drawing.
     pub fn content_rect(&self, rect: Rect, list: &mut DrawList, s: &StyleResolver) -> Rect {
+        let padding = self.resolved_padding(s);
+        let gap = self.resolved_gap(s);
         let top = self
             .caption(rect, list, s)
-            .map_or(0.0, |(row_h, ..)| row_h + self.gap);
+            .map_or(0.0, |(row_h, ..)| row_h + gap);
         Rect::new(
-            rect.x + self.padding,
-            rect.y + self.padding + top,
-            (rect.width - 2.0 * self.padding).max(0.0),
-            (rect.height - 2.0 * self.padding - top).max(0.0),
+            rect.x + padding,
+            rect.y + padding + top,
+            (rect.width - 2.0 * padding).max(0.0),
+            (rect.height - 2.0 * padding - top).max(0.0),
         )
     }
 
@@ -150,7 +161,7 @@ impl<'a> Panel<'a> {
             // The caption gives way to the aside rather than running under it.
             let right = aside
                 .as_ref()
-                .map_or(rect.right() - self.padding, |a| a.x - 10.0);
+                .map_or(rect.right() - self.resolved_padding(s), |a| a.x - 10.0);
             let clip = Rect::new(title.x, rect.y, (right - title.x).max(0.0), rect.height);
             list.text(title.with_clip(clip));
             if let Some(aside) = aside {
@@ -224,7 +235,7 @@ mod tests {
 
     #[test]
     fn untitled_content_is_inset_by_the_padding() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         let rect = Rect::new(10.0, 20.0, 200.0, 100.0);
@@ -235,7 +246,7 @@ mod tests {
 
     #[test]
     fn caption_row_pushes_the_content_down() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         let rect = Rect::new(0.0, 0.0, 200.0, 100.0);
@@ -245,15 +256,39 @@ mod tests {
             .draw(rect, &mut list, &s);
         assert_eq!(list.texts[0].content, "PHYSICS");
         assert_eq!(list.texts[1].content, "3");
-        assert!(body.y > PANEL_PADDING + PANEL_GAP, "{body:?}");
+        assert!(body.y > 14.0 + 11.0, "{body:?}");
         let aside = list.texts[1].clone();
         let (w, _) = list.measure_block(&aside);
-        assert!((aside.x + w - (rect.right() - PANEL_PADDING)).abs() < 0.01);
+        assert!((aside.x + w - (rect.right() - 14.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn padding_and_gap_follow_the_theme() {
+        let rect = Rect::new(10.0, 20.0, 200.0, 100.0);
+        let forge = Theme::forge();
+        let overlay = Theme::overlay();
+        let mut list = DrawList::new();
+        let f = Panel::new().content_rect(rect, &mut list, &StyleResolver::new(&forge));
+        let o = Panel::new().content_rect(rect, &mut list, &StyleResolver::new(&overlay));
+        assert_eq!(f, Rect::new(24.0, 34.0, 172.0, 72.0));
+        assert_eq!(o, Rect::new(26.0, 36.0, 168.0, 68.0));
+        let titled = Panel::new().title("T");
+        let flush = titled.gap(0.0);
+        for (theme, gap) in [(&forge, 11.0), (&overlay, 16.0)] {
+            let s = StyleResolver::new(theme);
+            let with = titled.content_rect(rect, &mut list, &s);
+            let without = flush.content_rect(rect, &mut list, &s);
+            assert!((with.y - without.y - gap).abs() < 0.01);
+        }
+        // Explicit overrides win on every theme.
+        let ov = Panel::new().padding(5.0).gap(3.0);
+        let r = ov.content_rect(rect, &mut list, &StyleResolver::new(&overlay));
+        assert_eq!(r, Rect::new(15.0, 25.0, 190.0, 90.0));
     }
 
     #[test]
     fn aside_needs_a_title() {
-        let theme = Theme::default();
+        let theme = Theme::forge();
         let s = StyleResolver::new(&theme);
         let mut list = DrawList::new();
         Panel::new()

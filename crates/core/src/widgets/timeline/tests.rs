@@ -432,6 +432,20 @@ fn double_clicking_a_lane_adds_a_key() {
 }
 
 #[test]
+fn transport_keys_are_spaced_by_the_themes_key_gap() {
+    for (theme, gap) in [(Theme::forge(), 3.0), (Theme::overlay(), 6.0)] {
+        let mut rig = Rig::new();
+        rig.theme = theme;
+        // Four keys (19, 19, 26, 19) and four gaps precede the last key.
+        let x = STRIP_PAD[3] + 19.0 + 19.0 + 26.0 + 19.0 + 4.0 * gap + KEY * 0.5;
+        let y = rig.layout().strip.y + STRIP_PAD[0] + KEY * 0.5;
+        rig.click((x, y));
+        let hi = rig.state.bounds(120)[1];
+        assert_eq!(rig.state.frame, hi, "gap {gap}: the click lands on the last key");
+    }
+}
+
+#[test]
 fn the_ruler_scrubs_the_playhead() {
     let mut rig = Rig::new();
     let l = rig.layout();

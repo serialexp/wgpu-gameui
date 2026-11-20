@@ -31,7 +31,6 @@ use super::paint;
 use super::placement;
 
 /// Literal Forge menu-sheet padding around the row stack.
-const SHEET_PADDING: f32 = 3.0;
 /// Horizontal row inset from the sheet edge.
 const ROW_PADDING: f32 = 8.0;
 /// Menu item typography from the handoff.
@@ -695,6 +694,7 @@ impl MenuBarState {
         let row_h = styles.scalar(StyleKey::MenuRowHeight).max(1.0);
         let gap = styles.scalar(StyleKey::MenuAccelGap).max(0.0);
         let min_width = styles.scalar(StyleKey::MenuItemMinWidth).max(0.0);
+        let sheet_pad = styles.scalar(StyleKey::SheetPadding).max(0.0);
         let check_w = CHECK_WIDTH;
         let chevron_w = CHEVRON_WIDTH;
         let font = FontSpec {
@@ -792,7 +792,7 @@ impl MenuBarState {
 
             let hint_area = if any_hint { gap + hint_max } else { 0.0 };
             let chevron_reserve = if any_submenu { gap + chevron_w } else { 0.0 };
-            let intrinsic = SHEET_PADDING * 2.0
+            let intrinsic = sheet_pad * 2.0
                 + ROW_PADDING * 2.0
                 + check_w
                 + gap
@@ -800,10 +800,10 @@ impl MenuBarState {
                 + hint_area
                 + chevron_reserve;
             let width = intrinsic.max(min_width).min(viewport.width).max(1.0);
-            let full_height = content_h + SHEET_PADDING * 2.0;
+            let full_height = content_h + sheet_pad * 2.0;
             let height = full_height
                 .min(viewport.height)
-                .max(viewport.height.min(row_h + SHEET_PADDING * 2.0));
+                .max(viewport.height.min(row_h + sheet_pad * 2.0));
             let rect = if level == 0 {
                 placement::place_popup(anchor, [width, height], viewport, side).0
             } else {
@@ -823,8 +823,8 @@ impl MenuBarState {
                 );
                 placement::place_submenu(row_rect, [width, height], viewport, side).0
             };
-            let content_left = rect.x + SHEET_PADDING + ROW_PADDING;
-            let content_right = rect.right() - SHEET_PADDING - ROW_PADDING;
+            let content_left = rect.x + sheet_pad + ROW_PADDING;
+            let content_right = rect.right() - sheet_pad - ROW_PADDING;
             let hint_right = content_right - chevron_reserve;
             let label_x = content_left + check_w + gap;
             self.next_columns.push(ColumnGeom {
@@ -834,7 +834,7 @@ impl MenuBarState {
                 hint_right,
                 label_avail: (hint_right - hint_area - label_x).max(0.0),
                 content_h,
-                sheet_padding: SHEET_PADDING,
+                sheet_padding: sheet_pad,
                 rows: std::mem::take(rows),
                 menu_index,
                 path,

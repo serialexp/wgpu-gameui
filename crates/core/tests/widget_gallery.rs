@@ -53,23 +53,23 @@ use wgpu_gameui::{
 use wgpu_gameui::{
     BADGE_HEIGHT, Badge, BadgeTone, Bar, BarChart, BarSegment, BarSeries, BarTooltip,
     COUNT_BUBBLE_HEIGHT, CountBubble, DROP_ZONE_SIZE, DropZone, EmptyState, FieldLabel, Ink,
-    MINI_METER_WARN, MeterFill, Panel, Placeholder, SPAN_TABS_HEIGHT, STATUS_BAR_HEIGHT,
+    MINI_METER_WARN, MeterFill, Panel, Placeholder,
     STATUS_ICON_INLINE_SIZE, STATUS_ICON_SIZE, SpanTab, SpanTabs, Status, StatusIcon, StatusPart,
     StatusToggle, StatusZone, TagInput, TextSize, WELL_CHIP_HEIGHT, Waffle, WaffleCategory,
     WaffleFill, WellChip, WellChipPart, ZonedStatusBar, dots, draw_combo_trigger,
-    draw_curve_editor, draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar,
+    draw_curve_editor, draw_doc_tabs, draw_gradient_ramp, draw_popover_frame, draw_status_bar, status_bar_height,
     inline_meter, keycap, mini_meter, place_popover, skeleton, spinner, stacked_bar, toolbar_band,
 };
 use wgpu_gameui::{
     BarOverlay, LineChart, LineSeries, SCATTER_HEIGHT, ScatterPlot, ScatterPoint, nice_max,
 };
 use wgpu_gameui::{
-    Clock, FILTER_CHIP_HEIGHT, FavouriteFolder, FileDialog, FileDialogMode, FileDialogState,
+    Clock, FavouriteFolder, FileDialog, FileDialogMode, FileDialogState,
     FileEntry, FilePlace, FileSource, FileView, FilterChip, Listing,
 };
 use wgpu_gameui::{DRAG_ROW_HEIGHT, DragItem, DragList, DragListState};
 use wgpu_gameui::{
-    FileField, FileRef, INSPECTOR_WIDTH, Inspector, InspectorSelection, InspectorState,
+    FileField, FileRef, Inspector, InspectorSelection, InspectorState,
     PROPERTY_GROUP_HEADER_HEIGHT, PROPERTY_ROW_GAP, PROPERTY_ROW_HEIGHT, PropertyGroup,
     PropertyRow, PropertyScrub, PropertyStack,
 };
@@ -6322,14 +6322,14 @@ fn render_gallery(
                 // of a live inspector would.
                 let mut scratch = DrawList::new();
                 inspector.draw_with(
-                    Rect::new(0.0, 0.0, INSPECTOR_WIDTH, 600.0),
+                    Rect::new(0.0, 0.0, theme.inspector_width, 600.0),
                     &mut state,
                     &mut ctx(&mut scratch, &mut focus, &theme, &input),
                     &body,
                 );
                 state.scroll.snap_to(1, scroll);
-                let h = inspector.height(INSPECTOR_WIDTH, &state, list, &s);
-                let r = shadowed_cell(&mut flow, list, &shadows, label, INSPECTOR_WIDTH, h);
+                let h = inspector.height(theme.inspector_width, &state, list, &s);
+                let r = shadowed_cell(&mut flow, list, &shadows, label, theme.inspector_width, h);
                 inspector.draw_with(
                     r,
                     &mut state,
@@ -6356,24 +6356,24 @@ fn render_gallery(
         );
         {
             // A filter row: first on, rest off.
-            let r = flow.cell(list, "On · off · off", 200.0, FILTER_CHIP_HEIGHT);
+            let r = flow.cell(list, "On · off · off", 200.0, FilterChip::height(&s));
             let mut cx = r.x;
             for (j, label) in ["info", "warn", "verbose"].iter().enumerate() {
                 let chip = FilterChip::new(label).on(j == 0);
                 let w = chip.width(list, &s);
                 chip.draw(
-                    Rect::new(cx, r.y, w, FILTER_CHIP_HEIGHT),
+                    Rect::new(cx, r.y, w, FilterChip::height(&s)),
                     &mut ctx(list, &mut focus, &theme, &input),
                 );
                 cx += w + 4.0;
             }
-            let r = flow.cell(list, "With counts", 200.0, FILTER_CHIP_HEIGHT);
+            let r = flow.cell(list, "With counts", 200.0, FilterChip::height(&s));
             let mut cx = r.x;
             for (j, (label, n)) in [(".png", 12), (".lvl", 3), (".ogg", 7)].iter().enumerate() {
                 let chip = FilterChip::new(label).count(*n).on(j != 1);
                 let w = chip.width(list, &s);
                 chip.draw(
-                    Rect::new(cx, r.y, w, FILTER_CHIP_HEIGHT),
+                    Rect::new(cx, r.y, w, FilterChip::height(&s)),
                     &mut ctx(list, &mut focus, &theme, &input),
                 );
                 cx += w + 4.0;
@@ -6408,7 +6408,7 @@ fn render_gallery(
                 list,
                 "Text cells, highlight, spacer",
                 400.0,
-                STATUS_BAR_HEIGHT,
+                status_bar_height(&s),
             );
             draw_status_bar(
                 r,
@@ -6459,7 +6459,7 @@ fn render_gallery(
                 list,
                 "Zoned: toggles, zones, right group",
                 760.0,
-                STATUS_BAR_HEIGHT,
+                status_bar_height(&s),
             );
             ZonedStatusBar::new(&toggles, &left, &right).draw(r, list, &s, &input);
         }
@@ -6476,7 +6476,7 @@ fn render_gallery(
                 list,
                 "Active · count · dirty · disabled",
                 520.0,
-                SPAN_TABS_HEIGHT,
+                SpanTabs::height(&s),
             );
             SpanTabs::new(&tabs).draw(r, 0, list, &s, &input);
         }
@@ -7584,7 +7584,11 @@ fn render_gallery(
                 ("sunken", Tone::Sunken),
             ];
             let states = ["idle", "hover", "pressed", "held", "disabled"];
-            for size in [IconKey::HEADER, IconKey::STATUS, IconKey::TOOLBAR] {
+            for size in [
+                IconKey::header_size(&s),
+                IconKey::status_size(&s),
+                IconKey::TOOLBAR,
+            ] {
                 for (tone_name, tone) in tones {
                     let cell_w = states.len() as f32 * (size + 6.0);
                     let label = format!("{tone_name} {size}");

@@ -63,7 +63,7 @@ use wgpu_gameui::{
     Waffle, WaffleCategory, WaffleFill,
 };
 use wgpu_gameui::{
-    DragItem, DragList, DragListState, INSPECTOR_WIDTH, Inspector, InspectorSelection,
+    DragItem, DragList, DragListState, Inspector, InspectorSelection,
     InspectorState, PropertyGroup, PropertyRow, PropertyScrub,
 };
 #[cfg(feature = "syntax-lua")]
@@ -1168,7 +1168,7 @@ fn bench_inspector(c: &mut Criterion) {
                 let mut focus = FocusState::new();
                 let mut ctx =
                     DrawContext::new(&mut list, &mut focus, &theme, &input, W as f32, H as f32);
-                let rect = Rect::new(0.0, 0.0, INSPECTOR_WIDTH, 600.0);
+                let rect = Rect::new(0.0, 0.0, theme.inspector_width, 600.0);
                 inspector.draw_with(rect, &mut state, &mut ctx, |body, ctx| {
                     for (g, open) in open.iter_mut().enumerate() {
                         PropertyGroup::new("Transform").draw_in(body, open, ctx, |rows, ctx| {

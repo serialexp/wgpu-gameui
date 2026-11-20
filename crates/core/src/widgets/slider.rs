@@ -113,8 +113,9 @@ impl Slider {
 
         // Track area (full width minus optional value text)
         let track_width = rect.width - value_text_width;
-        // The design's slider track is 5px tall (a thin sunken rail).
-        let track_height = rect.height.min(5.0);
+        // The theme's slider track: 5px in Forge (a thin sunken rail), 8px in
+        // Overlay.
+        let track_height = ctx.styles().scalar(StyleKey::SliderTrack).min(rect.height);
         let track_y = rect.y + (rect.height - track_height) / 2.0;
 
         // Scrubber slides within the track, inset by half scrubber width on each side
@@ -232,7 +233,7 @@ impl Slider {
             );
             list.chrome_rect_gradient(
                 fill_rect,
-                2.0,
+                2.0_f32.max(track_radius - 1.0),
                 0.0,
                 s.color(StyleKey::AccentFaceTop),
                 s.color(StyleKey::AccentFaceBottom),
@@ -381,6 +382,27 @@ mod tests {
     fn rect() -> Rect {
         // 100px-wide track at the origin, 20px tall.
         Rect::new(0.0, 0.0, 100.0, 20.0)
+    }
+
+    #[test]
+    fn track_thickness_comes_from_the_theme() {
+        // The first chrome instance is the trough.
+        let thickness = |theme: &Theme| {
+            let mut list = DrawList::new();
+            let mut focus = FocusState::new();
+            let input = release_at(500.0, 500.0);
+            let mut ctx = DrawContext::new(&mut list, &mut focus, theme, &input, 800.0, 600.0);
+            Slider::new(0.0, 100.0).draw(
+                50.0,
+                1,
+                &mut DragCapture::new(),
+                rect(),
+                &mut ctx,
+            );
+            list.chrome_instance(0).unwrap().rect[3]
+        };
+        assert_eq!(thickness(&Theme::forge()), 5.0);
+        assert_eq!(thickness(&Theme::overlay()), 8.0);
     }
 
     #[test]

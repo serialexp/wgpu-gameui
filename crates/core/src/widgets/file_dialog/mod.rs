@@ -15,7 +15,7 @@ use crate::{InputState, PhosphorIcon, SpriteId};
 use super::list::{List, ListState};
 use super::material::Tone;
 use super::{
-    Button, Checkbox, DrawContext, FILTER_CHIP_HEIGHT, FilterChip, FocusId, Icon, IconKey,
+    Button, Checkbox, DrawContext, FilterChip, FocusId, Icon, IconKey,
     ModalState, SearchField, TextInput,
 };
 
@@ -1727,14 +1727,15 @@ impl<'f, 'a, 'c> Frame<'f, 'a, 'c> {
                     n
                 };
                 let mut x = left - 4.0;
-                let chip_y = strip.y + (strip.height - FILTER_CHIP_HEIGHT) * 0.5;
+                let chip_h = FilterChip::height(&s);
+                let chip_y = strip.y + (strip.height - chip_h) * 0.5;
                 for (ext, count) in types.iter().take(shown) {
                     let label = format!(".{ext}");
                     let chip = FilterChip::new(&label)
                         .count(*count)
                         .on(!self.state.off.contains(ext));
                     let w = chip.width(self.ctx.draw_list, &s);
-                    if chip.draw(Rect::new(x, chip_y, w, FILTER_CHIP_HEIGHT), self.ctx) {
+                    if chip.draw(Rect::new(x, chip_y, w, chip_h), self.ctx) {
                         if let Some(i) = self.state.off.iter().position(|t| t == ext) {
                             self.state.off.remove(i);
                         } else {
@@ -1752,7 +1753,7 @@ impl<'f, 'a, 'c> Frame<'f, 'a, 'c> {
                     };
                     let chip = FilterChip::new(&label);
                     let w = chip.width(self.ctx.draw_list, &s);
-                    if chip.draw(Rect::new(x, chip_y, w, FILTER_CHIP_HEIGHT), self.ctx) {
+                    if chip.draw(Rect::new(x, chip_y, w, chip_h), self.ctx) {
                         self.state.more_types = !self.state.more_types;
                     }
                 }
