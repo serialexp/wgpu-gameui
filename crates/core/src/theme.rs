@@ -299,6 +299,12 @@ pub struct Theme {
     pub ink: [[f32; 4]; crate::Ink::ALL.len()],
     /// Search-match highlight on a dark surface.
     pub accent_match: [f32; 4],
+    /// Top of the input-prompt keycap's face (`--kbd-face`).
+    pub kbd_face_top: [f32; 4],
+    /// Bottom of the input-prompt keycap's face (`--kbd-face`).
+    pub kbd_face_bottom: [f32; 4],
+    /// Ink on the input-prompt keycap (`--kbd-ink`).
+    pub kbd_ink: [f32; 4],
     /// Zebra stripe over every other list row.
     pub row_zebra: [f32; 4],
     /// Hovered list row fill.
@@ -587,6 +593,9 @@ impl Theme {
                 hex(0x294d55), // OnSelectionSecond
             ],
             accent_match: oklch(0.84, 0.09, 200.0, 1.0),
+            kbd_face_top: crate::color::hex(0xf3f3f0),
+            kbd_face_bottom: crate::color::hex(0xc6c6c2),
+            kbd_ink: crate::color::hex(0x1a1a18),
             row_zebra: [1.0, 1.0, 1.0, 0.016],
             row_hover: [1.0, 1.0, 1.0, 0.055],
             row_held: [1.0, 1.0, 1.0, 0.1],
@@ -937,6 +946,9 @@ impl Theme {
             // Forge roles
             Ink(role) => StyleValue::Color(self.ink[role as usize]),
             AccentMatch => StyleValue::Color(self.accent_match),
+            KbdFaceTop => StyleValue::Color(self.kbd_face_top),
+            KbdFaceBottom => StyleValue::Color(self.kbd_face_bottom),
+            KbdInk => StyleValue::Color(self.kbd_ink),
             RowZebra => StyleValue::Color(self.row_zebra),
             RowHover => StyleValue::Color(self.row_hover),
             RowHeld => StyleValue::Color(self.row_held),
@@ -1095,6 +1107,9 @@ impl Theme {
             (InnerShadowDepth, StyleValue::Scalar(s)) => self.inner_shadow_depth = s,
             (Ink(role), StyleValue::Color(c)) => self.ink[role as usize] = c,
             (AccentMatch, StyleValue::Color(c)) => self.accent_match = c,
+            (KbdFaceTop, StyleValue::Color(c)) => self.kbd_face_top = c,
+            (KbdFaceBottom, StyleValue::Color(c)) => self.kbd_face_bottom = c,
+            (KbdInk, StyleValue::Color(c)) => self.kbd_ink = c,
             (RowZebra, StyleValue::Color(c)) => self.row_zebra = c,
             (RowHover, StyleValue::Color(c)) => self.row_hover = c,
             (RowHeld, StyleValue::Color(c)) => self.row_held = c,

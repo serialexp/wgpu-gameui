@@ -373,6 +373,13 @@ style_keys! {
     // --- Forge roles (colors) ---
     /// Search-match highlight on a dark surface (Forge `--accent-match`).
     AccentMatch("accent_match", Color),
+    /// Top of the input-prompt keycap's face (`--kbd-face`): the one light
+    /// object, readable on any scene.
+    KbdFaceTop("kbd_face_top", Color),
+    /// Bottom of the input-prompt keycap's face (`--kbd-face`).
+    KbdFaceBottom("kbd_face_bottom", Color),
+    /// Ink on the input-prompt keycap (`--kbd-ink`).
+    KbdInk("kbd_ink", Color),
     /// Every other row of a list, over its background (`--row-zebra`).
     RowZebra("row_zebra", Color),
     /// A hovered list row (`--row-hover`).

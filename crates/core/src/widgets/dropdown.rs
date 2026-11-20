@@ -311,6 +311,7 @@ impl DropdownState {
         // kept well below the selection so the two never read alike.
         let hover = style.color(StyleKey::RowHover);
         let chrome = style.dropdown();
+        let shadows = chrome.shadows();
         let shadow_margin = chrome.shadow.blur * 1.5;
 
         {
@@ -334,7 +335,7 @@ impl DropdownState {
                 content_rect,
                 chrome.surface.corner_radii,
                 chrome.surface,
-                std::slice::from_ref(&chrome.shadow),
+                shadows.as_slice(),
                 &chrome.lines,
             );
             surface.paint_pre_content();
@@ -991,8 +992,14 @@ mod tests {
             list.chrome_instances()
                 .any(|i| i.bg == [0.2, 0.3, 0.4, 1.0])
         );
-        assert_eq!(list.shadow_instance_count(), 1);
-        assert_eq!(list.shadow_instance(0).unwrap().color, chrome.shadow.color);
+        assert_eq!(
+            list.shadow_instance_count(),
+            chrome.shadows().as_slice().len()
+        );
+        assert!(
+            (0..list.shadow_instance_count())
+                .any(|n| list.shadow_instance(n).unwrap().color == chrome.shadow.color)
+        );
     }
 
     #[test]

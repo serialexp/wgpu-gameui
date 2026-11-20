@@ -20,6 +20,7 @@ mod combo_box;
 mod confirm_dialog;
 mod context_menu;
 mod count_bubble;
+mod key_prompt;
 mod curve_editor;
 mod doc_tabs;
 mod dock_panel;
@@ -139,6 +140,7 @@ pub use confirm_dialog::{
 };
 pub use context_menu::{ContextMenu, ContextMenuState, place_context_menu};
 pub use count_bubble::{COUNT_BUBBLE_HEIGHT, CountBubble};
+pub use key_prompt::KeyPrompt;
 pub use curve_editor::{CurveOutput, draw as draw_curve_editor};
 pub use doc_tabs::{DocTab, DocTabsOutput, draw as draw_doc_tabs};
 pub use dock_panel::{DockPanel, DockPanelOutput, DockPanelState, DockSide, DockTab};
