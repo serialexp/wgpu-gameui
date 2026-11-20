@@ -229,6 +229,10 @@ pub struct Theme {
     pub edge_highlight_hover: [f32; 4],
     /// 1px highlight line under a raised face's top edge (pressed).
     pub edge_highlight_pressed: [f32; 4],
+    /// Highlight line under an accent face's top edge (idle and hovered).
+    pub accent_edge_highlight: [f32; 4],
+    /// Highlight line under a danger face's top edge (idle and hovered).
+    pub danger_edge_highlight: [f32; 4],
     /// Inset shadow gradient for sunken surfaces (wells, tracks): strongest at
     /// the top edge, fading down.
     pub inner_shadow: [f32; 4],
@@ -529,6 +533,8 @@ impl Theme {
             edge_highlight: [1.0, 1.0, 1.0, 0.18],
             edge_highlight_hover: [1.0, 1.0, 1.0, 0.26],
             edge_highlight_pressed: [1.0, 1.0, 1.0, 0.07],
+            accent_edge_highlight: [1.0, 1.0, 1.0, 0.18],
+            danger_edge_highlight: [1.0, 1.0, 1.0, 0.18],
             inner_shadow: [0.0, 0.0, 0.0, 0.6],
             edge_shadow: [1.0, 1.0, 1.0, 0.07],
             // Forge `--accent-key-*` and `--danger-key-*`, spelled as the
@@ -867,6 +873,8 @@ impl Theme {
             EdgeHighlight => StyleValue::Color(self.edge_highlight),
             EdgeHighlightHover => StyleValue::Color(self.edge_highlight_hover),
             EdgeHighlightPressed => StyleValue::Color(self.edge_highlight_pressed),
+            AccentEdgeHighlight => StyleValue::Color(self.accent_edge_highlight),
+            DangerEdgeHighlight => StyleValue::Color(self.danger_edge_highlight),
             InnerShadow => StyleValue::Color(self.inner_shadow),
             EdgeShadow => StyleValue::Color(self.edge_shadow),
             AccentFaceTop => StyleValue::Color(self.accent_face_top),
@@ -1030,6 +1038,8 @@ impl Theme {
             (EdgeHighlight, StyleValue::Color(c)) => self.edge_highlight = c,
             (EdgeHighlightHover, StyleValue::Color(c)) => self.edge_highlight_hover = c,
             (EdgeHighlightPressed, StyleValue::Color(c)) => self.edge_highlight_pressed = c,
+            (AccentEdgeHighlight, StyleValue::Color(c)) => self.accent_edge_highlight = c,
+            (DangerEdgeHighlight, StyleValue::Color(c)) => self.danger_edge_highlight = c,
             (InnerShadow, StyleValue::Color(c)) => self.inner_shadow = c,
             (EdgeShadow, StyleValue::Color(c)) => self.edge_shadow = c,
             (AccentFaceTop, StyleValue::Color(c)) => self.accent_face_top = c,

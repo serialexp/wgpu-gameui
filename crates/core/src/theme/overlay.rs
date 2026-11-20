@@ -192,9 +192,12 @@ impl Theme {
         t.background = hex(0x0e0e10);
         t.panel = GLASS;
         t.panel_border = black(0.55);
-        t.button = rgba8([0x2a, 0x2a, 0x2c], 1.0);
-        t.button_hover = rgba8([0x33, 0x33, 0x35], 1.0);
-        t.button_pressed = rgba8([0x1c, 0x1c, 0x1e], 1.0);
+        // The design's key face is a translucent white sheen over the
+        // glass panel (`--key-face*`), so every state shares one base: the
+        // panel's own colour. Hover/pressed differ by their sheen tokens.
+        t.button = rgba8([24, 24, 27], 1.0);
+        t.button_hover = t.button;
+        t.button_pressed = t.button;
         t.button_border = black(0.5);
         t.input_background = black(0.36);
         t.input_border = black(0.55);
@@ -297,6 +300,8 @@ impl Theme {
         t.face_top_pressed = white(0.07);
         t.face_bottom_pressed = white(0.03);
         t.edge_highlight = white(0.22);
+        t.accent_edge_highlight = white(0.55); // --accent-key-inset
+        t.danger_edge_highlight = white(0.28); // --danger-key-inset
         t.edge_highlight_hover = white(0.32);
         t.edge_highlight_pressed = white(0.05);
         t.inner_shadow = black(0.5);
@@ -725,6 +730,18 @@ mod tests {
             t.accent_face_bottom_pressed,
             mix_oklab(bone, black(1.0), 0.26)
         );
+    }
+
+    #[test]
+    fn key_faces_share_the_panel_base_and_accent_keys_get_their_own_highlight() {
+        let t = Theme::overlay();
+        assert_eq!(t.button, t.button_hover);
+        assert_eq!(t.button, t.button_pressed);
+        assert_eq!(t.accent_edge_highlight, white(0.55));
+        assert_eq!(t.danger_edge_highlight, white(0.28));
+        let f = Theme::forge();
+        assert_eq!(f.accent_edge_highlight, f.edge_highlight);
+        assert_eq!(f.danger_edge_highlight, f.edge_highlight);
     }
 
     #[test]

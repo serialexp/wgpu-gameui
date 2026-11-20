@@ -243,6 +243,10 @@ style_keys! {
     EdgeHighlightHover("edge_highlight_hover", Color),
     /// Top-edge highlight line on a raised face, pressed.
     EdgeHighlightPressed("edge_highlight_pressed", Color),
+    /// Top-edge highlight line on an accent face (idle and hovered).
+    AccentEdgeHighlight("accent_edge_highlight", Color),
+    /// Top-edge highlight line on a danger face (idle and hovered).
+    DangerEdgeHighlight("danger_edge_highlight", Color),
     /// Inset shadow color for sunken surfaces (wells, tracks).
     InnerShadow("inner_shadow", Color),
     /// Bottom-edge light line under a sunken surface.

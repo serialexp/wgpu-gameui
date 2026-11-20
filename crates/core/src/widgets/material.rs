@@ -295,12 +295,12 @@ fn draw_raised(
         Tone::Accent if hovered => (
             s.color(StyleKey::AccentFaceTopHover),
             s.color(StyleKey::AccentFaceBottomHover),
-            s.color(StyleKey::EdgeHighlightHover),
+            s.color(StyleKey::AccentEdgeHighlight),
         ),
         Tone::Accent => (
             s.color(StyleKey::AccentFaceTop),
             s.color(StyleKey::AccentFaceBottom),
-            s.color(StyleKey::EdgeHighlight),
+            s.color(StyleKey::AccentEdgeHighlight),
         ),
         Tone::Danger if pressed => (
             s.color(StyleKey::DangerFaceTopPressed),
@@ -310,12 +310,12 @@ fn draw_raised(
         Tone::Danger if hovered => (
             s.color(StyleKey::DangerFaceTopHover),
             s.color(StyleKey::DangerFaceBottomHover),
-            s.color(StyleKey::EdgeHighlightHover),
+            s.color(StyleKey::DangerEdgeHighlight),
         ),
         Tone::Danger => (
             s.color(StyleKey::DangerFaceTop),
             s.color(StyleKey::DangerFaceBottom),
-            s.color(StyleKey::EdgeHighlight),
+            s.color(StyleKey::DangerEdgeHighlight),
         ),
         Tone::Latch if pressed => (
             s.color(StyleKey::LatchFaceTop),
