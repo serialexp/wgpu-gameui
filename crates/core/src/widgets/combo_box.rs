@@ -56,7 +56,7 @@ pub fn draw_trigger(
     let list = &mut *ctx.draw_list;
 
     let font_size = s.scalar(StyleKey::FontSize) * 0.9;
-    let pad = s.scalar(StyleKey::Padding) + 3.0;
+    let pad = s.scalar(StyleKey::WellPadX);
     let chev_w = 17.0;
     let text_rect_w = (rect.width - pad * 2.0 - chev_w).max(20.0);
     let text_y = list.vcentered_text_y(
@@ -329,6 +329,24 @@ mod tests {
             &mut ctx(&mut list, &mut focus, &theme, &input),
         );
         assert_eq!(out.query.as_deref(), Some("Stanlit"));
+    }
+
+    #[test]
+    fn trigger_text_starts_at_the_well_padding() {
+        for (theme, pad_x) in [(Theme::overlay(), 12.0), (Theme::forge(), 7.0)] {
+            let rect = Rect::new(5.0, 5.0, 200.0, 32.0);
+            let input = InputState::default();
+            let mut list = DrawList::new();
+            let mut focus = FocusState::new();
+            draw_trigger(
+                rect,
+                "Standard Lit",
+                false,
+                false,
+                &mut ctx(&mut list, &mut focus, &theme, &input),
+            );
+            assert_eq!(list.texts[0].x, rect.x + pad_x);
+        }
     }
 
     #[test]

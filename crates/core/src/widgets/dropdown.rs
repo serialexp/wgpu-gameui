@@ -528,7 +528,7 @@ impl<'a> Dropdown<'a> {
             .iter()
             .map(|item| list.measure_block(&styles.text_block(*item, 0.0, 0.0)).0)
             .fold(0.0, f32::max);
-        let padding = styles.scalar(StyleKey::Padding);
+        let padding = styles.scalar(StyleKey::WellPadX);
         (
             widest + padding * 2.0 + CHEVRON * 3.0 + CHEVRON_EDGE_GAP,
             styles.scalar(StyleKey::InputHeight),
@@ -646,7 +646,7 @@ impl<'a> Dropdown<'a> {
             s.color(StyleKey::Text)
         };
         let font_size = s.scalar(StyleKey::FontSize);
-        let pad = s.scalar(StyleKey::Padding);
+        let pad = s.scalar(StyleKey::WellPadX);
         let text_y = list.vcentered_text_y(
             rect.y,
             rect.height,
@@ -691,7 +691,7 @@ impl<'a> Dropdown<'a> {
 /// Draw a small chevron (▼ closed / ▲ open) at the button's right edge.
 fn draw_chevron(list: &mut DrawList, rect: Rect, s: &StyleResolver, open: bool) {
     let size = CHEVRON * 2.0;
-    let x = rect.right() - s.scalar(StyleKey::Padding) - CHEVRON_EDGE_GAP - size;
+    let x = rect.right() - s.scalar(StyleKey::WellPadX) - CHEVRON_EDGE_GAP - size;
     let y = rect.y + (rect.height - size) * 0.5;
     let color = s.color(StyleKey::TextDim);
 
@@ -861,7 +861,7 @@ mod tests {
 
         #[cfg(feature = "phosphor-icons")]
         {
-            let expected_x = rect.right() - theme.padding - CHEVRON_EDGE_GAP - CHEVRON * 2.0;
+            let expected_x = rect.right() - theme.well_pad_x - CHEVRON_EDGE_GAP - CHEVRON * 2.0;
             assert_eq!(
                 list.icons_msdf.len(),
                 1,
@@ -881,11 +881,37 @@ mod tests {
                 .map(|vertex| vertex.position[0])
                 .fold(f32::NEG_INFINITY, f32::max);
             let right_inset = rect.right() - rightmost;
-            let minimum_visible_inset = theme.padding + CHEVRON_EDGE_GAP - 0.75;
+            let minimum_visible_inset = theme.well_pad_x + CHEVRON_EDGE_GAP - 0.75;
             assert!(
                 right_inset >= minimum_visible_inset,
                 "fallback chevron's visible geometry must keep the requested right padding"
             );
+        }
+    }
+
+    #[test]
+    fn selected_label_and_intrinsic_width_use_the_well_padding() {
+        const ONE: [&str; 1] = ["Option"];
+        for (theme, pad_x) in [(Theme::overlay(), 12.0), (Theme::forge(), 7.0)] {
+            assert_eq!(theme.well_pad_x, pad_x);
+            let input = InputState::default();
+            let mut state = DropdownState::new();
+            let mut focus = FocusState::new();
+            let mut list = DrawList::new();
+            let rect = Rect::new(10.0, 10.0, 200.0, 32.0);
+            let dropdown = Dropdown::new(&ONE, 0);
+            dropdown.draw(
+                1,
+                rect,
+                &mut state,
+                &mut DrawContext::new(&mut list, &mut focus, &theme, &input, 800.0, 600.0),
+            );
+            assert_eq!(list.texts[0].x, rect.x + pad_x);
+
+            let styles = StyleResolver::new(&theme);
+            let widest = list.measure_block(&styles.text_block("Option", 0.0, 0.0)).0;
+            let (w, _) = dropdown.intrinsic_size(&mut list, &styles);
+            assert_eq!(w, widest + pad_x * 2.0 + CHEVRON * 3.0 + CHEVRON_EDGE_GAP);
         }
     }
 

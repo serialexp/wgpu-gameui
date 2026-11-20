@@ -271,7 +271,7 @@ pub struct TextInput {
     /// via [`with_invalid`](Self::with_invalid).
     pub invalid: bool,
     /// Left and right text insets in pixels, replacing the theme's
-    /// [`StyleKey::Padding`] on those two sides, for fields with something
+    /// [`StyleKey::WellPadX`] on those two sides, for fields with something
     /// beside the text (an icon, a key). `None` pads both sides evenly.
     pub insets: Option<[f32; 2]>,
     /// Clipboard getter — returns the current clipboard contents.
@@ -431,7 +431,7 @@ impl TextInput {
     }
 
     /// Inset the text `left` and `right` px from the field's sides instead of
-    /// the theme padding. See [`insets`](Self::insets).
+    /// the theme's well padding. See [`insets`](Self::insets).
     pub fn with_insets(mut self, left: f32, right: f32) -> Self {
         self.insets = Some([left, right]);
         self
@@ -1168,8 +1168,9 @@ impl TextInput {
         let multiline = self.multiline && self.mask.is_none();
 
         // ---- Geometry & layout policy ----
-        let padding = s.scalar(StyleKey::Padding);
-        let [want_left, want_right] = self.insets.unwrap_or([padding, padding]);
+        let padding = s.scalar(StyleKey::WellPadY);
+        let pad_x = s.scalar(StyleKey::WellPadX);
+        let [want_left, want_right] = self.insets.unwrap_or([pad_x, pad_x]);
         // Clamp padding so the inner clip always has positive area. If the
         // padding exceeds what the field can afford, the text clip collapses
         // to zero and all content becomes invisible — a silent, baffling
@@ -2010,8 +2011,8 @@ mod tests {
 
         assert!(ti.horizontal_scroll_offset > 0.0);
         let caret = focus.ime_request().expect("focused input requests IME");
-        assert!(caret.x >= theme.padding);
-        assert!(caret.x <= ti.width - theme.padding + 0.1);
+        assert!(caret.x >= theme.well_pad_x);
+        assert!(caret.x <= ti.width - theme.well_pad_x + 0.1);
     }
 
     #[test]
@@ -2028,13 +2029,29 @@ mod tests {
 
         assert!(ti.horizontal_scroll_offset > 0.0);
         let text = list.texts.last().expect("a text block was drawn");
-        assert!(text.x < theme.padding, "the text starts left of the field");
+        assert!(text.x < theme.well_pad_x, "the text starts left of the field");
         // The text is clipped to the field's inner box, not to a box that
         // starts where the scrolled text starts: the end of the value, which
         // the field scrolled into view, must not be clipped away.
         let clip = text.clip.expect("the text is clipped");
-        assert_eq!(clip.x, theme.padding);
-        assert_eq!(clip.x + clip.width, ti.width - theme.padding);
+        assert_eq!(clip.x, theme.well_pad_x);
+        assert_eq!(clip.x + clip.width, ti.width - theme.well_pad_x);
+    }
+
+    #[test]
+    fn well_padding_follows_the_theme_tokens() {
+        for (theme, pad_x) in [(Theme::overlay(), 12.0), (Theme::forge(), 7.0)] {
+            assert_eq!(theme.well_pad_x, pad_x);
+            let mut ti = TextInput::new(0.0, 0.0, 200.0, 32.0).with_value("hello".to_string());
+            let mut focus = FocusState::new();
+            let mut list = DrawList::new();
+            let input = InputState::default();
+            draw_input(&mut ti, 1, &mut focus, &mut list, &theme, &input);
+            let text = list.texts.last().expect("a text block was drawn");
+            assert_eq!(text.x, pad_x, "text starts at the well's horizontal padding");
+            let clip = text.clip.expect("the text is clipped");
+            assert_eq!(clip.width, 200.0 - pad_x * 2.0);
+        }
     }
 
     #[test]
@@ -2082,7 +2099,7 @@ mod tests {
         // All of the caret, not just its left edge: the text is clipped at the
         // inner box, so a caret starting on that edge is invisible.
         assert!(
-            caret.x + caret.width <= ti.width - theme.padding + 0.01,
+            caret.x + caret.width <= ti.width - theme.well_pad_x + 0.01,
             "caret {caret:?} ends past the inner box"
         );
     }

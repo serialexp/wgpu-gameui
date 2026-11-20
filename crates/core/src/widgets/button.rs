@@ -39,7 +39,7 @@ fn label_color(s: &StyleResolver, tone: Tone, hovered: bool, down: bool) -> [f32
 }
 
 /// Draw a button label centred on `face`, clipped to the inner width. The
-/// horizontal inset is the theme padding, but capped relative to the button
+/// horizontal inset is the theme's key padding ([`StyleKey::KeyPadX`]), but capped relative to the button
 /// width so a small button (e.g. a spin-box `+`/`-` stepper) still leaves room
 /// for the glyph instead of pushing it off the edge. `face` is the key's face
 /// rect (dropped `travel` px while pressed), so the label rides down with it.
@@ -52,7 +52,7 @@ fn draw_label_colored(
 ) {
     let font_size = s.scalar(StyleKey::FontSize);
     let font = s.theme().font.clone();
-    let inset = s.scalar(StyleKey::Padding).min(face.width * 0.15);
+    let inset = s.scalar(StyleKey::KeyPadX).min(face.width * 0.15);
     // Optically centre the label band (x-height for mixed case, cap height for
     // all-caps/numeric) — centring by font_size alone leaves the glyph low,
     // drifting to the bottom on short buttons like spin-box steppers.
@@ -123,7 +123,7 @@ impl Button {
     pub fn intrinsic_size(&self, list: &mut DrawList, styles: &StyleResolver) -> (f32, f32) {
         let label = styles.text_block(&self.label, 0.0, 0.0);
         let label_width = list.measure_block(&label).0;
-        let padding = styles.scalar(StyleKey::Padding);
+        let padding = styles.scalar(StyleKey::KeyPadX);
         let height = styles.scalar(StyleKey::ButtonHeight);
         (label_width + padding * 2.0, height)
     }
@@ -137,7 +137,7 @@ impl Button {
             .text_block(&self.label, 0.0, 0.0)
             .with_wrap(WrapMode::None);
         let text = cx.measure_text_with(label, MeasureConstraints::UNBOUNDED);
-        let padding = styles.scalar(StyleKey::Padding);
+        let padding = styles.scalar(StyleKey::KeyPadX);
         let natural = [
             text.metrics.size[0] + padding * 2.0,
             styles.scalar(StyleKey::ButtonHeight),
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(list.texts.len(), 1);
         let label = list.texts[0].clone();
         assert!(label.ellipsize, "button labels must use ellipsis mode");
-        let inset = theme.padding.min(button.width * 0.15);
+        let inset = theme.key_pad_x.min(button.width * 0.15);
         assert_eq!(label.max_width, button.width - inset * 2.0);
         // Centred on the face, which sits `travel` px above the plinth.
         let travel = StyleResolver::new(&theme).scalar(StyleKey::Travel);
@@ -534,6 +534,27 @@ mod tests {
             list.measure_block(&label).1 <= button.height,
             "the constrained caption must remain inside the button height",
         );
+    }
+
+    #[test]
+    fn key_padding_follows_the_theme_tokens() {
+        for (theme, pad_x) in [(Theme::overlay(), 16.0), (Theme::forge(), 10.0)] {
+            assert_eq!(theme.key_pad_x, pad_x);
+            let input = InputState::default();
+            let mut focus = FocusState::new();
+            let mut list = DrawList::new();
+            let rect = Rect::new(10.0, 10.0, 200.0, 32.0);
+            Button::new("Go").draw(rect, &mut with_ctx(&mut list, &mut focus, &theme, &input));
+            let label = list.texts[0].clone();
+            assert_eq!(label.x, rect.x + pad_x);
+            assert_eq!(label.max_width, rect.width - pad_x * 2.0);
+
+            let styles = StyleResolver::new(&theme);
+            let (w, h) = Button::new("Go").intrinsic_size(&mut list, &styles);
+            let text_w = list.measure_block(&styles.text_block("Go", 0.0, 0.0)).0;
+            assert_eq!(w, text_w + pad_x * 2.0);
+            assert_eq!(h, styles.scalar(StyleKey::ButtonHeight));
+        }
     }
 
     #[test]
