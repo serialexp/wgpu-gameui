@@ -21,23 +21,12 @@ const HI_CARD: [f32; 4] = [1.0, 1.0, 1.0, 0.055];
 /// ```
 ///
 /// Use [`Group`](super::Group) for a card inside a pane.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Panel<'a> {
     title: Option<&'a str>,
     aside: Option<&'a str>,
     padding: Option<f32>,
     gap: Option<f32>,
-}
-
-impl Default for Panel<'_> {
-    fn default() -> Self {
-        Self {
-            title: None,
-            aside: None,
-            padding: None,
-            gap: None,
-        }
-    }
 }
 
 impl<'a> Panel<'a> {
@@ -155,7 +144,13 @@ impl<'a> Panel<'a> {
             // doesn't leave the line standing outside the card's curve.
             let r = s.scalar(StyleKey::PanelRadius);
             let run = (r - (2.0 * r - 1.0).max(0.0).sqrt()).clamp(0.0, inner.width * 0.5);
-            list.quad(inner.x + run, inner.y, inner.width - 2.0 * run, 1.0, HI_CARD);
+            list.quad(
+                inner.x + run,
+                inner.y,
+                inner.width - 2.0 * run,
+                1.0,
+                HI_CARD,
+            );
         }
         if let Some((_, title, aside)) = self.caption(rect, list, s) {
             // The caption gives way to the aside rather than running under it.
