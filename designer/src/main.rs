@@ -40,6 +40,8 @@ fn to_winit_cursor(icon: CursorIcon) -> winit::window::CursorIcon {
 }
 
 struct Gpu {
+    /// Kept to make the window's surface again when it is lost.
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -109,8 +111,21 @@ impl Host {
         let frame = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+            wgpu::CurrentSurfaceTexture::Outdated => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
+                window.request_redraw();
+                return;
+            }
+            // Configuring a lost surface does not bring it back: it is made
+            // again for the window.
+            wgpu::CurrentSurfaceTexture::Lost => {
+                match gpu.instance.create_surface(window.clone()) {
+                    Ok(surface) => {
+                        gpu.surface = surface;
+                        gpu.surface.configure(&gpu.device, &gpu.config);
+                    }
+                    Err(error) => eprintln!("the window's surface was lost: {error}"),
+                }
                 window.request_redraw();
                 return;
             }
@@ -267,6 +282,7 @@ impl ApplicationHandler for Host {
             window.scale_factor() as f32,
         );
         self.gpu = Some(Gpu {
+            instance,
             surface,
             device,
             queue,
