@@ -163,7 +163,32 @@ Later (deferred):
   video most likely arrives in)
 - [ ] Matroska / WebM files (deferred: MP4 first)
 - [ ] Hardware decoding (VideoToolbox on macOS) behind the same interface (deferred: only if the
-  software decoder turns out too slow in practice)
+  software decoder turns out too slow in practice). What exists, checked 2026-11-22:
+  - It can stay pure Rust in the sense the rest of gameui is: the decoding is in the GPU's
+    silicon, reached through the system's API (VideoToolbox, Vulkan Video, VA-API, D3D11), the
+    way wgpu reaches Metal and Vulkan. No FFmpeg, nothing in C of our own to build.
+  - Hardware decoding alone saves the decode (about half a core at 1080p30) but not the copy: a
+    picture read back to the CPU is still uploaded every frame. The real win is the decoded
+    picture staying on the GPU and drawn from there, which needs wgpu's unsafe import calls.
+  - `gpu-video` 0.5.0 (Software Mansion, from their `smelter` repo; MIT; released 2026-11-10)
+    does both: H.264 decoded through Vulkan Video on Linux and Windows and through VideoToolbox
+    on macOS (since 0.5.0, via `objc2-video-toolbox`), frames handed out as NV12
+    `VideoTexture`s (wgpu textures, one per plane) that never leave the GPU. No FFmpeg. Its
+    costs for us: it needs wgpu 30 (gameui is on 24); it makes the device itself
+    (`request_device_with_video_support`), so the renderer would have to take a device made
+    elsewhere; and on Vulkan it pulls in `vk-mem`, which compiles the C++
+    VulkanMemoryAllocator. H.265 and AV1 decoding aren't there yet.
+  - Doing it ourselves instead: on macOS, `objc2-video-toolbox` plus `objc2-core-video`'s
+    `CVMetalTextureCache` turn a decoded `CVPixelBuffer` into Metal textures, and wgpu-hal's
+    `metal::Device::texture_from_raw_planar` wraps two of them as one NV12 texture (in wgpu's
+    tree; not checked which release has it). On Linux, `cros-codecs` 0.0.5 (ChromeOS) decodes
+    H.264 through VA-API into DMA-BUFs, and `vulkan::Device::texture_from_dmabuf_fd` (wgpu 30)
+    imports one. `cros-codecs` links `libva` and `gbm`, both C system libraries.
+  - Either way the YUV sprite needs an NV12 form (Y, then U and V interleaved in one
+    half-size plane) drawn from textures it doesn't own, beside today's three planes
+    uploaded by `update_yuv_sprite`.
+  - Drawing in the system compositor's own video layer (CALayer and the like) is a further step
+    none of these take.
 
 ## Why this exists
 
