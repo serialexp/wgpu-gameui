@@ -7,13 +7,14 @@
 //! and hung forever inside `Queue::submit`.
 //!
 //! Drawn in paint order and in batches (`docs/design/draw-call-batching.md`).
-//! Batched, the off-target labels are culled, so the colour runs merge; only
-//! the paint-order path still alternates.
+//! The labels sit on the target, clear of the pixels checked, so neither path
+//! can cull them and the stream really alternates.
 
 use wgpu_gameui::{DrawList, HeadlessGpu, TextBlock, Vertex};
 
 /// Rows of a quad followed by a label, so every row adds a color run and a
-/// text run.
+/// text run. Off the target, the labels would be culled and the stream would
+/// not alternate at all.
 const ROWS: usize = 1_500;
 
 #[test]
@@ -34,7 +35,7 @@ fn check_alternating_runs(gpu: &mut HeadlessGpu, paint_order: bool) {
         // must win: order is preserved across the shared pass.
         let shade = (i % 2) as f32;
         list.quad(0.0, 0.0, 64.0, 64.0, [shade, 0.0, 1.0 - shade, 1.0]);
-        list.text(TextBlock::new("x", 200.0, 0.0).with_size(10.0));
+        list.text(TextBlock::new("x", 48.0, 0.0).with_size(10.0));
     }
     list.quad(8.0, 8.0, 16.0, 16.0, [0.0, 1.0, 0.0, 1.0]);
 
@@ -47,6 +48,7 @@ fn check_alternating_runs(gpu: &mut HeadlessGpu, paint_order: bool) {
     if paint_order {
         assert!(stats.draw_calls >= ROWS * 2, "drawn as recorded: {stats:?}");
     }
+    assert!(stats.text_runs > 0, "the labels are drawn: {stats:?}");
     assert_eq!(stats.render_passes, 1, "{stats:?}");
 
     let at = |x: u32, y: u32| {
