@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 (2026-11-22)
+
+### BREAKING CHANGES
+
+- chore(deps)!: wgpu 24 → 30
+
+### Bug Fixes
+
+- make a lost surface again rather than reconfigure it
+
 ## 0.6.0 (2026-11-19)
 
 ### BREAKING CHANGES

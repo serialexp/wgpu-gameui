@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.7.0 (2026-11-22)
+
+### BREAKING CHANGES
+
+- feat(text)!: figures — tabular and proportional digits
+- chore(deps)!: wgpu 24 → 30
+
+### Features
+
+- text roles and the theme's role table
+- centre a styled block in its own face and line box
+- the complete role set for gameui's text sites
+- panel_radius — Panel and Group corners come from the theme
+- Overlay's geometry and colour tokens drive the widgets
+- wells and keys take their padding from the theme
+- glass panels carry the design's full shadow stack
+- KeyPrompt, the light input-prompt keycap; dropdown gets the shadow stack
+
+### Bug Fixes
+
+- focusing a field no longer rounds its value
+- derive Default for Panel
+- overlay key faces are a translucent sheen over the panel, accent/danger keys get their own highlight
+- make a lost surface again rather than reconfigure it
+
+### Tests
+
+- the alternating-runs test draws its labels on the target
+
+### Styles
+
+- collapse the nested if clippy flags
+- cargo fmt across gameui core
+
 ## 0.6.0 (2026-11-19)
 
 ### BREAKING CHANGES
