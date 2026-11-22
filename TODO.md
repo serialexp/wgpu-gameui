@@ -15,6 +15,17 @@ still open.
 
 ---
 
+## GPU tests (2026-11-22)
+
+- [ ] **P2 — One headless setup for the GPU tests.** About twenty files in
+  `crates/core/tests/` (and the two benches) each build their own instance,
+  adapter, device, target texture and readback buffer, though `HeadlessGpu`
+  and its `capture` already do that. The wgpu 24 → 30 upgrade had to fix the
+  same setup in every one of them. Move them onto `HeadlessGpu` (growing it
+  where a test needs more, such as a custom format or several passes), so the
+  next wgpu upgrade touches one place. The quad vertex buffer layout is also
+  repeated five times in `render/ui_renderer.rs`; one `const` would do.
+
 ## Overlay, the default theme (2026-11-20)
 
 - [ ] **P2 — The last widgets that hard-code Forge.** What is left after
