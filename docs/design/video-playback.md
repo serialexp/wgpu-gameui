@@ -188,7 +188,42 @@ Later (deferred):
     half-size plane) drawn from textures it doesn't own, beside today's three planes
     uploaded by `update_yuv_sprite`.
   - Drawing in the system compositor's own video layer (CALayer and the like) is a further step
-    none of these take.
+    none of these take; see the next item.
+- [ ] Video in a layer of the system compositor, beside gameui's surface, instead of copied into
+  it (deferred: Bart, 2026-11-22, "we'll want it eventually"; best done when gameui has layers of
+  its own anyway, for accessibility and repaints). The compositor can then put the picture on a
+  hardware overlay plane, which on weak machines is the only way to smooth playback (Raph Levien,
+  "Advice for the next 100 Rust GUIs", 2026-11-21). What exists, checked 2026-11-22:
+  - What each platform offers. macOS: Core Animation layers under the window's view; wgpu
+    renders into any `CAMetalLayer` (`SurfaceTargetUnsafe::CoreAnimationLayer`), so gameui can
+    be one layer among others. For video, `AVSampleBufferDisplayLayer` (in
+    `objc2-av-foundation`) takes the compressed H.264 samples and decodes and composites them
+    itself, on overlay planes where it can: the shortest way there, since our MP4 reader already
+    has the samples. Windows: DirectComposition, a tree of visuals that can each hold a
+    swapchain, with video moved to overlay planes (multiplane overlays) where it can. Wayland: a
+    `wl_subsurface` per layer with a `linux-dmabuf` buffer attached, which the compositor may
+    scan out on a hardware plane; `wp_viewporter` scales a layer and `wp_alpha_modifier` fades
+    it. X11: nothing usable. Android: `SurfaceControl` / `SurfaceView`.
+  - `subduction` (github.com/forest-rs/subduction, the library Raph links; 0.0.1, Apache-2.0 or
+    MIT, last commit 2026-10-15): `subduction_core` keeps a tree of layers (transforms, opacity,
+    clips, visibility), works out what changed each frame and hands that to a presenter.
+    Presenters: Apple (`CALayer` / `CAMetalLayer`, AppKit helpers), Windows (DirectComposition),
+    Wayland (a subsurface per layer, latched together in sync mode; opacity and scaling not wired
+    up yet), the web (DOM), and a wgpu fallback that composites a texture per layer on the GPU.
+    X11 and Android are empty stubs. `frameclock` and `mediaclock` beside it time display frames
+    per platform and keep sound and picture together. It places layers but doesn't fill them:
+    Windows visuals carry no content and the Wayland presenter attaches no buffers, so the video
+    layer is still filled by us (`gpu-video`, `cros-codecs`, or `AVSampleBufferDisplayLayer`;
+    see the item above).
+  - winit hands out the window's `NSView`, `wl_surface` or `HWND`, so a video layer can sit next
+    to gameui's surface without leaving winit.
+  - What gameui would need. Whatever it draws over the picture (the player's controls, rounded
+    corners, anything overlapping) either leaves its own surface transparent where the video
+    shows through, or moves into a layer above the video; either way gameui has to know about
+    layers (the keyed layers in `TODO.md`). A video layer has to move and clip in the same frame
+    as the UI when its pane scrolls or resizes, or it trails behind (what subduction's sync mode
+    and `frameclock` are for). And when the system plays the picture, the player's sound clock
+    has to drive the layer's timebase.
 
 ## Why this exists
 
