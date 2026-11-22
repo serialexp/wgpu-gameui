@@ -883,8 +883,8 @@ impl TextRenderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("msdf text pipeline layout"),
-            bind_group_layouts: &[uniform_bgl, &atlas_bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(uniform_bgl), Some(&atlas_bgl)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("msdf text pipeline"),
@@ -893,16 +893,16 @@ impl TextRenderer {
                 module: &shader,
                 entry_point: Some("vs_msdf"),
                 buffers: &[
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &QUAD_ATTRIBS,
-                    },
-                    wgpu::VertexBufferLayout {
+                    }),
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<MsdfInstance>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &MSDF_INSTANCE_ATTRIBS,
-                    },
+                    }),
                 ],
                 compilation_options: Default::default(),
             },
@@ -919,7 +919,7 @@ impl TextRenderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

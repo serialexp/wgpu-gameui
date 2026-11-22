@@ -100,11 +100,12 @@ impl Harness {
     }
 
     fn with_target(format: wgpu::TextureFormat, size: (u32, u32)) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("no GPU adapter available (run under DISPLAY=:0 with a GPU)");
         // Numbers are meaningless without knowing which adapter produced them
@@ -118,13 +119,10 @@ impl Harness {
             );
         });
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("ui_stress device"),
-                ..Default::default()
-            },
-            None,
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("ui_stress device"),
+            ..Default::default()
+        }))
         .expect("request device");
 
         let font_system = wgpu_gameui::shared_font_system();
@@ -182,7 +180,9 @@ impl Harness {
     /// blocking on it (keeps the queue from backing up across Criterion iters).
     fn render_frame(&mut self, list: &DrawList) {
         let _ = self.encode_and_submit(list);
-        self.device.poll(wgpu::Maintain::Poll);
+        self.device
+            .poll(wgpu::PollType::Poll)
+            .expect("failed to poll the GPU");
     }
 
     /// [`render_frame`](Self::render_frame), then block until the GPU has
@@ -190,7 +190,9 @@ impl Harness {
     /// such as the offscreen clear + composite), not just CPU encode.
     fn render_frame_and_wait(&mut self, list: &DrawList) {
         let _ = self.encode_and_submit(list);
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the GPU");
     }
 
     fn encode_and_submit(&mut self, list: &DrawList) -> wgpu_gameui::RenderStats {
@@ -205,6 +207,7 @@ impl Harness {
                 label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -214,6 +217,7 @@ impl Harness {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
         let stats = self.ui.render(
@@ -437,7 +441,10 @@ fn bench_frame_render(c: &mut Criterion) {
         build_buttons(&mut list, count, &theme, &input);
         // Warm the atlas/buffers once before timing.
         let stats = harness.encode_and_submit(&list);
-        harness.device.poll(wgpu::Maintain::Wait);
+        harness
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the GPU");
         eprintln!(
             "frame_render/{count}: paint_runs={} draw_calls={} primitives={}",
             stats.paint_runs, stats.draw_calls, stats.primitives
@@ -2189,7 +2196,10 @@ fn bench_batching(c: &mut Criterion) {
                 "batched"
             };
             let stats = harness.encode_and_submit(&list);
-            harness.device.poll(wgpu::Maintain::Wait);
+            harness
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("failed to wait for the GPU");
             eprintln!(
                 "batching/{name}/{path}: primitives={} units_ordered={} paint_runs={} \
                  batches={} draw_calls={} buffer_write_calls={} order_overlap_tests={} \

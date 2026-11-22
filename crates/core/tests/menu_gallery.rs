@@ -34,20 +34,18 @@ fn solid_with_border(size: u32, fill: [u8; 4], border: [u8; 4], thickness: u32) 
 #[test]
 #[ignore = "needs a GPU adapter; writes a PNG for manual inspection"]
 fn render_menu_gallery() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter available");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("menu gallery device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("menu gallery device"),
+        ..Default::default()
+    }))
     .expect("request device");
     let format = wgpu_gameui::CAPTURE_FORMAT;
     let mut ui = UiRenderer::new(&device, &queue, format, wgpu_gameui::shared_font_system());

@@ -146,7 +146,9 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.window = Some(window.clone());
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
+            Box::new(event_loop.owned_display_handle()),
+        ));
         let surface = instance
             .create_surface(window.clone())
             .expect("create surface");
@@ -154,15 +156,13 @@ impl ApplicationHandler for App {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("request adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("event_driven_ui device"),
-                ..Default::default()
-            },
-            None,
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("event_driven_ui device"),
+            ..Default::default()
+        }))
         .expect("request device");
 
         let size = window.inner_size();
@@ -179,6 +179,7 @@ impl ApplicationHandler for App {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
@@ -256,11 +257,15 @@ impl ApplicationHandler for App {
                     return;
                 }
                 let frame = match gpu.surface.get_current_texture() {
-                    Ok(f) => f,
-                    Err(_) => {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                         gpu.surface.configure(&gpu.device, &gpu.config);
                         return;
                     }
+                    wgpu::CurrentSurfaceTexture::Timeout
+                    | wgpu::CurrentSurfaceTexture::Occluded
+                    | wgpu::CurrentSurfaceTexture::Validation => return,
                 };
                 let view = frame
                     .texture
@@ -293,6 +298,7 @@ impl ApplicationHandler for App {
                             label: Some("clear"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: &view,
+                                depth_slice: None,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(
@@ -304,6 +310,7 @@ impl ApplicationHandler for App {
                             depth_stencil_attachment: None,
                             timestamp_writes: None,
                             occlusion_query_set: None,
+                            multiview_mask: None,
                         });
                     }
                     (result, quit, encoder)
@@ -318,7 +325,7 @@ impl ApplicationHandler for App {
                     &gpu.layers,
                 );
                 gpu.queue.submit(Some(encoder.finish()));
-                frame.present();
+                gpu.queue.present(frame);
                 self.input.end_frame();
                 if quit {
                     self.quit_requested = true;

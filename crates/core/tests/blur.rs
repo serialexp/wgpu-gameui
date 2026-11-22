@@ -11,20 +11,18 @@ use wgpu_gameui::{Backdrop, BlurParams, ColorEncoding, UiRenderer, shared_font_s
 const SIZE: u32 = 64;
 
 fn device_queue() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("blur test device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("blur test device"),
+        ..Default::default()
+    }))
     .expect("request device")
 }
 
@@ -156,6 +154,7 @@ fn blur_with(setup: Setup, radius: f32, downsample: u32, tint: [f32; 4]) -> Vec<
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -170,6 +169,7 @@ fn blur_with(setup: Setup, radius: f32, downsample: u32, tint: [f32; 4]) -> Vec<
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -219,8 +219,12 @@ fn blur_with(setup: Setup, radius: f32, downsample: u32, tint: [f32; 4]) -> Vec<
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
 
     let mut pixels = Vec::with_capacity((row_stride * SIZE) as usize);
     for row in 0..SIZE as usize {
@@ -364,6 +368,7 @@ fn two_blur_calls_in_one_submission_keep_their_own_params() {
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -378,6 +383,7 @@ fn two_blur_calls_in_one_submission_keep_their_own_params() {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -445,8 +451,12 @@ fn two_blur_calls_in_one_submission_keep_their_own_params() {
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
     let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
     for row in 0..SIZE as usize {
         let start = row * bytes_per_row as usize;

@@ -106,8 +106,8 @@ impl Offscreen {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ui composite pipeline layout"),
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ui composite pipeline"),
@@ -131,7 +131,7 @@ impl Offscreen {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         Self {
@@ -159,6 +159,7 @@ impl Offscreen {
             label: Some("ui offscreen clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &layer.view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -168,6 +169,7 @@ impl Offscreen {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         layer.view.clone()
     }
@@ -181,6 +183,7 @@ impl Offscreen {
             label: Some("ui composite"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: host,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -190,6 +193,7 @@ impl Offscreen {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &layer.bind_group, &[]);

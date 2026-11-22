@@ -14,19 +14,18 @@ const W: u32 = 64;
 const H: u32 = 16;
 
 fn device_queue() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
-    }))?;
-    pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("color pipeline test device"),
-            ..Default::default()
-        },
-        None,
-    ))
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("color pipeline test device"),
+        ..Default::default()
+    }))
     .ok()
 }
 
@@ -72,6 +71,7 @@ fn render(
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(ui.clear_color(clear).color()),
@@ -81,6 +81,7 @@ fn render(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
     ui.begin_frame();
@@ -109,8 +110,12 @@ fn render(
     queue.submit(Some(encoder.finish()));
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
     let mut pixels = Vec::with_capacity((W * H * 4) as usize);
     for row in 0..H as usize {
         let start = row * bytes_per_row as usize;

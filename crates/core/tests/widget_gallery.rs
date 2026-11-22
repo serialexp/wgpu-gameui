@@ -2077,6 +2077,7 @@ fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clea
         label: Some("gallery clear"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view,
+            depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(color),
@@ -2086,6 +2087,7 @@ fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, clea
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
 }
 
@@ -2219,8 +2221,12 @@ fn render_gallery_page(
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
 
     // De-pad: the GPU buffer rows are 256-aligned (`bytes_per_row`), but a
     // tightly-packed RGBA image expects `row_stride` (W*4) per row. Copy each
@@ -2841,23 +2847,21 @@ fn render_gallery(
     theme: Theme,
     theme_dir: &str,
 ) -> (Vec<GalleryPage>, Vec<GallerySection>, Vec<GalleryCell>) {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter available");
 
     // The canvas is rendered in pages of at most `PAGE_MAX` rows, so the
     // portable default limits are enough however tall the gallery grows.
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("gallery device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("gallery device"),
+        ..Default::default()
+    }))
     .expect("request device");
 
     // A non-sRGB target takes the renderer's direct path, where every blend

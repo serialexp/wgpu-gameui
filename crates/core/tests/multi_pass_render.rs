@@ -133,6 +133,7 @@ fn render_frame(
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -142,6 +143,7 @@ fn render_frame(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
     record(ui, &mut encoder, &view);
@@ -170,8 +172,12 @@ fn render_frame(
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
     let mut pixels = Vec::with_capacity((width * 4 * height) as usize);
     for row in 0..height as usize {
         let start = row * bytes_per_row as usize;
@@ -214,20 +220,18 @@ fn text_band_has_ink(img: &[u8], viewport: (u32, u32), y0: u32, y1: u32) -> bool
 }
 
 fn device_queue() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("multi-pass device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("multi-pass device"),
+        ..Default::default()
+    }))
     .expect("request device")
 }
 

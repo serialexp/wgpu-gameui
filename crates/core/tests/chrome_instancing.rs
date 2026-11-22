@@ -66,6 +66,7 @@ fn render_list(
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -75,6 +76,7 @@ fn render_list(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
     // One submission = one frame (see `UiRenderer::begin_frame`).
@@ -105,8 +107,12 @@ fn render_list(
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
 
     let row_stride = (W * 4) as usize;
     let bpr = bytes_per_row as usize;
@@ -142,20 +148,18 @@ const BORDER: [f32; 4] = [0.85, 0.85, 0.90, 1.0];
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn instanced_chrome_matches_immediate() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("parity device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("parity device"),
+        ..Default::default()
+    }))
     .expect("request device");
 
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -320,20 +324,18 @@ fn assert_rotated_shape(
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn rotated_chrome_uses_the_sdf_path_and_lands_where_the_transform_says() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("rotated chrome device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("rotated chrome device"),
+        ..Default::default()
+    }))
     .expect("request device");
     let mut ui = UiRenderer::new(
         &device,
@@ -380,20 +382,18 @@ fn rotated_chrome_uses_the_sdf_path_and_lands_where_the_transform_says() {
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn composable_quad_renders_affine_unequal_rounded_border_gradient_and_clip() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("composable quad device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("composable quad device"),
+        ..Default::default()
+    }))
     .expect("request device");
     let font_system = wgpu_gameui::shared_font_system();
     let mut ui = UiRenderer::new(
@@ -443,20 +443,18 @@ fn composable_quad_renders_affine_unequal_rounded_border_gradient_and_clip() {
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn one_side_rounded_quad_has_no_seam_where_its_halves_meet() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("seam device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("seam device"),
+        ..Default::default()
+    }))
     .expect("request device");
     let font_system = wgpu_gameui::shared_font_system();
     let mut ui = UiRenderer::new(
@@ -516,20 +514,18 @@ fn one_side_rounded_quad_has_no_seam_where_its_halves_meet() {
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn an_angled_gradient_lands_where_css_puts_it() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("angled gradient device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("angled gradient device"),
+        ..Default::default()
+    }))
     .expect("request device");
     let font_system = wgpu_gameui::shared_font_system();
     let mut ui = UiRenderer::new(
@@ -577,20 +573,18 @@ fn an_angled_gradient_lands_where_css_puts_it() {
 #[test]
 #[ignore = "requires a GPU adapter (DISPLAY=:0)"]
 fn whole_pixel_quads_are_solid_to_their_edges_and_fractional_edges_split() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter (run under DISPLAY=:0)");
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("edge coverage device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("edge coverage device"),
+        ..Default::default()
+    }))
     .expect("request device");
     let mut ui = UiRenderer::new(
         &device,

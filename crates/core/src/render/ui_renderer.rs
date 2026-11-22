@@ -790,8 +790,8 @@ impl UiRenderer {
         let color_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ui color pipeline layout"),
-                bind_group_layouts: &[uniform_bgl],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(uniform_bgl)],
+                immediate_size: 0,
             });
 
         let color_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -800,11 +800,11 @@ impl UiRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_color"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &COLOR_VERTEX_ATTRIBS,
-                }],
+                })],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -820,7 +820,7 @@ impl UiRenderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -832,7 +832,7 @@ impl UiRenderer {
             device,
             &shader,
             work_format,
-            &[uniform_bgl, &texture_bgl],
+            &[Some(uniform_bgl), Some(&texture_bgl)],
             "fs_icon",
             "ui icon pipeline",
         );
@@ -840,7 +840,7 @@ impl UiRenderer {
             device,
             &shader,
             work_format,
-            &[uniform_bgl, &yuv_bgl],
+            &[Some(uniform_bgl), Some(&yuv_bgl)],
             "fs_yuv",
             "ui yuv pipeline",
         );
@@ -850,8 +850,8 @@ impl UiRenderer {
         let chrome_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ui chrome pipeline layout"),
-                bind_group_layouts: &[uniform_bgl],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(uniform_bgl)],
+                immediate_size: 0,
             });
 
         let analytic_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -861,17 +861,17 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("vs_analytic"),
                 buffers: &[
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &QUAD_ATTRIBS,
-                    },
-                    wgpu::VertexBufferLayout {
+                    }),
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<AnalyticInstance>()
                             as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &ANALYTIC_INSTANCE_ATTRIBS,
-                    },
+                    }),
                 ],
                 compilation_options: Default::default(),
             },
@@ -888,7 +888,7 @@ impl UiRenderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -902,16 +902,16 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("vs_circle"),
                 buffers: &[
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &QUAD_ATTRIBS,
-                    },
-                    wgpu::VertexBufferLayout {
+                    }),
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<CircleInstance>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &CIRCLE_INSTANCE_ATTRIBS,
-                    },
+                    }),
                 ],
                 compilation_options: Default::default(),
             },
@@ -928,7 +928,7 @@ impl UiRenderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -938,8 +938,8 @@ impl UiRenderer {
         let nine_slice_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ui nine-slice pipeline layout"),
-                bind_group_layouts: &[uniform_bgl, &texture_bgl],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(uniform_bgl), Some(&texture_bgl)],
+                immediate_size: 0,
             });
 
         let nine_slice_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -949,17 +949,17 @@ impl UiRenderer {
                 module: &shader,
                 entry_point: Some("vs_nine_slice"),
                 buffers: &[
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &QUAD_ATTRIBS,
-                    },
-                    wgpu::VertexBufferLayout {
+                    }),
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<NineSliceInstance>()
                             as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &NINE_INSTANCE_ATTRIBS,
-                    },
+                    }),
                 ],
                 compilation_options: Default::default(),
             },
@@ -976,7 +976,7 @@ impl UiRenderer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -2815,14 +2815,14 @@ fn create_icon_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     work_format: wgpu::TextureFormat,
-    layouts: &[&wgpu::BindGroupLayout],
+    layouts: &[Option<&wgpu::BindGroupLayout>],
     fragment: &str,
     label: &str,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
         bind_group_layouts: layouts,
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -2831,16 +2831,16 @@ fn create_icon_pipeline(
             module: shader,
             entry_point: Some("vs_icon"),
             buffers: &[
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &QUAD_ATTRIBS,
-                },
-                wgpu::VertexBufferLayout {
+                }),
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<IconInstance>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &ICON_INSTANCE_ATTRIBS,
-                },
+                }),
             ],
             compilation_options: Default::default(),
         },
@@ -2857,7 +2857,7 @@ fn create_icon_pipeline(
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }

@@ -28,20 +28,18 @@ struct Gpu {
 
 impl Gpu {
     fn new() -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("no GPU adapter (run under DISPLAY=:0)");
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("stripes device"),
-                ..Default::default()
-            },
-            None,
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("stripes device"),
+            ..Default::default()
+        }))
         .expect("request device");
         let ui = UiRenderer::new(
             &device,
@@ -85,6 +83,7 @@ impl Gpu {
                 label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -94,6 +93,7 @@ impl Gpu {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
         self.ui.begin_frame();
@@ -130,8 +130,12 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         let slice = readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-        self.device.poll(wgpu::Maintain::Wait);
-        let data = slice.get_mapped_range();
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the GPU");
+        let data = slice
+            .get_mapped_range()
+            .expect("failed to read the mapped readback buffer");
         let mut red = Vec::with_capacity((W * H) as usize);
         for row in 0..H as usize {
             let start = row * bytes_per_row as usize;

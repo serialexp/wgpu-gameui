@@ -106,6 +106,7 @@ pub fn capture_with(
             label: Some("gameui capture clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(clear),
@@ -115,6 +116,7 @@ pub fn capture_with(
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -147,8 +149,12 @@ pub fn capture_with(
     slice.map_async(wgpu::MapMode::Read, |r| {
         r.expect("failed to map capture readback buffer")
     });
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the capture readback");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped capture readback buffer");
 
     // Strip the row padding; without this the image shears diagonally.
     let row_stride = (width * 4) as usize;
@@ -261,19 +267,18 @@ impl HeadlessGpu {
     /// Returning `None` rather than panicking lets a test skip cleanly:
     /// `let Some(gpu) = HeadlessGpu::new() else { return };`
     pub fn new() -> Option<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: None,
             force_fallback_adapter: false,
-        }))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("gameui headless device"),
-                ..Default::default()
-            },
-            None,
-        ))
+            apply_limit_buckets: false,
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("gameui headless device"),
+            ..Default::default()
+        }))
         .ok()?;
         let font_system = crate::text::shared_font_system();
         let ui = UiRenderer::new(&device, &queue, CAPTURE_FORMAT, font_system.clone());

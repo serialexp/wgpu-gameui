@@ -144,7 +144,9 @@ fn bench(c: &mut Criterion) {
                 let mut encoder = device.create_command_encoder(&Default::default());
                 ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, &before);
                 queue.submit(Some(encoder.finish()));
-                device.poll(wgpu::Maintain::Poll);
+                device
+                    .poll(wgpu::PollType::Poll)
+                    .expect("failed to poll the GPU");
             })
         });
         // The same alternation with the comparison off: what the frames cost
@@ -160,10 +162,14 @@ fn bench(c: &mut Criterion) {
                 let mut encoder = device.create_command_encoder(&Default::default());
                 ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, list);
                 queue.submit(Some(encoder.finish()));
-                device.poll(wgpu::Maintain::Poll);
+                device
+                    .poll(wgpu::PollType::Poll)
+                    .expect("failed to poll the GPU");
             })
         });
-        device.poll(wgpu::Maintain::Wait);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the GPU");
         // And with one text block moving, which is where boxes are reused.
         group.bench_with_input(
             BenchmarkId::new("recompute_alternating_one_moved", n),
@@ -179,11 +185,15 @@ fn bench(c: &mut Criterion) {
                     let mut encoder = device.create_command_encoder(&Default::default());
                     ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, list);
                     queue.submit(Some(encoder.finish()));
-                    device.poll(wgpu::Maintain::Poll);
+                    device
+                        .poll(wgpu::PollType::Poll)
+                        .expect("failed to poll the GPU");
                 })
             },
         );
-        device.poll(wgpu::Maintain::Wait);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the GPU");
         // The renderer with its frame comparison on, which compares the list
         // with the last one, keeps it, and (until a later phase consumes the
         // result) recomputes regardless. The extra over `recompute` is the
@@ -207,13 +217,19 @@ fn bench(c: &mut Criterion) {
                     let mut encoder = device.create_command_encoder(&Default::default());
                     ui.render(&device, &queue, &mut encoder, &view, SIZE, 1.0, list);
                     queue.submit(Some(encoder.finish()));
-                    device.poll(wgpu::Maintain::Poll);
+                    device
+                        .poll(wgpu::PollType::Poll)
+                        .expect("failed to poll the GPU");
                 });
                 ui.set_frame_comparison(false);
             });
-            device.poll(wgpu::Maintain::Wait);
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("failed to wait for the GPU");
         }
-        device.poll(wgpu::Maintain::Wait);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("failed to wait for the GPU");
     }
     group.finish();
 }

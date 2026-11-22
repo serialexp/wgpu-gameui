@@ -101,6 +101,7 @@ pub(crate) fn load_pass<'e>(
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view,
+            depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Load,
@@ -110,5 +111,6 @@ pub(crate) fn load_pass<'e>(
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     })
 }

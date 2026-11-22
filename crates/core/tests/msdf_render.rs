@@ -19,21 +19,19 @@ const H: u32 = 256;
 #[test]
 #[ignore = "needs a GPU adapter; writes a PNG for manual inspection"]
 fn render_text_to_png() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("no GPU adapter available");
 
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("msdf test device"),
-            ..Default::default()
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("msdf test device"),
+        ..Default::default()
+    }))
     .expect("request device");
 
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -123,6 +121,7 @@ fn render_text_to_png() {
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(ui.clear_color(CLEAR).color()),
@@ -132,6 +131,7 @@ fn render_text_to_png() {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -165,8 +165,12 @@ fn render_text_to_png() {
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
 
     std::fs::create_dir_all("test_output").unwrap();
     let img = image::RgbaImage::from_raw(W, H, data.to_vec()).expect("image from raw");

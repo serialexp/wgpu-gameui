@@ -8,5 +8,5 @@ publish.workspace = true
 ui-compare-common = { path = "../common" }
 wgpu-gameui = { path = "../../../crates/core" }
 wgpu-gameui-retained = { path = "../../../crates/retained" }
-wgpu = "24"
+wgpu = "30"
 pollster = "0.4"

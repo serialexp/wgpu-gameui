@@ -13,11 +13,10 @@ const H: u32 = 256;
 
 /// Draw `list` in batches, or in paint order when `paint_order`.
 fn render(list: &DrawList, paint_order: bool) -> Option<(Vec<u8>, RenderStats)> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-            .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let fonts = wgpu_gameui::shared_font_system();
     let mut renderer = UiRenderer::new(&device, &queue, format, fonts);
@@ -50,6 +49,7 @@ fn render(list: &DrawList, paint_order: bool) -> Option<(Vec<u8>, RenderStats)> 
         label: Some("clear"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: &view,
+            depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -59,6 +59,7 @@ fn render(list: &DrawList, paint_order: bool) -> Option<(Vec<u8>, RenderStats)> 
         depth_stencil_attachment: None,
         timestamp_writes: None,
         occlusion_query_set: None,
+        multiview_mask: None,
     });
     renderer.begin_frame();
     let stats = renderer.render(&device, &queue, &mut encoder, &view, (W, H), 1.0, list);
@@ -81,8 +82,13 @@ fn render(list: &DrawList, paint_order: bool) -> Option<(Vec<u8>, RenderStats)> 
     queue.submit(Some(encoder.finish()));
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |result| result.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let pixels = slice.get_mapped_range().to_vec();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let pixels = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer")
+        .to_vec();
     Some((pixels, stats))
 }
 

@@ -75,11 +75,10 @@ struct RenderFixture {
 
 impl RenderFixture {
     fn new() -> Option<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-                .ok()?;
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let fonts = wgpu_gameui::shared_font_system();
         let renderer = UiRenderer::new(&device, &queue, format, fonts);

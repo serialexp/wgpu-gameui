@@ -18,11 +18,12 @@ impl Gpu {
     /// Open the high-performance adapter (naming it on stderr, as
     /// `library`) and make the target.
     pub fn new(library: &str) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("no GPU adapter");
         let info = adapter.get_info();
@@ -31,7 +32,7 @@ impl Gpu {
             info.name, info.device_type, info.backend
         );
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                 .expect("device");
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let size = (WIDTH as u32, HEIGHT as u32);
@@ -84,13 +85,15 @@ impl Gpu {
             list,
         );
         self.queue.submit(Some(encoder.finish()));
-        self.device.poll(wgpu::Maintain::Poll);
+        self.device.poll(wgpu::PollType::Poll)
+.expect("failed to poll the GPU");
         stats
     }
 
     /// Wait for the GPU to finish what was submitted.
     pub fn wait(&self) {
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::wait_indefinitely())
+.expect("failed to wait for the GPU");
     }
 
     /// Read the target back as RGBA bytes (blocking), to check what was
@@ -131,8 +134,10 @@ impl Gpu {
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-        self.device.poll(wgpu::Maintain::Wait);
-        let data = buffer.slice(..).get_mapped_range().to_vec();
+        self.device.poll(wgpu::PollType::wait_indefinitely())
+.expect("failed to wait for the GPU");
+        let data = buffer.slice(..).get_mapped_range()
+.expect("failed to read the mapped readback buffer").to_vec();
         buffer.unmap();
         data
     }

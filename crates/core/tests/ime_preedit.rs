@@ -19,19 +19,18 @@ const W: u32 = 512;
 const H: u32 = 128;
 
 fn gpu_setup() -> Option<(wgpu::Device, wgpu::Queue, wgpu::TextureFormat)> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
         force_fallback_adapter: false,
-    }))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("ime test device"),
-            ..Default::default()
-        },
-        None,
-    ))
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("ime test device"),
+        ..Default::default()
+    }))
     .ok()?;
     Some((device, queue, wgpu::TextureFormat::Rgba8UnormSrgb))
 }
@@ -111,6 +110,7 @@ fn render_focused_composing_text_input() {
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(ui.clear_color(CLEAR).color()),
@@ -120,6 +120,7 @@ fn render_focused_composing_text_input() {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
     // One submission = one frame (see `UiRenderer::begin_frame`).
@@ -150,8 +151,12 @@ fn render_focused_composing_text_input() {
 
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-    device.poll(wgpu::Maintain::Wait);
-    let data = slice.get_mapped_range();
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("failed to wait for the GPU");
+    let data = slice
+        .get_mapped_range()
+        .expect("failed to read the mapped readback buffer");
 
     std::fs::create_dir_all("test_output").unwrap();
     let img = image::RgbaImage::from_raw(W, H, data.to_vec()).expect("image from raw");

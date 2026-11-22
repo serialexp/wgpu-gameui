@@ -188,8 +188,8 @@ impl Blur {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blur pipeline layout"),
-            bind_group_layouts: &[uniform_bgl, &src_bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(uniform_bgl), Some(&src_bgl)],
+            immediate_size: 0,
         });
 
         let pipeline = |label, format, blend| {
@@ -218,7 +218,7 @@ impl Blur {
                 },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             })
         };
@@ -343,6 +343,7 @@ impl Blur {
                 label: Some("blur pass A (horizontal)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &inter.view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -352,6 +353,7 @@ impl Blur {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.pipeline_a);
             rp.set_bind_group(0, self.uniforms.bind_group(), &[slot_a as u32]);
@@ -363,6 +365,7 @@ impl Blur {
                 label: Some("blur pass B (vertical)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -372,6 +375,7 @@ impl Blur {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.pipeline_b);
             rp.set_bind_group(0, self.uniforms.bind_group(), &[slot_b as u32]);
